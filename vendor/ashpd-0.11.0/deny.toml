@@ -1,0 +1,35 @@
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu"
+]
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+ignore = []
+
+[licenses]
+allow = [
+  "MIT",
+  "Unicode-3.0",
+  "BSD-3-Clause", # pipewire -> libspa -> bindgen
+  "Apache-2.0", # pipewire -> libspa -> bindgen -> clang-sys
+  "ISC", # pipewire -> libspa -> bindgen -> clang-sys -> libloading
+  "Apache-2.0 WITH LLVM-exception", # cfg-expr
+]
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+highlight = "all"
+skip = [
+    # ppv-lite86 uses an old version
+    { name = "zerocopy", version = "0.7.35" },
+    # pipewire -> libspa uses an old version
+    { name = "nix", version = "0.27.1" },
+    # pipewire -> libspa uses an old version
+    { name = "system-deps", version = "6.2.2" },
+    # pipewire -> libspa -> system-deps uses an old version
+    { name = "cfg-expr", version = "0.15.8" },
+]

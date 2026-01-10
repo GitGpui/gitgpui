@@ -1,0 +1,59 @@
+name: docs
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gtk-rs/gtk4-rs/gtk4:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo dnf install -y pipewire-devel clang-devel
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+      - uses: actions-rs/cargo@v1
+        env:
+          RUSTFLAGS: --cfg docsrs
+          RUSTDOCFLAGS: --cfg docsrs -Z unstable-options --extern-html-root-url=zbus=https://docs.rs/zbus/latest/
+              --extern-html-root-url=pipewire=https://pipewire.pages.freedesktop.org/pipewire-rs/
+              --extern-html-root-url=zvariant=https://docs.rs/zvariant/latest/
+              --extern-html-root-url=enumflags2=https://docs.rs/enumflags2/latest/
+        with:
+          command: doc
+          args: --package ashpd --features "gtk4,pipewire,wayland,raw_handle,backend" --no-deps
+
+      - name: Fix permissions
+        run: |
+          chmod -c -R +rX "target/doc/" | while read line; do
+            echo "::warning title=Invalid file permissions automatically fixed::$line"
+          done
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./target/doc/
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,91 @@
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+name: CI
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gtk-rs/gtk4-rs/gtk4:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo dnf install -y pipewire-devel clang-devel
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --features "gtk4,pipewire,wayland,raw_handle,tracing,backend"
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gtk-rs/gtk4-rs/gtk4:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo dnf install -y pipewire-devel clang-devel
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --features "gtk4,pipewire,wayland,raw_handle,tracing,backend"
+
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gtk-rs/gtk4-rs/gtk4:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo dnf install -y pipewire-devel clang-devel
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add rustfmt
+      - uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/gtk-rs/gtk4-rs/gtk4:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo dnf install -y pipewire-devel clang-devel
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - run: rustup component add clippy
+      - uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --features "gtk4,pipewire,wayland,raw_handle,tracing,backend" -- -D warnings
+
+  cargo-deny:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+        - uses: EmbarkStudios/cargo-deny-action@v1

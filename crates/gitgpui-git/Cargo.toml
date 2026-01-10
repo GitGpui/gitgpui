@@ -1,0 +1,15 @@
+[package]
+name = "gitgpui-git"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+
+[dependencies]
+gitgpui-core = { path = "../gitgpui-core" }
