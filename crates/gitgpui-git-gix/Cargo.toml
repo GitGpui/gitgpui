@@ -11,4 +11,4 @@ workspace = true
 [dependencies]
 gitgpui-core = { path = "../gitgpui-core" }
 gix = "0.70"
-
+gix-diff = "0.50"

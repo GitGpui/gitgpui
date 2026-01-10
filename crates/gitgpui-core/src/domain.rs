@@ -44,9 +44,21 @@ pub struct Remote {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RemoteBranch {
+    pub remote: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileStatus {
     pub path: PathBuf,
     pub kind: FileStatusKind,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RepoStatus {
+    pub staged: Vec<FileStatus>,
+    pub unstaged: Vec<FileStatus>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,6 +69,76 @@ pub enum FileStatusKind {
     Deleted,
     Renamed,
     Conflicted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffArea {
+    Staged,
+    Unstaged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffTarget {
+    pub path: PathBuf,
+    pub area: DiffArea,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Diff {
+    pub target: DiffTarget,
+    pub lines: Vec<DiffLine>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiffLine {
+    pub kind: DiffLineKind,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiffLineKind {
+    Header,
+    Hunk,
+    Add,
+    Remove,
+    Context,
+}
+
+impl Diff {
+    pub fn from_unified(target: DiffTarget, text: &str) -> Self {
+        let mut lines = Vec::new();
+
+        for raw in text.lines() {
+            let kind = if raw.starts_with("@@") {
+                DiffLineKind::Hunk
+            } else if raw.starts_with("diff ")
+                || raw.starts_with("index ")
+                || raw.starts_with("--- ")
+                || raw.starts_with("+++ ")
+                || raw.starts_with("new file mode ")
+                || raw.starts_with("deleted file mode ")
+                || raw.starts_with("similarity index ")
+                || raw.starts_with("rename from ")
+                || raw.starts_with("rename to ")
+                || raw.starts_with("Binary files ")
+            {
+                DiffLineKind::Header
+            } else if raw.starts_with('+') && !raw.starts_with("+++") {
+                DiffLineKind::Add
+            } else if raw.starts_with('-') && !raw.starts_with("---") {
+                DiffLineKind::Remove
+            } else {
+                DiffLineKind::Context
+            };
+
+            lines.push(DiffLine {
+                kind,
+                text: raw.to_string(),
+            });
+        }
+
+        Self { target, lines }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

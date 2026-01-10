@@ -13,3 +13,7 @@ gitgpui-core = { path = "../gitgpui-core" }
 gitgpui-state = { path = "../gitgpui-state" }
 gitgpui-ui = { path = "../gitgpui-ui" }
 gpui = "0.2.2"
+unicode-segmentation = "1.12.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.11.0", default-features = false, features = ["async-std"] }

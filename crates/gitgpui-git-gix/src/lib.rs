@@ -1,13 +1,15 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitId, FileStatus, FileStatusKind, LogCursor, LogPage, Remote, RepoSpec,
+    Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, LogCursor, LogPage,
+    Remote, RemoteBranch, RepoSpec, RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::{GitBackend, GitRepository, Result};
+use gitgpui_core::services::{GitBackend, GitRepository, PullMode, Result};
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+use std::{process::Command, str};
 
 pub struct GixBackend;
 
@@ -134,6 +136,26 @@ impl GitRepository for GixRepo {
         })
     }
 
+    fn current_branch(&self) -> Result<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rev-parse")
+            .arg("--abbrev-ref")
+            .arg("HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !output.status.success() {
+            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git rev-parse failed: {stderr}"
+            ))));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     fn list_branches(&self) -> Result<Vec<Branch>> {
         let repo = self._repo.to_thread_local();
 
@@ -189,14 +211,35 @@ impl GitRepository for GixRepo {
         Ok(remotes)
     }
 
-    fn status(&self) -> Result<Vec<gitgpui_core::domain::FileStatus>> {
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("for-each-ref")
+            .arg("--format=%(refname:strip=2)")
+            .arg("refs/remotes")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !output.status.success() {
+            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git for-each-ref refs/remotes failed: {stderr}"
+            ))));
+        }
+
+        Ok(parse_remote_branches(&String::from_utf8_lossy(&output.stdout)))
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
         let repo = self._repo.to_thread_local();
         let platform = repo
             .status(gix::progress::Discard)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
             .untracked_files(gix::status::UntrackedFiles::Files);
 
-        let mut out = Vec::new();
+        let mut unstaged = Vec::new();
+        let mut staged = Vec::new();
         let iter = platform
             .into_iter(std::iter::empty::<gix::bstr::BString>())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status iter: {e}"))))?;
@@ -212,7 +255,7 @@ impl GitRepository for GixRepo {
                     } => {
                         let path = PathBuf::from(rela_path.to_str_lossy().into_owned());
                         let kind = map_entry_status(status);
-                        out.push(FileStatus { path, kind });
+                        unstaged.push(FileStatus { path, kind });
                     }
                     gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
                         let kind = match entry.status {
@@ -223,7 +266,7 @@ impl GitRepository for GixRepo {
                         };
 
                         let path = PathBuf::from(entry.rela_path.to_str_lossy().into_owned());
-                        out.push(FileStatus { path, kind });
+                        unstaged.push(FileStatus { path, kind });
                     }
                     gix::status::index_worktree::Item::Rewrite {
                         dirwalk_entry, copy, ..
@@ -234,24 +277,88 @@ impl GitRepository for GixRepo {
                             FileStatusKind::Renamed
                         };
 
-                        let path = PathBuf::from(dirwalk_entry.rela_path.to_str_lossy().into_owned());
-                        out.push(FileStatus { path, kind });
+                        let path =
+                            PathBuf::from(dirwalk_entry.rela_path.to_str_lossy().into_owned());
+                        unstaged.push(FileStatus { path, kind });
                     }
                 },
 
-                // Staged changes will be handled later when we split status into
-                // "index" vs "worktree" sections in the domain model.
-                gix::status::Item::TreeIndex(_) => {}
+                gix::status::Item::TreeIndex(change) => {
+                    use gix_diff::index::ChangeRef;
+
+                    let (path, kind) = match change {
+                        ChangeRef::Addition { location, .. } => (
+                            PathBuf::from(location.to_str_lossy().into_owned()),
+                            FileStatusKind::Added,
+                        ),
+                        ChangeRef::Deletion { location, .. } => (
+                            PathBuf::from(location.to_str_lossy().into_owned()),
+                            FileStatusKind::Deleted,
+                        ),
+                        ChangeRef::Modification { location, .. } => (
+                            PathBuf::from(location.to_str_lossy().into_owned()),
+                            FileStatusKind::Modified,
+                        ),
+                        ChangeRef::Rewrite { location, copy, .. } => (
+                            PathBuf::from(location.to_str_lossy().into_owned()),
+                            if copy {
+                                FileStatusKind::Added
+                            } else {
+                                FileStatusKind::Renamed
+                            },
+                        ),
+                    };
+
+                    staged.push(FileStatus { path, kind });
+                }
             }
         }
 
-        Ok(out)
+        staged.sort_by(|a, b| a.path.cmp(&b.path));
+        unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+
+        Ok(RepoStatus { staged, unstaged })
+    }
+
+    fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("diff")
+            .arg("--no-ext-diff");
+
+        if matches!(target.area, DiffArea::Staged) {
+            cmd.arg("--cached");
+        }
+
+        cmd.arg("--").arg(&target.path);
+
+        let output = cmd
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let ok_exit = output.status.success() || output.status.code() == Some(1);
+        if !ok_exit {
+            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git diff failed: {stderr}"
+            ))));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     fn create_branch(&self, _name: &str, _target: &gitgpui_core::domain::CommitId) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: create_branch not implemented yet",
-        )))
+        let _ = _target;
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("branch")
+            .arg(_name);
+        run_git_simple(cmd, "git branch")
     }
 
     fn delete_branch(&self, _name: &str) -> Result<()> {
@@ -261,15 +368,27 @@ impl GitRepository for GixRepo {
     }
 
     fn checkout_branch(&self, _name: &str) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: checkout_branch not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout")
+            .arg(_name);
+        run_git_simple(cmd, "git checkout")
     }
 
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: stash_create not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("stash")
+            .arg("push");
+        if _include_untracked {
+            cmd.arg("-u");
+        }
+        if !_message.is_empty() {
+            cmd.arg("-m").arg(_message);
+        }
+        run_git_simple(cmd, "git stash push")
     }
 
     fn stash_list(&self) -> Result<Vec<gitgpui_core::domain::StashEntry>> {
@@ -290,10 +409,134 @@ impl GitRepository for GixRepo {
         )))
     }
 
+    fn stage(&self, paths: &[&Path]) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("add").arg("--");
+        for path in paths {
+            cmd.arg(path);
+        }
+        run_git_simple(cmd, "git add")
+    }
+
+    fn unstage(&self, paths: &[&Path]) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("restore")
+            .arg("--staged")
+            .arg("--");
+        for path in paths {
+            cmd.arg(path);
+        }
+        run_git_simple(cmd, "git restore --staged")
+    }
+
+    fn commit(&self, message: &str) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("commit")
+            .arg("-m")
+            .arg(message);
+        run_git_simple(cmd, "git commit")
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("fetch")
+            .arg("--all");
+        run_git_simple(cmd, "git fetch --all")
+    }
+
+    fn pull(&self, mode: PullMode) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
+        match mode {
+            PullMode::Default => {}
+            PullMode::FastForwardIfPossible => {
+                cmd.arg("--ff");
+            }
+            PullMode::FastForwardOnly => {
+                cmd.arg("--ff-only");
+            }
+            PullMode::Rebase => {
+                cmd.arg("--rebase");
+            }
+        }
+        run_git_simple(cmd, "git pull")
+    }
+
+    fn push(&self) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("push");
+        run_git_simple(cmd, "git push")
+    }
+
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "gix backend skeleton: discard not implemented yet",
         )))
+    }
+}
+
+fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    let ok_exit = output.status.success() || output.status.code() == Some(1);
+    if !ok_exit {
+        let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{label} failed: {stderr}"
+        ))));
+    }
+
+    Ok(())
+}
+
+fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
+    let mut branches = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.ends_with("/HEAD") {
+            continue;
+        }
+        let Some((remote, name)) = line.split_once('/') else {
+            continue;
+        };
+        branches.push(RemoteBranch {
+            remote: remote.to_string(),
+            name: name.to_string(),
+        });
+    }
+    branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+    branches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_remote_branches_splits_and_skips_head() {
+        let output = "origin/HEAD\norigin/main\nupstream/feature/foo\n\n";
+        let branches = parse_remote_branches(output);
+        assert_eq!(
+            branches,
+            vec![
+                RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "main".to_string()
+                },
+                RemoteBranch {
+                    remote: "upstream".to_string(),
+                    name: "feature/foo".to_string()
+                },
+            ]
+        );
     }
 }
 

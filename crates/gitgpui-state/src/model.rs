@@ -2,7 +2,8 @@ use gitgpui_core::domain::*;
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
-    pub current_repo: Option<RepoState>,
+    pub repos: Vec<RepoState>,
+    pub active_repo: Option<RepoId>,
 }
 
 #[derive(Clone, Debug)]
@@ -11,10 +12,17 @@ pub struct RepoState {
     pub spec: RepoSpec,
 
     pub open: Loadable<()>,
+    pub head_branch: Loadable<String>,
     pub branches: Loadable<Vec<Branch>>,
     pub remotes: Loadable<Vec<Remote>>,
-    pub status: Loadable<Vec<FileStatus>>,
+    pub remote_branches: Loadable<Vec<RemoteBranch>>,
+    pub status: Loadable<RepoStatus>,
     pub log: Loadable<LogPage>,
+
+    pub diff_target: Option<DiffTarget>,
+    pub diff: Loadable<Diff>,
+
+    pub last_error: Option<String>,
 }
 
 impl RepoState {
@@ -23,10 +31,15 @@ impl RepoState {
             id,
             spec,
             open: Loadable::Loading,
+            head_branch: Loadable::NotLoaded,
             branches: Loadable::NotLoaded,
             remotes: Loadable::NotLoaded,
+            remote_branches: Loadable::NotLoaded,
             status: Loadable::NotLoaded,
             log: Loadable::NotLoaded,
+            diff_target: None,
+            diff: Loadable::NotLoaded,
+            last_error: None,
         }
     }
 }
@@ -47,4 +60,3 @@ impl<T> Loadable<T> {
         matches!(self, Self::Loading)
     }
 }
-

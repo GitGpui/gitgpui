@@ -36,6 +36,10 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
+    fn current_branch(&self) -> Result<String> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
     fn list_branches(&self) -> Result<Vec<Branch>> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
@@ -44,7 +48,15 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
-    fn status(&self) -> Result<Vec<FileStatus>> {
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
@@ -76,8 +88,31 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn pull(&self, _mode: gitgpui_core::services::PullMode) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn push(&self) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 }
-
