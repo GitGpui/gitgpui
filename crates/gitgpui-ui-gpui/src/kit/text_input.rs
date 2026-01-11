@@ -1,13 +1,37 @@
+use crate::theme::AppTheme;
 use gpui::{
-    App, Bounds, ClickEvent, Context, CursorStyle, Element, ElementId, ElementInputHandler,
+    App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler,
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine,
     SharedString, Style, TextRun, UnderlineStyle, UTF16Selection, Window, div, fill, hsla, point,
-    px, relative, rgba, rgb, size,
+    px, relative, size, Rgba,
 };
 use gpui::prelude::*;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation as _;
+
+#[derive(Clone, Copy, Debug)]
+struct TextInputStyle {
+    is_dark: bool,
+    background: Rgba,
+    border: Rgba,
+    radius: f32,
+    cursor: Rgba,
+    selection: Rgba,
+}
+
+impl TextInputStyle {
+    fn from_theme(theme: AppTheme) -> Self {
+        Self {
+            is_dark: theme.is_dark,
+            background: theme.colors.surface_bg_elevated,
+            border: theme.colors.border,
+            radius: theme.radii.row,
+            cursor: theme.colors.accent,
+            selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct TextInputOptions {
@@ -20,6 +44,7 @@ pub struct TextInput {
     content: SharedString,
     placeholder: SharedString,
     multiline: bool,
+    style: TextInputStyle,
 
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -39,6 +64,7 @@ impl TextInput {
             content: "".into(),
             placeholder: options.placeholder,
             multiline: options.multiline,
+            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -50,6 +76,11 @@ impl TextInput {
 
     pub fn text(&self) -> &str {
         self.content.as_ref()
+    }
+
+    pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
+        self.style = TextInputStyle::from_theme(theme);
+        cx.notify();
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
@@ -363,7 +394,6 @@ impl Focusable for TextInput {
 
 struct TextElement {
     input: Entity<TextInput>,
-    is_dark: bool,
 }
 
 struct PrepaintState {
@@ -418,9 +448,10 @@ impl Element for TextElement {
         let content = input.content.clone();
         let selected_range = input.selected_range.clone();
         let cursor = input.cursor_offset();
+        let style_colors = input.style;
         let style = window.text_style();
 
-        let placeholder_color = if self.is_dark {
+        let placeholder_color = if style_colors.is_dark {
             hsla(0., 0., 1., 0.35)
         } else {
             hsla(0., 0., 0., 0.2)
@@ -481,7 +512,7 @@ impl Element for TextElement {
                         point(bounds.left() + cursor_pos, bounds.top()),
                         size(px(2.), bounds.bottom() - bounds.top()),
                     ),
-                    rgb(0x60A5FA),
+                    style_colors.cursor,
                 )),
             )
         } else {
@@ -491,7 +522,7 @@ impl Element for TextElement {
                         point(bounds.left() + line.x_for_index(selected_range.start), bounds.top()),
                         point(bounds.left() + line.x_for_index(selected_range.end), bounds.bottom()),
                     ),
-                    rgba(0x335EA8FF),
+                    style_colors.selection,
                 )),
                 None,
             )
@@ -541,7 +572,7 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_dark = true;
+        let style = self.style;
         let focus = self.focus_handle.clone();
 
         div()
@@ -553,15 +584,17 @@ impl Render for TextInput {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_key_down(cx.listener(Self::on_key_down))
-            .bg(rgb(0x0B1220))
+            .bg(style.background)
             .border_1()
-            .border_color(rgb(0x1F2A37))
-            .rounded(px(8.0))
+            .border_color(style.border)
+            .rounded(px(style.radius))
             .line_height(window.line_height())
             .text_size(px(13.0))
-            .child(div().p(px(8.0)).child(TextElement {
-                input: cx.entity(),
-                is_dark,
-            }))
+            .child(div().p(px(8.0)).child(TextElement { input: cx.entity() }))
     }
+}
+
+fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
+    color.a = alpha;
+    color
 }

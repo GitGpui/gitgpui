@@ -10,5 +10,6 @@ mod tab_bar;
 
 pub use button::{Button, ButtonStyle};
 pub use split_button::{SplitButton, SplitButtonStyle};
+#[allow(unused_imports)]
 pub use tab::{Tab, TabCloseSide, TabPosition};
 pub use tab_bar::TabBar;

@@ -1,5 +1,5 @@
 use crate::theme::AppTheme;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
+use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
 use gpui::prelude::*;
 
 use super::Tab;
@@ -40,15 +40,12 @@ impl TabBar {
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
         div()
             .id(self.id)
+            .group("tab_bar")
             .flex()
             .items_center()
             .w_full()
             .h(Tab::container_height())
             .bg(theme.colors.surface_bg)
-            .border_1()
-            .border_color(theme.colors.border)
-            .rounded(px(theme.radii.panel))
-            .overflow_hidden()
             .when(!self.start.is_empty(), |this| {
                 this.child(
                     div()
@@ -57,6 +54,7 @@ impl TabBar {
                         .gap_2()
                         .px_2()
                         .h_full()
+                        .border_b_1()
                         .border_r_1()
                         .border_color(theme.colors.border)
                         .children(self.start),
@@ -64,9 +62,19 @@ impl TabBar {
             })
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .h_full()
                     .overflow_x_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .border_b_1()
+                            .border_color(theme.colors.border),
+                    )
                     .child(div().flex().items_center().h_full().children(self.tabs)),
             )
             .when(!self.end.is_empty(), |this| {
@@ -77,6 +85,7 @@ impl TabBar {
                         .gap_2()
                         .px_2()
                         .h_full()
+                        .border_b_1()
                         .border_l_1()
                         .border_color(theme.colors.border)
                         .children(self.end),

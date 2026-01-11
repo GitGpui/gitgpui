@@ -1,6 +1,11 @@
 use crate::{components, kit, theme::AppTheme, view, zed_port as zed};
+use gitgpui_core::error::{Error, ErrorKind};
+use gitgpui_core::services::{GitBackend, GitRepository, Result};
+use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
-use gpui::{Decorations, Tiling, div, px};
+use gpui::{Decorations, Modifiers, MouseButton, Tiling, div, px};
+use std::path::Path;
+use std::sync::Arc;
 
 fn assert_no_panic(label: &str, f: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
@@ -10,91 +15,91 @@ fn assert_no_panic(label: &str, f: impl FnOnce()) {
 
 #[test]
 fn builds_pure_components_without_panics() {
-    let theme = AppTheme::zed_one_dark();
+    for theme in [AppTheme::zed_ayu_dark(), AppTheme::zed_one_light()] {
+        assert_no_panic("components::pill", || {
+            let _ = components::pill(theme, "Label", theme.colors.accent);
+        });
 
-    assert_no_panic("components::pill", || {
-        let _ = components::pill(theme, "Label", theme.colors.accent);
-    });
+        assert_no_panic("components::empty_state", || {
+            let _ = components::empty_state(theme, "Title", "Message");
+        });
 
-    assert_no_panic("components::empty_state", || {
-        let _ = components::empty_state(theme, "Title", "Message");
-    });
+        assert_no_panic("components::panel", || {
+            let _ = components::panel(theme, "Panel", None, div().child("body"));
+        });
 
-    assert_no_panic("components::panel", || {
-        let _ = components::panel(theme, "Panel", None, div().child("body"));
-    });
+        assert_no_panic("kit::Button render variants", || {
+            let _ = kit::Button::new("k1", "Primary")
+                .style(kit::ButtonStyle::Primary)
+                .render(theme);
+            let _ = kit::Button::new("k2", "Secondary")
+                .style(kit::ButtonStyle::Secondary)
+                .render(theme);
+            let _ = kit::Button::new("k3", "Danger")
+                .style(kit::ButtonStyle::Danger)
+                .render(theme);
+            let _ = kit::Button::new("k4", "Disabled")
+                .style(kit::ButtonStyle::Secondary)
+                .disabled(true)
+                .render(theme);
+        });
 
-    assert_no_panic("kit::Button render variants", || {
-        let _ = kit::Button::new("k1", "Primary")
-            .style(kit::ButtonStyle::Primary)
-            .render(theme);
-        let _ = kit::Button::new("k2", "Secondary")
-            .style(kit::ButtonStyle::Secondary)
-            .render(theme);
-        let _ = kit::Button::new("k3", "Danger")
-            .style(kit::ButtonStyle::Danger)
-            .render(theme);
-        let _ = kit::Button::new("k4", "Disabled")
-            .style(kit::ButtonStyle::Secondary)
-            .disabled(true)
-            .render(theme);
-    });
+        assert_no_panic("zed::Button render variants", || {
+            let _ = zed::Button::new("z1", "Filled")
+                .style(zed::ButtonStyle::Filled)
+                .render(theme);
+            let _ = zed::Button::new("z2", "Outlined")
+                .style(zed::ButtonStyle::Outlined)
+                .render(theme);
+            let _ = zed::Button::new("z3", "Subtle")
+                .style(zed::ButtonStyle::Subtle)
+                .render(theme);
+            let _ = zed::Button::new("z4", "Disabled")
+                .style(zed::ButtonStyle::Outlined)
+                .disabled(true)
+                .render(theme);
+        });
 
-    assert_no_panic("zed::Button render variants", || {
-        let _ = zed::Button::new("z1", "Filled")
-            .style(zed::ButtonStyle::Filled)
-            .render(theme);
-        let _ = zed::Button::new("z2", "Outlined")
-            .style(zed::ButtonStyle::Outlined)
-            .render(theme);
-        let _ = zed::Button::new("z3", "Subtle")
-            .style(zed::ButtonStyle::Subtle)
-            .render(theme);
-        let _ = zed::Button::new("z4", "Disabled")
-            .style(zed::ButtonStyle::Outlined)
-            .disabled(true)
-            .render(theme);
-    });
+        assert_no_panic("zed::SplitButton", || {
+            let left = zed::Button::new("s1", "Left")
+                .style(zed::ButtonStyle::Outlined)
+                .render(theme);
+            let right = zed::Button::new("s2", "Right")
+                .style(zed::ButtonStyle::Outlined)
+                .render(theme);
+            let _ = zed::SplitButton::new(left, right)
+                .style(zed::SplitButtonStyle::Outlined)
+                .render(theme);
+        });
 
-    assert_no_panic("zed::SplitButton", || {
-        let left = zed::Button::new("s1", "Left")
-            .style(zed::ButtonStyle::Outlined)
-            .render(theme);
-        let right = zed::Button::new("s2", "Right")
-            .style(zed::ButtonStyle::Outlined)
-            .render(theme);
-        let _ = zed::SplitButton::new(left, right)
-            .style(zed::SplitButtonStyle::Outlined)
-            .render(theme);
-    });
+        assert_no_panic("zed::Tab + TabBar", || {
+            let tab = zed::Tab::new(("t", 1u64))
+                .selected(true)
+                .child(div().child("Repo"))
+                .render(theme);
+            let _ = zed::TabBar::new("tb").tab(tab).render(theme);
+        });
 
-    assert_no_panic("zed::Tab + TabBar", || {
-        let tab = zed::Tab::new(("t", 1u64))
-            .selected(true)
-            .child(div().child("Repo"))
-            .render(theme);
-        let _ = zed::TabBar::new("tb").tab(tab).render(theme);
-    });
+        assert_no_panic("view::window_frame", || {
+            let content = div().child("content").into_any_element();
+            let _ = view::window_frame(theme, Decorations::Server, content);
+            let _ = view::window_frame(
+                theme,
+                Decorations::Client {
+                    tiling: Tiling::default(),
+                },
+                div().child("content").into_any_element(),
+            );
+        });
 
-    assert_no_panic("view::window_frame", || {
-        let content = div().child("content").into_any_element();
-        let _ = view::window_frame(theme, Decorations::Server, content);
-        let _ = view::window_frame(
-            theme,
-            Decorations::Client {
-                tiling: Tiling::default(),
-            },
-            div().child("content").into_any_element(),
-        );
-    });
-
-    assert_no_panic("window-frame uses shadow/rounding", || {
-        let _ = div()
-            .rounded(px(theme.radii.panel))
-            .shadow_lg()
-            .border_1()
-            .child("x");
-    });
+        assert_no_panic("window-frame uses shadow/rounding", || {
+            let _ = div()
+                .rounded(px(theme.radii.panel))
+                .shadow_lg()
+                .border_1()
+                .child("x");
+        });
+    }
 }
 
 struct SmokeView {
@@ -116,7 +121,7 @@ impl SmokeView {
         });
 
         Self {
-            theme: AppTheme::zed_one_dark(),
+            theme: AppTheme::zed_ayu_dark(),
             input,
         }
     }
@@ -177,5 +182,63 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
             })
         })
         .unwrap();
+    });
+}
+
+struct TestBackend;
+
+impl GitBackend for TestBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Test backend does not open repositories",
+        )))
+    }
+}
+
+#[gpui::test]
+fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        cx.open_window(Default::default(), |window, cx| {
+            cx.new(|cx| crate::view::GitGpuiView::new(store, events, None, window, cx))
+        })
+        .unwrap();
+    });
+}
+
+    #[gpui::test]
+    fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| crate::view::GitGpuiView::new(store, events, None, window, cx));
+
+    // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
+    let picker_bounds = cx
+        .debug_bounds("repo_picker")
+        .expect("expected repo_picker in debug bounds");
+    cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let close_bounds = cx
+        .debug_bounds("repo_popover_close")
+        .expect("expected repo_popover_close in debug bounds");
+    cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(close_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(close_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).is_popover_open(),
+            "expected popover to close on click"
+        );
     });
 }

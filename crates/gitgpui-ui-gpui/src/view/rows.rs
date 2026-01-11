@@ -285,33 +285,7 @@ fn status_row(
 }
 
 fn diff_row(theme: AppTheme, ix: usize, mode: DiffViewMode, line: &AnnotatedDiffLine) -> AnyElement {
-    let (bg, fg, gutter_fg) = match line.kind {
-        gitgpui_core::domain::DiffLineKind::Header => (
-            theme.colors.surface_bg,
-            theme.colors.text_muted,
-            theme.colors.text_muted,
-        ),
-        gitgpui_core::domain::DiffLineKind::Hunk => (
-            theme.colors.surface_bg_elevated,
-            theme.colors.accent,
-            theme.colors.text_muted,
-        ),
-        gitgpui_core::domain::DiffLineKind::Add => (
-            gpui::rgb(0x0B2E1C),
-            gpui::rgb(0xBBF7D0),
-            gpui::rgb(0x86EFAC),
-        ),
-        gitgpui_core::domain::DiffLineKind::Remove => (
-            gpui::rgb(0x3A0D13),
-            gpui::rgb(0xFECACA),
-            gpui::rgb(0xFCA5A5),
-        ),
-        gitgpui_core::domain::DiffLineKind::Context => (
-            theme.colors.surface_bg_elevated,
-            theme.colors.text,
-            theme.colors.text_muted,
-        ),
-    };
+    let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
 
     let text = match line.kind {
         gitgpui_core::domain::DiffLineKind::Add => line.text.strip_prefix('+').unwrap_or(&line.text),
@@ -395,5 +369,46 @@ fn diff_row(theme: AppTheme, ix: usize, mode: DiffViewMode, line: &AnnotatedDiff
                     .child(right_text),
             )
             .into_any_element(),
+    }
+}
+
+fn diff_line_colors(
+    theme: AppTheme,
+    kind: gitgpui_core::domain::DiffLineKind,
+) -> (gpui::Rgba, gpui::Rgba, gpui::Rgba) {
+    use gitgpui_core::domain::DiffLineKind::*;
+
+    match (theme.is_dark, kind) {
+        (_, Header) => (
+            theme.colors.surface_bg,
+            theme.colors.text_muted,
+            theme.colors.text_muted,
+        ),
+        (_, Hunk) => (
+            theme.colors.surface_bg_elevated,
+            theme.colors.accent,
+            theme.colors.text_muted,
+        ),
+        (true, Add) => (gpui::rgb(0x0B2E1C), gpui::rgb(0xBBF7D0), gpui::rgb(0x86EFAC)),
+        (true, Remove) => (
+            gpui::rgb(0x3A0D13),
+            gpui::rgb(0xFECACA),
+            gpui::rgb(0xFCA5A5),
+        ),
+        (false, Add) => (
+            gpui::rgba(0xe6ffedff),
+            gpui::rgba(0x22863aff),
+            theme.colors.text_muted,
+        ),
+        (false, Remove) => (
+            gpui::rgba(0xffeef0ff),
+            gpui::rgba(0xcb2431ff),
+            theme.colors.text_muted,
+        ),
+        (_, Context) => (
+            theme.colors.surface_bg_elevated,
+            theme.colors.text,
+            theme.colors.text_muted,
+        ),
     }
 }

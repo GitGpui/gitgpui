@@ -5,6 +5,7 @@ impl GitGpuiView {
         let theme = self.theme;
         let active = self.active_repo_id();
         let repos_len = self.state.repos.len();
+        let active_ix = active.and_then(|id| self.state.repos.iter().position(|r| r.id == id));
 
         let mut bar = zed::TabBar::new("repo_tab_bar");
         for (ix, repo) in self.state.repos.iter().enumerate() {
@@ -26,7 +27,12 @@ impl GitGpuiView {
             } else if ix + 1 == repos_len {
                 zed::TabPosition::Last
             } else {
-                zed::TabPosition::Middle(std::cmp::Ordering::Equal)
+                let ordering = match (is_active, active_ix) {
+                    (true, _) => std::cmp::Ordering::Equal,
+                    (false, Some(active_ix)) => ix.cmp(&active_ix),
+                    (false, None) => std::cmp::Ordering::Equal,
+                };
+                zed::TabPosition::Middle(ordering)
             };
 
             let tab = zed::Tab::new(("repo_tab", repo_id.0))
@@ -44,7 +50,7 @@ impl GitGpuiView {
         }
 
         bar.end_child(
-            zed::Button::new("add_repo", "Open Repo…")
+            zed::Button::new("add_repo", "＋")
                 .style(zed::ButtonStyle::Subtle)
                 .on_click(theme, cx, |this, _e, window, cx| this.prompt_open_repo(window, cx)),
         )
@@ -115,6 +121,7 @@ impl GitGpuiView {
 
         let repo_picker = div()
             .id("repo_picker")
+            .debug_selector(|| "repo_picker".to_string())
             .flex()
             .items_center()
             .gap_2()
@@ -206,7 +213,7 @@ impl GitGpuiView {
                 cx.notify();
             });
 
-        let mut bar = div()
+        let bar = div()
             .flex()
             .items_center()
             .justify_between()
@@ -236,10 +243,6 @@ impl GitGpuiView {
                     .child(create_branch)
                     .child(stash),
             );
-
-        if let Some(kind) = self.popover {
-            bar = bar.child(self.popover_view(kind, cx));
-        }
 
         bar
     }
@@ -282,7 +285,8 @@ impl GitGpuiView {
                 }
                 menu.child(
                     div()
-                        .id(("popover_close", 0usize))
+                        .id("repo_popover_close")
+                        .debug_selector(|| "repo_popover_close".to_string())
                         .px_3()
                         .py_2()
                         .hover(move |s| s.bg(theme.colors.hover))
@@ -417,6 +421,7 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("app_menu_quit")
+                            .debug_selector(|| "app_menu_quit".to_string())
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
@@ -428,6 +433,7 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("app_menu_close")
+                            .debug_selector(|| "app_menu_close".to_string())
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
@@ -437,12 +443,20 @@ impl GitGpuiView {
             }
         };
 
+        let offset_y = match kind {
+            PopoverKind::AppMenu => px(40.0),
+            _ => px(8.0),
+        };
+
         anchored()
             .position(anchor)
             .anchor(Corner::TopLeft)
-            .offset(point(px(0.0), px(8.0)))
+            .offset(point(px(0.0), offset_y))
             .child(
                 div()
+                    .id("app_popover")
+                    .debug_selector(|| "app_popover".to_string())
+                    .occlude()
                     .bg(theme.colors.surface_bg)
                     .border_1()
                     .border_color(theme.colors.border)

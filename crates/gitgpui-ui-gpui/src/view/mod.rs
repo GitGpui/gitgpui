@@ -49,6 +49,7 @@ pub struct GitGpuiView {
     store: Arc<AppStore>,
     state: AppState,
     _poller: Poller,
+    _appearance_subscription: gpui::Subscription,
     theme: AppTheme,
 
     diff_view: DiffViewMode,
@@ -83,6 +84,7 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let store = Arc::new(store);
+        let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
         if let Some(path) = initial_path.or_else(|| std::env::current_dir().ok()) {
             store.dispatch(Msg::OpenRepo(path));
@@ -90,6 +92,22 @@ impl GitGpuiView {
 
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, weak_view, window, cx);
+
+        let appearance_subscription = {
+            let view = cx.weak_entity();
+            let mut first = true;
+            window.observe_window_appearance(move |window, app| {
+                if first {
+                    first = false;
+                    return;
+                }
+                let theme = AppTheme::default_for_window_appearance(window.appearance());
+                let _ = view.update(app, |this, cx| {
+                    this.set_theme(theme, cx);
+                    cx.notify();
+                });
+            })
+        };
 
         let open_repo_input = cx.new(|cx| {
             kit::TextInput::new(
@@ -128,7 +146,8 @@ impl GitGpuiView {
             state: store.snapshot(),
             store,
             _poller: poller,
-            theme: AppTheme::zed_one_dark(),
+            _appearance_subscription: appearance_subscription,
+            theme: initial_theme,
             diff_view: DiffViewMode::Inline,
             diff_cache: Vec::new(),
             open_repo_panel: false,
@@ -148,8 +167,18 @@ impl GitGpuiView {
             diagnostics_scroll: UniformListScrollHandle::default(),
         };
 
+        view.set_theme(initial_theme, cx);
         view.rebuild_diff_cache();
         view
+    }
+
+    fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        self.theme = theme;
+        self.open_repo_input.update(cx, |input, cx| input.set_theme(theme, cx));
+        self.commit_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.create_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
     }
 
     fn active_repo_id(&self) -> Option<RepoId> {
@@ -276,6 +305,11 @@ impl GitGpuiView {
         };
         self.diff_cache = annotate_unified(diff);
     }
+
+    #[cfg(test)]
+    pub(crate) fn is_popover_open(&self) -> bool {
+        self.popover.is_some()
+    }
 }
 
 impl Render for GitGpuiView {
@@ -342,6 +376,10 @@ impl Render for GitGpuiView {
                     .rounded(px(theme.radii.panel))
                     .child(err.clone()),
             );
+        }
+
+        if let Some(kind) = self.popover {
+            body = body.child(self.popover_view(kind, cx));
         }
 
         let mut root = div().size_full().cursor(cursor);

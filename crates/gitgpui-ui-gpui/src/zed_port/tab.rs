@@ -29,6 +29,9 @@ pub struct Tab {
 }
 
 impl Tab {
+    const START_TAB_SLOT_SIZE: gpui::Pixels = px(12.0);
+    const END_TAB_SLOT_SIZE: gpui::Pixels = px(14.0);
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
@@ -73,27 +76,41 @@ impl Tab {
     }
 
     pub fn container_height() -> gpui::Pixels {
-        px(30.0)
+        px(32.0)
     }
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
-        let (text_color, tab_bg, hover_bg) = if self.selected {
-            (theme.colors.text, theme.colors.window_bg, theme.colors.hover)
+        let (text_color, tab_bg) = if self.selected {
+            (theme.colors.text, theme.colors.window_bg)
         } else {
-            (
-                theme.colors.text_muted,
-                theme.colors.surface_bg,
-                with_alpha(theme.colors.hover, 0.8),
-            )
+            (theme.colors.text_muted, theme.colors.surface_bg)
         };
+        let hover_bg = theme.colors.hover;
 
         let (start_slot, end_slot) = match self.close_side {
             TabCloseSide::End => (self.start_slot, self.end_slot),
             TabCloseSide::Start => (self.end_slot, self.start_slot),
         };
 
+        let start_slot = div()
+            .flex_none()
+            .size(Self::START_TAB_SLOT_SIZE)
+            .flex()
+            .items_center()
+            .justify_center()
+            .children(start_slot);
+
+        let end_slot = div()
+            .flex_none()
+            .size(Self::END_TAB_SLOT_SIZE)
+            .flex()
+            .items_center()
+            .justify_center()
+            .children(end_slot);
+
         let mut base = self
             .div
+            .group("tab")
             .h(Self::container_height())
             .bg(tab_bg)
             .border_color(theme.colors.border)
@@ -104,30 +121,34 @@ impl Tab {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .h_full()
+                    .h(px(31.0))
                     .px_2()
                     .text_color(text_color)
-                    .children(start_slot)
+                    .child(start_slot)
                     .children(self.children)
-                    .children(end_slot),
+                    .child(end_slot),
             );
 
         base = match self.position {
-            TabPosition::First => base.border_b_1().border_r_1(),
-            TabPosition::Last => base.border_b_1().border_l_1().border_r_1(),
-            TabPosition::Middle(_) => base.border_b_1().border_l_1().border_r_1(),
+            TabPosition::First => {
+                if self.selected {
+                    base.pl(px(1.0)).border_r_1().pb(px(1.0))
+                } else {
+                    base.pl(px(1.0)).pr(px(1.0)).border_b_1()
+                }
+            }
+            TabPosition::Last => {
+                if self.selected {
+                    base.border_l_1().border_r_1().pb(px(1.0))
+                } else {
+                    base.pl(px(1.0)).border_b_1().border_r_1()
+                }
+            }
+            TabPosition::Middle(Ordering::Equal) => base.border_l_1().border_r_1().pb(px(1.0)),
+            TabPosition::Middle(Ordering::Less) => base.border_l_1().pr(px(1.0)).border_b_1(),
+            TabPosition::Middle(Ordering::Greater) => base.border_r_1().pl(px(1.0)).border_b_1(),
         };
-
-        if self.selected {
-            base = base.border_b_0();
-        }
 
         base
     }
 }
-
-fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
-    color
-}
-

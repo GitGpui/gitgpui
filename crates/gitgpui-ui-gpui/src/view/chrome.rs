@@ -95,6 +95,7 @@ impl GitGpuiView {
 
         let hamburger = div()
             .id("app_menu")
+            .debug_selector(|| "app_menu".to_string())
             .h_full()
             .px_2()
             .flex()
@@ -211,7 +212,7 @@ mod tests {
 
     #[test]
     fn titlebar_buttons_do_not_double_set_hover_style() {
-        let theme = AppTheme::zed_one_dark();
+        let theme = AppTheme::zed_ayu_dark();
         assert!(std::panic::catch_unwind(|| {
             let _ = titlebar_control_button(theme, theme.colors.hover);
         })
