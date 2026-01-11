@@ -1,6 +1,42 @@
 use super::*;
 
 impl GitGpuiView {
+    fn history_column_headers(&self) -> gpui::Div {
+        let theme = self.theme;
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.colors.text_muted)
+            .child(div().w(px(HISTORY_COL_BRANCH_PX)).child("Branch / Tag"))
+            .child(
+                div()
+                    .w(px(HISTORY_COL_GRAPH_PX))
+                    .flex()
+                    .justify_center()
+                    .child("GRAPH"),
+            )
+            .child(div().flex_1().child("COMMIT MESSAGE"))
+            .child(
+                div()
+                    .w(px(HISTORY_COL_DATE_PX))
+                    .flex()
+                    .justify_end()
+                    .child("COMMIT DATE / TIME"),
+            )
+            .child(
+                div()
+                    .w(px(HISTORY_COL_SHA_PX))
+                    .flex()
+                    .justify_end()
+                    .child("SHA"),
+            )
+    }
+
     pub(super) fn repo_tabs_bar(&mut self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let active = self.active_repo_id();
@@ -52,7 +88,9 @@ impl GitGpuiView {
         bar.end_child(
             zed::Button::new("add_repo", "＋")
                 .style(zed::ButtonStyle::Subtle)
-                .on_click(theme, cx, |this, _e, window, cx| this.prompt_open_repo(window, cx)),
+                .on_click(theme, cx, |this, _e, window, cx| {
+                    this.prompt_open_repo(window, cx)
+                }),
         )
         .render(theme)
     }
@@ -74,7 +112,12 @@ impl GitGpuiView {
             .border_color(theme.colors.border)
             .rounded(px(theme.radii.panel))
             .shadow_sm()
-            .child(div().text_sm().text_color(theme.colors.text_muted).child("Path"))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child("Path"),
+            )
             .child(div().flex_1().child(self.open_repo_input.clone()))
             .child(
                 zed::Button::new("open_repo_go", "Open")
@@ -90,16 +133,14 @@ impl GitGpuiView {
                         cx.notify();
                     }),
             )
-            .child(
-                zed::Button::new("open_repo_cancel", "Cancel").on_click(
-                    theme,
-                    cx,
-                    |this, _e, _w, cx| {
-                        this.open_repo_panel = false;
-                        cx.notify();
-                    },
-                ),
-            )
+            .child(zed::Button::new("open_repo_cancel", "Cancel").on_click(
+                theme,
+                cx,
+                |this, _e, _w, cx| {
+                    this.open_repo_panel = false;
+                    cx.notify();
+                },
+            ))
     }
 
     pub(super) fn action_bar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -129,7 +170,12 @@ impl GitGpuiView {
             .py_1()
             .rounded(px(theme.radii.row))
             .hover(move |s| s.bg(theme.colors.hover))
-            .child(div().text_sm().font_weight(FontWeight::BOLD).child("Repository"))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Repository"),
+            )
             .child(
                 div()
                     .text_sm()
@@ -152,8 +198,18 @@ impl GitGpuiView {
             .py_1()
             .rounded(px(theme.radii.row))
             .hover(move |s| s.bg(theme.colors.hover))
-            .child(div().text_sm().font_weight(FontWeight::BOLD).child("Branch"))
-            .child(div().text_sm().text_color(theme.colors.text_muted).child(branch))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Branch"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child(branch),
+            )
             .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
                 this.popover = Some(PopoverKind::BranchPicker);
                 this.popover_anchor = Some(e.position());
@@ -253,7 +309,9 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let anchor = self.popover_anchor.unwrap_or_else(|| point(px(64.0), px(64.0)));
+        let anchor = self
+            .popover_anchor
+            .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let close = cx.listener(|this, _e: &ClickEvent, _w, cx| {
             this.popover = None;
@@ -309,12 +367,17 @@ impl GitGpuiView {
                                         .py_2()
                                         .hover(move |s| s.bg(theme.colors.hover))
                                         .child(name.clone())
-                                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                            this.store.dispatch(Msg::CheckoutBranch { repo_id, name: name.clone() });
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        })),
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                this.store.dispatch(Msg::CheckoutBranch {
+                                                    repo_id,
+                                                    name: name.clone(),
+                                                });
+                                                this.popover = None;
+                                                this.popover_anchor = None;
+                                                cx.notify();
+                                            },
+                                        )),
                                 );
                             }
                         }
@@ -346,7 +409,9 @@ impl GitGpuiView {
                                 let name = this
                                     .create_branch_input
                                     .read_with(cx, |i, _| i.text().trim().to_string());
-                                if let Some(repo_id) = this.active_repo_id() && !name.is_empty() {
+                                if let Some(repo_id) = this.active_repo_id()
+                                    && !name.is_empty()
+                                {
                                     this.store.dispatch(Msg::CreateBranch { repo_id, name });
                                 }
                                 this.popover = None;
@@ -413,34 +478,32 @@ impl GitGpuiView {
                         .on_click(close),
                 )
             }
-            PopoverKind::AppMenu => {
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(200.0))
-                    .child(
-                        div()
-                            .id("app_menu_quit")
-                            .debug_selector(|| "app_menu_quit".to_string())
-                            .px_3()
-                            .py_2()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Quit")
-                            .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
-                                cx.quit();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("app_menu_close")
-                            .debug_selector(|| "app_menu_close".to_string())
-                            .px_3()
-                            .py_2()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Close")
-                            .on_click(close),
-                    )
-            }
+            PopoverKind::AppMenu => div()
+                .flex()
+                .flex_col()
+                .min_w(px(200.0))
+                .child(
+                    div()
+                        .id("app_menu_quit")
+                        .debug_selector(|| "app_menu_quit".to_string())
+                        .px_3()
+                        .py_2()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .child("Quit")
+                        .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
+                            cx.quit();
+                        })),
+                )
+                .child(
+                    div()
+                        .id("app_menu_close")
+                        .debug_selector(|| "app_menu_close".to_string())
+                        .px_3()
+                        .py_2()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .child("Close")
+                        .on_click(close),
+                ),
         };
 
         let offset_y = match kind {
@@ -480,30 +543,21 @@ impl GitGpuiView {
             })
             .unwrap_or(0);
 
-        let remotes_count = repo.map(Self::remote_rows).map(|rows| rows.len()).unwrap_or(0);
-
-        let commits_count = repo
-            .and_then(|r| match &r.log {
-                Loadable::Ready(v) => Some(v.commits.len()),
-                _ => None,
-            })
+        let remotes_count = repo
+            .map(Self::remote_rows)
+            .map(|rows| rows.len())
             .unwrap_or(0);
-
-        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
-
-        let (staged_count, unstaged_count) = repo
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
-                _ => None,
-            })
-            .unwrap_or((0, 0));
 
         let branches_list: AnyElement = if branches_count == 0 {
             components::empty_state(theme, "Local", "No branches loaded.").into_any_element()
         } else {
-            let list = uniform_list("branches", branches_count, cx.processor(Self::render_branch_rows))
-                .h(px(140.0))
-                .track_scroll(self.branches_scroll.clone());
+            let list = uniform_list(
+                "branches",
+                branches_count,
+                cx.processor(Self::render_branch_rows),
+            )
+            .h(px(140.0))
+            .track_scroll(self.branches_scroll.clone());
             let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
             div()
                 .id("branches_scroll_container")
@@ -517,9 +571,13 @@ impl GitGpuiView {
         let remotes_list: AnyElement = if remotes_count == 0 {
             components::empty_state(theme, "Remote", "No remotes loaded.").into_any_element()
         } else {
-            let list = uniform_list("remotes", remotes_count, cx.processor(Self::render_remote_rows))
-                .h(px(160.0))
-                .track_scroll(self.remotes_scroll.clone());
+            let list = uniform_list(
+                "remotes",
+                remotes_count,
+                cx.processor(Self::render_remote_rows),
+            )
+            .h(px(160.0))
+            .track_scroll(self.remotes_scroll.clone());
             let scroll_handle = self.remotes_scroll.0.borrow().base_handle.clone();
             div()
                 .id("remotes_scroll_container")
@@ -530,21 +588,26 @@ impl GitGpuiView {
                 .into_any_element()
         };
 
-        let commits_list: AnyElement = if commits_count == 0 {
-            components::empty_state(theme, "History", "No commits loaded.").into_any_element()
-        } else {
-            let list = uniform_list("history", commits_count, cx.processor(Self::render_commit_rows))
-                .h(px(240.0))
-                .track_scroll(self.commits_scroll.clone());
-            let scroll_handle = self.commits_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("history_scroll_container")
-                .relative()
-                .h(px(240.0))
-                .child(list)
-                .child(kit::Scrollbar::new("history_scrollbar", scroll_handle).render(theme))
-                .into_any_element()
-        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(components::panel(theme, "Local", None, branches_list))
+            .child(components::panel(theme, "Remote", None, remotes_list))
+    }
+
+    pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let repo = self.active_repo();
+
+        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
+
+        let (staged_count, unstaged_count) = repo
+            .and_then(|r| match &r.status {
+                Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
+                _ => None,
+            })
+            .unwrap_or((0, 0));
 
         let diagnostics_list: AnyElement = if diagnostics_count == 0 {
             components::empty_state(theme, "Diagnostics", "No issues.").into_any_element()
@@ -568,16 +631,12 @@ impl GitGpuiView {
 
         let unstaged_list = self.status_list(cx, DiffArea::Unstaged, unstaged_count);
         let staged_list = self.status_list(cx, DiffArea::Staged, staged_count);
-
         let commit_box = self.commit_box(cx);
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(components::panel(theme, "Local", None, branches_list))
-            .child(components::panel(theme, "Remote", None, remotes_list))
-            .child(components::panel(theme, "History", None, commits_list))
             .child(components::panel(
                 theme,
                 "Diagnostics",
@@ -615,9 +674,10 @@ impl GitGpuiView {
         }
         match area {
             DiffArea::Unstaged => {
-                let list = uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
-                    .h(px(140.0))
-                    .track_scroll(self.unstaged_scroll.clone());
+                let list =
+                    uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
+                        .h(px(140.0))
+                        .track_scroll(self.unstaged_scroll.clone());
                 let scroll_handle = self.unstaged_scroll.0.borrow().base_handle.clone();
                 div()
                     .id("unstaged_scroll_container")
@@ -668,7 +728,8 @@ impl GitGpuiView {
                                 let message = this
                                     .commit_message_input
                                     .read_with(cx, |i, _| i.text().trim().to_string());
-                                if let Some(repo_id) = this.active_repo_id() && !message.is_empty()
+                                if let Some(repo_id) = this.active_repo_id()
+                                    && !message.is_empty()
                                 {
                                     this.store.dispatch(Msg::Commit { repo_id, message });
                                 }
@@ -678,9 +739,71 @@ impl GitGpuiView {
             )
     }
 
+    pub(super) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let repo = self.active_repo();
+
+        let commits_count = repo
+            .and_then(|r| match &r.log {
+                Loadable::Ready(v) => Some(v.commits.len()),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        let body: AnyElement = if commits_count == 0 {
+            match repo.map(|r| &r.log) {
+                None => {
+                    components::empty_state(theme, "History", "No repository.").into_any_element()
+                }
+                Some(Loadable::Loading) => {
+                    components::empty_state(theme, "History", "Loading…").into_any_element()
+                }
+                Some(Loadable::Error(e)) => {
+                    components::empty_state(theme, "History", e.clone()).into_any_element()
+                }
+                Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                    components::empty_state(theme, "History", "No commits loaded.")
+                        .into_any_element()
+                }
+            }
+        } else {
+            let list = uniform_list(
+                "history_main",
+                commits_count,
+                cx.processor(Self::render_history_table_rows),
+            )
+            .h_full()
+            .track_scroll(self.history_scroll.clone());
+            let scroll_handle = self.history_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("history_main_scroll_container")
+                .relative()
+                .flex_1()
+                .child(list)
+                .child(kit::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
+                .into_any_element()
+        };
+
+        let table = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .h_full()
+            .child(self.history_column_headers())
+            .child(div().flex_1().child(body));
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .flex_1()
+            .child(components::panel(theme, "History", None, table).flex_1())
+    }
+
     pub(super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo = self.active_repo();
+        let repo_id = self.active_repo_id();
 
         let title = repo
             .and_then(|r| r.diff_target.as_ref())
@@ -697,56 +820,73 @@ impl GitGpuiView {
             })
             .unwrap_or_else(|| "Select a file to view diff".to_string());
 
+        let mut controls = div().flex().items_center().gap_1();
+        controls = controls
+            .child(
+                zed::Button::new("diff_inline", "Inline")
+                    .style(if self.diff_view == DiffViewMode::Inline {
+                        zed::ButtonStyle::Filled
+                    } else {
+                        zed::ButtonStyle::Outlined
+                    })
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_view = DiffViewMode::Inline;
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_split", "Split")
+                    .style(if self.diff_view == DiffViewMode::Split {
+                        zed::ButtonStyle::Filled
+                    } else {
+                        zed::ButtonStyle::Outlined
+                    })
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.diff_view = DiffViewMode::Split;
+                        cx.notify();
+                    }),
+            );
+
+        if let Some(repo_id) = repo_id {
+            controls = controls.child(
+                zed::Button::new("diff_close", "✕")
+                    .style(zed::ButtonStyle::Transparent)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        cx.notify();
+                    }),
+            );
+        }
+
         let header = div()
             .flex()
             .items_center()
             .justify_between()
             .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        zed::Button::new("diff_inline", "Inline")
-                            .style(if self.diff_view == DiffViewMode::Inline {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_view = DiffViewMode::Inline;
-                                cx.notify();
-                            }),
-                    )
-                    .child(
-                        zed::Button::new("diff_split", "Split")
-                            .style(if self.diff_view == DiffViewMode::Split {
-                                zed::ButtonStyle::Filled
-                            } else {
-                                zed::ButtonStyle::Outlined
-                            })
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                this.diff_view = DiffViewMode::Split;
-                                cx.notify();
-                            }),
-                    ),
-            );
+            .child(controls);
 
         let body: AnyElement = match repo.map(|r| &r.diff) {
             None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
             Some(Loadable::NotLoaded) => {
                 components::empty_state(theme, "Diff", "Select a file.").into_any_element()
             }
-            Some(Loadable::Loading) => components::empty_state(theme, "Diff", "Loading…").into_any_element(),
-            Some(Loadable::Error(e)) => components::empty_state(theme, "Diff", e.clone()).into_any_element(),
+            Some(Loadable::Loading) => {
+                components::empty_state(theme, "Diff", "Loading…").into_any_element()
+            }
+            Some(Loadable::Error(e)) => {
+                components::empty_state(theme, "Diff", e.clone()).into_any_element()
+            }
             Some(Loadable::Ready(_)) => {
                 if self.diff_cache.is_empty() {
                     components::empty_state(theme, "Diff", "No differences.").into_any_element()
                 } else {
-                    let list = uniform_list("diff", self.diff_cache.len(), cx.processor(Self::render_diff_rows))
-                        .h_full()
-                        .track_scroll(self.diff_scroll.clone());
+                    let list = uniform_list(
+                        "diff",
+                        self.diff_cache.len(),
+                        cx.processor(Self::render_diff_rows),
+                    )
+                    .h_full()
+                    .track_scroll(self.diff_scroll.clone());
                     let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
                     div()
                         .id("diff_scroll_container")

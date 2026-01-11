@@ -1,21 +1,23 @@
 use crate::{components, kit, theme::AppTheme, zed_port as zed};
 use gitgpui_core::diff::{AnnotatedDiffLine, annotate_unified};
-use gitgpui_core::domain::{Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus};
+use gitgpui_core::domain::{
+    Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
+};
 use gitgpui_core::services::PullMode;
-use gitgpui_state::msg::{Msg, StoreEvent};
 use gitgpui_state::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoState};
+use gitgpui_state::msg::{Msg, StoreEvent};
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Entity, FontWeight,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, ResizeEdge, SharedString,
-    ScrollHandle, Size, Timer, Tiling, UniformListScrollHandle, WeakEntity, Window,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
+    SharedString, Size, Tiling, Timer, UniformListScrollHandle, WeakEntity, Window,
     WindowControlArea, anchored, div, point, px, size, uniform_list,
 };
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use std::collections::BTreeMap;
 
 mod chrome;
 mod panels;
@@ -24,6 +26,11 @@ mod rows;
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
 
 pub(crate) use chrome::window_frame;
+
+const HISTORY_COL_BRANCH_PX: f32 = 160.0;
+const HISTORY_COL_GRAPH_PX: f32 = 56.0;
+const HISTORY_COL_DATE_PX: f32 = 160.0;
+const HISTORY_COL_SHA_PX: f32 = 88.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiffViewMode {
@@ -68,12 +75,13 @@ pub struct GitGpuiView {
 
     branches_scroll: UniformListScrollHandle,
     remotes_scroll: UniformListScrollHandle,
-    commits_scroll: UniformListScrollHandle,
+    history_scroll: UniformListScrollHandle,
     unstaged_scroll: UniformListScrollHandle,
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     diagnostics_scroll: UniformListScrollHandle,
     sidebar_scroll: ScrollHandle,
+    commit_scroll: ScrollHandle,
 }
 
 impl GitGpuiView {
@@ -161,12 +169,13 @@ impl GitGpuiView {
             hover_resize_edge: None,
             branches_scroll: UniformListScrollHandle::default(),
             remotes_scroll: UniformListScrollHandle::default(),
-            commits_scroll: UniformListScrollHandle::default(),
+            history_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
             diagnostics_scroll: UniformListScrollHandle::default(),
             sidebar_scroll: ScrollHandle::new(),
+            commit_scroll: ScrollHandle::new(),
         };
 
         view.set_theme(initial_theme, cx);
@@ -176,7 +185,8 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.open_repo_input.update(cx, |input, cx| input.set_theme(theme, cx));
+        self.open_repo_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_branch_input
@@ -330,6 +340,16 @@ impl Render for GitGpuiView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
+        let show_diff = self
+            .active_repo()
+            .and_then(|r| r.diff_target.as_ref())
+            .is_some();
+        let main_view = if show_diff {
+            self.diff_view(cx)
+        } else {
+            self.history_view(cx)
+        };
+
         let mut body = div()
             .flex()
             .flex_col()
@@ -356,16 +376,34 @@ impl Render for GitGpuiView {
                             .child(
                                 div()
                                     .id("sidebar_scroll")
-                                    .w(px(420.0))
+                                    .w(px(280.0))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.sidebar_scroll)
                                     .child(self.sidebar(cx))
                                     .child(
-                                        kit::Scrollbar::new("sidebar_scrollbar", self.sidebar_scroll.clone())
-                                            .render(theme),
+                                        kit::Scrollbar::new(
+                                            "sidebar_scrollbar",
+                                            self.sidebar_scroll.clone(),
+                                        )
+                                        .render(theme),
                                     ),
                             )
-                            .child(self.diff_view(cx)),
+                            .child(main_view)
+                            .child(
+                                div()
+                                    .id("commit_scroll")
+                                    .w(px(420.0))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.commit_scroll)
+                                    .child(self.commit_details_view(cx))
+                                    .child(
+                                        kit::Scrollbar::new(
+                                            "commit_scrollbar",
+                                            self.commit_scroll.clone(),
+                                        )
+                                        .render(theme),
+                                    ),
+                            ),
                     ),
             );
 
@@ -405,8 +443,9 @@ impl Render for GitGpuiView {
                         cx.notify();
                     }
                 }))
-                .on_mouse_down(MouseButton::Left, cx.listener(
-                    |_this, e: &MouseDownEvent, window, cx| {
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, e: &MouseDownEvent, window, cx| {
                         let Decorations::Client { tiling } = window.window_decorations() else {
                             return;
                         };
@@ -420,8 +459,8 @@ impl Render for GitGpuiView {
 
                         cx.stop_propagation();
                         window.start_window_resize(edge);
-                    },
-                ));
+                    }),
+                );
         } else if self.hover_resize_edge.is_some() {
             self.hover_resize_edge = None;
         }
@@ -521,7 +560,12 @@ mod tests {
 
     #[test]
     fn remote_rows_groups_and_sorts() {
-        let mut repo = RepoState::new_opening(RepoId(1), RepoSpec { workdir: PathBuf::new() });
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
         repo.remote_branches = Loadable::Ready(vec![
             RemoteBranch {
                 remote: "origin".to_string(),

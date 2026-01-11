@@ -109,7 +109,7 @@ impl GitGpuiView {
             .collect()
     }
 
-    pub(super) fn render_commit_rows(
+    pub(super) fn render_history_table_rows(
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
@@ -121,10 +121,15 @@ impl GitGpuiView {
         let Loadable::Ready(page) = &repo.log else {
             return Vec::new();
         };
+
         let theme = this.theme;
         range
             .filter_map(|ix| page.commits.get(ix).map(|c| (ix, c)))
-            .map(|(ix, commit)| commit_row(theme, ix, commit))
+            .map(|(ix, commit)| {
+                let refs = commit_refs(repo, ix == 0, commit);
+                let when = format_relative_time(commit.time);
+                history_table_row(theme, ix, commit, refs, when)
+            })
             .collect()
     }
 
@@ -180,22 +185,132 @@ impl GitGpuiView {
     }
 }
 
-fn commit_row(theme: AppTheme, ix: usize, commit: &Commit) -> AnyElement {
+fn history_table_row(
+    theme: AppTheme,
+    ix: usize,
+    commit: &Commit,
+    refs: String,
+    when: String,
+) -> AnyElement {
     let id: &str = <CommitId as AsRef<str>>::as_ref(&commit.id);
     let short = id.get(0..8).unwrap_or(id);
+    let graph = if commit.parent_ids.len() > 1 {
+        "◈"
+    } else {
+        "●"
+    };
+
     div()
         .id(ix)
         .flex()
         .items_center()
-        .justify_between()
         .gap_2()
         .px_2()
         .py_1()
         .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
-        .child(div().text_sm().line_clamp(1).child(commit.summary.clone()))
-        .child(div().text_xs().text_color(theme.colors.text_muted).child(short.to_string()))
+        .child(
+            div()
+                .w(px(HISTORY_COL_BRANCH_PX))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .line_clamp(1)
+                .child(refs),
+        )
+        .child(
+            div()
+                .w(px(HISTORY_COL_GRAPH_PX))
+                .flex()
+                .justify_center()
+                .text_xs()
+                .child(graph),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_sm()
+                .line_clamp(1)
+                .child(commit.summary.clone()),
+        )
+        .child(
+            div()
+                .w(px(HISTORY_COL_DATE_PX))
+                .flex()
+                .justify_end()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(when),
+        )
+        .child(
+            div()
+                .w(px(HISTORY_COL_SHA_PX))
+                .flex()
+                .justify_end()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(short.to_string()),
+        )
         .into_any_element()
+}
+
+fn commit_refs(repo: &RepoState, is_head: bool, commit: &Commit) -> String {
+    use std::collections::BTreeSet;
+
+    let mut refs: BTreeSet<String> = BTreeSet::new();
+    if is_head {
+        if let Loadable::Ready(head) = &repo.head_branch {
+            refs.insert(format!("HEAD → {head}"));
+        }
+    }
+
+    if let Loadable::Ready(branches) = &repo.branches {
+        for branch in branches {
+            if branch.target == commit.id {
+                refs.insert(branch.name.clone());
+            }
+        }
+    }
+
+    refs.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+fn format_relative_time(time: std::time::SystemTime) -> String {
+    use std::time::SystemTime;
+
+    let Ok(elapsed) = SystemTime::now().duration_since(time) else {
+        return "in the future".to_string();
+    };
+
+    fn fmt(n: u64, unit: &str) -> String {
+        if n == 1 {
+            format!("1 {unit} ago")
+        } else {
+            format!("{n} {unit}s ago")
+        }
+    }
+
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        return fmt(secs.max(1), "second");
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return fmt(mins, "minute");
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        return fmt(hours, "hour");
+    }
+    let days = hours / 24;
+    if days < 30 {
+        return fmt(days, "day");
+    }
+    let months = days / 30;
+    if months < 12 {
+        return fmt(months, "month");
+    }
+    let years = months / 12;
+    fmt(years, "year")
 }
 
 fn status_row(
@@ -284,11 +399,18 @@ fn status_row(
         .into_any_element()
 }
 
-fn diff_row(theme: AppTheme, ix: usize, mode: DiffViewMode, line: &AnnotatedDiffLine) -> AnyElement {
+fn diff_row(
+    theme: AppTheme,
+    ix: usize,
+    mode: DiffViewMode,
+    line: &AnnotatedDiffLine,
+) -> AnyElement {
     let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
 
     let text = match line.kind {
-        gitgpui_core::domain::DiffLineKind::Add => line.text.strip_prefix('+').unwrap_or(&line.text),
+        gitgpui_core::domain::DiffLineKind::Add => {
+            line.text.strip_prefix('+').unwrap_or(&line.text)
+        }
         gitgpui_core::domain::DiffLineKind::Remove => {
             line.text.strip_prefix('-').unwrap_or(&line.text)
         }
@@ -389,7 +511,11 @@ fn diff_line_colors(
             theme.colors.accent,
             theme.colors.text_muted,
         ),
-        (true, Add) => (gpui::rgb(0x0B2E1C), gpui::rgb(0xBBF7D0), gpui::rgb(0x86EFAC)),
+        (true, Add) => (
+            gpui::rgb(0x0B2E1C),
+            gpui::rgb(0xBBF7D0),
+            gpui::rgb(0x86EFAC),
+        ),
         (true, Remove) => (
             gpui::rgb(0x3A0D13),
             gpui::rgb(0xFECACA),
