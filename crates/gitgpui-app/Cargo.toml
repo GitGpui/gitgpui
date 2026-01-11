@@ -9,7 +9,7 @@ repository.workspace = true
 workspace = true
 
 [features]
-default = []
+default = ["ui-gpui", "gix"]
 ui = ["dep:gitgpui-ui"]
 ui-gpui = ["ui", "dep:gitgpui-ui-gpui"]
 gix = ["dep:gitgpui-git-gix"]

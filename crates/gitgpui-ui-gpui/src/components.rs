@@ -34,7 +34,6 @@ pub fn panel(
         .border_1()
         .border_color(theme.colors.border)
         .rounded(px(theme.radii.panel))
-        .shadow_sm()
         .overflow_hidden()
         .child(header)
         .child(div().flex_1().p_3().child(content))

@@ -1,4 +1,5 @@
 use gitgpui_core::domain::*;
+use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
@@ -23,6 +24,7 @@ pub struct RepoState {
     pub diff: Loadable<Diff>,
 
     pub last_error: Option<String>,
+    pub diagnostics: Vec<DiagnosticEntry>,
 }
 
 impl RepoState {
@@ -40,8 +42,23 @@ impl RepoState {
             diff_target: None,
             diff: Loadable::NotLoaded,
             last_error: None,
+            diagnostics: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticEntry {
+    pub time: SystemTime,
+    pub kind: DiagnosticKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiagnosticKind {
+    Info,
+    Warning,
+    Error,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

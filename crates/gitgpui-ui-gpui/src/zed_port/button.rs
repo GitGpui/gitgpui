@@ -58,10 +58,10 @@ impl Button {
         let transparent = gpui::rgba(0x00000000);
         let (bg, hover_bg, border, text) = match self.style {
             ButtonStyle::Filled => (
-                theme.colors.hover,
-                with_alpha(theme.colors.hover, 0.85),
-                theme.colors.border,
-                theme.colors.text,
+                theme.colors.accent,
+                with_alpha(theme.colors.accent, 0.85),
+                with_alpha(theme.colors.accent, 0.9),
+                theme.colors.window_bg,
             ),
             ButtonStyle::Outlined => (
                 transparent,

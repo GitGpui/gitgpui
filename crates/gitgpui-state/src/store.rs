@@ -1,4 +1,4 @@
-use crate::model::{AppState, Loadable, RepoId, RepoState};
+use crate::model::{AppState, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, Msg, StoreEvent};
 use gitgpui_core::domain::{Diff, RepoSpec};
 use gitgpui_core::error::{Error, ErrorKind};
@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, RwLock};
 use std::thread;
+use std::time::SystemTime;
 
 pub struct AppStore {
     state: Arc<RwLock<AppState>>,
@@ -196,6 +197,7 @@ fn reduce(
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Error(error.to_string());
                 repo_state.last_error = Some(error.to_string());
+                push_diagnostic(repo_state, DiagnosticKind::Error, error.to_string());
             }
             Vec::new()
         }
@@ -204,7 +206,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.branches = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -214,7 +219,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.remotes = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -224,7 +232,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.remote_branches = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -234,7 +245,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.status = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -244,7 +258,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.head_branch = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -254,7 +271,10 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.log = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -270,7 +290,10 @@ fn reduce(
             {
                 repo_state.diff = match result {
                     Ok(v) => Loadable::Ready(v),
-                    Err(e) => Loadable::Error(e.to_string()),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
                 };
             }
             Vec::new()
@@ -280,11 +303,27 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 match result {
                     Ok(()) => repo_state.last_error = None,
-                    Err(e) => repo_state.last_error = Some(e.to_string()),
+                    Err(e) => {
+                        repo_state.last_error = Some(e.to_string());
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    }
                 }
             }
             refresh_effects(repo_id)
         }
+    }
+}
+
+fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
+    const MAX_DIAGNOSTICS: usize = 200;
+    repo_state.diagnostics.push(DiagnosticEntry {
+        time: SystemTime::now(),
+        kind,
+        message,
+    });
+    if repo_state.diagnostics.len() > MAX_DIAGNOSTICS {
+        let extra = repo_state.diagnostics.len() - MAX_DIAGNOSTICS;
+        repo_state.diagnostics.drain(0..extra);
     }
 }
 
@@ -306,6 +345,100 @@ fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitgpui_core::domain::{
+        Branch, CommitId, DiffTarget, LogCursor, LogPage, Remote, RemoteBranch, RepoStatus,
+        StashEntry,
+    };
+    use gitgpui_core::services::{PullMode, Result};
+    use std::sync::Arc;
+
+    struct DummyRepo {
+        spec: RepoSpec,
+    }
+
+    impl DummyRepo {
+        fn new(path: &str) -> Self {
+            Self {
+                spec: RepoSpec {
+                    workdir: PathBuf::from(path),
+                },
+            }
+        }
+    }
+
+    impl GitRepository for DummyRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
 
     #[test]
     fn open_repo_sets_opening_and_emits_effect() {
@@ -325,6 +458,182 @@ mod tests {
         assert_eq!(repo_state.id.0, 1);
         assert!(repo_state.open.is_loading());
         assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    }
+
+    #[test]
+    fn close_repo_removes_and_moves_active() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(10);
+        let mut state = AppState::default();
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+        );
+
+        assert_eq!(state.repos.len(), 2);
+        assert_eq!(state.active_repo, Some(RepoId(11)));
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::CloseRepo { repo_id: RepoId(11) },
+        );
+
+        assert!(effects.is_empty());
+        assert_eq!(state.repos.len(), 1);
+        assert_eq!(state.active_repo, Some(RepoId(10)));
+    }
+
+    #[test]
+    fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+        );
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoOpenedOk {
+                repo_id: RepoId(1),
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+                repo: Arc::new(DummyRepo::new("/tmp/repo")),
+            },
+        );
+
+        let repo_state = state.repos.first().unwrap();
+        assert!(matches!(repo_state.open, Loadable::Ready(())));
+        assert!(repo_state.head_branch.is_loading());
+        assert!(repo_state.branches.is_loading());
+        assert!(repo_state.remotes.is_loading());
+        assert!(repo_state.remote_branches.is_loading());
+        assert!(repo_state.status.is_loading());
+        assert!(repo_state.log.is_loading());
+        assert!(matches!(
+            effects.as_slice(),
+            [
+                Effect::LoadHeadBranch { .. },
+                Effect::LoadBranches { .. },
+                Effect::LoadRemotes { .. },
+                Effect::LoadRemoteBranches { .. },
+                Effect::LoadStatus { .. },
+                Effect::LoadHeadLog { .. }
+            ]
+        ));
+    }
+
+    #[test]
+    fn repo_action_finished_clears_error_and_refreshes() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
+        state.repos[0].last_error = Some("boom".to_string());
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoActionFinished {
+                repo_id: RepoId(1),
+                result: Ok(()),
+            },
+        );
+
+        assert!(state.repos[0].last_error.is_none());
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })));
+    }
+
+    #[test]
+    fn repo_action_finished_err_records_diagnostic() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
+
+        let error = Error::new(ErrorKind::Backend("boom".to_string()));
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoActionFinished {
+                repo_id: RepoId(1),
+                result: Err(error),
+            },
+        );
+
+        let repo_state = &state.repos[0];
+        assert!(repo_state
+            .last_error
+            .as_deref()
+            .is_some_and(|s| s.contains("boom")));
+        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("boom")));
+    }
+
+    #[test]
+    fn repo_opened_err_records_diagnostic() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+        );
+
+        let error = Error::new(ErrorKind::Backend("nope".to_string()));
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoOpenedErr {
+                repo_id: RepoId(1),
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+                error,
+            },
+        );
+
+        let repo_state = &state.repos[0];
+        assert!(repo_state
+            .last_error
+            .as_deref()
+            .is_some_and(|s| s.contains("nope")));
+        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("nope")));
     }
 
     #[test]
@@ -394,6 +703,193 @@ mod tests {
         assert!(repo_state.diff_target.is_none());
         assert!(matches!(repo_state.diff, Loadable::NotLoaded));
         assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn set_active_repo_ignores_unknown_repo() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+        );
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+        );
+        assert_eq!(state.active_repo, Some(RepoId(2)));
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SetActiveRepo { repo_id: RepoId(999) },
+        );
+        assert_eq!(state.active_repo, Some(RepoId(2)));
+    }
+
+    #[test]
+    fn diff_loaded_err_records_diagnostic_when_target_matches() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        let mut repo_state = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let target = DiffTarget {
+            path: PathBuf::from("src/lib.rs"),
+            area: gitgpui_core::domain::DiffArea::Unstaged,
+        };
+        repo_state.diff_target = Some(target.clone());
+        repo_state.diff = Loadable::Loading;
+        state.repos.push(repo_state);
+        state.active_repo = Some(RepoId(1));
+
+        let error = Error::new(ErrorKind::Backend("diff failed".to_string()));
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::DiffLoaded {
+                repo_id: RepoId(1),
+                target,
+                result: Err(error),
+            },
+        );
+
+        let repo_state = &state.repos[0];
+        assert!(matches!(repo_state.diff, Loadable::Error(_)));
+        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("diff failed")));
+    }
+
+    #[test]
+    fn diagnostics_are_capped() {
+        let mut repo_state =
+            RepoState::new_opening(RepoId(1), RepoSpec { workdir: PathBuf::from("/tmp/repo") });
+
+        for i in 0..205 {
+            push_diagnostic(
+                &mut repo_state,
+                DiagnosticKind::Error,
+                format!("err-{i}"),
+            );
+        }
+
+        assert_eq!(repo_state.diagnostics.len(), 200);
+        assert_eq!(repo_state.diagnostics[0].message, "err-5");
+        assert_eq!(repo_state.diagnostics.last().unwrap().message, "err-204");
+    }
+
+    #[test]
+    fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::ReloadRepo { repo_id: RepoId(1) },
+        );
+
+        let repo_state = &state.repos[0];
+        assert!(repo_state.head_branch.is_loading());
+        assert!(repo_state.branches.is_loading());
+        assert!(repo_state.remotes.is_loading());
+        assert!(repo_state.remote_branches.is_loading());
+        assert!(repo_state.status.is_loading());
+        assert!(repo_state.log.is_loading());
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })));
+    }
+
+    #[test]
+    fn repo_operations_emit_effects() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
+
+        let stage = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::StagePath {
+                repo_id: RepoId(1),
+                path: PathBuf::from("a.txt"),
+            },
+        );
+        assert!(matches!(stage.as_slice(), [Effect::StagePath { repo_id: RepoId(1), .. }]));
+
+        let unstage = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::UnstagePath {
+                repo_id: RepoId(1),
+                path: PathBuf::from("a.txt"),
+            },
+        );
+        assert!(matches!(unstage.as_slice(), [Effect::UnstagePath { repo_id: RepoId(1), .. }]));
+
+        let commit = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Commit {
+                repo_id: RepoId(1),
+                message: "m".to_string(),
+            },
+        );
+        assert!(matches!(commit.as_slice(), [Effect::Commit { repo_id: RepoId(1), .. }]));
+
+        let pull = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Pull {
+                repo_id: RepoId(1),
+                mode: PullMode::Rebase,
+            },
+        );
+        assert!(matches!(pull.as_slice(), [Effect::Pull { repo_id: RepoId(1), .. }]));
+
+        let push = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id: RepoId(1) });
+        assert!(matches!(push.as_slice(), [Effect::Push { repo_id: RepoId(1) }]));
+
+        let stash = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Stash {
+                repo_id: RepoId(1),
+                message: "wip".to_string(),
+                include_untracked: true,
+            },
+        );
+        assert!(matches!(stash.as_slice(), [Effect::Stash { repo_id: RepoId(1), .. }]));
     }
 }
 

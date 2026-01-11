@@ -12,3 +12,6 @@ workspace = true
 gitgpui-core = { path = "../gitgpui-core" }
 gix = "0.70"
 gix-diff = "0.50"
+
+[dev-dependencies]
+tempfile = "3.24.0"

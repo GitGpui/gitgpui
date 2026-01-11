@@ -11,9 +11,13 @@ members = [
 ]
 
 default-members = [
+  "crates/gitgpui-app",
   "crates/gitgpui-core",
   "crates/gitgpui-git",
+  "crates/gitgpui-git-gix",
   "crates/gitgpui-state",
+  "crates/gitgpui-ui",
+  "crates/gitgpui-ui-gpui",
 ]
 
 [workspace.package]
