@@ -1,5 +1,6 @@
 use crate::model::{AppState, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, Msg, StoreEvent};
+use crate::session;
 use gitgpui_core::domain::{Diff, RepoSpec};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository};
@@ -76,6 +77,7 @@ fn reduce(
 ) -> Vec<Effect> {
     match msg {
         Msg::OpenRepo(path) => {
+            let path = normalize_repo_path(path);
             let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
             let spec = RepoSpec { workdir: path };
 
@@ -83,10 +85,55 @@ fn reduce(
                 .repos
                 .push(RepoState::new_opening(repo_id, spec.clone()));
             state.active_repo = Some(repo_id);
-            vec![Effect::OpenRepo {
+            let effects = vec![Effect::OpenRepo {
                 repo_id,
                 path: spec.workdir.clone(),
-            }]
+            }];
+            let _ = session::persist_from_state(state);
+            effects
+        }
+
+        Msg::RestoreSession {
+            open_repos,
+            active_repo,
+        } => {
+            repos.clear();
+            state.repos.clear();
+            state.active_repo = None;
+
+            let active_repo = active_repo.map(normalize_repo_path);
+            let mut active_repo_id: Option<RepoId> = None;
+
+            let mut effects = Vec::new();
+            for path in dedup_paths_in_order(open_repos).into_iter().map(normalize_repo_path) {
+                if state.repos.iter().any(|r| r.spec.workdir == path) {
+                    continue;
+                }
+                let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
+                let spec = RepoSpec { workdir: path };
+                if active_repo_id.is_none()
+                    && active_repo.as_ref().is_some_and(|active| active == &spec.workdir)
+                {
+                    active_repo_id = Some(repo_id);
+                }
+
+                state
+                    .repos
+                    .push(RepoState::new_opening(repo_id, spec.clone()));
+                effects.push(Effect::OpenRepo {
+                    repo_id,
+                    path: spec.workdir.clone(),
+                });
+            }
+
+            state.active_repo = if let Some(active_repo_id) = active_repo_id {
+                Some(active_repo_id)
+            } else {
+                state.repos.last().map(|r| r.id)
+            };
+
+            let _ = session::persist_from_state(state);
+            effects
         }
 
         Msg::CloseRepo { repo_id } => {
@@ -95,12 +142,14 @@ fn reduce(
             if state.active_repo == Some(repo_id) {
                 state.active_repo = state.repos.first().map(|r| r.id);
             }
+            let _ = session::persist_from_state(state);
             Vec::new()
         }
 
         Msg::SetActiveRepo { repo_id } => {
             if state.repos.iter().any(|r| r.id == repo_id) {
                 state.active_repo = Some(repo_id);
+                let _ = session::persist_from_state(state);
             }
             Vec::new()
         }
@@ -187,6 +236,9 @@ fn reduce(
         } => {
             repos.insert(repo_id, repo);
 
+            let spec = RepoSpec {
+                workdir: normalize_repo_path(spec.workdir),
+            };
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Ready(());
@@ -211,6 +263,9 @@ fn reduce(
             spec,
             error,
         } => {
+            let spec = RepoSpec {
+                workdir: normalize_repo_path(spec.workdir),
+            };
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Error(error.to_string());
@@ -349,6 +404,29 @@ fn reduce(
             refresh_effects(repo_id)
         }
     }
+}
+
+fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for p in paths {
+        if out.iter().any(|x| x == &p) {
+            continue;
+        }
+        out.push(p);
+    }
+    out
+}
+
+fn normalize_repo_path(path: PathBuf) -> PathBuf {
+    let path = if path.is_relative() {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    } else {
+        path
+    };
+
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
@@ -534,6 +612,56 @@ mod tests {
         assert!(effects.is_empty());
         assert_eq!(state.repos.len(), 1);
         assert_eq!(state.active_repo, Some(RepoId(10)));
+    }
+
+    #[test]
+    fn restore_session_opens_all_and_selects_active_repo() {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+
+        let dir = std::env::temp_dir().join(format!(
+            "gitgpui-restore-session-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+        let _ = std::fs::create_dir_all(&repo_a);
+        let _ = std::fs::create_dir_all(&repo_b);
+
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RestoreSession {
+                open_repos: vec![repo_a.clone(), repo_b],
+                active_repo: Some(repo_a.clone()),
+            },
+        );
+
+        assert_eq!(state.repos.len(), 2);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::OpenRepo { .. }, Effect::OpenRepo { .. }]
+        ));
+
+        let active_repo_id = state.active_repo.expect("active repo is set");
+        let active_workdir = state
+            .repos
+            .iter()
+            .find(|r| r.id == active_repo_id)
+            .expect("active repo exists")
+            .spec
+            .workdir
+            .clone();
+
+        assert_eq!(active_workdir, super::normalize_repo_path(repo_a));
     }
 
     #[test]

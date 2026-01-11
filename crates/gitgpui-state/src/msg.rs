@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 pub enum Msg {
     OpenRepo(PathBuf),
+    RestoreSession {
+        open_repos: Vec<PathBuf>,
+        active_repo: Option<PathBuf>,
+    },
     CloseRepo {
         repo_id: RepoId,
     },
@@ -125,6 +129,14 @@ impl std::fmt::Debug for Msg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Msg::OpenRepo(path) => f.debug_tuple("OpenRepo").field(path).finish(),
+            Msg::RestoreSession {
+                open_repos,
+                active_repo,
+            } => f
+                .debug_struct("RestoreSession")
+                .field("open_repos", open_repos)
+                .field("active_repo", active_repo)
+                .finish(),
             Msg::CloseRepo { repo_id } => f
                 .debug_struct("CloseRepo")
                 .field("repo_id", repo_id)

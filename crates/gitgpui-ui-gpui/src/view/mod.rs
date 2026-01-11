@@ -6,6 +6,7 @@ use gitgpui_core::domain::{
 use gitgpui_core::services::PullMode;
 use gitgpui_state::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoState};
 use gitgpui_state::msg::{Msg, StoreEvent};
+use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
@@ -96,7 +97,20 @@ impl GitGpuiView {
         let store = Arc::new(store);
         let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
-        if let Some(path) = initial_path.or_else(|| std::env::current_dir().ok()) {
+        let mut ui_session = session::load();
+        if let Some(path) = initial_path {
+            if !ui_session.open_repos.iter().any(|p| p == &path) {
+                ui_session.open_repos.push(path.clone());
+            }
+            ui_session.active_repo = Some(path);
+        }
+
+        if !ui_session.open_repos.is_empty() {
+            store.dispatch(Msg::RestoreSession {
+                open_repos: ui_session.open_repos,
+                active_repo: ui_session.active_repo,
+            });
+        } else if let Ok(path) = std::env::current_dir() {
             store.dispatch(Msg::OpenRepo(path));
         }
 
