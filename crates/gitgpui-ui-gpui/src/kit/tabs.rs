@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{ClickEvent, Div, SharedString, Window, div, px};
 use gpui::prelude::*;
+use gpui::{ClickEvent, Div, SharedString, Window, div, px};
 use std::sync::Arc;
 
 pub struct Tabs {

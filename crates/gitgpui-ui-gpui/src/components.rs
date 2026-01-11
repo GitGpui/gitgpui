@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
 use gpui::prelude::*;
+use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
 
 pub fn panel(
     theme: AppTheme,
@@ -24,7 +24,12 @@ pub fn panel(
         );
 
     if let Some(subtitle) = subtitle {
-        header = header.child(div().text_xs().text_color(theme.colors.text_muted).child(subtitle));
+        header = header.child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(subtitle),
+        );
     }
 
     div()
@@ -50,13 +55,22 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
-pub fn key_value(theme: AppTheme, key: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
+pub fn key_value(
+    theme: AppTheme,
+    key: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+) -> Div {
     div()
         .flex()
         .items_center()
         .justify_between()
         .gap_3()
-        .child(div().text_sm().text_color(theme.colors.text_muted).child(key.into()))
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(key.into()),
+        )
         .child(div().text_sm().child(value.into()))
 }
 
@@ -73,5 +87,10 @@ pub fn empty_state(
         .gap_2()
         .py_6()
         .child(div().text_lg().child(title.into()))
-        .child(div().text_sm().text_color(theme.colors.text_muted).child(message.into()))
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(message.into()),
+        )
 }

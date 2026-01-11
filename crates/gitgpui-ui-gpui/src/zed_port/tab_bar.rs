@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
 use gpui::prelude::*;
+use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
 
 use super::Tab;
 

@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 use gpui::prelude::*;
+use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 use std::cmp::Ordering;
 
 /// The position of a tab within a list.

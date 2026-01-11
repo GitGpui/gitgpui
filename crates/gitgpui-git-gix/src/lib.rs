@@ -1,6 +1,6 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind,
-    LogCursor, LogPage, Remote, RemoteBranch, RepoSpec, RepoStatus,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileStatus,
+    FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, PullMode, Result};
@@ -181,19 +181,13 @@ impl GitRepository for GixRepo {
             cmd.arg("-C")
                 .arg(&self.spec.workdir)
                 .arg("show")
-                .arg("--name-only")
+                .arg("--name-status")
                 .arg("--pretty=format:")
                 .arg(sha);
-            run_git_capture(cmd, "git show --name-only")?
+            let output = run_git_capture(cmd, "git show --name-status")?;
+            output
                 .lines()
-                .filter_map(|l| {
-                    let l = l.trim();
-                    if l.is_empty() {
-                        None
-                    } else {
-                        Some(PathBuf::from(l))
-                    }
-                })
+                .filter_map(parse_name_status_line)
                 .collect::<Vec<_>>()
         };
 
@@ -204,6 +198,47 @@ impl GitRepository for GixRepo {
             parent_ids,
             files,
         })
+    }
+
+    fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("reflog")
+            .arg("show")
+            .arg("--date=unix")
+            .arg(format!("-n{limit}"))
+            .arg("--format=%H%x00%gd%x00%gs%x00%ct")
+            .arg("HEAD");
+
+        let output = run_git_capture(cmd, "git reflog")?;
+        let mut entries = Vec::new();
+        for (ix, line) in output.lines().enumerate() {
+            let mut parts = line.split('\0');
+            let Some(new_id) = parts.next().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let selector = parts.next().unwrap_or_default().to_string();
+            let message = parts.next().unwrap_or_default().to_string();
+            let time = parts
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .and_then(unix_seconds_to_system_time);
+
+            let index = parse_reflog_index(&selector).unwrap_or(ix);
+
+            entries.push(ReflogEntry {
+                index,
+                new_id: CommitId(new_id.to_string()),
+                message,
+                time,
+                selector,
+            });
+        }
+        Ok(entries)
     }
 
     fn current_branch(&self) -> Result<String> {
@@ -394,34 +429,56 @@ impl GitRepository for GixRepo {
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
-            .arg("color.ui=false")
-            .arg("--no-pager")
-            .arg("diff")
-            .arg("--no-ext-diff");
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                let mut cmd = Command::new("git");
+                cmd.arg("-C")
+                    .arg(&self.spec.workdir)
+                    .arg("-c")
+                    .arg("color.ui=false")
+                    .arg("--no-pager")
+                    .arg("diff")
+                    .arg("--no-ext-diff");
 
-        if matches!(target.area, DiffArea::Staged) {
-            cmd.arg("--cached");
+                if matches!(area, DiffArea::Staged) {
+                    cmd.arg("--cached");
+                }
+
+                cmd.arg("--").arg(path);
+
+                let output = cmd
+                    .output()
+                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+                let ok_exit = output.status.success() || output.status.code() == Some(1);
+                if !ok_exit {
+                    let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+                    return Err(Error::new(ErrorKind::Backend(format!(
+                        "git diff failed: {stderr}"
+                    ))));
+                }
+
+                Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            }
+            DiffTarget::Commit { commit_id, path } => {
+                let mut cmd = Command::new("git");
+                cmd.arg("-C")
+                    .arg(&self.spec.workdir)
+                    .arg("-c")
+                    .arg("color.ui=false")
+                    .arg("--no-pager")
+                    .arg("show")
+                    .arg("--no-ext-diff")
+                    .arg("--pretty=format:")
+                    .arg(commit_id.as_ref());
+
+                if let Some(path) = path {
+                    cmd.arg("--").arg(path);
+                }
+
+                run_git_capture(cmd, "git show --pretty=format:")
+            }
         }
-
-        cmd.arg("--").arg(&target.path);
-
-        let output = cmd
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        let ok_exit = output.status.success() || output.status.code() == Some(1);
-        if !ok_exit {
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git diff failed: {stderr}"
-            ))));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     fn create_branch(&self, _name: &str, _target: &gitgpui_core::domain::CommitId) -> Result<()> {
@@ -449,6 +506,34 @@ impl GitRepository for GixRepo {
         run_git_simple(cmd, "git checkout")
     }
 
+    fn checkout_commit(&self, id: &CommitId) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout")
+            .arg(id.as_ref());
+        run_git_simple(cmd, "git checkout <commit>")
+    }
+
+    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("cherry-pick")
+            .arg(id.as_ref());
+        run_git_simple(cmd, "git cherry-pick")
+    }
+
+    fn revert(&self, id: &CommitId) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("revert")
+            .arg("--no-edit")
+            .arg(id.as_ref());
+        run_git_simple(cmd, "git revert")
+    }
+
     fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -465,21 +550,57 @@ impl GitRepository for GixRepo {
     }
 
     fn stash_list(&self) -> Result<Vec<gitgpui_core::domain::StashEntry>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: stash_list not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("stash")
+            .arg("list")
+            .arg("--date=unix")
+            .arg("--format=%gd%x00%ct%x00%gs");
+
+        let output = run_git_capture(cmd, "git stash list")?;
+        let mut entries = Vec::new();
+        for (ix, line) in output.lines().enumerate() {
+            let mut parts = line.split('\0');
+            let Some(selector) = parts.next().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let created_at = parts
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .and_then(unix_seconds_to_system_time);
+            let message = parts.next().unwrap_or_default().to_string();
+            let index = parse_reflog_index(selector).unwrap_or(ix);
+            entries.push(gitgpui_core::domain::StashEntry {
+                index,
+                message,
+                created_at,
+            });
+        }
+        Ok(entries)
     }
 
     fn stash_apply(&self, _index: usize) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: stash_apply not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("stash")
+            .arg("apply")
+            .arg(format!("stash@{{{_index}}}"));
+        run_git_simple(cmd, "git stash apply")
     }
 
     fn stash_drop(&self, _index: usize) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: stash_drop not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("stash")
+            .arg("drop")
+            .arg(format!("stash@{{{_index}}}"));
+        run_git_simple(cmd, "git stash drop")
     }
 
     fn stage(&self, paths: &[&Path]) -> Result<()> {
@@ -583,6 +704,59 @@ fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let mut parts = line.split('\t');
+    let status = parts.next()?.trim();
+    if status.is_empty() {
+        return None;
+    }
+
+    let status_kind = status.chars().next()?;
+    let kind = match status_kind {
+        'A' => FileStatusKind::Added,
+        'M' => FileStatusKind::Modified,
+        'D' => FileStatusKind::Deleted,
+        'R' => FileStatusKind::Renamed,
+        'C' => FileStatusKind::Added,
+        _ => FileStatusKind::Modified,
+    };
+
+    let path = match status_kind {
+        'R' | 'C' => {
+            let _old = parts.next()?;
+            parts.next().unwrap_or_default()
+        }
+        _ => parts.next().unwrap_or_default(),
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+
+    Some(CommitFileChange {
+        path: PathBuf::from(path),
+        kind,
+    })
+}
+
+fn unix_seconds_to_system_time(seconds: i64) -> Option<SystemTime> {
+    if seconds >= 0 {
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64))
+    } else {
+        None
+    }
+}
+
+fn parse_reflog_index(selector: &str) -> Option<usize> {
+    let start = selector.rfind("@{")? + 2;
+    let end = selector[start..].find('}')? + start;
+    selector[start..end].parse::<usize>().ok()
 }
 
 fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {

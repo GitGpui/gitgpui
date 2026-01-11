@@ -40,6 +40,10 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
     fn current_branch(&self) -> Result<String> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
@@ -73,6 +77,18 @@ impl GitRepository for NoopRepo {
     }
 
     fn checkout_branch(&self, _name: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 

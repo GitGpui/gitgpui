@@ -21,6 +21,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 mod chrome;
+mod history_graph;
 mod panels;
 mod rows;
 
@@ -29,7 +30,7 @@ use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_
 pub(crate) use chrome::window_frame;
 
 const HISTORY_COL_BRANCH_PX: f32 = 160.0;
-const HISTORY_COL_GRAPH_PX: f32 = 56.0;
+const HISTORY_COL_GRAPH_PX: f32 = 180.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
 
@@ -40,11 +41,35 @@ enum DiffViewMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryTab {
+    Log,
+    Stash,
+    Reflog,
+}
+
+#[derive(Clone, Debug)]
+struct HistoryCache {
+    repo_id: RepoId,
+    query: String,
+    branch_filter: Option<String>,
+    commit_ids: Vec<CommitId>,
+    visible_indices: Vec<usize>,
+    graph_rows: Vec<history_graph::GraphRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum PopoverKind {
     RepoPicker,
     BranchPicker,
     PullPicker,
     AppMenu,
+    CommitMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    HistoryBranchFilter {
+        repo_id: RepoId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +88,14 @@ pub struct GitGpuiView {
     diff_view: DiffViewMode,
     diff_cache: Vec<AnnotatedDiffLine>,
 
+    history_tab: HistoryTab,
+    history_search_input: Entity<kit::TextInput>,
+    history_search_raw: String,
+    history_search_debounced: String,
+    history_search_seq: u64,
+    history_branch_filter: Option<String>,
+    history_cache: Option<HistoryCache>,
+
     open_repo_panel: bool,
     show_diagnostics_view: bool,
     open_repo_input: Entity<kit::TextInput>,
@@ -78,6 +111,8 @@ pub struct GitGpuiView {
     branches_scroll: UniformListScrollHandle,
     remotes_scroll: UniformListScrollHandle,
     history_scroll: UniformListScrollHandle,
+    stashes_scroll: UniformListScrollHandle,
+    reflog_scroll: UniformListScrollHandle,
     unstaged_scroll: UniformListScrollHandle,
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
@@ -166,6 +201,17 @@ impl GitGpuiView {
             )
         });
 
+        let history_search_input = cx.new(|cx| {
+            kit::TextInput::new(
+                kit::TextInputOptions {
+                    placeholder: "Search commits…".into(),
+                    multiline: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let mut view = Self {
             state: store.snapshot(),
             store,
@@ -174,6 +220,13 @@ impl GitGpuiView {
             theme: initial_theme,
             diff_view: DiffViewMode::Inline,
             diff_cache: Vec::new(),
+            history_tab: HistoryTab::Log,
+            history_search_input,
+            history_search_raw: String::new(),
+            history_search_debounced: String::new(),
+            history_search_seq: 0,
+            history_branch_filter: None,
+            history_cache: None,
             open_repo_panel: false,
             show_diagnostics_view: false,
             open_repo_input,
@@ -186,6 +239,8 @@ impl GitGpuiView {
             branches_scroll: UniformListScrollHandle::default(),
             remotes_scroll: UniformListScrollHandle::default(),
             history_scroll: UniformListScrollHandle::default(),
+            stashes_scroll: UniformListScrollHandle::default(),
+            reflog_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
@@ -206,6 +261,8 @@ impl GitGpuiView {
         self.commit_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.history_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
     }
 
@@ -332,6 +389,133 @@ impl GitGpuiView {
             return;
         };
         self.diff_cache = annotate_unified(diff);
+    }
+
+    fn update_history_search_debounce(&mut self, cx: &mut gpui::Context<Self>) {
+        let raw = self
+            .history_search_input
+            .read_with(cx, |i, _| i.text().to_string());
+
+        if raw == self.history_search_raw {
+            return;
+        }
+
+        self.history_search_raw = raw.clone();
+        self.history_search_seq = self.history_search_seq.wrapping_add(1);
+        let seq = self.history_search_seq;
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            Timer::after(Duration::from_millis(150)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.history_search_seq != seq {
+                    return;
+                }
+                if this.history_search_raw != raw {
+                    return;
+                }
+                this.history_search_debounced = raw;
+                this.history_cache = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn ensure_history_cache(&mut self, _cx: &mut gpui::Context<Self>) {
+        let Some(repo) = self.active_repo() else {
+            self.history_cache = None;
+            return;
+        };
+        let Loadable::Ready(page) = &repo.log else {
+            self.history_cache = None;
+            return;
+        };
+
+        let query = self.history_search_debounced.trim().to_string();
+        let branch_filter = self.history_branch_filter.clone();
+
+        let commit_ids = page
+            .commits
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>();
+
+        let cache_ok = self.history_cache.as_ref().is_some_and(|c| {
+            c.repo_id == repo.id
+                && c.query == query
+                && c.branch_filter == branch_filter
+                && c.commit_ids == commit_ids
+        });
+        if cache_ok {
+            return;
+        }
+
+        let query_lc = query.to_lowercase();
+        let mut visible_indices = if query_lc.is_empty() {
+            (0..page.commits.len()).collect::<Vec<_>>()
+        } else {
+            page.commits
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, c)| {
+                    let haystack =
+                        format!("{} {} {}", c.summary, c.author, c.id.as_ref()).to_lowercase();
+                    if haystack.contains(&query_lc) {
+                        Some(ix)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if let Some(branch_name) = &branch_filter {
+            if let Loadable::Ready(branches) = &repo.branches {
+                if let Some(branch) = branches.iter().find(|b| &b.name == branch_name) {
+                    let mut by_id: std::collections::HashMap<&str, &Commit> =
+                        std::collections::HashMap::new();
+                    for c in &page.commits {
+                        by_id.insert(c.id.as_ref(), c);
+                    }
+
+                    let mut reachable: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
+                    let mut stack: Vec<&CommitId> = vec![&branch.target];
+                    while let Some(id) = stack.pop() {
+                        if !reachable.insert(id.as_ref()) {
+                            continue;
+                        }
+                        if let Some(c) = by_id.get(id.as_ref()) {
+                            for p in &c.parent_ids {
+                                stack.push(p);
+                            }
+                        }
+                    }
+
+                    visible_indices.retain(|ix| {
+                        page.commits
+                            .get(*ix)
+                            .is_some_and(|c| reachable.contains(c.id.as_ref()))
+                    });
+                }
+            }
+        }
+
+        let visible_commits = visible_indices
+            .iter()
+            .filter_map(|ix| page.commits.get(*ix).cloned())
+            .collect::<Vec<_>>();
+
+        let graph_rows = history_graph::compute_graph(&visible_commits, self.theme);
+
+        self.history_cache = Some(HistoryCache {
+            repo_id: repo.id,
+            query,
+            branch_filter,
+            commit_ids,
+            visible_indices,
+            graph_rows,
+        });
     }
 
     #[cfg(test)]
@@ -518,6 +702,7 @@ impl GitGpuiView {
 
         let popover = self
             .popover
+            .clone()
             .and_then(|kind| Some(self.popover_view(kind, cx).into_any_element()))
             .unwrap_or_else(|| div().into_any_element());
 

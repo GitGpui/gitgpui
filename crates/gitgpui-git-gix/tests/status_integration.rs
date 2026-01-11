@@ -36,7 +36,10 @@ fn status_separates_staged_and_unstaged() {
 
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "init"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
 
     write(repo, "a.txt", "one\ntwo\n");
     run_git(repo, &["add", "a.txt"]);
@@ -67,7 +70,10 @@ fn diff_unified_works_for_staged_and_unstaged() {
 
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "init"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
 
     write(repo, "a.txt", "one\ntwo\n");
 
@@ -75,7 +81,7 @@ fn diff_unified_works_for_staged_and_unstaged() {
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
-        .diff_unified(&DiffTarget {
+        .diff_unified(&DiffTarget::WorkingTree {
             path: PathBuf::from("a.txt"),
             area: DiffArea::Unstaged,
         })
@@ -85,7 +91,7 @@ fn diff_unified_works_for_staged_and_unstaged() {
     run_git(repo, &["add", "a.txt"]);
 
     let staged = opened
-        .diff_unified(&DiffTarget {
+        .diff_unified(&DiffTarget::WorkingTree {
             path: PathBuf::from("a.txt"),
             area: DiffArea::Staged,
         })

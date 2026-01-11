@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{ClickEvent, Div, SharedString, Window, div, px};
 use gpui::prelude::*;
+use gpui::{ClickEvent, Div, SharedString, Window, div, px};
 use std::hash::{Hash as _, Hasher as _};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

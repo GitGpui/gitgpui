@@ -328,6 +328,8 @@ impl GitGpuiView {
             .popover_anchor
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
+        let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+
         let close = cx.listener(|this, _e: &ClickEvent, _w, cx| {
             this.popover = None;
             this.popover_anchor = None;
@@ -446,6 +448,69 @@ impl GitGpuiView {
 
                 menu
             }
+            PopoverKind::HistoryBranchFilter { repo_id } => {
+                let mut menu = div().flex().flex_col().min_w(px(260.0));
+
+                menu = menu.child(
+                    div()
+                        .id("history_branch_all")
+                        .px_3()
+                        .py_2()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .child("All branches")
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            this.history_branch_filter = None;
+                            this.popover = None;
+                            this.popover_anchor = None;
+                            cx.notify();
+                        })),
+                );
+
+                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                    match &repo.branches {
+                        Loadable::Ready(branches) => {
+                            for (ix, branch) in branches.iter().enumerate() {
+                                let name = branch.name.clone();
+                                menu = menu.child(
+                                    div()
+                                        .id(("history_branch_item", ix))
+                                        .px_3()
+                                        .py_2()
+                                        .hover(move |s| s.bg(theme.colors.hover))
+                                        .child(name.clone())
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                this.history_branch_filter = Some(name.clone());
+                                                this.popover = None;
+                                                this.popover_anchor = None;
+                                                cx.notify();
+                                            },
+                                        )),
+                                );
+                            }
+                        }
+                        Loadable::Loading => {
+                            menu = menu.child(div().px_3().py_2().child("Loading…"));
+                        }
+                        Loadable::Error(e) => {
+                            menu = menu.child(div().px_3().py_2().child(e.clone()));
+                        }
+                        Loadable::NotLoaded => {
+                            menu = menu.child(div().px_3().py_2().child("Not loaded"));
+                        }
+                    }
+                }
+
+                menu.child(
+                    div()
+                        .id("history_branch_close")
+                        .px_3()
+                        .py_2()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .child("Close")
+                        .on_click(close),
+                )
+            }
             PopoverKind::PullPicker => {
                 let repo_id = self.active_repo_id();
                 let mut menu = div().flex().flex_col().min_w(px(280.0));
@@ -493,6 +558,106 @@ impl GitGpuiView {
                         .on_click(close),
                 )
             }
+            PopoverKind::CommitMenu { repo_id, commit_id } => {
+                let sha = commit_id.as_ref().to_string();
+                let short = sha.get(0..8).unwrap_or(&sha).to_string();
+                let sha_for_clipboard = sha.clone();
+                let commit_id_checkout = commit_id.clone();
+                let commit_id_cherry_pick = commit_id.clone();
+                let commit_id_revert = commit_id.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(240.0))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(format!("Commit {short}")),
+                    )
+                    .child(
+                        div()
+                            .id("commit_menu_copy_sha")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Copy SHA")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                    sha_for_clipboard.clone(),
+                                ));
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("commit_menu_checkout")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Checkout (detached)")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.store.dispatch(Msg::CheckoutCommit {
+                                    repo_id,
+                                    commit_id: commit_id_checkout.clone(),
+                                });
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("commit_menu_cherry_pick")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Cherry-pick")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.store.dispatch(Msg::CherryPickCommit {
+                                    repo_id,
+                                    commit_id: commit_id_cherry_pick.clone(),
+                                });
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("commit_menu_revert")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Revert")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.store.dispatch(Msg::RevertCommit {
+                                    repo_id,
+                                    commit_id: commit_id_revert.clone(),
+                                });
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("commit_menu_close")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Close")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
+            }
             PopoverKind::AppMenu => div()
                 .flex()
                 .flex_col()
@@ -536,10 +701,7 @@ impl GitGpuiView {
                 ),
         };
 
-        let offset_y = match kind {
-            PopoverKind::AppMenu => px(40.0),
-            _ => px(8.0),
-        };
+        let offset_y = if is_app_menu { px(40.0) } else { px(8.0) };
 
         anchored()
             .position(anchor)
@@ -681,16 +843,65 @@ impl GitGpuiView {
                                     .child("No files.")
                                     .into_any_element()
                             } else {
+                                let repo_id = repo.id;
+                                let commit_id_for_list = details.id.clone();
                                 div()
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .children(details.files.iter().enumerate().map(|(ix, p)| {
+                                    .children(details.files.iter().enumerate().map(|(ix, f)| {
+                                        let (label, color) = match f.kind {
+                                            FileStatusKind::Added => {
+                                                ("Added", theme.colors.success)
+                                            }
+                                            FileStatusKind::Modified => {
+                                                ("Modified", theme.colors.accent)
+                                            }
+                                            FileStatusKind::Deleted => {
+                                                ("Deleted", theme.colors.danger)
+                                            }
+                                            FileStatusKind::Renamed => {
+                                                ("Renamed", theme.colors.accent)
+                                            }
+                                            FileStatusKind::Untracked => {
+                                                ("Untracked", theme.colors.warning)
+                                            }
+                                            FileStatusKind::Conflicted => {
+                                                ("Conflicted", theme.colors.danger)
+                                            }
+                                        };
+
+                                        let path = f.path.clone();
+                                        let path_for_click = path.clone();
+                                        let commit_id = commit_id_for_list.clone();
                                         div()
                                             .id(("commit_file", ix))
-                                            .text_sm()
-                                            .line_clamp(1)
-                                            .child(p.display().to_string())
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(theme.radii.row))
+                                            .hover(move |s| s.bg(theme.colors.hover))
+                                            .child(components::pill(theme, label, color))
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .line_clamp(1)
+                                                    .child(path.display().to_string()),
+                                            )
+                                            .on_click(cx.listener(
+                                                move |this, _e: &ClickEvent, _w, cx| {
+                                                    this.store.dispatch(Msg::SelectDiff {
+                                                        repo_id,
+                                                        target: DiffTarget::Commit {
+                                                            commit_id: commit_id.clone(),
+                                                            path: Some(path_for_click.clone()),
+                                                        },
+                                                    });
+                                                    cx.notify();
+                                                },
+                                            ))
                                     }))
                                     .into_any_element()
                             };
@@ -958,63 +1169,250 @@ impl GitGpuiView {
 
     pub(super) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let repo = self.active_repo();
 
-        let commits_count = repo
-            .and_then(|r| match &r.log {
-                Loadable::Ready(v) => Some(v.commits.len()),
-                _ => None,
-            })
-            .unwrap_or(0);
-
-        let body: AnyElement = if commits_count == 0 {
-            match repo.map(|r| &r.log) {
-                None => {
-                    components::empty_state(theme, "History", "No repository.").into_any_element()
-                }
-                Some(Loadable::Loading) => {
-                    components::empty_state(theme, "History", "Loading…").into_any_element()
-                }
-                Some(Loadable::Error(e)) => {
-                    components::empty_state(theme, "History", e.clone()).into_any_element()
-                }
-                Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                    components::empty_state(theme, "History", "No commits loaded.")
-                        .into_any_element()
-                }
+        let tabs = {
+            let tab = self.history_tab;
+            let mut bar = zed::TabBar::new("history_tab_bar");
+            for (ix, (label, value)) in [
+                ("History", HistoryTab::Log),
+                ("Stash", HistoryTab::Stash),
+                ("Reflog", HistoryTab::Reflog),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let selected = tab == value;
+                let position = if ix == 0 {
+                    zed::TabPosition::First
+                } else if ix == 2 {
+                    zed::TabPosition::Last
+                } else {
+                    zed::TabPosition::Middle(std::cmp::Ordering::Equal)
+                };
+                let value_for_click = value;
+                let t = zed::Tab::new(("history_tab", ix))
+                    .selected(selected)
+                    .position(position)
+                    .child(div().text_sm().child(label))
+                    .render(theme)
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.history_tab = value_for_click;
+                        cx.notify();
+                    }));
+                bar = bar.tab(t);
             }
-        } else {
-            let list = uniform_list(
-                "history_main",
-                commits_count,
-                cx.processor(Self::render_history_table_rows),
-            )
-            .h_full()
-            .track_scroll(self.history_scroll.clone());
-            let scroll_handle = self.history_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("history_main_scroll_container")
-                .relative()
-                .h_full()
-                .child(list)
-                .child(kit::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
-                .into_any_element()
+            bar.render(theme)
         };
 
-        let table = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .h_full()
-            .child(self.history_column_headers())
-            .child(div().flex_1().child(body));
+        let (title, body): (SharedString, AnyElement) = match self.history_tab {
+            HistoryTab::Log => {
+                self.update_history_search_debounce(cx);
+                self.ensure_history_cache(cx);
+                let repo = self.active_repo();
+                let count = self
+                    .history_cache
+                    .as_ref()
+                    .map(|c| c.visible_indices.len())
+                    .unwrap_or(0);
 
-        div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .flex_1()
-            .child(components::panel(theme, "History", None, table).flex_1())
+                let filter = div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(self.history_search_input.clone()),
+                    )
+                    .child({
+                        let current: SharedString = self
+                            .history_branch_filter
+                            .clone()
+                            .unwrap_or_else(|| "All branches".to_string())
+                            .into();
+                        div()
+                            .id("history_branch_filter")
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .px_2()
+                            .py_1()
+                            .bg(theme.colors.surface_bg)
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .rounded(px(theme.radii.row))
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Branch"),
+                            )
+                            .child(div().text_sm().child(current))
+                            .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
+                                if let Some(repo_id) = this.active_repo_id() {
+                                    this.popover =
+                                        Some(PopoverKind::HistoryBranchFilter { repo_id });
+                                    this.popover_anchor = Some(e.position());
+                                    cx.notify();
+                                }
+                            }))
+                    });
+
+                let body: AnyElement = if count == 0 {
+                    match repo.map(|r| &r.log) {
+                        None => components::empty_state(theme, "History", "No repository.")
+                            .into_any_element(),
+                        Some(Loadable::Loading) => {
+                            components::empty_state(theme, "History", "Loading…").into_any_element()
+                        }
+                        Some(Loadable::Error(e)) => {
+                            components::empty_state(theme, "History", e.clone()).into_any_element()
+                        }
+                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                            components::empty_state(theme, "History", "No commits.")
+                                .into_any_element()
+                        }
+                    }
+                } else {
+                    let list = uniform_list(
+                        "history_main",
+                        count,
+                        cx.processor(Self::render_history_table_rows),
+                    )
+                    .h_full()
+                    .track_scroll(self.history_scroll.clone());
+                    let scroll_handle = self.history_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("history_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            kit::Scrollbar::new("history_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
+                };
+
+                let table = div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .h_full()
+                    .child(filter)
+                    .child(self.history_column_headers())
+                    .child(div().flex_1().child(body));
+
+                ("History".into(), table.into_any_element())
+            }
+            HistoryTab::Stash => {
+                let repo = self.active_repo();
+                let count = repo
+                    .and_then(|r| match &r.stashes {
+                        Loadable::Ready(v) => Some(v.len()),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+
+                let body: AnyElement = if count == 0 {
+                    match repo.map(|r| &r.stashes) {
+                        None => components::empty_state(theme, "Stash", "No repository.")
+                            .into_any_element(),
+                        Some(Loadable::Loading) => {
+                            components::empty_state(theme, "Stash", "Loading…").into_any_element()
+                        }
+                        Some(Loadable::Error(e)) => {
+                            components::empty_state(theme, "Stash", e.clone()).into_any_element()
+                        }
+                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                            components::empty_state(theme, "Stash", "No stashes.")
+                                .into_any_element()
+                        }
+                    }
+                } else {
+                    let list =
+                        uniform_list("stash_main", count, cx.processor(Self::render_stash_rows))
+                            .h_full()
+                            .track_scroll(self.stashes_scroll.clone());
+                    let scroll_handle = self.stashes_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("stash_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            kit::Scrollbar::new("stash_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
+                };
+
+                ("Stash".into(), body)
+            }
+            HistoryTab::Reflog => {
+                let repo = self.active_repo();
+                let count = repo
+                    .and_then(|r| match &r.reflog {
+                        Loadable::Ready(v) => Some(v.len()),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+
+                let body: AnyElement = if count == 0 {
+                    match repo.map(|r| &r.reflog) {
+                        None => components::empty_state(theme, "Reflog", "No repository.")
+                            .into_any_element(),
+                        Some(Loadable::Loading) => {
+                            components::empty_state(theme, "Reflog", "Loading…").into_any_element()
+                        }
+                        Some(Loadable::Error(e)) => {
+                            components::empty_state(theme, "Reflog", e.clone()).into_any_element()
+                        }
+                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                            components::empty_state(theme, "Reflog", "No reflog.")
+                                .into_any_element()
+                        }
+                    }
+                } else {
+                    let list =
+                        uniform_list("reflog_main", count, cx.processor(Self::render_reflog_rows))
+                            .h_full()
+                            .track_scroll(self.reflog_scroll.clone());
+                    let scroll_handle = self.reflog_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("reflog_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            kit::Scrollbar::new("reflog_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
+                };
+
+                ("Reflog".into(), body)
+            }
+        };
+
+        div().flex().flex_col().gap_3().flex_1().child(
+            components::panel(
+                theme,
+                title,
+                None,
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .h_full()
+                    .child(tabs)
+                    .child(div().flex_1().child(body)),
+            )
+            .flex_1(),
+        )
     }
 
     pub(super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -1024,16 +1422,24 @@ impl GitGpuiView {
 
         let title = repo
             .and_then(|r| r.diff_target.as_ref())
-            .map(|t| {
-                format!(
+            .map(|t| match t {
+                DiffTarget::WorkingTree { path, area } => format!(
                     "{}: {}",
-                    if t.area == DiffArea::Staged {
+                    if *area == DiffArea::Staged {
                         "staged"
                     } else {
                         "unstaged"
                     },
-                    t.path.display()
-                )
+                    path.display()
+                ),
+                DiffTarget::Commit { commit_id, path } => {
+                    let sha = commit_id.as_ref();
+                    let short = sha.get(0..8).unwrap_or(sha);
+                    match path {
+                        Some(path) => format!("{short}: {}", path.display()),
+                        None => format!("{short}: full diff"),
+                    }
+                }
             })
             .unwrap_or_else(|| "Select a file to view diff".to_string());
 

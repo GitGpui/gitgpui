@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[test]
 fn diff_from_unified_classifies_lines() {
-    let target = DiffTarget {
+    let target = DiffTarget::WorkingTree {
         path: PathBuf::from("a.txt"),
         area: DiffArea::Unstaged,
     };
@@ -26,4 +26,3 @@ index 0000000..1111111 100644
     assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Remove));
     assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Context));
 }
-

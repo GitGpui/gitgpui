@@ -80,7 +80,11 @@ pub(super) fn resize_edge(
 }
 
 impl GitGpuiView {
-    pub(super) fn title_bar(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> AnyElement {
+    pub(super) fn title_bar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
         let theme = self.theme;
         let bar_bg = if window.is_window_active() {
             theme.colors.surface_bg
@@ -108,35 +112,52 @@ impl GitGpuiView {
                 this.popover_anchor = Some(e.position());
                 cx.notify();
             }))
-            .on_mouse_down(MouseButton::Right, cx.listener(|_this, e: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                window.show_window_menu(e.position);
-            }));
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    window.show_window_menu(e.position);
+                }),
+            );
 
         let drag_region = div()
             .id("title_drag")
             .flex_1()
             .h_full()
             .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _e, _w, cx| {
-                this.title_should_move = true;
-                cx.notify();
-            }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _e, _w, cx| {
-                this.title_should_move = false;
-                cx.notify();
-            }))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(|this, _e, _w, cx| {
-                this.title_should_move = false;
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.title_should_move = true;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.title_should_move = false;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.title_should_move = false;
+                    cx.notify();
+                }),
+            )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
                 if this.title_should_move {
                     this.title_should_move = false;
                     window.start_window_move();
                 }
             }))
-            .child(div().text_sm().text_color(theme.colors.text_muted).child("GitGpui"));
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child("GitGpui"),
+            );
 
         let min = titlebar_control_button(theme, theme.colors.hover)
             .id("win_min")
@@ -176,13 +197,27 @@ impl GitGpuiView {
             .border_color(bar_border)
             .child(hamburger)
             .child(drag_region)
-            .child(div().flex().items_center().child(min).child(max).child(close))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(min)
+                    .child(max)
+                    .child(close),
+            )
             .into_any_element()
     }
 }
 
-pub(crate) fn window_frame(theme: AppTheme, decorations: Decorations, content: AnyElement) -> AnyElement {
-    let mut outer = div().id("window_frame").size_full().bg(gpui::rgba(0x00000000));
+pub(crate) fn window_frame(
+    theme: AppTheme,
+    decorations: Decorations,
+    content: AnyElement,
+) -> AnyElement {
+    let mut outer = div()
+        .id("window_frame")
+        .size_full()
+        .bg(gpui::rgba(0x00000000));
 
     if let Decorations::Client { tiling } = decorations {
         outer = outer
@@ -213,13 +248,17 @@ mod tests {
     #[test]
     fn titlebar_buttons_do_not_double_set_hover_style() {
         let theme = AppTheme::zed_ayu_dark();
-        assert!(std::panic::catch_unwind(|| {
-            let _ = titlebar_control_button(theme, theme.colors.hover);
-        })
-        .is_ok());
-        assert!(std::panic::catch_unwind(|| {
-            let _ = titlebar_control_button(theme, with_alpha(theme.colors.danger, 0.25));
-        })
-        .is_ok());
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = titlebar_control_button(theme, theme.colors.hover);
+            })
+            .is_ok()
+        );
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _ = titlebar_control_button(theme, with_alpha(theme.colors.danger, 0.25));
+            })
+            .is_ok()
+        );
     }
 }

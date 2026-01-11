@@ -30,4 +30,3 @@ pub enum ErrorKind {
     Unsupported(&'static str),
     Backend(String),
 }
-

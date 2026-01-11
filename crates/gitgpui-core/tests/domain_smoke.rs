@@ -30,4 +30,3 @@ fn commit_struct_is_constructible() {
     };
     assert_eq!(commit.summary, "test");
 }
-

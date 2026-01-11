@@ -30,7 +30,13 @@ pub struct CommitDetails {
     pub message: String,
     pub committed_at: String,
     pub parent_ids: Vec<CommitId>,
-    pub files: Vec<PathBuf>,
+    pub files: Vec<CommitFileChange>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitFileChange {
+    pub path: PathBuf,
+    pub kind: FileStatusKind,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,9 +93,15 @@ pub enum DiffArea {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DiffTarget {
-    pub path: PathBuf,
-    pub area: DiffArea,
+pub enum DiffTarget {
+    WorkingTree {
+        path: PathBuf,
+        area: DiffArea,
+    },
+    Commit {
+        commit_id: CommitId,
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +167,15 @@ pub struct StashEntry {
     pub index: usize,
     pub message: String,
     pub created_at: Option<SystemTime>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReflogEntry {
+    pub index: usize,
+    pub new_id: CommitId,
+    pub message: String,
+    pub time: Option<SystemTime>,
+    pub selector: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

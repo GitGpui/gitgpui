@@ -105,14 +105,19 @@ fn reduce(
             let mut active_repo_id: Option<RepoId> = None;
 
             let mut effects = Vec::new();
-            for path in dedup_paths_in_order(open_repos).into_iter().map(normalize_repo_path) {
+            for path in dedup_paths_in_order(open_repos)
+                .into_iter()
+                .map(normalize_repo_path)
+            {
                 if state.repos.iter().any(|r| r.spec.workdir == path) {
                     continue;
                 }
                 let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
                 let spec = RepoSpec { workdir: path };
                 if active_repo_id.is_none()
-                    && active_repo.as_ref().is_some_and(|active| active == &spec.workdir)
+                    && active_repo
+                        .as_ref()
+                        .is_some_and(|active| active == &spec.workdir)
                 {
                     active_repo_id = Some(repo_id);
                 }
@@ -165,6 +170,8 @@ fn reduce(
             repo_state.remote_branches = Loadable::Loading;
             repo_state.status = Loadable::Loading;
             repo_state.log = Loadable::Loading;
+            repo_state.stashes = Loadable::Loading;
+            repo_state.reflog = Loadable::Loading;
             repo_state.selected_commit = None;
             repo_state.commit_details = Loadable::NotLoaded;
 
@@ -211,7 +218,35 @@ fn reduce(
             Vec::new()
         }
 
+        Msg::LoadStashes { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.stashes = Loadable::Loading;
+            vec![Effect::LoadStashes { repo_id, limit: 50 }]
+        }
+
+        Msg::LoadReflog { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.reflog = Loadable::Loading;
+            vec![Effect::LoadReflog {
+                repo_id,
+                limit: 200,
+            }]
+        }
+
         Msg::CheckoutBranch { repo_id, name } => vec![Effect::CheckoutBranch { repo_id, name }],
+        Msg::CheckoutCommit { repo_id, commit_id } => {
+            vec![Effect::CheckoutCommit { repo_id, commit_id }]
+        }
+        Msg::CherryPickCommit { repo_id, commit_id } => {
+            vec![Effect::CherryPickCommit { repo_id, commit_id }]
+        }
+        Msg::RevertCommit { repo_id, commit_id } => {
+            vec![Effect::RevertCommit { repo_id, commit_id }]
+        }
         Msg::CreateBranch { repo_id, name } => vec![Effect::CreateBranch { repo_id, name }],
         Msg::StagePath { repo_id, path } => vec![Effect::StagePath { repo_id, path }],
         Msg::UnstagePath { repo_id, path } => vec![Effect::UnstagePath { repo_id, path }],
@@ -228,6 +263,8 @@ fn reduce(
             message,
             include_untracked,
         }],
+        Msg::ApplyStash { repo_id, index } => vec![Effect::ApplyStash { repo_id, index }],
+        Msg::DropStash { repo_id, index } => vec![Effect::DropStash { repo_id, index }],
 
         Msg::RepoOpenedOk {
             repo_id,
@@ -248,6 +285,8 @@ fn reduce(
                 repo_state.remote_branches = Loadable::Loading;
                 repo_state.status = Loadable::Loading;
                 repo_state.log = Loadable::Loading;
+                repo_state.stashes = Loadable::Loading;
+                repo_state.reflog = Loadable::Loading;
                 repo_state.selected_commit = None;
                 repo_state.commit_details = Loadable::NotLoaded;
                 repo_state.diff_target = None;
@@ -343,6 +382,32 @@ fn reduce(
         Msg::LogLoaded { repo_id, result } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.log = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::StashesLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.stashes = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::ReflogLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.reflog = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -449,6 +514,11 @@ fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
         Effect::LoadRemotes { repo_id },
         Effect::LoadRemoteBranches { repo_id },
         Effect::LoadStatus { repo_id },
+        Effect::LoadStashes { repo_id, limit: 50 },
+        Effect::LoadReflog {
+            repo_id,
+            limit: 200,
+        },
         Effect::LoadHeadLog {
             repo_id,
             limit: 200,
@@ -461,8 +531,8 @@ fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
 mod tests {
     use super::*;
     use gitgpui_core::domain::{
-        Branch, CommitDetails, CommitId, DiffTarget, LogCursor, LogPage, Remote, RemoteBranch,
-        RepoStatus, StashEntry,
+        Branch, CommitDetails, CommitId, DiffTarget, LogCursor, LogPage, ReflogEntry, Remote,
+        RemoteBranch, RepoStatus, StashEntry,
     };
     use gitgpui_core::services::{PullMode, Result};
     use std::sync::Arc;
@@ -492,6 +562,9 @@ mod tests {
         fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
             unimplemented!()
         }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
         fn current_branch(&self) -> Result<String> {
             unimplemented!()
         }
@@ -518,6 +591,15 @@ mod tests {
             unimplemented!()
         }
         fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
             unimplemented!()
         }
 
@@ -698,6 +780,8 @@ mod tests {
         assert!(repo_state.remote_branches.is_loading());
         assert!(repo_state.status.is_loading());
         assert!(repo_state.log.is_loading());
+        assert!(repo_state.stashes.is_loading());
+        assert!(repo_state.reflog.is_loading());
         assert!(matches!(
             effects.as_slice(),
             [
@@ -706,6 +790,8 @@ mod tests {
                 Effect::LoadRemotes { .. },
                 Effect::LoadRemoteBranches { .. },
                 Effect::LoadStatus { .. },
+                Effect::LoadStashes { .. },
+                Effect::LoadReflog { .. },
                 Effect::LoadHeadLog { .. }
             ]
         ));
@@ -837,7 +923,7 @@ mod tests {
         ));
         state.active_repo = Some(RepoId(1));
 
-        let target = gitgpui_core::domain::DiffTarget {
+        let target = gitgpui_core::domain::DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
             area: gitgpui_core::domain::DiffArea::Unstaged,
         };
@@ -872,7 +958,7 @@ mod tests {
                 workdir: PathBuf::from("/tmp/repo"),
             },
         );
-        repo_state.diff_target = Some(gitgpui_core::domain::DiffTarget {
+        repo_state.diff_target = Some(gitgpui_core::domain::DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
             area: gitgpui_core::domain::DiffArea::Unstaged,
         });
@@ -935,7 +1021,7 @@ mod tests {
                 workdir: PathBuf::from("/tmp/repo"),
             },
         );
-        let target = DiffTarget {
+        let target = DiffTarget::WorkingTree {
             path: PathBuf::from("src/lib.rs"),
             area: gitgpui_core::domain::DiffArea::Unstaged,
         };
@@ -1232,6 +1318,32 @@ fn schedule_effect(
             }
         }
 
+        Effect::LoadStashes { repo_id, limit } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let mut entries = repo.stash_list();
+                    if let Ok(v) = &mut entries {
+                        v.truncate(limit);
+                    }
+                    let _ = msg_tx.send(Msg::StashesLoaded {
+                        repo_id,
+                        result: entries,
+                    });
+                });
+            }
+        }
+
+        Effect::LoadReflog { repo_id, limit } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::ReflogLoaded {
+                        repo_id,
+                        result: repo.reflog_head(limit),
+                    });
+                });
+            }
+        }
+
         Effect::LoadCommitDetails { repo_id, commit_id } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
@@ -1265,6 +1377,39 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::RepoActionFinished {
                         repo_id,
                         result: repo.checkout_branch(&name),
+                    });
+                });
+            }
+        }
+
+        Effect::CheckoutCommit { repo_id, commit_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.checkout_commit(&commit_id),
+                    });
+                });
+            }
+        }
+
+        Effect::CherryPickCommit { repo_id, commit_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.cherry_pick(&commit_id),
+                    });
+                });
+            }
+        }
+
+        Effect::RevertCommit { repo_id, commit_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.revert(&commit_id),
                     });
                 });
             }
@@ -1360,6 +1505,28 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::RepoActionFinished {
                         repo_id,
                         result: repo.stash_create(&message, include_untracked),
+                    });
+                });
+            }
+        }
+
+        Effect::ApplyStash { repo_id, index } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.stash_apply(index),
+                    });
+                });
+            }
+        }
+
+        Effect::DropStash { repo_id, index } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.stash_drop(index),
                     });
                 });
             }

@@ -55,7 +55,13 @@ impl Scrollbar {
         .left_0()
         .size_full();
 
-        let base = div().id(self.id).absolute().top_0().left_0().size_full().child(paint);
+        let base = div()
+            .id(self.id)
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(paint);
 
         #[cfg(test)]
         let base = match self.debug_selector {
@@ -93,7 +99,11 @@ fn thumb_bg(theme: AppTheme) -> gpui::Rgba {
     color
 }
 
-fn vertical_thumb_metrics(viewport_h: Pixels, max_offset: Pixels, scroll_y: Pixels) -> Option<ThumbMetrics> {
+fn vertical_thumb_metrics(
+    viewport_h: Pixels,
+    max_offset: Pixels,
+    scroll_y: Pixels,
+) -> Option<ThumbMetrics> {
     if viewport_h <= px(0.0) || max_offset <= px(0.0) {
         return None;
     }
@@ -104,7 +114,11 @@ fn vertical_thumb_metrics(viewport_h: Pixels, max_offset: Pixels, scroll_y: Pixe
     let thumb_h = ((viewport_h * (viewport_h / content_h)).max(px(24.0))).min(track_h);
     let available = (track_h - thumb_h).max(px(0.0));
 
-    let pct = if max_offset <= px(0.0) { 0.0 } else { scroll_y / max_offset };
+    let pct = if max_offset <= px(0.0) {
+        0.0
+    } else {
+        scroll_y / max_offset
+    };
 
     let top = margin + available * pct;
 

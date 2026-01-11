@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
-use gpui::{AnyElement, Div, IntoElement, div, px};
 use gpui::prelude::*;
+use gpui::{AnyElement, Div, IntoElement, div, px};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SplitButtonStyle {
@@ -33,7 +33,10 @@ impl SplitButton {
     }
 
     pub fn render(self, theme: AppTheme) -> Div {
-        let bordered = matches!(self.style, SplitButtonStyle::Filled | SplitButtonStyle::Outlined);
+        let bordered = matches!(
+            self.style,
+            SplitButtonStyle::Filled | SplitButtonStyle::Outlined
+        );
         let bg = match self.style {
             SplitButtonStyle::Filled => theme.colors.surface_bg,
             SplitButtonStyle::Outlined | SplitButtonStyle::Transparent => gpui::rgba(0x00000000),
@@ -44,9 +47,17 @@ impl SplitButton {
             .items_center()
             .rounded(px(theme.radii.row))
             .bg(bg)
-            .when(bordered, |this| this.border_1().border_color(with_alpha(theme.colors.border, 0.8)))
+            .when(bordered, |this| {
+                this.border_1()
+                    .border_color(with_alpha(theme.colors.border, 0.8))
+            })
             .child(div().flex_1().child(self.left))
-            .child(div().h_full().w(px(1.0)).bg(with_alpha(theme.colors.border, 0.5)))
+            .child(
+                div()
+                    .h_full()
+                    .w(px(1.0))
+                    .bg(with_alpha(theme.colors.border, 0.5)),
+            )
             .child(self.right)
     }
 }

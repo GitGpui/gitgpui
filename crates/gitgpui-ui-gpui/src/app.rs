@@ -2,8 +2,8 @@ use crate::view::GitGpuiView;
 use gitgpui_core::services::GitBackend;
 use gitgpui_state::store::AppStore;
 use gpui::{
-    App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowDecorations,
-    WindowOptions, point, px, size,
+    App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds,
+    WindowDecorations, WindowOptions, point, px, size,
 };
 use std::sync::Arc;
 
@@ -17,6 +17,31 @@ pub fn run(backend: Arc<dyn GitBackend>) {
             }
         })
         .detach();
+
+        cx.bind_keys([
+            KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
+            KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
+            KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+            KeyBinding::new("shift-left", crate::kit::SelectLeft, Some("TextInput")),
+            KeyBinding::new("shift-right", crate::kit::SelectRight, Some("TextInput")),
+            KeyBinding::new("home", crate::kit::Home, Some("TextInput")),
+            KeyBinding::new("end", crate::kit::End, Some("TextInput")),
+            KeyBinding::new("cmd-a", crate::kit::SelectAll, Some("TextInput")),
+            KeyBinding::new("ctrl-a", crate::kit::SelectAll, Some("TextInput")),
+            KeyBinding::new("cmd-v", crate::kit::Paste, Some("TextInput")),
+            KeyBinding::new("ctrl-v", crate::kit::Paste, Some("TextInput")),
+            KeyBinding::new("cmd-c", crate::kit::Copy, Some("TextInput")),
+            KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+            KeyBinding::new("cmd-x", crate::kit::Cut, Some("TextInput")),
+            KeyBinding::new("ctrl-x", crate::kit::Cut, Some("TextInput")),
+            #[cfg(target_os = "macos")]
+            KeyBinding::new(
+                "ctrl-cmd-space",
+                crate::kit::ShowCharacterPalette,
+                Some("TextInput"),
+            ),
+        ]);
 
         let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
         let backend = Arc::clone(&backend);

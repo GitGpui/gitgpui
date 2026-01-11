@@ -35,9 +35,27 @@ pub enum Msg {
     ClearDiffSelection {
         repo_id: RepoId,
     },
+    LoadStashes {
+        repo_id: RepoId,
+    },
+    LoadReflog {
+        repo_id: RepoId,
+    },
     CheckoutBranch {
         repo_id: RepoId,
         name: String,
+    },
+    CheckoutCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    CherryPickCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    RevertCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
     },
     CreateBranch {
         repo_id: RepoId,
@@ -69,6 +87,14 @@ pub enum Msg {
         repo_id: RepoId,
         message: String,
         include_untracked: bool,
+    },
+    ApplyStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    DropStash {
+        repo_id: RepoId,
+        index: usize,
     },
 
     RepoOpenedOk {
@@ -105,6 +131,14 @@ pub enum Msg {
     LogLoaded {
         repo_id: RepoId,
         result: Result<LogPage, Error>,
+    },
+    StashesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<StashEntry>, Error>,
+    },
+    ReflogLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<ReflogEntry>, Error>,
     },
 
     CommitDetailsLoaded {
@@ -167,10 +201,33 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("ClearDiffSelection")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::LoadStashes { repo_id } => f
+                .debug_struct("LoadStashes")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::LoadReflog { repo_id } => f
+                .debug_struct("LoadReflog")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::CheckoutBranch { repo_id, name } => f
                 .debug_struct("CheckoutBranch")
                 .field("repo_id", repo_id)
                 .field("name", name)
+                .finish(),
+            Msg::CheckoutCommit { repo_id, commit_id } => f
+                .debug_struct("CheckoutCommit")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .finish(),
+            Msg::CherryPickCommit { repo_id, commit_id } => f
+                .debug_struct("CherryPickCommit")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .finish(),
+            Msg::RevertCommit { repo_id, commit_id } => f
+                .debug_struct("RevertCommit")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
                 .finish(),
             Msg::CreateBranch { repo_id, name } => f
                 .debug_struct("CreateBranch")
@@ -211,6 +268,16 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("message", message)
                 .field("include_untracked", include_untracked)
+                .finish(),
+            Msg::ApplyStash { repo_id, index } => f
+                .debug_struct("ApplyStash")
+                .field("repo_id", repo_id)
+                .field("index", index)
+                .finish(),
+            Msg::DropStash { repo_id, index } => f
+                .debug_struct("DropStash")
+                .field("repo_id", repo_id)
+                .field("index", index)
                 .finish(),
             Msg::RepoOpenedOk { repo_id, spec, .. } => f
                 .debug_struct("RepoOpenedOk")
@@ -255,6 +322,16 @@ impl std::fmt::Debug for Msg {
                 .finish(),
             Msg::LogLoaded { repo_id, result } => f
                 .debug_struct("LogLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            Msg::StashesLoaded { repo_id, result } => f
+                .debug_struct("StashesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            Msg::ReflogLoaded { repo_id, result } => f
+                .debug_struct("ReflogLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
@@ -313,6 +390,14 @@ pub enum Effect {
         limit: usize,
         cursor: Option<LogCursor>,
     },
+    LoadStashes {
+        repo_id: RepoId,
+        limit: usize,
+    },
+    LoadReflog {
+        repo_id: RepoId,
+        limit: usize,
+    },
     LoadCommitDetails {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -325,6 +410,18 @@ pub enum Effect {
     CheckoutBranch {
         repo_id: RepoId,
         name: String,
+    },
+    CheckoutCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    CherryPickCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    RevertCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
     },
     CreateBranch {
         repo_id: RepoId,
@@ -356,6 +453,14 @@ pub enum Effect {
         repo_id: RepoId,
         message: String,
         include_untracked: bool,
+    },
+    ApplyStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    DropStash {
+        repo_id: RepoId,
+        index: usize,
     },
 }
 

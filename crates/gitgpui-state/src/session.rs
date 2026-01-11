@@ -160,15 +160,12 @@ fn app_state_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = env::var_os("HOME")?;
-        return Some(
-            PathBuf::from(home).join("Library/Application Support/gitgpui"),
-        );
+        return Some(PathBuf::from(home).join("Library/Application Support/gitgpui"));
     }
 
     #[cfg(target_os = "windows")]
     {
-        let appdata = env::var_os("LOCALAPPDATA")
-            .or_else(|| env::var_os("APPDATA"))?;
+        let appdata = env::var_os("LOCALAPPDATA").or_else(|| env::var_os("APPDATA"))?;
         return Some(PathBuf::from(appdata).join("gitgpui"));
     }
 
@@ -186,10 +183,7 @@ mod tests {
 
     #[test]
     fn session_file_round_trips() {
-        let dir = env::temp_dir().join(format!(
-            "gitgpui-session-test-{}",
-            std::process::id()
-        ));
+        let dir = env::temp_dir().join(format!("gitgpui-session-test-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("session.json");
 
@@ -227,8 +221,18 @@ mod tests {
 
         let mut state = AppState::default();
         state.repos = vec![
-            RepoState::new_opening(RepoId(1), RepoSpec { workdir: repo_a.clone() }),
-            RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_b.clone() }),
+            RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: repo_a.clone(),
+                },
+            ),
+            RepoState::new_opening(
+                RepoId(2),
+                RepoSpec {
+                    workdir: repo_b.clone(),
+                },
+            ),
         ];
         state.active_repo = Some(RepoId(2));
 

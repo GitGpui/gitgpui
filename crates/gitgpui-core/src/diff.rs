@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn annotate_tracks_line_numbers_through_hunks() {
         let diff = Diff::from_unified(
-            DiffTarget {
+            DiffTarget::WorkingTree {
                 path: PathBuf::from("src/lib.rs"),
                 area: DiffArea::Unstaged,
             },
@@ -135,7 +135,12 @@ index 1111111..2222222 100644
         let annotated = annotate_unified(&diff);
         let mut rows = annotated
             .iter()
-            .filter(|l| matches!(l.kind, DiffLineKind::Context | DiffLineKind::Add | DiffLineKind::Remove))
+            .filter(|l| {
+                matches!(
+                    l.kind,
+                    DiffLineKind::Context | DiffLineKind::Add | DiffLineKind::Remove
+                )
+            })
             .map(|l| (l.kind, l.old_line, l.new_line, l.text.as_str()))
             .collect::<Vec<_>>();
 
@@ -167,7 +172,9 @@ index 1111111..2222222 100644
     fn parse_hunk_header_variants() {
         assert_eq!(parse_unified_hunk_header("@@ -1 +2 @@"), Some((1, 2)));
         assert_eq!(parse_unified_hunk_header("@@ -1,0 +2,10 @@"), Some((1, 2)));
-        assert_eq!(parse_unified_hunk_header("@@ -42,7 +100,8 @@ fn x"), Some((42, 100)));
+        assert_eq!(
+            parse_unified_hunk_header("@@ -42,7 +100,8 @@ fn x"),
+            Some((42, 100))
+        );
     }
 }
-

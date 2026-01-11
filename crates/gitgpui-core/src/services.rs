@@ -10,6 +10,7 @@ pub trait GitRepository: Send + Sync {
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
     fn list_branches(&self) -> Result<Vec<Branch>>;
     fn list_remotes(&self) -> Result<Vec<Remote>>;
@@ -20,6 +21,9 @@ pub trait GitRepository: Send + Sync {
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
     fn delete_branch(&self, name: &str) -> Result<()>;
     fn checkout_branch(&self, name: &str) -> Result<()>;
+    fn checkout_commit(&self, id: &CommitId) -> Result<()>;
+    fn cherry_pick(&self, id: &CommitId) -> Result<()>;
+    fn revert(&self, id: &CommitId) -> Result<()>;
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;

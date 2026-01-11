@@ -19,6 +19,8 @@ pub struct RepoState {
     pub remote_branches: Loadable<Vec<RemoteBranch>>,
     pub status: Loadable<RepoStatus>,
     pub log: Loadable<LogPage>,
+    pub stashes: Loadable<Vec<StashEntry>>,
+    pub reflog: Loadable<Vec<ReflogEntry>>,
 
     pub selected_commit: Option<CommitId>,
     pub commit_details: Loadable<CommitDetails>,
@@ -41,6 +43,8 @@ impl RepoState {
             remote_branches: Loadable::NotLoaded,
             status: Loadable::NotLoaded,
             log: Loadable::NotLoaded,
+            stashes: Loadable::NotLoaded,
+            reflog: Loadable::NotLoaded,
             selected_commit: None,
             commit_details: Loadable::NotLoaded,
             diff_target: None,

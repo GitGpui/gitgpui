@@ -128,7 +128,11 @@ impl SmokeView {
 }
 
 impl gpui::Render for SmokeView {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let tabs = kit::Tabs::new(vec!["One".into(), "Two".into()])
             .selected(0)
@@ -140,18 +144,24 @@ impl gpui::Render for SmokeView {
             .gap_2()
             .child(components::panel(theme, "Tabs", None, tabs))
             .child(components::panel(theme, "Input", None, self.input.clone()))
-            .child(
-                components::panel(
-                    theme,
-                    "Buttons",
-                    None,
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(zed::Button::new("b1", "Primary").style(zed::ButtonStyle::Filled).render(theme))
-                        .child(zed::Button::new("b2", "Secondary").style(zed::ButtonStyle::Outlined).render(theme)),
-                ),
-            )
+            .child(components::panel(
+                theme,
+                "Buttons",
+                None,
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        zed::Button::new("b1", "Primary")
+                            .style(zed::ButtonStyle::Filled)
+                            .render(theme),
+                    )
+                    .child(
+                        zed::Button::new("b2", "Secondary")
+                            .style(zed::ButtonStyle::Outlined)
+                            .render(theme),
+                    ),
+            ))
             .into_any_element();
 
         view::window_frame(theme, window.window_decorations(), content)
@@ -161,8 +171,10 @@ impl gpui::Render for SmokeView {
 #[gpui::test]
 fn smoke_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
-        cx.open_window(Default::default(), |window, cx| cx.new(|cx| SmokeView::new(window, cx)))
-            .unwrap();
+        cx.open_window(Default::default(), |window, cx| {
+            cx.new(|cx| SmokeView::new(window, cx))
+        })
+        .unwrap();
     });
 }
 
@@ -206,19 +218,28 @@ fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     });
 }
 
-    #[gpui::test]
+#[gpui::test]
 fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
-        let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) =
-            cx.add_window_view(|window, cx| crate::view::GitGpuiView::new(store, events, None, window, cx));
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
 
     // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
     let picker_bounds = cx
         .debug_bounds("repo_picker")
         .expect("expected repo_picker in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
-    cx.simulate_mouse_down(picker_bounds.center(), MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_down(
+        picker_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        picker_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -228,8 +249,16 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
         .debug_bounds("repo_popover_close")
         .expect("expected repo_popover_close in debug bounds");
     cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
-    cx.simulate_mouse_down(close_bounds.center(), MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(close_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_down(
+        close_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        close_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
     cx.run_until_parked();
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -246,15 +275,24 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| crate::view::GitGpuiView::new(store, events, None, window, cx));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
 
     let picker_bounds = cx
         .debug_bounds("repo_picker")
         .expect("expected repo_picker in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
-    cx.simulate_mouse_down(picker_bounds.center(), MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_down(
+        picker_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        picker_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
     cx.run_until_parked();
 
     cx.update(|_window, app| {
@@ -293,30 +331,38 @@ impl ScrollbarTestView {
 }
 
 impl gpui::Render for ScrollbarTestView {
-    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.theme;
         let rows = (0..self.rows)
-            .map(|ix| div().id(ix).h(px(20.0)).px_2().child(format!("Row {ix}")).into_any_element())
+            .map(|ix| {
+                div()
+                    .id(ix)
+                    .h(px(20.0))
+                    .px_2()
+                    .child(format!("Row {ix}"))
+                    .into_any_element()
+            })
             .collect::<Vec<_>>();
 
-        div()
-            .size_full()
-            .bg(theme.colors.window_bg)
-            .child(
-                div()
-                    .id("scroll_container")
-                    .relative()
-                    .w(px(200.0))
-                    .h(px(120.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.handle)
-                    .child(div().flex().flex_col().children(rows))
-                    .child(
-                        kit::Scrollbar::new("test_scrollbar", self.handle.clone())
-                            .debug_selector("test_scrollbar")
-                            .render(theme),
-                    ),
-            )
+        div().size_full().bg(theme.colors.window_bg).child(
+            div()
+                .id("scroll_container")
+                .relative()
+                .w(px(200.0))
+                .h(px(120.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.handle)
+                .child(div().flex().flex_col().children(rows))
+                .child(
+                    kit::Scrollbar::new("test_scrollbar", self.handle.clone())
+                        .debug_selector("test_scrollbar")
+                        .render(theme),
+                ),
+        )
     }
 }
 
