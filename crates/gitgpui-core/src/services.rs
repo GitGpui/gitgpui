@@ -9,6 +9,7 @@ pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
     fn current_branch(&self) -> Result<String>;
     fn list_branches(&self) -> Result<Vec<Branch>>;
     fn list_remotes(&self) -> Result<Vec<Remote>>;

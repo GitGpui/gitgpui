@@ -36,6 +36,10 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
     fn current_branch(&self) -> Result<String> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }

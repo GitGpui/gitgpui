@@ -113,7 +113,7 @@ impl GitGpuiView {
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
@@ -128,7 +128,8 @@ impl GitGpuiView {
             .map(|(ix, commit)| {
                 let refs = commit_refs(repo, ix == 0, commit);
                 let when = format_relative_time(commit.time);
-                history_table_row(theme, ix, commit, refs, when)
+                let selected = repo.selected_commit.as_ref() == Some(&commit.id);
+                history_table_row(theme, ix, repo.id, commit, refs, when, selected, cx)
             })
             .collect()
     }
@@ -188,9 +189,12 @@ impl GitGpuiView {
 fn history_table_row(
     theme: AppTheme,
     ix: usize,
+    repo_id: RepoId,
     commit: &Commit,
     refs: String,
     when: String,
+    selected: bool,
+    cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let id: &str = <CommitId as AsRef<str>>::as_ref(&commit.id);
     let short = id.get(0..8).unwrap_or(id);
@@ -200,7 +204,8 @@ fn history_table_row(
         "●"
     };
 
-    div()
+    let commit_id = commit.id.clone();
+    let mut row = div()
         .id(ix)
         .flex()
         .w_full()
@@ -257,7 +262,19 @@ fn history_table_row(
                 .whitespace_nowrap()
                 .child(short.to_string()),
         )
-        .into_any_element()
+        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            this.store.dispatch(Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+            });
+            cx.notify();
+        }));
+
+    if selected {
+        row = row.bg(with_alpha(theme.colors.accent, 0.15));
+    }
+
+    row.into_any_element()
 }
 
 fn commit_refs(repo: &RepoState, is_head: bool, commit: &Commit) -> String {

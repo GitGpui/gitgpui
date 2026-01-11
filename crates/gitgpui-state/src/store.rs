@@ -6,7 +6,7 @@ use gitgpui_core::services::{GitBackend, GitRepository};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, RwLock};
+use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 use std::time::SystemTime;
 
@@ -40,9 +40,7 @@ impl AppStore {
 
             while let Ok(msg) = msg_rx.recv() {
                 let effects = {
-                    let mut app_state = thread_state
-                        .write()
-                        .expect("state lock poisoned (write)");
+                    let mut app_state = thread_state.write().expect("state lock poisoned (write)");
 
                     reduce(&mut repos, &id_alloc, &mut app_state, msg)
                 };
@@ -50,13 +48,7 @@ impl AppStore {
                 let _ = event_tx.send(StoreEvent::StateChanged);
 
                 for effect in effects {
-                    schedule_effect(
-                        &executor,
-                        &backend,
-                        &repos,
-                        thread_msg_tx.clone(),
-                        effect,
-                    );
+                    schedule_effect(&executor, &backend, &repos, thread_msg_tx.clone(), effect);
                 }
             }
         });
@@ -87,7 +79,9 @@ fn reduce(
             let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
             let spec = RepoSpec { workdir: path };
 
-            state.repos.push(RepoState::new_opening(repo_id, spec.clone()));
+            state
+                .repos
+                .push(RepoState::new_opening(repo_id, spec.clone()));
             state.active_repo = Some(repo_id);
             vec![Effect::OpenRepo {
                 repo_id,
@@ -122,8 +116,30 @@ fn reduce(
             repo_state.remote_branches = Loadable::Loading;
             repo_state.status = Loadable::Loading;
             repo_state.log = Loadable::Loading;
+            repo_state.selected_commit = None;
+            repo_state.commit_details = Loadable::NotLoaded;
 
             refresh_effects(repo_id)
+        }
+
+        Msg::SelectCommit { repo_id, commit_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+
+            repo_state.selected_commit = Some(commit_id.clone());
+            repo_state.commit_details = Loadable::Loading;
+            vec![Effect::LoadCommitDetails { repo_id, commit_id }]
+        }
+
+        Msg::ClearCommitSelection { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+
+            repo_state.selected_commit = None;
+            repo_state.commit_details = Loadable::NotLoaded;
+            Vec::new()
         }
 
         Msg::SelectDiff { repo_id, target } => {
@@ -180,6 +196,8 @@ fn reduce(
                 repo_state.remote_branches = Loadable::Loading;
                 repo_state.status = Loadable::Loading;
                 repo_state.log = Loadable::Loading;
+                repo_state.selected_commit = None;
+                repo_state.commit_details = Loadable::NotLoaded;
                 repo_state.diff_target = None;
                 repo_state.diff = Loadable::NotLoaded;
                 repo_state.last_error = None;
@@ -280,6 +298,25 @@ fn reduce(
             Vec::new()
         }
 
+        Msg::CommitDetailsLoaded {
+            repo_id,
+            commit_id,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.selected_commit.as_ref() == Some(&commit_id)
+            {
+                repo_state.commit_details = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
         Msg::DiffLoaded {
             repo_id,
             target,
@@ -346,8 +383,8 @@ fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
 mod tests {
     use super::*;
     use gitgpui_core::domain::{
-        Branch, CommitId, DiffTarget, LogCursor, LogPage, Remote, RemoteBranch, RepoStatus,
-        StashEntry,
+        Branch, CommitDetails, CommitId, DiffTarget, LogCursor, LogPage, Remote, RemoteBranch,
+        RepoStatus, StashEntry,
     };
     use gitgpui_core::services::{PullMode, Result};
     use std::sync::Arc;
@@ -372,6 +409,9 @@ mod tests {
         }
 
         fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
             unimplemented!()
         }
         fn current_branch(&self) -> Result<String> {
@@ -486,7 +526,9 @@ mod tests {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::CloseRepo { repo_id: RepoId(11) },
+            Msg::CloseRepo {
+                repo_id: RepoId(11),
+            },
         );
 
         assert!(effects.is_empty());
@@ -566,7 +608,11 @@ mod tests {
         );
 
         assert!(state.repos[0].last_error.is_none());
-        assert!(effects.iter().any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
+        );
     }
 
     #[test]
@@ -594,11 +640,18 @@ mod tests {
         );
 
         let repo_state = &state.repos[0];
-        assert!(repo_state
-            .last_error
-            .as_deref()
-            .is_some_and(|s| s.contains("boom")));
-        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("boom")));
+        assert!(
+            repo_state
+                .last_error
+                .as_deref()
+                .is_some_and(|s| s.contains("boom"))
+        );
+        assert!(
+            repo_state
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("boom"))
+        );
     }
 
     #[test]
@@ -629,11 +682,18 @@ mod tests {
         );
 
         let repo_state = &state.repos[0];
-        assert!(repo_state
-            .last_error
-            .as_deref()
-            .is_some_and(|s| s.contains("nope")));
-        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("nope")));
+        assert!(
+            repo_state
+                .last_error
+                .as_deref()
+                .is_some_and(|s| s.contains("nope"))
+        );
+        assert!(
+            repo_state
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("nope"))
+        );
     }
 
     #[test]
@@ -729,7 +789,9 @@ mod tests {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::SetActiveRepo { repo_id: RepoId(999) },
+            Msg::SetActiveRepo {
+                repo_id: RepoId(999),
+            },
         );
         assert_eq!(state.active_repo, Some(RepoId(2)));
     }
@@ -768,20 +830,25 @@ mod tests {
 
         let repo_state = &state.repos[0];
         assert!(matches!(repo_state.diff, Loadable::Error(_)));
-        assert!(repo_state.diagnostics.iter().any(|d| d.message.contains("diff failed")));
+        assert!(
+            repo_state
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("diff failed"))
+        );
     }
 
     #[test]
     fn diagnostics_are_capped() {
-        let mut repo_state =
-            RepoState::new_opening(RepoId(1), RepoSpec { workdir: PathBuf::from("/tmp/repo") });
+        let mut repo_state = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
 
         for i in 0..205 {
-            push_diagnostic(
-                &mut repo_state,
-                DiagnosticKind::Error,
-                format!("err-{i}"),
-            );
+            push_diagnostic(&mut repo_state, DiagnosticKind::Error, format!("err-{i}"));
         }
 
         assert_eq!(repo_state.diagnostics.len(), 200);
@@ -816,7 +883,11 @@ mod tests {
         assert!(repo_state.remote_branches.is_loading());
         assert!(repo_state.status.is_loading());
         assert!(repo_state.log.is_loading());
-        assert!(effects.iter().any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
+        );
     }
 
     #[test]
@@ -841,7 +912,13 @@ mod tests {
                 path: PathBuf::from("a.txt"),
             },
         );
-        assert!(matches!(stage.as_slice(), [Effect::StagePath { repo_id: RepoId(1), .. }]));
+        assert!(matches!(
+            stage.as_slice(),
+            [Effect::StagePath {
+                repo_id: RepoId(1),
+                ..
+            }]
+        ));
 
         let unstage = reduce(
             &mut repos,
@@ -852,7 +929,13 @@ mod tests {
                 path: PathBuf::from("a.txt"),
             },
         );
-        assert!(matches!(unstage.as_slice(), [Effect::UnstagePath { repo_id: RepoId(1), .. }]));
+        assert!(matches!(
+            unstage.as_slice(),
+            [Effect::UnstagePath {
+                repo_id: RepoId(1),
+                ..
+            }]
+        ));
 
         let commit = reduce(
             &mut repos,
@@ -863,7 +946,13 @@ mod tests {
                 message: "m".to_string(),
             },
         );
-        assert!(matches!(commit.as_slice(), [Effect::Commit { repo_id: RepoId(1), .. }]));
+        assert!(matches!(
+            commit.as_slice(),
+            [Effect::Commit {
+                repo_id: RepoId(1),
+                ..
+            }]
+        ));
 
         let pull = reduce(
             &mut repos,
@@ -874,10 +963,24 @@ mod tests {
                 mode: PullMode::Rebase,
             },
         );
-        assert!(matches!(pull.as_slice(), [Effect::Pull { repo_id: RepoId(1), .. }]));
+        assert!(matches!(
+            pull.as_slice(),
+            [Effect::Pull {
+                repo_id: RepoId(1),
+                ..
+            }]
+        ));
 
-        let push = reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id: RepoId(1) });
-        assert!(matches!(push.as_slice(), [Effect::Push { repo_id: RepoId(1) }]));
+        let push = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Push { repo_id: RepoId(1) },
+        );
+        assert!(matches!(
+            push.as_slice(),
+            [Effect::Push { repo_id: RepoId(1) }]
+        ));
 
         let stash = reduce(
             &mut repos,
@@ -889,7 +992,13 @@ mod tests {
                 include_untracked: true,
             },
         );
-        assert!(matches!(stash.as_slice(), [Effect::Stash { repo_id: RepoId(1), .. }]));
+        assert!(matches!(
+            stash.as_slice(),
+            [Effect::Stash {
+                repo_id: RepoId(1),
+                ..
+            }]
+        ));
     }
 }
 
@@ -907,7 +1016,11 @@ fn schedule_effect(
                 let spec = RepoSpec { workdir: path };
                 match backend.open(&spec.workdir) {
                     Ok(repo) => {
-                        let _ = msg_tx.send(Msg::RepoOpenedOk { repo_id, spec, repo });
+                        let _ = msg_tx.send(Msg::RepoOpenedOk {
+                            repo_id,
+                            spec,
+                            repo,
+                        });
                     }
                     Err(error) => {
                         let _ = msg_tx.send(Msg::RepoOpenedErr {
@@ -986,6 +1099,18 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::LogLoaded {
                         repo_id,
                         result: repo.log_head_page(limit, cursor_ref),
+                    });
+                });
+            }
+        }
+
+        Effect::LoadCommitDetails { repo_id, commit_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::CommitDetailsLoaded {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                        result: repo.commit_details(&commit_id),
                     });
                 });
             }
@@ -1133,14 +1258,16 @@ impl TaskExecutor {
         let mut worker_threads = Vec::with_capacity(threads);
         for _ in 0..threads {
             let rx = Arc::clone(&rx);
-            worker_threads.push(thread::spawn(move || loop {
-                let task = {
-                    let rx = rx.lock().expect("executor lock poisoned");
-                    rx.recv()
-                };
-                match task {
-                    Ok(task) => task(),
-                    Err(_) => break,
+            worker_threads.push(thread::spawn(move || {
+                loop {
+                    let task = {
+                        let rx = rx.lock().expect("executor lock poisoned");
+                        rx.recv()
+                    };
+                    match task {
+                        Ok(task) => task(),
+                        Err(_) => break,
+                    }
                 }
             }));
         }

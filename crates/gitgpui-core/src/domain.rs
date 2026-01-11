@@ -25,6 +25,15 @@ pub struct Commit {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitDetails {
+    pub id: CommitId,
+    pub message: String,
+    pub committed_at: String,
+    pub parent_ids: Vec<CommitId>,
+    pub files: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Branch {
     pub name: String,
     pub target: CommitId,

@@ -1,27 +1,71 @@
 use crate::model::RepoId;
 use gitgpui_core::domain::*;
 use gitgpui_core::error::Error;
-use gitgpui_core::services::PullMode;
 use gitgpui_core::services::GitRepository;
+use gitgpui_core::services::PullMode;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 pub enum Msg {
     OpenRepo(PathBuf),
-    CloseRepo { repo_id: RepoId },
-    SetActiveRepo { repo_id: RepoId },
-    ReloadRepo { repo_id: RepoId },
-    SelectDiff { repo_id: RepoId, target: DiffTarget },
-    ClearDiffSelection { repo_id: RepoId },
-    CheckoutBranch { repo_id: RepoId, name: String },
-    CreateBranch { repo_id: RepoId, name: String },
-    StagePath { repo_id: RepoId, path: PathBuf },
-    UnstagePath { repo_id: RepoId, path: PathBuf },
-    Commit { repo_id: RepoId, message: String },
-    FetchAll { repo_id: RepoId },
-    Pull { repo_id: RepoId, mode: PullMode },
-    Push { repo_id: RepoId },
-    Stash { repo_id: RepoId, message: String, include_untracked: bool },
+    CloseRepo {
+        repo_id: RepoId,
+    },
+    SetActiveRepo {
+        repo_id: RepoId,
+    },
+    ReloadRepo {
+        repo_id: RepoId,
+    },
+    SelectCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    ClearCommitSelection {
+        repo_id: RepoId,
+    },
+    SelectDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    ClearDiffSelection {
+        repo_id: RepoId,
+    },
+    CheckoutBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CreateBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    StagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    UnstagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    Commit {
+        repo_id: RepoId,
+        message: String,
+    },
+    FetchAll {
+        repo_id: RepoId,
+    },
+    Pull {
+        repo_id: RepoId,
+        mode: PullMode,
+    },
+    Push {
+        repo_id: RepoId,
+    },
+    Stash {
+        repo_id: RepoId,
+        message: String,
+        include_untracked: bool,
+    },
 
     RepoOpenedOk {
         repo_id: RepoId,
@@ -59,6 +103,12 @@ pub enum Msg {
         result: Result<LogPage, Error>,
     },
 
+    CommitDetailsLoaded {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        result: Result<CommitDetails, Error>,
+    },
+
     DiffLoaded {
         repo_id: RepoId,
         target: DiffTarget,
@@ -75,14 +125,27 @@ impl std::fmt::Debug for Msg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Msg::OpenRepo(path) => f.debug_tuple("OpenRepo").field(path).finish(),
-            Msg::CloseRepo { repo_id } => {
-                f.debug_struct("CloseRepo").field("repo_id", repo_id).finish()
-            }
+            Msg::CloseRepo { repo_id } => f
+                .debug_struct("CloseRepo")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::SetActiveRepo { repo_id } => f
                 .debug_struct("SetActiveRepo")
                 .field("repo_id", repo_id)
                 .finish(),
-            Msg::ReloadRepo { repo_id } => f.debug_struct("ReloadRepo").field("repo_id", repo_id).finish(),
+            Msg::ReloadRepo { repo_id } => f
+                .debug_struct("ReloadRepo")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::SelectCommit { repo_id, commit_id } => f
+                .debug_struct("SelectCommit")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .finish(),
+            Msg::ClearCommitSelection { repo_id } => f
+                .debug_struct("ClearCommitSelection")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::SelectDiff { repo_id, target } => f
                 .debug_struct("SelectDiff")
                 .field("repo_id", repo_id)
@@ -143,7 +206,10 @@ impl std::fmt::Debug for Msg {
                 .field("spec", spec)
                 .finish_non_exhaustive(),
             Msg::RepoOpenedErr {
-                repo_id, spec, error, ..
+                repo_id,
+                spec,
+                error,
+                ..
             } => f
                 .debug_struct("RepoOpenedErr")
                 .field("repo_id", repo_id)
@@ -180,6 +246,16 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::CommitDetailsLoaded {
+                repo_id,
+                commit_id,
+                result,
+            } => f
+                .debug_struct("CommitDetailsLoaded")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .field("result", result)
+                .finish(),
             Msg::DiffLoaded {
                 repo_id,
                 target,
@@ -201,24 +277,74 @@ impl std::fmt::Debug for Msg {
 
 #[derive(Clone, Debug)]
 pub enum Effect {
-    OpenRepo { repo_id: RepoId, path: PathBuf },
-    LoadBranches { repo_id: RepoId },
-    LoadRemotes { repo_id: RepoId },
-    LoadRemoteBranches { repo_id: RepoId },
-    LoadStatus { repo_id: RepoId },
-    LoadHeadBranch { repo_id: RepoId },
-    LoadHeadLog { repo_id: RepoId, limit: usize, cursor: Option<LogCursor> },
-    LoadDiff { repo_id: RepoId, target: DiffTarget },
+    OpenRepo {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadBranches {
+        repo_id: RepoId,
+    },
+    LoadRemotes {
+        repo_id: RepoId,
+    },
+    LoadRemoteBranches {
+        repo_id: RepoId,
+    },
+    LoadStatus {
+        repo_id: RepoId,
+    },
+    LoadHeadBranch {
+        repo_id: RepoId,
+    },
+    LoadHeadLog {
+        repo_id: RepoId,
+        limit: usize,
+        cursor: Option<LogCursor>,
+    },
+    LoadCommitDetails {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    LoadDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
 
-    CheckoutBranch { repo_id: RepoId, name: String },
-    CreateBranch { repo_id: RepoId, name: String },
-    StagePath { repo_id: RepoId, path: PathBuf },
-    UnstagePath { repo_id: RepoId, path: PathBuf },
-    Commit { repo_id: RepoId, message: String },
-    FetchAll { repo_id: RepoId },
-    Pull { repo_id: RepoId, mode: PullMode },
-    Push { repo_id: RepoId },
-    Stash { repo_id: RepoId, message: String, include_untracked: bool },
+    CheckoutBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CreateBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    StagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    UnstagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    Commit {
+        repo_id: RepoId,
+        message: String,
+    },
+    FetchAll {
+        repo_id: RepoId,
+    },
+    Pull {
+        repo_id: RepoId,
+        mode: PullMode,
+    },
+    Push {
+        repo_id: RepoId,
+    },
+    Stash {
+        repo_id: RepoId,
+        message: String,
+        include_untracked: bool,
+    },
 }
 
 #[derive(Debug)]

@@ -630,6 +630,150 @@ impl GitGpuiView {
         let theme = self.theme;
         let repo = self.active_repo();
 
+        if let Some(repo) = repo {
+            if let Some(selected_id) = repo.selected_commit.as_ref() {
+                let header = div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Commit"),
+                    )
+                    .child(
+                        zed::Button::new("commit_details_close", "✕")
+                            .style(zed::ButtonStyle::Transparent)
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                if let Some(repo_id) = this.active_repo_id() {
+                                    this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                                }
+                                cx.notify();
+                            }),
+                    );
+
+                let body: AnyElement = match &repo.commit_details {
+                    Loadable::Loading => {
+                        components::empty_state(theme, "Commit", "Loading…").into_any_element()
+                    }
+                    Loadable::Error(e) => {
+                        components::empty_state(theme, "Commit", e.clone()).into_any_element()
+                    }
+                    Loadable::NotLoaded => {
+                        components::empty_state(theme, "Commit", "Select a commit in History.")
+                            .into_any_element()
+                    }
+                    Loadable::Ready(details) => {
+                        if &details.id != selected_id {
+                            components::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        } else {
+                            let parent = details
+                                .parent_ids
+                                .first()
+                                .map(|p| p.as_ref().to_string())
+                                .unwrap_or_else(|| "—".to_string());
+
+                            let files = if details.files.is_empty() {
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("No files.")
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .children(details.files.iter().enumerate().map(|(ix, p)| {
+                                        div()
+                                            .id(("commit_file", ix))
+                                            .text_sm()
+                                            .line_clamp(1)
+                                            .child(p.display().to_string())
+                                    }))
+                                    .into_any_element()
+                            };
+
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Commit message"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .min_w(px(0.0))
+                                                .line_clamp(8)
+                                                .child(details.message.clone()),
+                                        ),
+                                )
+                                .child(components::key_value(
+                                    theme,
+                                    "Commit SHA",
+                                    details.id.as_ref().to_string(),
+                                ))
+                                .child(components::key_value(
+                                    theme,
+                                    "Commit date",
+                                    details.committed_at.clone(),
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Parent commit SHA"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .whitespace_nowrap()
+                                                .line_clamp(1)
+                                                .child(parent),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Committed files"),
+                                        )
+                                        .child(files),
+                                )
+                                .into_any_element()
+                        }
+                    }
+                };
+
+                return div().flex().flex_col().gap_3().child(components::panel(
+                    theme,
+                    "Commit",
+                    None,
+                    div().flex().flex_col().gap_2().child(header).child(body),
+                ));
+            }
+        }
+
         let (staged_count, unstaged_count) = repo
             .and_then(|r| match &r.status {
                 Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),

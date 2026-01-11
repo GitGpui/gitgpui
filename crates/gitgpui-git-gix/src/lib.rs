@@ -1,6 +1,6 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, LogCursor, LogPage,
-    Remote, RemoteBranch, RepoSpec, RepoStatus,
+    Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind,
+    LogCursor, LogPage, Remote, RemoteBranch, RepoSpec, RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, PullMode, Result};
@@ -49,11 +49,7 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
-    fn log_head_page(
-        &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
-    ) -> Result<LogPage> {
+    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
         let repo = self._repo.to_thread_local();
         let head_id = repo
             .head_id()
@@ -73,7 +69,8 @@ impl GitRepository for GixRepo {
         let mut next_cursor: Option<LogCursor> = None;
 
         while let Some(info) = walk.next() {
-            let info = info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+            let info =
+                info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
             let id = info.id().detach().to_string();
 
             if !started {
@@ -136,6 +133,79 @@ impl GitRepository for GixRepo {
         })
     }
 
+    fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
+        let sha = id.as_ref();
+
+        let message = {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("show")
+                .arg("-s")
+                .arg("--format=%B")
+                .arg(sha);
+            run_git_capture(cmd, "git show --format=%B")?
+                .trim_end()
+                .to_string()
+        };
+
+        let committed_at = {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("show")
+                .arg("-s")
+                .arg("--format=%cI")
+                .arg(sha);
+            run_git_capture(cmd, "git show --format=%cI")?
+                .trim()
+                .to_string()
+        };
+
+        let parent_ids = {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("show")
+                .arg("-s")
+                .arg("--format=%P")
+                .arg(sha);
+            run_git_capture(cmd, "git show --format=%P")?
+                .split_whitespace()
+                .map(|p| CommitId(p.to_string()))
+                .collect::<Vec<_>>()
+        };
+
+        let files = {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("show")
+                .arg("--name-only")
+                .arg("--pretty=format:")
+                .arg(sha);
+            run_git_capture(cmd, "git show --name-only")?
+                .lines()
+                .filter_map(|l| {
+                    let l = l.trim();
+                    if l.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(l))
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        Ok(CommitDetails {
+            id: id.clone(),
+            message,
+            committed_at,
+            parent_ids,
+            files,
+        })
+    }
+
     fn current_branch(&self) -> Result<String> {
         let output = Command::new("git")
             .arg("-C")
@@ -171,9 +241,8 @@ impl GitRepository for GixRepo {
 
         let mut branches = Vec::new();
         for reference in iter {
-            let reference = reference.map_err(|e| {
-                Error::new(ErrorKind::Backend(format!("gix ref iter: {e}")))
-            })?;
+            let reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
             let target = CommitId(reference.id().detach().to_string());
 
@@ -228,7 +297,9 @@ impl GitRepository for GixRepo {
             ))));
         }
 
-        Ok(parse_remote_branches(&String::from_utf8_lossy(&output.stdout)))
+        Ok(parse_remote_branches(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
     }
 
     fn status(&self) -> Result<RepoStatus> {
@@ -245,8 +316,8 @@ impl GitRepository for GixRepo {
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status iter: {e}"))))?;
 
         for item in iter {
-            let item = item
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status item: {e}"))))?;
+            let item =
+                item.map_err(|e| Error::new(ErrorKind::Backend(format!("gix status item: {e}"))))?;
 
             match item {
                 gix::status::Item::IndexWorktree(item) => match item {
@@ -269,7 +340,9 @@ impl GitRepository for GixRepo {
                         unstaged.push(FileStatus { path, kind });
                     }
                     gix::status::index_worktree::Item::Rewrite {
-                        dirwalk_entry, copy, ..
+                        dirwalk_entry,
+                        copy,
+                        ..
                     } => {
                         let kind = if copy {
                             FileStatusKind::Added
@@ -497,6 +570,21 @@ fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if !output.status.success() {
+        let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{label} failed: {stderr}"
+        ))));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
     let mut branches = Vec::new();
     for line in output.lines() {
@@ -540,7 +628,9 @@ mod tests {
     }
 }
 
-fn map_entry_status<T, U>(status: gix::status::plumbing::index_as_worktree::EntryStatus<T, U>) -> FileStatusKind {
+fn map_entry_status<T, U>(
+    status: gix::status::plumbing::index_as_worktree::EntryStatus<T, U>,
+) -> FileStatusKind {
     use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
     match status {

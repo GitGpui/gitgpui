@@ -20,6 +20,8 @@ pub struct RepoState {
     pub status: Loadable<RepoStatus>,
     pub log: Loadable<LogPage>,
 
+    pub selected_commit: Option<CommitId>,
+    pub commit_details: Loadable<CommitDetails>,
     pub diff_target: Option<DiffTarget>,
     pub diff: Loadable<Diff>,
 
@@ -39,6 +41,8 @@ impl RepoState {
             remote_branches: Loadable::NotLoaded,
             status: Loadable::NotLoaded,
             log: Loadable::NotLoaded,
+            selected_commit: None,
+            commit_details: Loadable::NotLoaded,
             diff_target: None,
             diff: Loadable::NotLoaded,
             last_error: None,
