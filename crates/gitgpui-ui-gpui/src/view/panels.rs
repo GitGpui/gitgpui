@@ -5,6 +5,7 @@ impl GitGpuiView {
         let theme = self.theme;
         div()
             .flex()
+            .w_full()
             .items_center()
             .gap_2()
             .px_2()
@@ -12,20 +13,33 @@ impl GitGpuiView {
             .text_xs()
             .font_weight(FontWeight::BOLD)
             .text_color(theme.colors.text_muted)
-            .child(div().w(px(HISTORY_COL_BRANCH_PX)).child("Branch / Tag"))
+            .child(
+                div()
+                    .w(px(HISTORY_COL_BRANCH_PX))
+                    .whitespace_nowrap()
+                    .child("Branch / Tag"),
+            )
             .child(
                 div()
                     .w(px(HISTORY_COL_GRAPH_PX))
                     .flex()
                     .justify_center()
+                    .whitespace_nowrap()
                     .child("GRAPH"),
             )
-            .child(div().flex_1().child("COMMIT MESSAGE"))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .whitespace_nowrap()
+                    .child("COMMIT MESSAGE"),
+            )
             .child(
                 div()
                     .w(px(HISTORY_COL_DATE_PX))
                     .flex()
                     .justify_end()
+                    .whitespace_nowrap()
                     .child("COMMIT DATE / TIME"),
             )
             .child(
@@ -33,6 +47,7 @@ impl GitGpuiView {
                     .w(px(HISTORY_COL_SHA_PX))
                     .flex()
                     .justify_end()
+                    .whitespace_nowrap()
                     .child("SHA"),
             )
     }
@@ -484,6 +499,21 @@ impl GitGpuiView {
                 .min_w(px(200.0))
                 .child(
                     div()
+                        .id("app_menu_diagnostics")
+                        .debug_selector(|| "app_menu_diagnostics".to_string())
+                        .px_3()
+                        .py_2()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .child("Diagnostics")
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                            this.show_diagnostics_view = !this.show_diagnostics_view;
+                            this.popover = None;
+                            this.popover_anchor = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
                         .id("app_menu_quit")
                         .debug_selector(|| "app_menu_quit".to_string())
                         .px_3()
@@ -600,34 +630,12 @@ impl GitGpuiView {
         let theme = self.theme;
         let repo = self.active_repo();
 
-        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
-
         let (staged_count, unstaged_count) = repo
             .and_then(|r| match &r.status {
                 Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
                 _ => None,
             })
             .unwrap_or((0, 0));
-
-        let diagnostics_list: AnyElement = if diagnostics_count == 0 {
-            components::empty_state(theme, "Diagnostics", "No issues.").into_any_element()
-        } else {
-            let list = uniform_list(
-                "diagnostics",
-                diagnostics_count,
-                cx.processor(Self::render_diagnostic_rows),
-            )
-            .h(px(140.0))
-            .track_scroll(self.diagnostics_scroll.clone());
-            let scroll_handle = self.diagnostics_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("diagnostics_scroll_container")
-                .relative()
-                .h(px(140.0))
-                .child(list)
-                .child(kit::Scrollbar::new("diagnostics_scrollbar", scroll_handle).render(theme))
-                .into_any_element()
-        };
 
         let unstaged_list = self.status_list(cx, DiffArea::Unstaged, unstaged_count);
         let staged_list = self.status_list(cx, DiffArea::Staged, staged_count);
@@ -637,12 +645,6 @@ impl GitGpuiView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(components::panel(
-                theme,
-                "Diagnostics",
-                Some(format!("{diagnostics_count}").into()),
-                diagnostics_list,
-            ))
             .child(components::panel(
                 theme,
                 "Unstaged",
@@ -659,6 +661,77 @@ impl GitGpuiView {
                     .gap_3()
                     .child(staged_list)
                     .child(commit_box),
+            ))
+    }
+
+    pub(super) fn diagnostics_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let repo = self.active_repo();
+
+        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Diagnostics"),
+            )
+            .child(
+                zed::Button::new("diagnostics_close", "✕")
+                    .style(zed::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.show_diagnostics_view = false;
+                        cx.notify();
+                    }),
+            );
+
+        let body: AnyElement = if diagnostics_count == 0 {
+            match repo {
+                None => components::empty_state(theme, "Diagnostics", "No repository.")
+                    .into_any_element(),
+                Some(_) => {
+                    components::empty_state(theme, "Diagnostics", "No issues.").into_any_element()
+                }
+            }
+        } else {
+            let list = uniform_list(
+                "diagnostics_main",
+                diagnostics_count,
+                cx.processor(Self::render_diagnostic_rows),
+            )
+            .h_full()
+            .track_scroll(self.diagnostics_scroll.clone());
+            let scroll_handle = self.diagnostics_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("diagnostics_main_scroll_container")
+                .relative()
+                .h_full()
+                .child(list)
+                .child(
+                    kit::Scrollbar::new("diagnostics_main_scrollbar", scroll_handle).render(theme),
+                )
+                .into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .flex_1()
+            .child(components::panel(
+                theme,
+                "Diagnostics",
+                None,
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(header)
+                    .child(div().flex_1().child(body)),
             ))
     }
 
@@ -778,7 +851,7 @@ impl GitGpuiView {
             div()
                 .id("history_main_scroll_container")
                 .relative()
-                .flex_1()
+                .h_full()
                 .child(list)
                 .child(kit::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
                 .into_any_element()

@@ -203,6 +203,7 @@ fn history_table_row(
     div()
         .id(ix)
         .flex()
+        .w_full()
         .items_center()
         .gap_2()
         .px_2()
@@ -215,6 +216,7 @@ fn history_table_row(
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .line_clamp(1)
+                .whitespace_nowrap()
                 .child(refs),
         )
         .child(
@@ -223,13 +225,16 @@ fn history_table_row(
                 .flex()
                 .justify_center()
                 .text_xs()
+                .whitespace_nowrap()
                 .child(graph),
         )
         .child(
             div()
                 .flex_1()
+                .min_w(px(0.0))
                 .text_sm()
                 .line_clamp(1)
+                .whitespace_nowrap()
                 .child(commit.summary.clone()),
         )
         .child(
@@ -239,6 +244,7 @@ fn history_table_row(
                 .justify_end()
                 .text_xs()
                 .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
                 .child(when),
         )
         .child(
@@ -248,6 +254,7 @@ fn history_table_row(
                 .justify_end()
                 .text_xs()
                 .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
                 .child(short.to_string()),
         )
         .into_any_element()

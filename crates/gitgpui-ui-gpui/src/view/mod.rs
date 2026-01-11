@@ -63,6 +63,7 @@ pub struct GitGpuiView {
     diff_cache: Vec<AnnotatedDiffLine>,
 
     open_repo_panel: bool,
+    show_diagnostics_view: bool,
     open_repo_input: Entity<kit::TextInput>,
     commit_message_input: Entity<kit::TextInput>,
     create_branch_input: Entity<kit::TextInput>,
@@ -160,6 +161,7 @@ impl GitGpuiView {
             diff_view: DiffViewMode::Inline,
             diff_cache: Vec::new(),
             open_repo_panel: false,
+            show_diagnostics_view: false,
             open_repo_input,
             commit_message_input,
             create_branch_input,
@@ -344,7 +346,9 @@ impl Render for GitGpuiView {
             .active_repo()
             .and_then(|r| r.diff_target.as_ref())
             .is_some();
-        let main_view = if show_diff {
+        let main_view = if self.show_diagnostics_view {
+            self.diagnostics_view(cx)
+        } else if show_diff {
             self.diff_view(cx)
         } else {
             self.history_view(cx)
