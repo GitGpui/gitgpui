@@ -9,8 +9,8 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Entity, FontWeight,
     MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, ResizeEdge, SharedString,
-    Size, Timer, Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored,
-    div, point, px, size, uniform_list,
+    ScrollHandle, Size, Timer, Tiling, UniformListScrollHandle, WeakEntity, Window,
+    WindowControlArea, anchored, div, point, px, size, uniform_list,
 };
 use std::ops::Range;
 use std::sync::{Arc, mpsc};
@@ -73,6 +73,7 @@ pub struct GitGpuiView {
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     diagnostics_scroll: UniformListScrollHandle,
+    sidebar_scroll: ScrollHandle,
 }
 
 impl GitGpuiView {
@@ -165,6 +166,7 @@ impl GitGpuiView {
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
             diagnostics_scroll: UniformListScrollHandle::default(),
+            sidebar_scroll: ScrollHandle::new(),
         };
 
         view.set_theme(initial_theme, cx);
@@ -356,8 +358,12 @@ impl Render for GitGpuiView {
                                     .id("sidebar_scroll")
                                     .w(px(420.0))
                                     .overflow_y_scroll()
-                                    .scrollbar_width(px(10.0))
-                                    .child(self.sidebar(cx)),
+                                    .track_scroll(&self.sidebar_scroll)
+                                    .child(self.sidebar(cx))
+                                    .child(
+                                        kit::Scrollbar::new("sidebar_scrollbar", self.sidebar_scroll.clone())
+                                            .render(theme),
+                                    ),
                             )
                             .child(self.diff_view(cx)),
                     ),
@@ -378,11 +384,8 @@ impl Render for GitGpuiView {
             );
         }
 
-        if let Some(kind) = self.popover {
-            body = body.child(self.popover_view(kind, cx));
-        }
-
         let mut root = div().size_full().cursor(cursor);
+        root = root.relative();
 
         if tiling.is_some() {
             root = root
@@ -423,13 +426,54 @@ impl Render for GitGpuiView {
             self.hover_resize_edge = None;
         }
 
-        root.child(window_frame(theme, decorations, body.into_any_element()))
+        root = root.child(window_frame(theme, decorations, body.into_any_element()));
+
+        if self.popover.is_some() {
+            root = root.child(self.popover_layer(cx));
+        }
+
+        root
     }
 }
 
 pub(super) fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
     color
+}
+
+impl GitGpuiView {
+    fn popover_layer(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
+            this.popover = None;
+            this.popover_anchor = None;
+            cx.notify();
+        });
+
+        let scrim = div()
+            .id("popover_scrim")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(gpui::rgba(0x00000000))
+            .occlude()
+            .on_any_mouse_down(close);
+
+        let popover = self
+            .popover
+            .and_then(|kind| Some(self.popover_view(kind, cx).into_any_element()))
+            .unwrap_or_else(|| div().into_any_element());
+
+        div()
+            .id("popover_layer")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(popover)
+            .into_any_element()
+    }
 }
 
 struct Poller;
@@ -598,11 +642,11 @@ mod tests {
         );
         assert_eq!(
             cursor_style_for_resize_edge(ResizeEdge::TopLeft),
-            CursorStyle::ResizeUpRightDownLeft
+            CursorStyle::ResizeUpLeftDownRight
         );
         assert_eq!(
             cursor_style_for_resize_edge(ResizeEdge::TopRight),
-            CursorStyle::ResizeUpLeftDownRight
+            CursorStyle::ResizeUpRightDownLeft
         );
     }
 }

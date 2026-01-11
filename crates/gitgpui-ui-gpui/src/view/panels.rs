@@ -456,6 +456,7 @@ impl GitGpuiView {
                 div()
                     .id("app_popover")
                     .debug_selector(|| "app_popover".to_string())
+                    .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
                     .occlude()
                     .bg(theme.colors.surface_bg)
                     .border_1()
@@ -500,41 +501,69 @@ impl GitGpuiView {
         let branches_list: AnyElement = if branches_count == 0 {
             components::empty_state(theme, "Local", "No branches loaded.").into_any_element()
         } else {
-            uniform_list("branches", branches_count, cx.processor(Self::render_branch_rows))
+            let list = uniform_list("branches", branches_count, cx.processor(Self::render_branch_rows))
                 .h(px(140.0))
-                .track_scroll(self.branches_scroll.clone())
+                .track_scroll(self.branches_scroll.clone());
+            let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("branches_scroll_container")
+                .relative()
+                .h(px(140.0))
+                .child(list)
+                .child(kit::Scrollbar::new("branches_scrollbar", scroll_handle).render(theme))
                 .into_any_element()
         };
 
         let remotes_list: AnyElement = if remotes_count == 0 {
             components::empty_state(theme, "Remote", "No remotes loaded.").into_any_element()
         } else {
-            uniform_list("remotes", remotes_count, cx.processor(Self::render_remote_rows))
+            let list = uniform_list("remotes", remotes_count, cx.processor(Self::render_remote_rows))
                 .h(px(160.0))
-                .track_scroll(self.remotes_scroll.clone())
+                .track_scroll(self.remotes_scroll.clone());
+            let scroll_handle = self.remotes_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("remotes_scroll_container")
+                .relative()
+                .h(px(160.0))
+                .child(list)
+                .child(kit::Scrollbar::new("remotes_scrollbar", scroll_handle).render(theme))
                 .into_any_element()
         };
 
         let commits_list: AnyElement = if commits_count == 0 {
             components::empty_state(theme, "History", "No commits loaded.").into_any_element()
         } else {
-            uniform_list("history", commits_count, cx.processor(Self::render_commit_rows))
+            let list = uniform_list("history", commits_count, cx.processor(Self::render_commit_rows))
                 .h(px(240.0))
-                .track_scroll(self.commits_scroll.clone())
+                .track_scroll(self.commits_scroll.clone());
+            let scroll_handle = self.commits_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("history_scroll_container")
+                .relative()
+                .h(px(240.0))
+                .child(list)
+                .child(kit::Scrollbar::new("history_scrollbar", scroll_handle).render(theme))
                 .into_any_element()
         };
 
         let diagnostics_list: AnyElement = if diagnostics_count == 0 {
             components::empty_state(theme, "Diagnostics", "No issues.").into_any_element()
         } else {
-            uniform_list(
+            let list = uniform_list(
                 "diagnostics",
                 diagnostics_count,
                 cx.processor(Self::render_diagnostic_rows),
             )
             .h(px(140.0))
-            .track_scroll(self.diagnostics_scroll.clone())
-            .into_any_element()
+            .track_scroll(self.diagnostics_scroll.clone());
+            let scroll_handle = self.diagnostics_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("diagnostics_scroll_container")
+                .relative()
+                .h(px(140.0))
+                .child(list)
+                .child(kit::Scrollbar::new("diagnostics_scrollbar", scroll_handle).render(theme))
+                .into_any_element()
         };
 
         let unstaged_list = self.status_list(cx, DiffArea::Unstaged, unstaged_count);
@@ -585,14 +614,32 @@ impl GitGpuiView {
             return components::empty_state(theme, "Status", "Clean.").into_any_element();
         }
         match area {
-            DiffArea::Unstaged => uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
-                .h(px(140.0))
-                .track_scroll(self.unstaged_scroll.clone())
-                .into_any_element(),
-            DiffArea::Staged => uniform_list("staged", count, cx.processor(Self::render_staged_rows))
-                .h(px(140.0))
-                .track_scroll(self.staged_scroll.clone())
-                .into_any_element(),
+            DiffArea::Unstaged => {
+                let list = uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
+                    .h(px(140.0))
+                    .track_scroll(self.unstaged_scroll.clone());
+                let scroll_handle = self.unstaged_scroll.0.borrow().base_handle.clone();
+                div()
+                    .id("unstaged_scroll_container")
+                    .relative()
+                    .h(px(140.0))
+                    .child(list)
+                    .child(kit::Scrollbar::new("unstaged_scrollbar", scroll_handle).render(theme))
+                    .into_any_element()
+            }
+            DiffArea::Staged => {
+                let list = uniform_list("staged", count, cx.processor(Self::render_staged_rows))
+                    .h(px(140.0))
+                    .track_scroll(self.staged_scroll.clone());
+                let scroll_handle = self.staged_scroll.0.borrow().base_handle.clone();
+                div()
+                    .id("staged_scroll_container")
+                    .relative()
+                    .h(px(140.0))
+                    .child(list)
+                    .child(kit::Scrollbar::new("staged_scrollbar", scroll_handle).render(theme))
+                    .into_any_element()
+            }
         }
     }
 
@@ -697,9 +744,16 @@ impl GitGpuiView {
                 if self.diff_cache.is_empty() {
                     components::empty_state(theme, "Diff", "No differences.").into_any_element()
                 } else {
-                    uniform_list("diff", self.diff_cache.len(), cx.processor(Self::render_diff_rows))
+                    let list = uniform_list("diff", self.diff_cache.len(), cx.processor(Self::render_diff_rows))
                         .h_full()
-                        .track_scroll(self.diff_scroll.clone())
+                        .track_scroll(self.diff_scroll.clone());
+                    let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("diff_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(kit::Scrollbar::new("diff_scrollbar", scroll_handle).render(theme))
                         .into_any_element()
                 }
             }

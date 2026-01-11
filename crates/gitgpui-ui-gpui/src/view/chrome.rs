@@ -17,8 +17,8 @@ pub(super) fn cursor_style_for_resize_edge(edge: ResizeEdge) -> CursorStyle {
     match edge {
         ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
         ResizeEdge::Left | ResizeEdge::Right => CursorStyle::ResizeLeftRight,
-        ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorStyle::ResizeUpRightDownLeft,
-        ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpLeftDownRight,
+        ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorStyle::ResizeUpLeftDownRight,
+        ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
     }
 }
 

@@ -3,7 +3,7 @@ use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, Result};
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
-use gpui::{Decorations, Modifiers, MouseButton, Tiling, div, px};
+use gpui::{Decorations, Modifiers, MouseButton, ScrollHandle, Tiling, div, px};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -207,7 +207,7 @@ fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
 }
 
     #[gpui::test]
-    fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
+fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| crate::view::GitGpuiView::new(store, events, None, window, cx));
@@ -239,6 +239,113 @@ fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
         assert!(
             !view.read(app).is_popover_open(),
             "expected popover to close on click"
+        );
+    });
+}
+
+#[gpui::test]
+fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| crate::view::GitGpuiView::new(store, events, None, window, cx));
+
+    let picker_bounds = cx
+        .debug_bounds("repo_picker")
+        .expect("expected repo_picker in debug bounds");
+    cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(picker_bounds.center(), MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(view.read(app).is_popover_open(), "expected popover to open");
+    });
+
+    // Click somewhere in the main content area (outside the popover).
+    let outside = gpui::point(px(900.0), px(700.0));
+    cx.simulate_mouse_move(outside, None, Modifiers::default());
+    cx.simulate_mouse_down(outside, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).is_popover_open(),
+            "expected popover to close when clicking outside"
+        );
+    });
+}
+
+struct ScrollbarTestView {
+    theme: AppTheme,
+    handle: ScrollHandle,
+    rows: usize,
+}
+
+impl ScrollbarTestView {
+    fn new(rows: usize) -> Self {
+        Self {
+            theme: AppTheme::zed_ayu_dark(),
+            handle: ScrollHandle::new(),
+            rows,
+        }
+    }
+}
+
+impl gpui::Render for ScrollbarTestView {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
+        let rows = (0..self.rows)
+            .map(|ix| div().id(ix).h(px(20.0)).px_2().child(format!("Row {ix}")).into_any_element())
+            .collect::<Vec<_>>();
+
+        div()
+            .size_full()
+            .bg(theme.colors.window_bg)
+            .child(
+                div()
+                    .id("scroll_container")
+                    .relative()
+                    .w(px(200.0))
+                    .h(px(120.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.handle)
+                    .child(div().flex().flex_col().children(rows))
+                    .child(
+                        kit::Scrollbar::new("test_scrollbar", self.handle.clone())
+                            .debug_selector("test_scrollbar")
+                            .render(theme),
+                    ),
+            )
+    }
+}
+
+#[gpui::test]
+fn scrollbar_thumb_visible_when_overflowing(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(50));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        let handle = &view.read(app).handle;
+        assert!(
+            kit::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
+            "expected scrollbar thumb to be visible when overflowing"
+        );
+    });
+}
+
+#[gpui::test]
+fn scrollbar_thumb_hidden_when_not_overflowing(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(2));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        let handle = &view.read(app).handle;
+        assert!(
+            !kit::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
+            "expected scrollbar thumb to be hidden when not overflowing"
         );
     });
 }
