@@ -3,8 +3,17 @@ use gitgpui_core::domain::*;
 use gitgpui_core::error::Error;
 use gitgpui_core::services::GitRepository;
 use gitgpui_core::services::PullMode;
+use gitgpui_core::services::{CommandOutput, ConflictSide};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RepoCommandKind {
+    FetchAll,
+    Pull { mode: PullMode },
+    Push,
+    CheckoutConflict { path: PathBuf, side: ConflictSide },
+}
 
 pub enum Msg {
     OpenRepo(PathBuf),
@@ -83,6 +92,19 @@ pub enum Msg {
     Push {
         repo_id: RepoId,
     },
+    LoadBlame {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+    },
+    ClearBlame {
+        repo_id: RepoId,
+    },
+    CheckoutConflictSide {
+        repo_id: RepoId,
+        path: PathBuf,
+        side: ConflictSide,
+    },
     Stash {
         repo_id: RepoId,
         message: String,
@@ -156,6 +178,18 @@ pub enum Msg {
     RepoActionFinished {
         repo_id: RepoId,
         result: Result<(), Error>,
+    },
+
+    RepoCommandFinished {
+        repo_id: RepoId,
+        command: RepoCommandKind,
+        result: Result<CommandOutput, Error>,
+    },
+
+    BlameLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<Vec<gitgpui_core::services::BlameLine>, Error>,
     },
 }
 
@@ -259,6 +293,22 @@ impl std::fmt::Debug for Msg {
                 .field("mode", mode)
                 .finish(),
             Msg::Push { repo_id } => f.debug_struct("Push").field("repo_id", repo_id).finish(),
+            Msg::LoadBlame { repo_id, path, rev } => f
+                .debug_struct("LoadBlame")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("rev", rev)
+                .finish(),
+            Msg::ClearBlame { repo_id } => f
+                .debug_struct("ClearBlame")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::CheckoutConflictSide { repo_id, path, side } => f
+                .debug_struct("CheckoutConflictSide")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("side", side)
+                .finish(),
             Msg::Stash {
                 repo_id,
                 message,
@@ -360,6 +410,26 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::RepoCommandFinished {
+                repo_id,
+                command,
+                result,
+            } => f
+                .debug_struct("RepoCommandFinished")
+                .field("repo_id", repo_id)
+                .field("command", command)
+                .field("result", result)
+                .finish(),
+            Msg::BlameLoaded {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("BlameLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
         }
     }
 }
@@ -406,6 +476,11 @@ pub enum Effect {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    LoadBlame {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+    },
 
     CheckoutBranch {
         repo_id: RepoId,
@@ -448,6 +523,11 @@ pub enum Effect {
     },
     Push {
         repo_id: RepoId,
+    },
+    CheckoutConflictSide {
+        repo_id: RepoId,
+        path: PathBuf,
+        side: ConflictSide,
     },
     Stash {
         repo_id: RepoId,

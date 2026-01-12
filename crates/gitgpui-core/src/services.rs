@@ -1,9 +1,56 @@
 use crate::domain::*;
-use crate::error::Error;
+use crate::error::{Error, ErrorKind};
 use std::path::Path;
 use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommandOutput {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
+impl CommandOutput {
+    pub fn empty_success(command: impl Into<String>) -> Self {
+        Self {
+            command: command.into(),
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: Some(0),
+        }
+    }
+
+    pub fn combined(&self) -> String {
+        let mut out = String::new();
+        if !self.stdout.trim().is_empty() {
+            out.push_str(self.stdout.trim_end());
+            out.push('\n');
+        }
+        if !self.stderr.trim().is_empty() {
+            out.push_str(self.stderr.trim_end());
+            out.push('\n');
+        }
+        out.trim_end().to_string()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictSide {
+    Ours,
+    Theirs,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BlameLine {
+    pub commit_id: String,
+    pub author: String,
+    pub author_time_unix: Option<i64>,
+    pub summary: String,
+    pub line: String,
+}
 
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
@@ -36,6 +83,33 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+
+    fn fetch_all_with_output(&self) -> Result<CommandOutput> {
+        self.fetch_all()?;
+        Ok(CommandOutput::empty_success("git fetch --all"))
+    }
+
+    fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
+        self.pull(mode)?;
+        Ok(CommandOutput::empty_success("git pull"))
+    }
+
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.push()?;
+        Ok(CommandOutput::empty_success("git push"))
+    }
+
+    fn blame_file(&self, _path: &Path, _rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git blame is not implemented for this backend",
+        )))
+    }
+
+    fn checkout_conflict_side(&self, _path: &Path, _side: ConflictSide) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "conflict resolution is not implemented for this backend",
+        )))
+    }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
 }

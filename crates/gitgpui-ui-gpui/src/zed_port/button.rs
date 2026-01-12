@@ -9,6 +9,7 @@ pub enum ButtonStyle {
     Outlined,
     Subtle,
     Transparent,
+    Danger,
 }
 
 pub struct Button {
@@ -80,6 +81,12 @@ impl Button {
                 transparent,
                 transparent,
                 theme.colors.text_muted,
+            ),
+            ButtonStyle::Danger => (
+                with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.14 }),
+                with_alpha(theme.colors.danger, if theme.is_dark { 0.26 } else { 0.20 }),
+                with_alpha(theme.colors.danger, if theme.is_dark { 0.42 } else { 0.32 }),
+                theme.colors.text,
             ),
         };
 

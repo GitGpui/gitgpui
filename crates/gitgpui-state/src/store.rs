@@ -1,9 +1,11 @@
-use crate::model::{AppState, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoState};
+use crate::model::{
+    AppState, CommandLogEntry, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoState,
+};
 use crate::msg::{Effect, Msg, StoreEvent};
 use crate::session;
 use gitgpui_core::domain::{Diff, RepoSpec};
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::{GitBackend, GitRepository};
+use gitgpui_core::services::{CommandOutput, GitBackend, GitRepository};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -208,6 +210,24 @@ fn reduce(
             vec![Effect::LoadDiff { repo_id, target }]
         }
 
+        Msg::LoadBlame { repo_id, path, rev } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.blame_target = Some(path.clone());
+            repo_state.blame = Loadable::Loading;
+            vec![Effect::LoadBlame { repo_id, path, rev }]
+        }
+
+        Msg::ClearBlame { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.blame_target = None;
+            repo_state.blame = Loadable::NotLoaded;
+            Vec::new()
+        }
+
         Msg::ClearDiffSelection { repo_id } => {
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
@@ -254,6 +274,11 @@ fn reduce(
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
         Msg::Pull { repo_id, mode } => vec![Effect::Pull { repo_id, mode }],
         Msg::Push { repo_id } => vec![Effect::Push { repo_id }],
+        Msg::CheckoutConflictSide {
+            repo_id,
+            path,
+            side,
+        } => vec![Effect::CheckoutConflictSide { repo_id, path, side }],
         Msg::Stash {
             repo_id,
             message,
@@ -468,6 +493,46 @@ fn reduce(
             }
             refresh_effects(repo_id)
         }
+
+        Msg::RepoCommandFinished {
+            repo_id,
+            command,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                match result {
+                    Ok(output) => {
+                        repo_state.last_error = None;
+                        push_command_log(repo_state, true, &command, &output, None);
+                    }
+                    Err(e) => {
+                        repo_state.last_error = Some(e.to_string());
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        push_command_log(repo_state, false, &command, &CommandOutput::default(), Some(&e));
+                    }
+                }
+            }
+            refresh_effects(repo_id)
+        }
+
+        Msg::BlameLoaded {
+            repo_id,
+            path,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.blame_target.as_ref() == Some(&path)
+            {
+                repo_state.blame = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
     }
 }
 
@@ -504,6 +569,113 @@ fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: St
     if repo_state.diagnostics.len() > MAX_DIAGNOSTICS {
         let extra = repo_state.diagnostics.len() - MAX_DIAGNOSTICS;
         repo_state.diagnostics.drain(0..extra);
+    }
+}
+
+fn push_command_log(
+    repo_state: &mut RepoState,
+    ok: bool,
+    command: &crate::msg::RepoCommandKind,
+    output: &CommandOutput,
+    error: Option<&Error>,
+) {
+    const MAX_COMMAND_LOG: usize = 200;
+
+    let (command_text, summary) = summarize_command(command, output, ok, error);
+
+    repo_state.command_log.push(CommandLogEntry {
+        time: SystemTime::now(),
+        ok,
+        command: command_text,
+        summary,
+        stdout: output.stdout.clone(),
+        stderr: if output.stderr.is_empty() {
+            error.map(|e| e.to_string()).unwrap_or_default()
+        } else {
+            output.stderr.clone()
+        },
+    });
+    if repo_state.command_log.len() > MAX_COMMAND_LOG {
+        let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
+        repo_state.command_log.drain(0..extra);
+    }
+}
+
+fn summarize_command(
+    command: &crate::msg::RepoCommandKind,
+    output: &CommandOutput,
+    ok: bool,
+    error: Option<&Error>,
+) -> (String, String) {
+    use crate::msg::RepoCommandKind;
+    use gitgpui_core::services::ConflictSide;
+
+    if !ok {
+        let label = match command {
+            RepoCommandKind::FetchAll => "Fetch",
+            RepoCommandKind::Pull { .. } => "Pull",
+            RepoCommandKind::Push => "Push",
+            RepoCommandKind::CheckoutConflict { side, .. } => match side {
+                ConflictSide::Ours => "Checkout ours",
+                ConflictSide::Theirs => "Checkout theirs",
+            },
+        };
+        return (
+            output.command.clone().if_empty_else(|| label.to_string()),
+            error
+                .map(|e| format!("{label} failed: {e}"))
+                .unwrap_or_else(|| format!("{label} failed")),
+        );
+    }
+
+    let summary = match command {
+        RepoCommandKind::FetchAll => {
+            if output.stderr.trim().is_empty() && output.stdout.trim().is_empty() {
+                "Fetch: Already up to date".to_string()
+            } else {
+                "Fetch: Synchronized".to_string()
+            }
+        }
+        RepoCommandKind::Pull { .. } => {
+            if output.stdout.contains("Already up to date") {
+                "Pull: Already up to date".to_string()
+            } else if output.stdout.starts_with("Updating") {
+                "Pull: Fast-forwarded".to_string()
+            } else if output.stdout.starts_with("Merge") {
+                "Pull: Merged".to_string()
+            } else if output.stdout.contains("Successfully rebased") {
+                "Pull: Rebasing complete".to_string()
+            } else {
+                "Pull: Completed".to_string()
+            }
+        }
+        RepoCommandKind::Push => {
+            if output.stderr.contains("Everything up-to-date") {
+                "Push: Everything up-to-date".to_string()
+            } else {
+                "Push: Completed".to_string()
+            }
+        }
+        RepoCommandKind::CheckoutConflict { side, .. } => match side {
+            ConflictSide::Ours => "Resolved using ours".to_string(),
+            ConflictSide::Theirs => "Resolved using theirs".to_string(),
+        },
+    };
+
+    (output.command.clone(), summary)
+}
+
+trait IfEmptyElse {
+    fn if_empty_else(self, f: impl FnOnce() -> String) -> String;
+}
+
+impl IfEmptyElse for String {
+    fn if_empty_else(self, f: impl FnOnce() -> String) -> String {
+        if self.trim().is_empty() {
+            f()
+        } else {
+            self
+        }
     }
 }
 
@@ -1371,6 +1543,15 @@ fn schedule_effect(
             }
         }
 
+        Effect::LoadBlame { repo_id, path, rev } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let result = repo.blame_file(&path, rev.as_deref());
+                    let _ = msg_tx.send(Msg::BlameLoaded { repo_id, path, result });
+                });
+            }
+        }
+
         Effect::CheckoutBranch { repo_id, name } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
@@ -1465,9 +1646,10 @@ fn schedule_effect(
         Effect::FetchAll { repo_id } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
                         repo_id,
-                        result: repo.fetch_all(),
+                        command: crate::msg::RepoCommandKind::FetchAll,
+                        result: repo.fetch_all_with_output(),
                     });
                 });
             }
@@ -1476,9 +1658,10 @@ fn schedule_effect(
         Effect::Pull { repo_id, mode } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
                         repo_id,
-                        result: repo.pull(mode),
+                        command: crate::msg::RepoCommandKind::Pull { mode },
+                        result: repo.pull_with_output(mode),
                     });
                 });
             }
@@ -1487,9 +1670,26 @@ fn schedule_effect(
         Effect::Push { repo_id } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
                         repo_id,
-                        result: repo.push(),
+                        command: crate::msg::RepoCommandKind::Push,
+                        result: repo.push_with_output(),
+                    });
+                });
+            }
+        }
+
+        Effect::CheckoutConflictSide { repo_id, path, side } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let result = repo.checkout_conflict_side(&path, side);
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::CheckoutConflict {
+                            path: path.clone(),
+                            side,
+                        },
+                        result,
                     });
                 });
             }

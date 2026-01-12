@@ -10,6 +10,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/gitgpui-state/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gitgpui-ui-gpui/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/gitgpui-ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/gitgpui-git-gix/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

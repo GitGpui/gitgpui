@@ -1,10 +1,22 @@
 use gitgpui_core::domain::*;
+use gitgpui_core::services::BlameLine;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandLogEntry {
+    pub time: SystemTime,
+    pub ok: bool,
+    pub command: String,
+    pub summary: String,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +41,10 @@ pub struct RepoState {
 
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
+
+    pub command_log: Vec<CommandLogEntry>,
+    pub blame_target: Option<PathBuf>,
+    pub blame: Loadable<Vec<BlameLine>>,
 }
 
 impl RepoState {
@@ -51,6 +67,9 @@ impl RepoState {
             diff: Loadable::NotLoaded,
             last_error: None,
             diagnostics: Vec::new(),
+            command_log: Vec::new(),
+            blame_target: None,
+            blame: Loadable::NotLoaded,
         }
     }
 }

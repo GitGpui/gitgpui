@@ -97,6 +97,10 @@ impl TextInput {
         self.content.as_ref()
     }
 
+    pub fn focus_handle(&self) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
         self.style = TextInputStyle::from_theme(theme);
         cx.notify();

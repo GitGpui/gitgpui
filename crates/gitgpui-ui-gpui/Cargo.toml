@@ -19,4 +19,4 @@ unicode-segmentation = "1.12.0"
 gpui = { version = "0.2.2", features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.11.0", default-features = false, features = ["async-std"] }
+ashpd = { version = "0.12.1", default-features = false, features = ["tokio"] }

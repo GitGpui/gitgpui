@@ -1,3 +1,8 @@
+//! Small reusable UI building blocks.
+//!
+//! These are kept in `zed_port` so the rest of the UI can consistently depend on
+//! a single "Zed-style" component surface without pulling in Zed's crate graph.
+
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
@@ -16,12 +21,7 @@ pub fn panel(
         .py_2()
         .border_b_1()
         .border_color(theme.colors.border)
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title.into()),
-        );
+        .child(div().text_sm().font_weight(FontWeight::BOLD).child(title.into()));
 
     if let Some(subtitle) = subtitle {
         header = header.child(
@@ -55,11 +55,7 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
-pub fn key_value(
-    theme: AppTheme,
-    key: impl Into<SharedString>,
-    value: impl Into<SharedString>,
-) -> Div {
+pub fn key_value(theme: AppTheme, key: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
     div()
         .flex()
         .items_center()
@@ -94,3 +90,4 @@ pub fn empty_state(
                 .child(message.into()),
         )
 }
+

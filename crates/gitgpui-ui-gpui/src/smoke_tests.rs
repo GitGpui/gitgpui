@@ -1,4 +1,4 @@
-use crate::{components, kit, theme::AppTheme, view, zed_port as zed};
+use crate::{theme::AppTheme, view, zed_port as zed};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, Result};
 use gitgpui_state::store::AppStore;
@@ -16,32 +16,24 @@ fn assert_no_panic(label: &str, f: impl FnOnce()) {
 #[test]
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::zed_ayu_dark(), AppTheme::zed_one_light()] {
-        assert_no_panic("components::pill", || {
-            let _ = components::pill(theme, "Label", theme.colors.accent);
+        assert_no_panic("zed::pill", || {
+            let _ = zed::pill(theme, "Label", theme.colors.accent);
         });
 
-        assert_no_panic("components::empty_state", || {
-            let _ = components::empty_state(theme, "Title", "Message");
+        assert_no_panic("zed::empty_state", || {
+            let _ = zed::empty_state(theme, "Title", "Message");
         });
 
-        assert_no_panic("components::panel", || {
-            let _ = components::panel(theme, "Panel", None, div().child("body"));
+        assert_no_panic("zed::panel", || {
+            let _ = zed::panel(theme, "Panel", None, div().child("body"));
         });
 
-        assert_no_panic("kit::Button render variants", || {
-            let _ = kit::Button::new("k1", "Primary")
-                .style(kit::ButtonStyle::Primary)
-                .render(theme);
-            let _ = kit::Button::new("k2", "Secondary")
-                .style(kit::ButtonStyle::Secondary)
-                .render(theme);
-            let _ = kit::Button::new("k3", "Danger")
-                .style(kit::ButtonStyle::Danger)
-                .render(theme);
-            let _ = kit::Button::new("k4", "Disabled")
-                .style(kit::ButtonStyle::Secondary)
-                .disabled(true)
-                .render(theme);
+        assert_no_panic("zed::diff_stat", || {
+            let _ = zed::diff_stat(theme, 12, 4);
+        });
+
+        assert_no_panic("zed::toast", || {
+            let _ = zed::toast(theme, zed::ToastKind::Info, "Hello");
         });
 
         assert_no_panic("zed::Button render variants", || {
@@ -104,14 +96,14 @@ fn builds_pure_components_without_panics() {
 
 struct SmokeView {
     theme: AppTheme,
-    input: gpui::Entity<kit::TextInput>,
+    input: gpui::Entity<zed::TextInput>,
 }
 
 impl SmokeView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
         let input = cx.new(|cx| {
-            kit::TextInput::new(
-                kit::TextInputOptions {
+            zed::TextInput::new(
+                zed::TextInputOptions {
                     placeholder: "Enter…".into(),
                     multiline: false,
                 },
@@ -131,20 +123,31 @@ impl gpui::Render for SmokeView {
     fn render(
         &mut self,
         window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
+        _cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let tabs = kit::Tabs::new(vec!["One".into(), "Two".into()])
-            .selected(0)
-            .render(theme, cx, |_this, _ix, _e, _w, _cx| {});
+        let tabs = zed::TabBar::new("smoke_tabs")
+            .tab(
+                zed::Tab::new(("t", 0u64))
+                    .selected(true)
+                    .child(div().child("One"))
+                    .render(theme),
+            )
+            .tab(
+                zed::Tab::new(("t", 1u64))
+                    .selected(false)
+                    .child(div().child("Two"))
+                    .render(theme),
+            )
+            .render(theme);
 
         let content = div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(components::panel(theme, "Tabs", None, tabs))
-            .child(components::panel(theme, "Input", None, self.input.clone()))
-            .child(components::panel(
+            .child(zed::panel(theme, "Tabs", None, tabs))
+            .child(zed::panel(theme, "Input", None, self.input.clone()))
+            .child(zed::panel(
                 theme,
                 "Buttons",
                 None,
@@ -183,8 +186,8 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         cx.open_window(Default::default(), |window, cx| {
             cx.new(|cx| {
-                kit::TextInput::new(
-                    kit::TextInputOptions {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
                         placeholder: "Commit message…".into(),
                         multiline: false,
                     },
@@ -358,7 +361,7 @@ impl gpui::Render for ScrollbarTestView {
                 .track_scroll(&self.handle)
                 .child(div().flex().flex_col().children(rows))
                 .child(
-                    kit::Scrollbar::new("test_scrollbar", self.handle.clone())
+                    zed::Scrollbar::new("test_scrollbar", self.handle.clone())
                         .debug_selector("test_scrollbar")
                         .render(theme),
                 ),
@@ -375,7 +378,7 @@ fn scrollbar_thumb_visible_when_overflowing(cx: &mut gpui::TestAppContext) {
     cx.update(|_window, app| {
         let handle = &view.read(app).handle;
         assert!(
-            kit::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
+            zed::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
             "expected scrollbar thumb to be visible when overflowing"
         );
     });
@@ -390,7 +393,7 @@ fn scrollbar_thumb_hidden_when_not_overflowing(cx: &mut gpui::TestAppContext) {
     cx.update(|_window, app| {
         let handle = &view.read(app).handle;
         assert!(
-            !kit::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
+            !zed::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
             "expected scrollbar thumb to be hidden when not overflowing"
         );
     });

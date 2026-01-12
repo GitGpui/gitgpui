@@ -3,7 +3,9 @@ use gitgpui_core::domain::{
     FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::{GitBackend, GitRepository, PullMode, Result};
+use gitgpui_core::services::{
+    BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, Result,
+};
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use std::path::{Path, PathBuf};
@@ -644,6 +646,15 @@ impl GitRepository for GixRepo {
         run_git_simple(cmd, "git fetch --all")
     }
 
+    fn fetch_all_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("fetch")
+            .arg("--all");
+        run_git_with_output(cmd, "git fetch --all")
+    }
+
     fn pull(&self, mode: PullMode) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
@@ -662,10 +673,64 @@ impl GitRepository for GixRepo {
         run_git_simple(cmd, "git pull")
     }
 
+    fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
+        match mode {
+            PullMode::Default => {}
+            PullMode::FastForwardIfPossible => {
+                cmd.arg("--ff");
+            }
+            PullMode::FastForwardOnly => {
+                cmd.arg("--ff-only");
+            }
+            PullMode::Rebase => {
+                cmd.arg("--rebase");
+            }
+        }
+        run_git_with_output(cmd, "git pull")
+    }
+
     fn push(&self) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("push");
         run_git_simple(cmd, "git push")
+    }
+
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("push");
+        run_git_with_output(cmd, "git push")
+    }
+
+    fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("blame")
+            .arg("--line-porcelain");
+        if let Some(rev) = rev {
+            cmd.arg(rev);
+        }
+        cmd.arg("--").arg(path);
+
+        let output = run_git_capture(cmd, "git blame --line-porcelain")?;
+        Ok(parse_git_blame_porcelain(&output))
+    }
+
+    fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("checkout");
+        match side {
+            ConflictSide::Ours => {
+                cmd.arg("--ours");
+            }
+            ConflictSide::Theirs => {
+                cmd.arg("--theirs");
+            }
+        }
+        cmd.arg("--").arg(path);
+        run_git_with_output(cmd, "git checkout --ours/--theirs")
     }
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
@@ -691,6 +756,31 @@ fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_git_with_output(mut cmd: Command, label: &str) -> Result<CommandOutput> {
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    let exit_code = output.status.code();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let ok_exit = output.status.success() || output.status.code() == Some(1);
+    if !ok_exit {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{label} failed: {}",
+            stderr.trim()
+        ))));
+    }
+
+    Ok(CommandOutput {
+        command: label.to_string(),
+        stdout,
+        stderr,
+        exit_code,
+    })
+}
+
 fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
     let output = cmd
         .output()
@@ -704,6 +794,75 @@ fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
+    let mut out = Vec::new();
+    let mut cached_by_commit: std::collections::HashMap<String, (String, Option<i64>, String)> =
+        std::collections::HashMap::new();
+
+    let mut current_commit: Option<String> = None;
+    let mut author: Option<String> = None;
+    let mut author_time: Option<i64> = None;
+    let mut summary: Option<String> = None;
+
+    for line in output.lines() {
+        if line.starts_with('\t') {
+            let commit = current_commit.clone().unwrap_or_else(|| "0000000".to_string());
+            let line_text = line.strip_prefix('\t').unwrap_or("").to_string();
+
+            let (author_filled, author_time_filled, summary_filled) = if author.is_none()
+                && author_time.is_none()
+                && summary.is_none()
+                && cached_by_commit.contains_key(&commit)
+            {
+                cached_by_commit.get(&commit).cloned().unwrap_or_default()
+            } else {
+                (
+                    author.clone().unwrap_or_default(),
+                    author_time,
+                    summary.clone().unwrap_or_default(),
+                )
+            };
+
+            cached_by_commit.insert(
+                commit.clone(),
+                (author_filled.clone(), author_time_filled, summary_filled.clone()),
+            );
+
+            out.push(BlameLine {
+                commit_id: commit,
+                author: author_filled,
+                author_time_unix: author_time_filled,
+                summary: summary_filled,
+                line: line_text,
+            });
+
+            author = None;
+            author_time = None;
+            summary = None;
+            continue;
+        }
+
+        let mut parts = line.split_whitespace();
+        if let Some(first) = parts.next() {
+            let is_header = first.len() >= 8 && first.chars().all(|c| c.is_ascii_hexdigit());
+            if is_header && parts.next().is_some() && parts.next().is_some() {
+                current_commit = Some(first.to_string());
+                continue;
+            }
+        }
+
+        if let Some(rest) = line.strip_prefix("author ") {
+            author = Some(rest.to_string());
+        } else if let Some(rest) = line.strip_prefix("author-time ") {
+            author_time = rest.trim().parse::<i64>().ok();
+        } else if let Some(rest) = line.strip_prefix("summary ") {
+            summary = Some(rest.to_string());
+        }
+    }
+
+    out
 }
 
 fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
@@ -808,7 +967,7 @@ fn map_entry_status<T, U>(
     use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
     match status {
-        EntryStatus::Conflict(_) => FileStatusKind::Conflicted,
+        EntryStatus::Conflict { .. } => FileStatusKind::Conflicted,
         EntryStatus::IntentToAdd => FileStatusKind::Added,
         EntryStatus::NeedsUpdate(_) => FileStatusKind::Modified,
         EntryStatus::Change(change) => match change {

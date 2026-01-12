@@ -198,7 +198,8 @@ impl GitGpuiView {
                     .line_clamp(1)
                     .child(repo_title),
             )
-            .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                let _ = this.ensure_repo_picker_search_input(window, cx);
                 this.popover = Some(PopoverKind::RepoPicker);
                 this.popover_anchor = Some(e.position());
                 cx.notify();
@@ -225,7 +226,8 @@ impl GitGpuiView {
                     .text_color(theme.colors.text_muted)
                     .child(branch),
             )
-            .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                let _ = this.ensure_branch_picker_search_input(window, cx);
                 this.popover = Some(PopoverKind::BranchPicker);
                 this.popover_anchor = Some(e.position());
                 cx.notify();
@@ -278,7 +280,8 @@ impl GitGpuiView {
 
         let create_branch = zed::Button::new("create_branch", "Branch…")
             .style(zed::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, _e, _w, cx| {
+            .on_click(theme, cx, |this, _e, window, cx| {
+                let _ = this.ensure_branch_picker_search_input(window, cx);
                 this.popover = Some(PopoverKind::BranchPicker);
                 this.popover_anchor = Some(point(px(300.0), px(120.0)));
                 cx.notify();
@@ -338,64 +341,131 @@ impl GitGpuiView {
 
         let panel = match kind {
             PopoverKind::RepoPicker => {
-                let mut menu = div().flex().flex_col().min_w(px(320.0));
-                for repo in self.state.repos.iter() {
-                    let id = repo.id;
-                    let label: SharedString = repo.spec.workdir.display().to_string().into();
-                    menu = menu.child(
+                if let Some(search) = self.repo_picker_search_input.clone() {
+                    let repo_ids = self.state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
+                    let items = self
+                        .state
+                        .repos
+                        .iter()
+                        .map(|r| r.spec.workdir.display().to_string().into())
+                        .collect::<Vec<SharedString>>();
+
+                    zed::PickerPrompt::new(search)
+                        .items(items)
+                        .empty_text("No repositories")
+                        .max_height(px(260.0))
+                        .render(theme, cx, move |this, ix, _e, _w, cx| {
+                            if let Some(&repo_id) = repo_ids.get(ix) {
+                                this.store.dispatch(Msg::SetActiveRepo { repo_id });
+                                this.rebuild_diff_cache();
+                            }
+                            this.popover = None;
+                            this.popover_anchor = None;
+                            cx.notify();
+                        })
+                        .min_w(px(320.0))
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .id("repo_popover_close")
+                                .debug_selector(|| "repo_popover_close".to_string())
+                                .px_3()
+                                .py_2()
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .child("Close")
+                                .on_click(close),
+                        )
+                } else {
+                    let mut menu = div().flex().flex_col().min_w(px(320.0));
+                    for repo in self.state.repos.iter() {
+                        let id = repo.id;
+                        let label: SharedString = repo.spec.workdir.display().to_string().into();
+                        menu = menu.child(
+                            div()
+                                .id(("repo_item", id.0))
+                                .px_3()
+                                .py_2()
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .child(div().text_sm().line_clamp(1).child(label))
+                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                    this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    this.rebuild_diff_cache();
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                    menu.child(
                         div()
-                            .id(("repo_item", id.0))
+                            .id("repo_popover_close")
+                            .debug_selector(|| "repo_popover_close".to_string())
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
-                            .child(div().text_sm().line_clamp(1).child(label))
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                this.rebuild_diff_cache();
-                                cx.notify();
-                            })),
-                    );
+                            .child("Close")
+                            .on_click(close),
+                    )
                 }
-                menu.child(
-                    div()
-                        .id("repo_popover_close")
-                        .debug_selector(|| "repo_popover_close".to_string())
-                        .px_3()
-                        .py_2()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .child("Close")
-                        .on_click(close),
-                )
             }
             PopoverKind::BranchPicker => {
                 let mut menu = div().flex().flex_col().min_w(px(260.0));
+
                 if let Some(repo) = self.active_repo() {
                     match &repo.branches {
                         Loadable::Ready(branches) => {
-                            for (ix, branch) in branches.iter().enumerate() {
+                            if let Some(search) = self.branch_picker_search_input.clone() {
                                 let repo_id = repo.id;
-                                let name = branch.name.clone();
+                                let branch_names =
+                                    branches.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+                                let items = branch_names
+                                    .iter()
+                                    .map(|name| name.clone().into())
+                                    .collect::<Vec<SharedString>>();
+
                                 menu = menu.child(
-                                    div()
-                                        .id(("branch_item", ix))
-                                        .px_3()
-                                        .py_2()
-                                        .hover(move |s| s.bg(theme.colors.hover))
-                                        .child(name.clone())
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
+                                    zed::PickerPrompt::new(search)
+                                        .items(items)
+                                        .empty_text("No branches")
+                                        .max_height(px(240.0))
+                                        .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                            if let Some(name) =
+                                                branch_names.get(ix).map(|n| n.clone())
+                                            {
                                                 this.store.dispatch(Msg::CheckoutBranch {
                                                     repo_id,
-                                                    name: name.clone(),
+                                                    name,
                                                 });
-                                                this.popover = None;
-                                                this.popover_anchor = None;
-                                                cx.notify();
-                                            },
-                                        )),
+                                            }
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
                                 );
+                            } else {
+                                for (ix, branch) in branches.iter().enumerate() {
+                                    let repo_id = repo.id;
+                                    let name = branch.name.clone();
+                                    menu = menu.child(
+                                        div()
+                                            .id(("branch_item", ix))
+                                            .px_3()
+                                            .py_2()
+                                            .hover(move |s| s.bg(theme.colors.hover))
+                                            .child(name.clone())
+                                            .on_click(cx.listener(
+                                                move |this, _e: &ClickEvent, _w, cx| {
+                                                    this.store.dispatch(Msg::CheckoutBranch {
+                                                        repo_id,
+                                                        name: name.clone(),
+                                                    });
+                                                    this.popover = None;
+                                                    this.popover_anchor = None;
+                                                    cx.notify();
+                                                },
+                                            )),
+                                    );
+                                }
                             }
                         }
                         Loadable::Loading => {
@@ -410,7 +480,7 @@ impl GitGpuiView {
                     }
                 }
 
-                menu = menu
+                menu.child(div().border_t_1().border_color(theme.colors.border))
                     .child(
                         div()
                             .px_3()
@@ -420,8 +490,8 @@ impl GitGpuiView {
                     )
                     .child(self.create_branch_input.clone())
                     .child(
-                        kit::Button::new("create_branch_go", "Create")
-                            .style(kit::ButtonStyle::Primary)
+                        zed::Button::new("create_branch_go", "Create")
+                            .style(zed::ButtonStyle::Filled)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 let name = this
                                     .create_branch_input
@@ -444,72 +514,101 @@ impl GitGpuiView {
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Close")
                             .on_click(close),
-                    );
-
-                menu
+                    )
             }
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 let mut menu = div().flex().flex_col().min_w(px(260.0));
 
-                menu = menu.child(
-                    div()
-                        .id("history_branch_all")
-                        .px_3()
-                        .py_2()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .child("All branches")
-                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                            this.history_branch_filter = None;
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        })),
-                );
+                if let Some(search) = self.history_branch_picker_search_input.clone() {
+                    let mut items: Vec<SharedString> = vec!["All branches".into()];
+                    let mut branch_names: Vec<String> = Vec::new();
+                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
+                        && let Loadable::Ready(branches) = &repo.branches
+                    {
+                        branch_names =
+                            branches.iter().map(|b| b.name.clone()).collect::<Vec<String>>();
+                        items.extend(branch_names.iter().map(|name| name.clone().into()));
+                    }
 
-                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                    match &repo.branches {
-                        Loadable::Ready(branches) => {
-                            for (ix, branch) in branches.iter().enumerate() {
-                                let name = branch.name.clone();
-                                menu = menu.child(
-                                    div()
-                                        .id(("history_branch_item", ix))
-                                        .px_3()
-                                        .py_2()
-                                        .hover(move |s| s.bg(theme.colors.hover))
-                                        .child(name.clone())
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
-                                                this.history_branch_filter = Some(name.clone());
-                                                this.popover = None;
-                                                this.popover_anchor = None;
-                                                cx.notify();
-                                            },
-                                        )),
-                                );
+                    menu = menu.child(
+                        zed::PickerPrompt::new(search)
+                            .items(items)
+                            .empty_text("No branches")
+                            .max_height(px(260.0))
+                            .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                if ix == 0 {
+                                    this.history_branch_filter = None;
+                                } else if let Some(name) = branch_names.get(ix - 1) {
+                                    this.history_branch_filter = Some(name.clone());
+                                }
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            }),
+                    );
+                } else {
+                    menu = menu.child(
+                        div()
+                            .id("history_branch_all")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("All branches")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.history_branch_filter = None;
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    );
+
+                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                        match &repo.branches {
+                            Loadable::Ready(branches) => {
+                                for (ix, branch) in branches.iter().enumerate() {
+                                    let name = branch.name.clone();
+                                    menu = menu.child(
+                                        div()
+                                            .id(("history_branch_item", ix))
+                                            .px_3()
+                                            .py_2()
+                                            .hover(move |s| s.bg(theme.colors.hover))
+                                            .child(name.clone())
+                                            .on_click(cx.listener(
+                                                move |this, _e: &ClickEvent, _w, cx| {
+                                                    this.history_branch_filter = Some(name.clone());
+                                                    this.popover = None;
+                                                    this.popover_anchor = None;
+                                                    cx.notify();
+                                                },
+                                            )),
+                                    );
+                                }
+                            }
+                            Loadable::Loading => {
+                                menu = menu.child(div().px_3().py_2().child("Loading…"));
+                            }
+                            Loadable::Error(e) => {
+                                menu = menu.child(div().px_3().py_2().child(e.clone()));
+                            }
+                            Loadable::NotLoaded => {
+                                menu = menu.child(div().px_3().py_2().child("Not loaded"));
                             }
                         }
-                        Loadable::Loading => {
-                            menu = menu.child(div().px_3().py_2().child("Loading…"));
-                        }
-                        Loadable::Error(e) => {
-                            menu = menu.child(div().px_3().py_2().child(e.clone()));
-                        }
-                        Loadable::NotLoaded => {
-                            menu = menu.child(div().px_3().py_2().child("Not loaded"));
-                        }
                     }
+
+                    menu = menu.child(
+                        div()
+                            .id("history_branch_close")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Close")
+                            .on_click(close),
+                    );
                 }
 
-                menu.child(
-                    div()
-                        .id("history_branch_close")
-                        .px_3()
-                        .py_2()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .child("Close")
-                        .on_click(close),
-                )
+                menu
             }
             PopoverKind::PullPicker => {
                 let repo_id = self.active_repo_id();
@@ -558,13 +657,384 @@ impl GitGpuiView {
                         .on_click(close),
                 )
             }
+            PopoverKind::DiffHunks => {
+                let mut items: Vec<SharedString> = Vec::new();
+                let mut targets: Vec<usize> = Vec::new();
+                let mut current_file: Option<String> = None;
+
+                for (visible_ix, &src_ix) in self.diff_visible_indices.iter().enumerate() {
+                    let Some(line) = self.diff_cache.get(src_ix) else {
+                        continue;
+                    };
+
+                    if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                        && line.text.starts_with("diff --git ")
+                    {
+                        current_file = parse_diff_git_header_path(&line.text);
+                    }
+
+                    if !matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                        continue;
+                    }
+
+                    let label = if let Some(parsed) = parse_unified_hunk_header_for_display(&line.text)
+                    {
+                        let file = current_file
+                            .as_deref()
+                            .unwrap_or("<file>")
+                            .to_string();
+                        let heading = parsed.heading.unwrap_or_default();
+                        if heading.is_empty() {
+                            format!("{file}: {} {}", parsed.old, parsed.new)
+                        } else {
+                            format!("{file}: {} {} {heading}", parsed.old, parsed.new)
+                        }
+                    } else {
+                        current_file
+                            .as_deref()
+                            .unwrap_or("<file>")
+                            .to_string()
+                    };
+
+                    items.push(label.into());
+                    targets.push(visible_ix);
+                }
+
+                if let Some(search) = self.diff_hunk_picker_search_input.clone() {
+                    zed::PickerPrompt::new(search)
+                        .items(items)
+                        .empty_text("No hunks")
+                        .max_height(px(260.0))
+                        .render(theme, cx, move |this, ix, _e, _w, cx| {
+                            let Some(&target) = targets.get(ix) else {
+                                return;
+                            };
+                            this.diff_scroll
+                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            this.diff_selection_anchor = Some(target);
+                            this.diff_selection_range = Some((target, target));
+                            this.popover = None;
+                            this.popover_anchor = None;
+                            cx.notify();
+                        })
+                        .min_w(px(520.0))
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .id("diff_hunks_close")
+                                .px_3()
+                                .py_2()
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .child("Close")
+                                .on_click(close),
+                        )
+                } else {
+                    let mut menu = div().flex().flex_col().min_w(px(520.0));
+                    for (ix, label) in items.into_iter().enumerate() {
+                        let target = targets.get(ix).copied().unwrap_or(0);
+                        menu = menu.child(
+                            div()
+                                .id(("diff_hunk_item", ix))
+                                .px_3()
+                                .py_2()
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .child(div().text_sm().line_clamp(1).child(label))
+                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                    this.diff_scroll
+                                        .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                                    this.diff_selection_anchor = Some(target);
+                                    this.diff_selection_range = Some((target, target));
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                })),
+                        );
+                    }
+                    menu.child(
+                        div()
+                            .id("diff_hunks_close")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Close")
+                            .on_click(close),
+                    )
+                }
+            }
+            PopoverKind::CommandLogDetails { repo_id, index } => {
+                let entry = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|r| r.command_log.get(index))
+                    .cloned();
+
+                match entry {
+                    None => div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(520.0))
+                        .child(div().px_3().py_2().child("Missing log entry"))
+                        .child(
+                            div()
+                                .id("cmdlog_missing_close")
+                                .px_3()
+                                .py_2()
+                                .hover(move |s| s.bg(theme.colors.hover))
+                                .child("Close")
+                                .on_click(close),
+                        ),
+                    Some(entry) => {
+                        let combined = {
+                            let mut s = String::new();
+                            if !entry.stdout.trim().is_empty() {
+                                s.push_str(entry.stdout.trim_end());
+                                s.push('\n');
+                            }
+                            if !entry.stderr.trim().is_empty() {
+                                s.push_str(entry.stderr.trim_end());
+                                s.push('\n');
+                            }
+                            s.trim_end().to_string()
+                        };
+
+                        let combined_for_clipboard = combined.clone();
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(520.0))
+                            .max_w(px(760.0))
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(entry.summary.clone()),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .pb_2()
+                                    .text_xs()
+                                    .font_family("monospace")
+                                    .text_color(theme.colors.text_muted)
+                                    .child(entry.command.clone()),
+                            )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(
+                                div()
+                                    .id("cmdlog_output")
+                                    .px_3()
+                                    .py_2()
+                                    .h(px(220.0))
+                                    .overflow_y_scroll()
+                                    .font_family("monospace")
+                                    .text_xs()
+                                    .child(if combined.is_empty() {
+                                        "<no output>".to_string()
+                                    } else {
+                                        combined
+                                    }),
+                            )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .px_3()
+                                    .py_2()
+                                    .child(
+                                        zed::Button::new("cmdlog_copy", "Copy")
+                                            .style(zed::ButtonStyle::Outlined)
+                                            .on_click(theme, cx, move |_this, _e, _w, cx| {
+                                                if !combined_for_clipboard.is_empty() {
+                                                    cx.write_to_clipboard(
+                                                        gpui::ClipboardItem::new_string(
+                                                            combined_for_clipboard.clone(),
+                                                        ),
+                                                    );
+                                                }
+                                                cx.notify();
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("cmdlog_close")
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(px(theme.radii.row))
+                                            .hover(move |s| s.bg(theme.colors.hover))
+                                            .child("Close")
+                                            .on_click(close),
+                                    ),
+                            )
+                            
+                    }
+                }
+            }
+            PopoverKind::CommitModal { repo_id } => {
+                let staged = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|r| match &r.status {
+                        Loadable::Ready(s) => Some(s.staged.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+
+                let staged_summary = format!("Staged files: {}", staged.len());
+                let staged_list = if staged.is_empty() {
+                    div()
+                        .px_3()
+                        .py_2()
+                        .text_sm()
+                        .text_color(theme.colors.text_muted)
+                        .child("No staged changes.")
+                        .into_any_element()
+                } else {
+                    let rows = staged
+                        .into_iter()
+                        .take(8)
+                        .map(|f| {
+                            let (label, color) = match f.kind {
+                                FileStatusKind::Added => ("Added", theme.colors.success),
+                                FileStatusKind::Modified => ("Modified", theme.colors.accent),
+                                FileStatusKind::Deleted => ("Deleted", theme.colors.danger),
+                                FileStatusKind::Renamed => ("Renamed", theme.colors.accent),
+                                FileStatusKind::Untracked => ("Untracked", theme.colors.warning),
+                                FileStatusKind::Conflicted => ("Conflicted", theme.colors.danger),
+                            };
+
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .py_1()
+                                .child(zed::pill(theme, label, color))
+                                .child(div().text_sm().line_clamp(1).child(f.path.display().to_string()))
+                        })
+                        .collect::<Vec<_>>();
+                    div().flex().flex_col().children(rows).into_any_element()
+                };
+
+                let input = self
+                    .commit_modal_input
+                    .clone()
+                    .map(|i| i.into_any_element())
+                    .unwrap_or_else(|| {
+                        zed::empty_state(theme, "Commit", "Input not initialized.")
+                            .into_any_element()
+                    });
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(520.0))
+                    .max_w(px(760.0))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("Commit"),
+                            )
+                            .child(
+                                div()
+                                    .id("commit_modal_close")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(px(theme.radii.row))
+                                    .hover(move |s| s.bg(theme.colors.hover))
+                                    .child("✕")
+                                    .on_click(close),
+                            ),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(staged_summary),
+                    )
+                    .child(staged_list)
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(div().px_3().py_2().h(px(140.0)).child(input))
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_3()
+                            .py_2()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                zed::Button::new("commit_modal_cancel", "Cancel")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            )
+                            .child(
+                                zed::Button::new("commit_modal_commit", "Commit")
+                                    .style(zed::ButtonStyle::Filled)
+                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                        let message = this
+                                            .commit_modal_input
+                                            .as_ref()
+                                            .map(|i| i.read_with(cx, |i, _| i.text().trim().to_string()))
+                                            .unwrap_or_default();
+                                        if !message.is_empty() {
+                                            this.store.dispatch(Msg::Commit { repo_id, message });
+                                            this.commit_message_input.update(cx, |i, cx| i.set_text(String::new(), cx));
+                                            if let Some(input) = &this.commit_modal_input {
+                                                input.update(cx, |i, cx| i.set_text(String::new(), cx));
+                                            }
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                        }
+                                        cx.notify();
+                                    }),
+                            ),
+                    )
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 let sha = commit_id.as_ref().to_string();
                 let short = sha.get(0..8).unwrap_or(&sha).to_string();
                 let sha_for_clipboard = sha.clone();
+                let commit_id_open_diff = commit_id.clone();
                 let commit_id_checkout = commit_id.clone();
                 let commit_id_cherry_pick = commit_id.clone();
                 let commit_id_revert = commit_id.clone();
+
+                let commit_summary = self
+                    .active_repo()
+                    .and_then(|r| match &r.log {
+                        Loadable::Ready(page) => page
+                            .commits
+                            .iter()
+                            .find(|c| c.id == commit_id)
+                            .map(|c| format!("{} — {}", c.author, c.summary)),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+
                 div()
                     .flex()
                     .flex_col()
@@ -577,13 +1047,45 @@ impl GitGpuiView {
                             .text_color(theme.colors.text_muted)
                             .child(format!("Commit {short}")),
                     )
+                    .when(!commit_summary.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .px_3()
+                                .pb_2()
+                                .text_sm()
+                                .line_clamp(2)
+                                .child(commit_summary),
+                        )
+                    })
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .id("commit_menu_open_diff")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Open diff  (Enter)")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: DiffTarget::Commit {
+                                        commit_id: commit_id_open_diff.clone(),
+                                        path: None,
+                                    },
+                                });
+                                this.rebuild_diff_cache();
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         div()
                             .id("commit_menu_copy_sha")
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Copy SHA")
+                            .child("Copy SHA  (C)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                     sha_for_clipboard.clone(),
@@ -599,7 +1101,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Checkout (detached)")
+                            .child("Checkout (detached)  (D)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.store.dispatch(Msg::CheckoutCommit {
                                     repo_id,
@@ -616,7 +1118,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Cherry-pick")
+                            .child("Cherry-pick  (P)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.store.dispatch(Msg::CherryPickCommit {
                                     repo_id,
@@ -633,7 +1135,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Revert")
+                            .child("Revert  (R)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.store.dispatch(Msg::RevertCommit {
                                     repo_id,
@@ -669,9 +1171,12 @@ impl GitGpuiView {
                         .px_3()
                         .py_2()
                         .hover(move |s| s.bg(theme.colors.hover))
-                        .child("Diagnostics")
+                        .child("Tools")
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             this.show_diagnostics_view = !this.show_diagnostics_view;
+                            if this.show_diagnostics_view {
+                                this.tools_tab = ToolsTab::Diagnostics;
+                            }
                             this.popover = None;
                             this.popover_anchor = None;
                             cx.notify();
@@ -741,7 +1246,7 @@ impl GitGpuiView {
             .unwrap_or(0);
 
         let branches_list: AnyElement = if branches_count == 0 {
-            components::empty_state(theme, "Local", "No branches loaded.").into_any_element()
+            zed::empty_state(theme, "Local", "No branches loaded.").into_any_element()
         } else {
             let list = uniform_list(
                 "branches",
@@ -756,12 +1261,12 @@ impl GitGpuiView {
                 .relative()
                 .h(px(140.0))
                 .child(list)
-                .child(kit::Scrollbar::new("branches_scrollbar", scroll_handle).render(theme))
+                .child(zed::Scrollbar::new("branches_scrollbar", scroll_handle).render(theme))
                 .into_any_element()
         };
 
         let remotes_list: AnyElement = if remotes_count == 0 {
-            components::empty_state(theme, "Remote", "No remotes loaded.").into_any_element()
+            zed::empty_state(theme, "Remote", "No remotes loaded.").into_any_element()
         } else {
             let list = uniform_list(
                 "remotes",
@@ -776,16 +1281,90 @@ impl GitGpuiView {
                 .relative()
                 .h(px(160.0))
                 .child(list)
-                .child(kit::Scrollbar::new("remotes_scrollbar", scroll_handle).render(theme))
+                .child(zed::Scrollbar::new("remotes_scrollbar", scroll_handle).render(theme))
                 .into_any_element()
         };
+
+        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
+        let output_count = repo.map(|r| r.command_log.len()).unwrap_or(0);
+        let conflicts_count = repo
+            .and_then(|r| match &r.status {
+                Loadable::Ready(status) => Some(
+                    status
+                        .unstaged
+                        .iter()
+                        .chain(status.staged.iter())
+                        .filter(|e| e.kind == FileStatusKind::Conflicted)
+                        .count(),
+                ),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        let repo_id = repo.map(|r| r.id);
+        let blame_target = repo.and_then(|r| r.diff_target.as_ref()).and_then(|t| match t {
+            DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+            DiffTarget::Commit { path: Some(path), .. } => Some(path.clone()),
+            _ => None,
+        });
+
+        let tools_panel = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                zed::Button::new("tools_diagnostics", format!("Diagnostics ({diagnostics_count})"))
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.show_diagnostics_view = true;
+                        this.tools_tab = ToolsTab::Diagnostics;
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("tools_output", format!("Output ({output_count})"))
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.show_diagnostics_view = true;
+                        this.tools_tab = ToolsTab::Output;
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("tools_conflicts", format!("Conflicts ({conflicts_count})"))
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.show_diagnostics_view = true;
+                        this.tools_tab = ToolsTab::Conflicts;
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("tools_blame", "Blame")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        if let Some(repo_id) = repo_id
+                            && let Some(path) = blame_target.clone()
+                        {
+                            this.store.dispatch(Msg::LoadBlame {
+                                repo_id,
+                                path,
+                                rev: None,
+                            });
+                        }
+                        this.show_diagnostics_view = true;
+                        this.tools_tab = ToolsTab::Blame;
+                        cx.notify();
+                    }),
+            );
 
         div()
             .flex()
             .flex_col()
             .gap_3()
-            .child(components::panel(theme, "Local", None, branches_list))
-            .child(components::panel(theme, "Remote", None, remotes_list))
+            .child(zed::panel(theme, "Local", None, branches_list))
+            .child(zed::panel(theme, "Remote", None, remotes_list))
+            .child(zed::panel(theme, "Tools", None, tools_panel))
     }
 
     pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -817,18 +1396,18 @@ impl GitGpuiView {
 
                 let body: AnyElement = match &repo.commit_details {
                     Loadable::Loading => {
-                        components::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        zed::empty_state(theme, "Commit", "Loading…").into_any_element()
                     }
                     Loadable::Error(e) => {
-                        components::empty_state(theme, "Commit", e.clone()).into_any_element()
+                        zed::empty_state(theme, "Commit", e.clone()).into_any_element()
                     }
                     Loadable::NotLoaded => {
-                        components::empty_state(theme, "Commit", "Select a commit in History.")
+                        zed::empty_state(theme, "Commit", "Select a commit in History.")
                             .into_any_element()
                     }
                     Loadable::Ready(details) => {
                         if &details.id != selected_id {
-                            components::empty_state(theme, "Commit", "Loading…").into_any_element()
+                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
                         } else {
                             let parent = details
                                 .parent_ids
@@ -883,7 +1462,7 @@ impl GitGpuiView {
                                             .py_1()
                                             .rounded(px(theme.radii.row))
                                             .hover(move |s| s.bg(theme.colors.hover))
-                                            .child(components::pill(theme, label, color))
+                                            .child(zed::pill(theme, label, color))
                                             .child(
                                                 div()
                                                     .text_sm()
@@ -929,12 +1508,12 @@ impl GitGpuiView {
                                                 .child(details.message.clone()),
                                         ),
                                 )
-                                .child(components::key_value(
+                                .child(zed::key_value(
                                     theme,
                                     "Commit SHA",
                                     details.id.as_ref().to_string(),
                                 ))
-                                .child(components::key_value(
+                                .child(zed::key_value(
                                     theme,
                                     "Commit date",
                                     details.committed_at.clone(),
@@ -976,7 +1555,7 @@ impl GitGpuiView {
                     }
                 };
 
-                return div().flex().flex_col().gap_3().child(components::panel(
+                return div().flex().flex_col().gap_3().child(zed::panel(
                     theme,
                     "Commit",
                     None,
@@ -1000,13 +1579,13 @@ impl GitGpuiView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(components::panel(
+            .child(zed::panel(
                 theme,
                 "Unstaged",
                 Some(format!("{unstaged_count}").into()),
                 unstaged_list,
             ))
-            .child(components::panel(
+            .child(zed::panel(
                 theme,
                 "Staged",
                 Some(format!("{staged_count}").into()),
@@ -1023,7 +1602,40 @@ impl GitGpuiView {
         let theme = self.theme;
         let repo = self.active_repo();
 
-        let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
+        let tabs = {
+            let tab = self.tools_tab;
+            let mut bar = zed::TabBar::new("tools_tab_bar");
+            for (ix, (label, value)) in [
+                ("Diagnostics", ToolsTab::Diagnostics),
+                ("Output", ToolsTab::Output),
+                ("Conflicts", ToolsTab::Conflicts),
+                ("Blame", ToolsTab::Blame),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let selected = tab == value;
+                let position = if ix == 0 {
+                    zed::TabPosition::First
+                } else if ix == 3 {
+                    zed::TabPosition::Last
+                } else {
+                    zed::TabPosition::Middle(std::cmp::Ordering::Equal)
+                };
+                let value_for_click = value;
+                let t = zed::Tab::new(("tools_tab", ix))
+                    .selected(selected)
+                    .position(position)
+                    .child(div().text_sm().child(label))
+                    .render(theme)
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.tools_tab = value_for_click;
+                        cx.notify();
+                    }));
+                bar = bar.tab(t);
+            }
+            bar.render(theme)
+        };
 
         let header = div()
             .flex()
@@ -1033,7 +1645,7 @@ impl GitGpuiView {
                 div()
                     .text_sm()
                     .font_weight(FontWeight::BOLD)
-                    .child("Diagnostics"),
+                    .child("Tools"),
             )
             .child(
                 zed::Button::new("diagnostics_close", "✕")
@@ -1044,32 +1656,161 @@ impl GitGpuiView {
                     }),
             );
 
-        let body: AnyElement = if diagnostics_count == 0 {
-            match repo {
-                None => components::empty_state(theme, "Diagnostics", "No repository.")
-                    .into_any_element(),
-                Some(_) => {
-                    components::empty_state(theme, "Diagnostics", "No issues.").into_any_element()
+        let body: AnyElement = match self.tools_tab {
+            ToolsTab::Diagnostics => {
+                let diagnostics_count = repo.map(|r| r.diagnostics.len()).unwrap_or(0);
+                if diagnostics_count == 0 {
+                    match repo {
+                        None => zed::empty_state(theme, "Diagnostics", "No repository.")
+                            .into_any_element(),
+                        Some(_) => zed::empty_state(theme, "Diagnostics", "No issues.")
+                            .into_any_element(),
+                    }
+                } else {
+                    let list = uniform_list(
+                        "diagnostics_main",
+                        diagnostics_count,
+                        cx.processor(Self::render_diagnostic_rows),
+                    )
+                    .h_full()
+                    .track_scroll(self.diagnostics_scroll.clone());
+                    let scroll_handle = self.diagnostics_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("diagnostics_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            zed::Scrollbar::new("diagnostics_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
                 }
             }
-        } else {
-            let list = uniform_list(
-                "diagnostics_main",
-                diagnostics_count,
-                cx.processor(Self::render_diagnostic_rows),
-            )
-            .h_full()
-            .track_scroll(self.diagnostics_scroll.clone());
-            let scroll_handle = self.diagnostics_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("diagnostics_main_scroll_container")
-                .relative()
-                .h_full()
-                .child(list)
-                .child(
-                    kit::Scrollbar::new("diagnostics_main_scrollbar", scroll_handle).render(theme),
-                )
-                .into_any_element()
+            ToolsTab::Output => {
+                let count = repo.map(|r| r.command_log.len()).unwrap_or(0);
+                if count == 0 {
+                    match repo {
+                        None => zed::empty_state(theme, "Output", "No repository.")
+                            .into_any_element(),
+                        Some(_) => zed::empty_state(theme, "Output", "No commands yet.")
+                            .into_any_element(),
+                    }
+                } else {
+                    let list = uniform_list(
+                        "output_main",
+                        count,
+                        cx.processor(Self::render_command_log_rows),
+                    )
+                    .h_full()
+                    .track_scroll(self.output_scroll.clone());
+                    let scroll_handle = self.output_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("output_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            zed::Scrollbar::new("output_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
+                }
+            }
+            ToolsTab::Conflicts => {
+                let count = repo
+                    .and_then(|r| match &r.status {
+                        Loadable::Ready(status) => Some(
+                            status
+                                .unstaged
+                                .iter()
+                                .chain(status.staged.iter())
+                                .filter(|e| e.kind == FileStatusKind::Conflicted)
+                                .count(),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
+
+                if count == 0 {
+                    match repo {
+                        None => zed::empty_state(theme, "Conflicts", "No repository.")
+                            .into_any_element(),
+                        Some(_) => zed::empty_state(theme, "Conflicts", "No conflicts.")
+                            .into_any_element(),
+                    }
+                } else {
+                    let list = uniform_list(
+                        "conflicts_main",
+                        count,
+                        cx.processor(Self::render_conflict_rows),
+                    )
+                    .h_full()
+                    .track_scroll(self.conflicts_scroll.clone());
+                    let scroll_handle = self.conflicts_scroll.0.borrow().base_handle.clone();
+                    div()
+                        .id("conflicts_main_scroll_container")
+                        .relative()
+                        .h_full()
+                        .child(list)
+                        .child(
+                            zed::Scrollbar::new("conflicts_main_scrollbar", scroll_handle)
+                                .render(theme),
+                        )
+                        .into_any_element()
+                }
+            }
+            ToolsTab::Blame => {
+                match repo {
+                    None => zed::empty_state(theme, "Blame", "No repository.").into_any_element(),
+                    Some(repo) => match (&repo.blame_target, &repo.blame) {
+                        (None, _) => zed::empty_state(
+                            theme,
+                            "Blame",
+                            "Select a file in Diff, then click Blame.",
+                        )
+                        .into_any_element(),
+                        (Some(path), Loadable::Loading) => zed::empty_state(
+                            theme,
+                            "Blame",
+                            format!("Loading… {}", path.display()),
+                        )
+                        .into_any_element(),
+                        (Some(_), Loadable::Error(e)) => {
+                            zed::empty_state(theme, "Blame", e.clone()).into_any_element()
+                        }
+                        (Some(_), Loadable::NotLoaded) => {
+                            zed::empty_state(theme, "Blame", "Not loaded.").into_any_element()
+                        }
+                        (Some(_), Loadable::Ready(lines)) => {
+                            if lines.is_empty() {
+                                zed::empty_state(theme, "Blame", "No blame data.")
+                                    .into_any_element()
+                            } else {
+                                let list = uniform_list(
+                                    "blame_main",
+                                    lines.len(),
+                                    cx.processor(Self::render_blame_rows),
+                                )
+                                .h_full()
+                                .track_scroll(self.blame_scroll.clone());
+                                let scroll_handle =
+                                    self.blame_scroll.0.borrow().base_handle.clone();
+                                div()
+                                    .id("blame_main_scroll_container")
+                                    .relative()
+                                    .h_full()
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new("blame_main_scrollbar", scroll_handle)
+                                            .render(theme),
+                                    )
+                                    .into_any_element()
+                            }
+                        }
+                    },
+                }
+            }
         };
 
         div()
@@ -1077,14 +1818,15 @@ impl GitGpuiView {
             .flex_col()
             .gap_3()
             .flex_1()
-            .child(components::panel(
+            .child(zed::panel(
                 theme,
-                "Diagnostics",
+                "Tools",
                 None,
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .child(tabs)
                     .child(header)
                     .child(div().flex_1().child(body)),
             ))
@@ -1098,7 +1840,7 @@ impl GitGpuiView {
     ) -> AnyElement {
         let theme = self.theme;
         if count == 0 {
-            return components::empty_state(theme, "Status", "Clean.").into_any_element();
+            return zed::empty_state(theme, "Status", "Clean.").into_any_element();
         }
         match area {
             DiffArea::Unstaged => {
@@ -1112,7 +1854,7 @@ impl GitGpuiView {
                     .relative()
                     .h(px(140.0))
                     .child(list)
-                    .child(kit::Scrollbar::new("unstaged_scrollbar", scroll_handle).render(theme))
+                    .child(zed::Scrollbar::new("unstaged_scrollbar", scroll_handle).render(theme))
                     .into_any_element()
             }
             DiffArea::Staged => {
@@ -1125,7 +1867,7 @@ impl GitGpuiView {
                     .relative()
                     .h(px(140.0))
                     .child(list)
-                    .child(kit::Scrollbar::new("staged_scrollbar", scroll_handle).render(theme))
+                    .child(zed::Scrollbar::new("staged_scrollbar", scroll_handle).render(theme))
                     .into_any_element()
             }
         }
@@ -1152,14 +1894,15 @@ impl GitGpuiView {
                     .child(
                         zed::Button::new("commit", "Commit")
                             .style(zed::ButtonStyle::Filled)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
+                            .on_click(theme, cx, |this, e, window, cx| {
                                 let message = this
                                     .commit_message_input
-                                    .read_with(cx, |i, _| i.text().trim().to_string());
-                                if let Some(repo_id) = this.active_repo_id()
-                                    && !message.is_empty()
-                                {
-                                    this.store.dispatch(Msg::Commit { repo_id, message });
+                                    .read_with(cx, |i, _| i.text().to_string());
+                                let input = this.ensure_commit_modal_input(window, cx);
+                                input.update(cx, |i, cx| i.set_text(message, cx));
+                                if let Some(repo_id) = this.active_repo_id() {
+                                    this.popover = Some(PopoverKind::CommitModal { repo_id });
+                                    this.popover_anchor = Some(e.position());
                                 }
                                 cx.notify();
                             }),
@@ -1251,8 +1994,11 @@ impl GitGpuiView {
                                     .child("Branch"),
                             )
                             .child(div().text_sm().child(current))
-                            .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
+                            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                                 if let Some(repo_id) = this.active_repo_id() {
+                                    let _ = this.ensure_history_branch_picker_search_input(
+                                        window, cx,
+                                    );
                                     this.popover =
                                         Some(PopoverKind::HistoryBranchFilter { repo_id });
                                     this.popover_anchor = Some(e.position());
@@ -1263,16 +2009,16 @@ impl GitGpuiView {
 
                 let body: AnyElement = if count == 0 {
                     match repo.map(|r| &r.log) {
-                        None => components::empty_state(theme, "History", "No repository.")
+                        None => zed::empty_state(theme, "History", "No repository.")
                             .into_any_element(),
                         Some(Loadable::Loading) => {
-                            components::empty_state(theme, "History", "Loading…").into_any_element()
+                            zed::empty_state(theme, "History", "Loading…").into_any_element()
                         }
                         Some(Loadable::Error(e)) => {
-                            components::empty_state(theme, "History", e.clone()).into_any_element()
+                            zed::empty_state(theme, "History", e.clone()).into_any_element()
                         }
                         Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            components::empty_state(theme, "History", "No commits.")
+                            zed::empty_state(theme, "History", "No commits.")
                                 .into_any_element()
                         }
                     }
@@ -1290,10 +2036,7 @@ impl GitGpuiView {
                         .relative()
                         .h_full()
                         .child(list)
-                        .child(
-                            kit::Scrollbar::new("history_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
+                        .child(zed::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
                         .into_any_element()
                 };
 
@@ -1319,16 +2062,16 @@ impl GitGpuiView {
 
                 let body: AnyElement = if count == 0 {
                     match repo.map(|r| &r.stashes) {
-                        None => components::empty_state(theme, "Stash", "No repository.")
+                        None => zed::empty_state(theme, "Stash", "No repository.")
                             .into_any_element(),
                         Some(Loadable::Loading) => {
-                            components::empty_state(theme, "Stash", "Loading…").into_any_element()
+                            zed::empty_state(theme, "Stash", "Loading…").into_any_element()
                         }
                         Some(Loadable::Error(e)) => {
-                            components::empty_state(theme, "Stash", e.clone()).into_any_element()
+                            zed::empty_state(theme, "Stash", e.clone()).into_any_element()
                         }
                         Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            components::empty_state(theme, "Stash", "No stashes.")
+                            zed::empty_state(theme, "Stash", "No stashes.")
                                 .into_any_element()
                         }
                     }
@@ -1343,10 +2086,7 @@ impl GitGpuiView {
                         .relative()
                         .h_full()
                         .child(list)
-                        .child(
-                            kit::Scrollbar::new("stash_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
+                        .child(zed::Scrollbar::new("stash_main_scrollbar", scroll_handle).render(theme))
                         .into_any_element()
                 };
 
@@ -1363,16 +2103,16 @@ impl GitGpuiView {
 
                 let body: AnyElement = if count == 0 {
                     match repo.map(|r| &r.reflog) {
-                        None => components::empty_state(theme, "Reflog", "No repository.")
+                        None => zed::empty_state(theme, "Reflog", "No repository.")
                             .into_any_element(),
                         Some(Loadable::Loading) => {
-                            components::empty_state(theme, "Reflog", "Loading…").into_any_element()
+                            zed::empty_state(theme, "Reflog", "Loading…").into_any_element()
                         }
                         Some(Loadable::Error(e)) => {
-                            components::empty_state(theme, "Reflog", e.clone()).into_any_element()
+                            zed::empty_state(theme, "Reflog", e.clone()).into_any_element()
                         }
                         Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            components::empty_state(theme, "Reflog", "No reflog.")
+                            zed::empty_state(theme, "Reflog", "No reflog.")
                                 .into_any_element()
                         }
                     }
@@ -1387,10 +2127,7 @@ impl GitGpuiView {
                         .relative()
                         .h_full()
                         .child(list)
-                        .child(
-                            kit::Scrollbar::new("reflog_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
+                        .child(zed::Scrollbar::new("reflog_main_scrollbar", scroll_handle).render(theme))
                         .into_any_element()
                 };
 
@@ -1399,7 +2136,7 @@ impl GitGpuiView {
         };
 
         div().flex().flex_col().gap_3().flex_1().child(
-            components::panel(
+            zed::panel(
                 theme,
                 title,
                 None,
@@ -1470,6 +2207,112 @@ impl GitGpuiView {
                     }),
             );
 
+        controls = controls
+            .child(
+                zed::Button::new("diff_prev_hunk", "Prev")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let current = this.diff_selection_anchor.unwrap_or(0);
+                        let hunks = this
+                            .diff_visible_indices
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(visible_ix, &src_ix)| {
+                                this.diff_cache
+                                    .get(src_ix)
+                                    .is_some_and(|l| {
+                                        matches!(l.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                                    })
+                                    .then_some(visible_ix)
+                            })
+                            .collect::<Vec<_>>();
+                        if let Some(&target) = hunks.iter().rev().find(|&&ix| ix < current).or_else(
+                            || hunks.last(),
+                        ) {
+                            this.diff_scroll
+                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            this.diff_selection_anchor = Some(target);
+                            this.diff_selection_range = Some((target, target));
+                            cx.notify();
+                        }
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_next_hunk", "Next")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let current = this.diff_selection_anchor.unwrap_or(0);
+                        let hunks = this
+                            .diff_visible_indices
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(visible_ix, &src_ix)| {
+                                this.diff_cache
+                                    .get(src_ix)
+                                    .is_some_and(|l| {
+                                        matches!(l.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                                    })
+                                    .then_some(visible_ix)
+                            })
+                            .collect::<Vec<_>>();
+                        if let Some(&target) =
+                            hunks.iter().find(|&&ix| ix > current).or_else(|| hunks.first())
+                        {
+                            this.diff_scroll
+                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            this.diff_selection_anchor = Some(target);
+                            this.diff_selection_range = Some((target, target));
+                            cx.notify();
+                        }
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_hunks", "Hunks…")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, e, window, cx| {
+                        let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
+                        this.popover = Some(PopoverKind::DiffHunks);
+                        this.popover_anchor = Some(e.position());
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_blame", "Blame")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Some(repo_id) = this.active_repo_id()
+                            && let Some(repo) = this.active_repo()
+                        {
+                            let path = repo.diff_target.as_ref().and_then(|t| match t {
+                                DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+                                DiffTarget::Commit { path: Some(path), .. } => Some(path.clone()),
+                                _ => None,
+                            });
+                            if let Some(path) = path {
+                                this.store.dispatch(Msg::LoadBlame {
+                                    repo_id,
+                                    path,
+                                    rev: None,
+                                });
+                                this.show_diagnostics_view = true;
+                                this.tools_tab = ToolsTab::Blame;
+                            }
+                        }
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_copy", "Copy")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let text = this.diff_selected_text_for_clipboard();
+                        if !text.is_empty() {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }
+                        cx.notify();
+                    }),
+            );
+
         if let Some(repo_id) = repo_id {
             controls = controls.child(
                 zed::Button::new("diff_close", "✕")
@@ -1485,27 +2328,40 @@ impl GitGpuiView {
             .flex()
             .items_center()
             .justify_between()
-            .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w(px(0.0))
+                    .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
+                    .child(div().w(px(220.0)).child(self.diff_search_input.clone())),
+            )
             .child(controls);
 
         let body: AnyElement = match repo.map(|r| &r.diff) {
-            None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
+            None => zed::empty_state(theme, "Diff", "No repository.").into_any_element(),
             Some(Loadable::NotLoaded) => {
-                components::empty_state(theme, "Diff", "Select a file.").into_any_element()
+                zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
             }
             Some(Loadable::Loading) => {
-                components::empty_state(theme, "Diff", "Loading…").into_any_element()
+                zed::empty_state(theme, "Diff", "Loading…").into_any_element()
             }
             Some(Loadable::Error(e)) => {
-                components::empty_state(theme, "Diff", e.clone()).into_any_element()
+                zed::empty_state(theme, "Diff", e.clone()).into_any_element()
             }
             Some(Loadable::Ready(_)) => {
+                self.update_diff_search_debounce(cx);
+                self.ensure_diff_visible_indices();
                 if self.diff_cache.is_empty() {
-                    components::empty_state(theme, "Diff", "No differences.").into_any_element()
+                    zed::empty_state(theme, "Diff", "No differences.").into_any_element()
+                } else if !self.diff_visible_query.is_empty() && self.diff_query_match_count == 0 {
+                    zed::empty_state(theme, "Diff", "No matches.").into_any_element()
                 } else {
                     let list = uniform_list(
                         "diff",
-                        self.diff_cache.len(),
+                        self.diff_visible_indices.len(),
                         cx.processor(Self::render_diff_rows),
                     )
                     .h_full()
@@ -1516,7 +2372,7 @@ impl GitGpuiView {
                         .relative()
                         .h_full()
                         .child(list)
-                        .child(kit::Scrollbar::new("diff_scrollbar", scroll_handle).render(theme))
+                        .child(zed::Scrollbar::new("diff_scrollbar", scroll_handle).render(theme))
                         .into_any_element()
                 }
             }
@@ -1527,7 +2383,7 @@ impl GitGpuiView {
             .flex_col()
             .gap_3()
             .flex_1()
-            .child(components::panel(
+            .child(zed::panel(
                 theme,
                 "Diff",
                 None,

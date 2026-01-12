@@ -96,7 +96,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
-                    .child(components::pill(theme, label, color))
+                    .child(zed::pill(theme, label, color))
                     .child(
                         div()
                             .text_sm()
@@ -104,6 +104,255 @@ impl GitGpuiView {
                             .line_clamp(2)
                             .child(d.message.clone()),
                     )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_command_log_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let theme = this.theme;
+        let repo_id = repo.id;
+
+        range
+            .filter_map(|ix| repo.command_log.get(ix).map(|e| (ix, e)))
+            .map(|(ix, entry)| {
+                let label = if entry.ok { "OK" } else { "Error" };
+                let color = if entry.ok {
+                    theme.colors.success
+                } else {
+                    theme.colors.danger
+                };
+                let when = format_relative_time(entry.time);
+
+                div()
+                    .id(("cmd", ix))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(theme.radii.row))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .min_w(px(0.0))
+                            .child(zed::pill(theme, label, color))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .line_clamp(1)
+                                    .child(entry.summary.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .font_family("monospace")
+                                    .line_clamp(1)
+                                    .child(entry.command.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .whitespace_nowrap()
+                            .child(when),
+                    )
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        this.popover = Some(PopoverKind::CommandLogDetails { repo_id, index: ix });
+                        this.popover_anchor = Some(e.position());
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_conflict_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(status) = &repo.status else {
+            return Vec::new();
+        };
+        let theme = this.theme;
+        let repo_id = repo.id;
+
+        let conflicts = status
+            .unstaged
+            .iter()
+            .map(|e| (DiffArea::Unstaged, e))
+            .chain(status.staged.iter().map(|e| (DiffArea::Staged, e)))
+            .filter(|(_area, e)| e.kind == FileStatusKind::Conflicted)
+            .map(|(area, e)| (area, e.path.clone()))
+            .collect::<Vec<_>>();
+
+        range
+            .filter_map(|ix| conflicts.get(ix).cloned().map(|e| (ix, e)))
+            .map(|(ix, (area, path))| {
+                let path_for_ours = path.clone();
+                let path_for_theirs = path.clone();
+                let path_for_view = path.clone();
+
+                div()
+                    .id(("conflict", ix))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(theme.radii.row))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .min_w(px(0.0))
+                            .child(zed::pill(theme, "Conflicted", theme.colors.danger))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .line_clamp(1)
+                                    .child(path.display().to_string()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                zed::Button::new(format!("conflict_ours_{ix}"), "Ours")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                        this.store.dispatch(Msg::CheckoutConflictSide {
+                                            repo_id,
+                                            path: path_for_ours.clone(),
+                                            side: gitgpui_core::services::ConflictSide::Ours,
+                                        });
+                                        cx.notify();
+                                    }),
+                            )
+                            .child(
+                                zed::Button::new(format!("conflict_theirs_{ix}"), "Theirs")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                        this.store.dispatch(Msg::CheckoutConflictSide {
+                                            repo_id,
+                                            path: path_for_theirs.clone(),
+                                            side: gitgpui_core::services::ConflictSide::Theirs,
+                                        });
+                                        cx.notify();
+                                    }),
+                            )
+                            .child(
+                                zed::Button::new(format!("conflict_view_{ix}"), "View diff")
+                                    .style(zed::ButtonStyle::Subtle)
+                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                        this.store.dispatch(Msg::SelectDiff {
+                                            repo_id,
+                                            target: DiffTarget::WorkingTree {
+                                                path: path_for_view.clone(),
+                                                area,
+                                            },
+                                        });
+                                        this.show_diagnostics_view = false;
+                                        this.rebuild_diff_cache();
+                                        cx.notify();
+                                    }),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_blame_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(lines) = &repo.blame else {
+            return Vec::new();
+        };
+        let theme = this.theme;
+        let repo_id = repo.id;
+
+        range
+            .filter_map(|ix| lines.get(ix).map(|l| (ix, l)))
+            .map(|(ix, line)| {
+                let short = line.commit_id.get(0..8).unwrap_or(&line.commit_id);
+                let commit_id = CommitId(line.commit_id.clone());
+                let author = if line.author.trim().is_empty() {
+                    "—".to_string()
+                } else {
+                    line.author.clone()
+                };
+                div()
+                    .id(("blame", ix))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(theme.radii.row))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(short.to_string()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(author),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .font_family("monospace")
+                            .text_sm()
+                            .line_clamp(1)
+                            .child(line.line.clone()),
+                    )
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.store.dispatch(Msg::SelectCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        });
+                        cx.notify();
+                    }))
                     .into_any_element()
             })
             .collect()
@@ -219,16 +468,16 @@ impl GitGpuiView {
                                     .child(when),
                             )
                             .child(
-                                kit::Button::new(format!("stash_apply_{index}"), "Apply")
-                                    .style(kit::ButtonStyle::Secondary)
+                                zed::Button::new(format!("stash_apply_{index}"), "Apply")
+                                    .style(zed::ButtonStyle::Outlined)
                                     .on_click(theme, cx, move |this, _e, _w, cx| {
                                         this.store.dispatch(Msg::ApplyStash { repo_id, index });
                                         cx.notify();
                                     }),
                             )
                             .child(
-                                kit::Button::new(format!("stash_drop_{index}"), "Drop")
-                                    .style(kit::ButtonStyle::Danger)
+                                zed::Button::new(format!("stash_drop_{index}"), "Drop")
+                                    .style(zed::ButtonStyle::Danger)
                                     .on_click(theme, cx, move |this, _e, _w, cx| {
                                         this.store.dispatch(Msg::DropStash { repo_id, index });
                                         cx.notify();
@@ -356,12 +605,52 @@ impl GitGpuiView {
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         range
-            .filter_map(|ix| this.diff_cache.get(ix).map(|l| (ix, l)))
-            .map(|(ix, line)| diff_row(theme, ix, this.diff_view, line))
+            .filter_map(|visible_ix| {
+                let src_ix = this.diff_visible_indices.get(visible_ix).copied()?;
+                let line = this.diff_cache.get(src_ix)?;
+                Some((visible_ix, src_ix, line))
+            })
+            .map(|(visible_ix, src_ix, line)| {
+                let selected = this
+                    .diff_selection_range
+                    .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                let click_kind = if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                    DiffClickKind::HunkHeader
+                } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                    && line.text.starts_with("diff --git ")
+                {
+                    DiffClickKind::FileHeader
+                } else {
+                    DiffClickKind::Line
+                };
+
+                let word_ranges = this
+                    .diff_word_highlights
+                    .get(&src_ix)
+                    .cloned()
+                    .unwrap_or_default();
+
+                let file_stat = this.diff_file_stats.get(&src_ix).copied();
+
+                diff_row(
+                    theme,
+                    visible_ix,
+                    src_ix,
+                    click_kind,
+                    selected,
+                    this.diff_view,
+                    line,
+                    file_stat,
+                    &this.diff_visible_query,
+                    &word_ranges,
+                    cx,
+                )
+            })
             .collect()
     }
 }
@@ -788,7 +1077,7 @@ fn status_row(
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(components::pill(theme, label, color))
+                .child(zed::pill(theme, label, color))
                 .child(
                     div()
                         .text_sm()
@@ -797,8 +1086,8 @@ fn status_row(
                 ),
         )
         .child(
-            kit::Button::new(format!("stage_btn_{ix}"), stage_label)
-                .style(kit::ButtonStyle::Secondary)
+            zed::Button::new(format!("stage_btn_{ix}"), stage_label)
+                .style(zed::ButtonStyle::Outlined)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     this.store.dispatch(Msg::SelectDiff {
                         repo_id,
@@ -836,24 +1125,90 @@ fn status_row(
 
 fn diff_row(
     theme: AppTheme,
-    ix: usize,
+    visible_ix: usize,
+    _src_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
     mode: DiffViewMode,
     line: &AnnotatedDiffLine,
+    file_stat: Option<(usize, usize)>,
+    query: &str,
+    word_ranges: &[Range<usize>],
+    cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
+    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        this.handle_diff_row_click(visible_ix, click_kind, e.modifiers().shift);
+        cx.notify();
+    });
 
-    let text = match line.kind {
-        gitgpui_core::domain::DiffLineKind::Add => {
-            line.text.strip_prefix('+').unwrap_or(&line.text)
+    if matches!(click_kind, DiffClickKind::FileHeader) {
+        let file = parse_diff_git_header_path(&line.text).unwrap_or_else(|| line.text.clone());
+        let mut row = div()
+            .id(("diff_file_hdr", visible_ix))
+            .h(px(28.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .px_2()
+            .bg(theme.colors.surface_bg_elevated)
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .font_family("monospace")
+            .text_sm()
+            .font_weight(FontWeight::BOLD)
+            .child(file)
+            .when(
+                file_stat.is_some_and(|(a, r)| a > 0 || r > 0),
+                |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(zed::diff_stat(theme, a, r))
+                },
+            )
+            .on_click(on_click);
+
+        if selected {
+            row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
         }
-        gitgpui_core::domain::DiffLineKind::Remove => {
-            line.text.strip_prefix('-').unwrap_or(&line.text)
+
+        return row.into_any_element();
+    }
+
+    if matches!(click_kind, DiffClickKind::HunkHeader) {
+        let display = parse_unified_hunk_header_for_display(&line.text)
+            .map(|p| {
+                let heading = p.heading.unwrap_or_default();
+                if heading.is_empty() {
+                    format!("{} {}", p.old, p.new)
+                } else {
+                    format!("{} {}  {heading}", p.old, p.new)
+                }
+            })
+            .unwrap_or_else(|| line.text.clone());
+
+        let mut row = div()
+            .id(("diff_hunk_hdr", visible_ix))
+            .h(px(24.0))
+            .flex()
+            .items_center()
+            .px_2()
+            .bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.10 } else { 0.07 }))
+            .border_b_1()
+            .border_color(with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.22 }))
+            .font_family("monospace")
+            .text_xs()
+            .text_color(theme.colors.text_muted)
+            .child(display)
+            .on_click(on_click);
+
+        if selected {
+            row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
         }
-        gitgpui_core::domain::DiffLineKind::Context => {
-            line.text.strip_prefix(' ').unwrap_or(&line.text)
-        }
-        _ => &line.text,
-    };
+
+        return row.into_any_element();
+    }
+
+    let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
+    let text = diff_content_text(line);
 
     let old = line.old_line.map(|n| n.to_string()).unwrap_or_default();
     let new = line.new_line.map(|n| n.to_string()).unwrap_or_default();
@@ -872,14 +1227,21 @@ fn diff_row(
         (DiffViewMode::Inline, _) => (text.to_string(), String::new()),
     };
 
-    let row = div()
-        .id(ix)
+    let word_color = match line.kind {
+        gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+        gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+        _ => None,
+    };
+
+    let mut row = div()
+        .id(("diff_row", visible_ix))
         .h(px(20.0))
         .flex()
         .items_center()
         .bg(bg)
         .font_family("monospace")
         .text_xs()
+        .on_click(on_click)
         .child(
             div()
                 .w(px(44.0))
@@ -897,6 +1259,10 @@ fn diff_row(
                 .child(new),
         );
 
+    if selected {
+        row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
+    }
+
     match mode {
         DiffViewMode::Inline => row
             .child(
@@ -905,7 +1271,14 @@ fn diff_row(
                     .px_2()
                     .text_color(fg)
                     .whitespace_nowrap()
-                    .child(left_text),
+                    .child(render_diff_text_segments(
+                        theme,
+                        fg,
+                        &left_text,
+                        word_ranges,
+                        query,
+                        word_color,
+                    )),
             )
             .into_any_element(),
         DiffViewMode::Split => row
@@ -915,7 +1288,14 @@ fn diff_row(
                     .px_2()
                     .text_color(fg)
                     .whitespace_nowrap()
-                    .child(left_text),
+                    .child(render_diff_text_segments(
+                        theme,
+                        fg,
+                        &left_text,
+                        word_ranges,
+                        query,
+                        word_color,
+                    )),
             )
             .child(
                 div()
@@ -923,10 +1303,124 @@ fn diff_row(
                     .px_2()
                     .text_color(fg)
                     .whitespace_nowrap()
-                    .child(right_text),
+                    .child(render_diff_text_segments(
+                        theme,
+                        fg,
+                        &right_text,
+                        word_ranges,
+                        query,
+                        word_color,
+                    )),
             )
             .into_any_element(),
     }
+}
+
+fn render_diff_text_segments(
+    theme: AppTheme,
+    base_fg: gpui::Rgba,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    word_color: Option<gpui::Rgba>,
+) -> AnyElement {
+    if text.is_empty() {
+        return div().into_any_element();
+    }
+
+    let query = query.trim();
+    let query_range =
+        (!query.is_empty()).then(|| find_ascii_case_insensitive(text, query)).flatten();
+
+    let mut boundaries: Vec<usize> = vec![0, text.len()];
+    for r in word_ranges {
+        boundaries.push(r.start.min(text.len()));
+        boundaries.push(r.end.min(text.len()));
+    }
+    if let Some(r) = &query_range {
+        boundaries.push(r.start);
+        boundaries.push(r.end);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut container = div()
+        .flex()
+        .items_center()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(base_fg);
+
+    for w in boundaries.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a >= b || a >= text.len() {
+            continue;
+        }
+        let b = b.min(text.len());
+        let seg = &text[a..b];
+        let seg_text = preserve_spaces(seg);
+
+        let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
+        let in_query = query_range
+            .as_ref()
+            .is_some_and(|r| a < r.end && b > r.start);
+
+        let mut el = div().child(seg_text);
+
+        if in_word {
+            if let Some(mut c) = word_color {
+                c.a = if theme.is_dark { 0.22 } else { 0.16 };
+                el = el.bg(c);
+            }
+        }
+
+        if in_query {
+            el = el
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.colors.accent);
+        }
+
+        container = container.child(el);
+    }
+
+    container.into_any_element()
+}
+
+fn preserve_spaces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            ' ' => out.push('\u{00A0}'),
+            '\t' => out.push_str("\u{00A0}\u{00A0}\u{00A0}\u{00A0}"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usize>> {
+    if needle.is_empty() {
+        return Some(0..0);
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return None;
+    }
+
+    'outer: for start in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
+            let haystack_byte = haystack_bytes[start + offset];
+            if haystack_byte.to_ascii_lowercase() != needle_byte.to_ascii_lowercase() {
+                continue 'outer;
+            }
+        }
+        return Some(start..(start + needle_bytes.len()));
+    }
+
+    None
 }
 
 fn diff_line_colors(

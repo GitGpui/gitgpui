@@ -10,5 +10,5 @@ workspace = true
 
 [dependencies]
 gitgpui-core = { path = "../gitgpui-core" }
-serde = { version = "1.0.218", features = ["derive"] }
-serde_json = "1.0.140"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"

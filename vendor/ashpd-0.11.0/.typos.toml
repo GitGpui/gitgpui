@@ -1,4 +1,0 @@
-[default.extend-words]
-# Ignore false-positives
-eis = "eis"
-datas = "datas"
