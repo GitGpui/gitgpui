@@ -27,3 +27,6 @@ repository = "https://github.com/<your-org>/gitgpui"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[patch.crates-io]
+gpui = { path = "crates/vendor/gpui" }
