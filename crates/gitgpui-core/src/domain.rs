@@ -111,6 +111,13 @@ pub struct Diff {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffText {
+    pub path: PathBuf,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
     pub text: String,

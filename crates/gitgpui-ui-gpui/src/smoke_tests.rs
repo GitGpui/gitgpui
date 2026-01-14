@@ -221,6 +221,90 @@ fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     });
 }
 
+struct PanelLayoutTestView {
+    theme: AppTheme,
+    handle: gpui::UniformListScrollHandle,
+}
+
+impl PanelLayoutTestView {
+    fn new() -> Self {
+        Self {
+            theme: AppTheme::zed_ayu_dark(),
+            handle: gpui::UniformListScrollHandle::default(),
+        }
+    }
+}
+
+impl gpui::Render for PanelLayoutTestView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+
+        let header = div().id("diff_header").h(px(24.0)).child("Header");
+        let list = gpui::uniform_list(
+            "diff_list",
+            50,
+            cx.processor(
+                |_this: &mut PanelLayoutTestView,
+                 range: std::ops::Range<usize>,
+                 _window: &mut gpui::Window,
+                 _cx: &mut gpui::Context<PanelLayoutTestView>| {
+                    range
+                        .map(|ix| {
+                            div()
+                                .id(ix)
+                                .h(px(20.0))
+                                .px_2()
+                                .child(format!("Row {ix}"))
+                                .into_any_element()
+                        })
+                        .collect::<Vec<_>>()
+                },
+            ),
+        )
+        .h_full()
+        .track_scroll(self.handle.clone());
+
+        let scroll_handle = self.handle.0.borrow().base_handle.clone();
+
+        let body = div()
+            .id("diff_body")
+            .debug_selector(|| "diff_body".to_string())
+            .flex()
+            .flex_col()
+            .h_full()
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .relative()
+                    .child(list)
+                    .child(zed::Scrollbar::new("diff_scrollbar_test", scroll_handle).render(theme)),
+            );
+
+        div()
+            .size_full()
+            .bg(theme.colors.window_bg)
+            .child(zed::panel(theme, "Panel", None, body).flex_1().h_full())
+    }
+}
+
+#[gpui::test]
+fn panel_allows_flex_body_to_have_height(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(|_window, _cx| PanelLayoutTestView::new());
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let bounds = cx
+        .debug_bounds("diff_body")
+        .expect("expected diff_body to be painted");
+    assert!(bounds.size.height > px(50.0));
+}
+
 #[gpui::test]
 fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));

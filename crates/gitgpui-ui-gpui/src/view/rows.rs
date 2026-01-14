@@ -609,15 +609,33 @@ impl GitGpuiView {
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         range
-            .filter_map(|visible_ix| {
-                let src_ix = this.diff_visible_indices.get(visible_ix).copied()?;
-                let line = this.diff_cache.get(src_ix)?;
-                Some((visible_ix, src_ix, line))
-            })
-            .map(|(visible_ix, src_ix, line)| {
+            .map(|visible_ix| {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                let Some(src_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                    return div()
+                        .id(("diff_missing", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+                let Some(line) = this.diff_cache.get(src_ix) else {
+                    return div()
+                        .id(("diff_oob", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
 
                 let click_kind = if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
                     DiffClickKind::HunkHeader
@@ -650,6 +668,37 @@ impl GitGpuiView {
                     &word_ranges,
                     cx,
                 )
+            })
+            .collect()
+    }
+
+    pub(super) fn render_file_diff_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .map(|ix| {
+                let selected = matches!(this.diff_selection_scope, DiffSelectionScope::File)
+                    && this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| ix >= a.min(b) && ix <= a.max(b));
+
+                let Some(row) = this.file_diff_cache.get(ix) else {
+                    return div()
+                        .id(("file_diff_oob", ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+
+                file_diff_row(theme, ix, row, selected, cx)
             })
             .collect()
     }
@@ -1314,6 +1363,97 @@ fn diff_row(
             )
             .into_any_element(),
     }
+}
+
+fn file_diff_row(
+    theme: AppTheme,
+    ix: usize,
+    row: &gitgpui_core::file_diff::FileDiffRow,
+    selected: bool,
+    cx: &mut gpui::Context<GitGpuiView>,
+) -> AnyElement {
+    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        this.handle_file_diff_row_click(ix, e.modifiers().shift);
+        cx.notify();
+    });
+
+    let (ctx_bg, ctx_fg, ctx_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Context);
+    let (add_bg, add_fg, add_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Add);
+    let (rem_bg, rem_fg, rem_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Remove);
+
+    let (left_bg, left_fg, left_gutter) = match row.kind {
+        gitgpui_core::file_diff::FileDiffRowKind::Remove
+        | gitgpui_core::file_diff::FileDiffRowKind::Modify => (rem_bg, rem_fg, rem_gutter),
+        _ => (ctx_bg, ctx_fg, ctx_gutter),
+    };
+    let (right_bg, right_fg, right_gutter) = match row.kind {
+        gitgpui_core::file_diff::FileDiffRowKind::Add
+        | gitgpui_core::file_diff::FileDiffRowKind::Modify => (add_bg, add_fg, add_gutter),
+        _ => (ctx_bg, ctx_fg, ctx_gutter),
+    };
+
+    let old_no = row.old_line.map(|n| n.to_string()).unwrap_or_default();
+    let new_no = row.new_line.map(|n| n.to_string()).unwrap_or_default();
+    let old_text = preserve_spaces(row.old.as_deref().unwrap_or(""));
+    let new_text = preserve_spaces(row.new.as_deref().unwrap_or(""));
+
+    let mut el = div()
+        .id(("file_diff_row", ix))
+        .h(px(20.0))
+        .flex()
+        .items_center()
+        .font_family("monospace")
+        .text_xs()
+        .on_click(on_click)
+        .child(
+            div()
+                .w(px(44.0))
+                .px_2()
+                .bg(left_bg)
+                .text_color(left_gutter)
+                .whitespace_nowrap()
+                .child(old_no),
+        )
+        .child(
+            div()
+                .w(px(44.0))
+                .px_2()
+                .bg(right_bg)
+                .text_color(right_gutter)
+                .whitespace_nowrap()
+                .child(new_no),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .px_2()
+                .bg(left_bg)
+                .text_color(left_fg)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(old_text),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .px_2()
+                .bg(right_bg)
+                .text_color(right_fg)
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(new_text),
+        );
+
+    if selected {
+        el = el.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
+    }
+
+    el.into_any_element()
 }
 
 fn render_diff_text_segments(

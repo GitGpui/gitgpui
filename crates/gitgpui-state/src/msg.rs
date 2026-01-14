@@ -174,6 +174,11 @@ pub enum Msg {
         target: DiffTarget,
         result: Result<Diff, Error>,
     },
+    DiffFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<Option<FileDiffText>, Error>,
+    },
 
     RepoActionFinished {
         repo_id: RepoId,
@@ -405,6 +410,16 @@ impl std::fmt::Debug for Msg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
+            Msg::DiffFileLoaded {
+                repo_id,
+                target,
+                result,
+            } => f
+                .debug_struct("DiffFileLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
             Msg::RepoActionFinished { repo_id, result } => f
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
@@ -473,6 +488,10 @@ pub enum Effect {
         commit_id: CommitId,
     },
     LoadDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    LoadDiffFile {
         repo_id: RepoId,
         target: DiffTarget,
     },

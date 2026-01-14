@@ -3,7 +3,7 @@ use crate::model::{
 };
 use crate::msg::{Effect, Msg, StoreEvent};
 use crate::session;
-use gitgpui_core::domain::{Diff, RepoSpec};
+use gitgpui_core::domain::{Diff, DiffTarget, RepoSpec};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{CommandOutput, GitBackend, GitRepository};
 use std::collections::HashMap;
@@ -207,7 +207,24 @@ fn reduce(
 
             repo_state.diff_target = Some(target.clone());
             repo_state.diff = Loadable::Loading;
-            vec![Effect::LoadDiff { repo_id, target }]
+            let supports_file = matches!(
+                &target,
+                DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+            );
+            repo_state.diff_file = if supports_file {
+                Loadable::Loading
+            } else {
+                Loadable::NotLoaded
+            };
+
+            let mut effects = vec![Effect::LoadDiff {
+                repo_id,
+                target: target.clone(),
+            }];
+            if supports_file {
+                effects.push(Effect::LoadDiffFile { repo_id, target });
+            }
+            effects
         }
 
         Msg::LoadBlame { repo_id, path, rev } => {
@@ -235,6 +252,7 @@ fn reduce(
 
             repo_state.diff_target = None;
             repo_state.diff = Loadable::NotLoaded;
+            repo_state.diff_file = Loadable::NotLoaded;
             Vec::new()
         }
 
@@ -471,6 +489,25 @@ fn reduce(
                 && repo_state.diff_target.as_ref() == Some(&target)
             {
                 repo_state.diff = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::DiffFileLoaded {
+            repo_id,
+            target,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.diff_target.as_ref() == Some(&target)
+            {
+                repo_state.diff_file = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -1113,9 +1150,13 @@ mod tests {
         let repo_state = state.repos.first().expect("repo state to exist");
         assert_eq!(repo_state.diff_target, Some(target.clone()));
         assert!(repo_state.diff.is_loading());
+        assert!(repo_state.diff_file.is_loading());
         assert!(matches!(
             effects.as_slice(),
-            [Effect::LoadDiff { repo_id: RepoId(1), target: t }] if t == &target
+            [
+                Effect::LoadDiff { repo_id: RepoId(1), target: a },
+                Effect::LoadDiffFile { repo_id: RepoId(1), target: b },
+            ] if a == &target && b == &target
         ));
     }
 
@@ -1135,6 +1176,7 @@ mod tests {
             area: gitgpui_core::domain::DiffArea::Unstaged,
         });
         repo_state.diff = Loadable::Loading;
+        repo_state.diff_file = Loadable::Loading;
         state.repos.push(repo_state);
         state.active_repo = Some(RepoId(1));
 
@@ -1148,6 +1190,7 @@ mod tests {
         let repo_state = state.repos.first().expect("repo state to exist");
         assert!(repo_state.diff_target.is_none());
         assert!(matches!(repo_state.diff, Loadable::NotLoaded));
+        assert!(matches!(repo_state.diff_file, Loadable::NotLoaded));
         assert!(effects.is_empty());
     }
 
@@ -1535,6 +1578,19 @@ fn schedule_effect(
                         .diff_unified(&target)
                         .map(|text| Diff::from_unified(target.clone(), &text));
                     let _ = msg_tx.send(Msg::DiffLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    });
+                });
+            }
+        }
+
+        Effect::LoadDiffFile { repo_id, target } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let result = repo.diff_file_text(&target);
+                    let _ = msg_tx.send(Msg::DiffFileLoaded {
                         repo_id,
                         target,
                         result,

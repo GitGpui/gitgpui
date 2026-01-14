@@ -64,6 +64,11 @@ pub trait GitRepository: Send + Sync {
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
     fn status(&self) -> Result<RepoStatus>;
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
+    fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "file diff view is not implemented for this backend",
+        )))
+    }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
     fn delete_branch(&self, name: &str) -> Result<()>;

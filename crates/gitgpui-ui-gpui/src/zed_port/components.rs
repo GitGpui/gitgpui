@@ -41,7 +41,15 @@ pub fn panel(
         .rounded(px(theme.radii.panel))
         .overflow_hidden()
         .child(header)
-        .child(div().flex_1().p_3().child(content))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.0))
+                .p_3()
+                .child(div().flex_1().min_h(px(0.0)).child(content)),
+        )
 }
 
 pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> Div {
@@ -90,4 +98,3 @@ pub fn empty_state(
                 .child(message.into()),
         )
 }
-

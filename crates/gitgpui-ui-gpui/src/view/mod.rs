@@ -3,6 +3,7 @@ use gitgpui_core::diff::{AnnotatedDiffLine, annotate_unified};
 use gitgpui_core::domain::{
     Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
 };
+use gitgpui_core::file_diff::{FileDiffRow, side_by_side_rows};
 use gitgpui_core::services::PullMode;
 use gitgpui_state::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoState};
 use gitgpui_state::msg::{Msg, StoreEvent};
@@ -38,6 +39,18 @@ const HISTORY_COL_SHA_PX: f32 = 88.0;
 enum DiffViewMode {
     Inline,
     Split,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffDisplayMode {
+    File,
+    Patch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffSelectionScope {
+    File,
+    Patch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,7 +129,9 @@ pub struct GitGpuiView {
     theme: AppTheme,
 
     diff_view: DiffViewMode,
+    diff_display: DiffDisplayMode,
     diff_cache: Vec<AnnotatedDiffLine>,
+    file_diff_cache: Vec<FileDiffRow>,
     diff_search_input: Entity<zed::TextInput>,
     diff_search_raw: String,
     diff_search_debounced: String,
@@ -129,6 +144,7 @@ pub struct GitGpuiView {
     diff_file_stats: HashMap<usize, (usize, usize)>,
     diff_selection_anchor: Option<usize>,
     diff_selection_range: Option<(usize, usize)>,
+    diff_selection_scope: DiffSelectionScope,
     diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
 
     history_tab: HistoryTab,
@@ -283,7 +299,9 @@ impl GitGpuiView {
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
             diff_view: DiffViewMode::Inline,
+            diff_display: DiffDisplayMode::File,
             diff_cache: Vec::new(),
+            file_diff_cache: Vec::new(),
             diff_search_input,
             diff_search_raw: String::new(),
             diff_search_debounced: String::new(),
@@ -296,6 +314,7 @@ impl GitGpuiView {
             diff_file_stats: HashMap::new(),
             diff_selection_anchor: None,
             diff_selection_range: None,
+            diff_selection_scope: DiffSelectionScope::Patch,
             diff_hunk_picker_search_input: None,
             history_tab: HistoryTab::Log,
             history_search_input,
@@ -337,6 +356,7 @@ impl GitGpuiView {
 
         view.set_theme(initial_theme, cx);
         view.rebuild_diff_cache();
+        view.rebuild_file_diff_cache();
         view
     }
 
@@ -622,6 +642,7 @@ impl GitGpuiView {
         self.diff_file_stats.clear();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_selection_scope = DiffSelectionScope::Patch;
         let Some(repo) = self.active_repo() else {
             return;
         };
@@ -633,7 +654,49 @@ impl GitGpuiView {
         self.rebuild_diff_word_highlights();
     }
 
+    fn rebuild_file_diff_cache(&mut self) {
+        self.file_diff_cache.clear();
+
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let Loadable::Ready(Some(file)) = &repo.diff_file else {
+            let supported = repo.diff_target.as_ref().is_some_and(|t| {
+                matches!(
+                    t,
+                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                )
+            });
+            if !supported && self.diff_display == DiffDisplayMode::File {
+                self.diff_display = DiffDisplayMode::Patch;
+            }
+            return;
+        };
+
+        let old = file.old.as_deref().unwrap_or("");
+        let new = file.new.as_deref().unwrap_or("");
+
+        let old_len = old.lines().count();
+        let new_len = new.lines().count();
+        let too_large = old_len.saturating_add(new_len) > 20_000;
+        if too_large {
+            return;
+        }
+
+        self.file_diff_cache = side_by_side_rows(old, new);
+    }
+
     fn apply_state_snapshot(&mut self, next: AppState, cx: &mut gpui::Context<Self>) {
+        let prev_diff_target = self
+            .active_repo()
+            .and_then(|r| r.diff_target.as_ref())
+            .cloned();
+        let next_diff_target = next
+            .active_repo
+            .and_then(|id| next.repos.iter().find(|r| r.id == id))
+            .and_then(|r| r.diff_target.as_ref())
+            .cloned();
+
         for next_repo in &next.repos {
             let (old_diag_len, old_cmd_len) = self
                 .state
@@ -673,8 +736,30 @@ impl GitGpuiView {
             }
         }
 
+        if prev_diff_target != next_diff_target {
+            let supported = next_diff_target.as_ref().is_some_and(|t| {
+                matches!(
+                    t,
+                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                )
+            });
+            self.diff_display = if supported {
+                DiffDisplayMode::File
+            } else {
+                DiffDisplayMode::Patch
+            };
+            self.diff_selection_anchor = None;
+            self.diff_selection_range = None;
+            self.diff_selection_scope = if supported {
+                DiffSelectionScope::File
+            } else {
+                DiffSelectionScope::Patch
+            };
+        }
+
         self.state = next;
         self.rebuild_diff_cache();
+        self.rebuild_file_diff_cache();
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
@@ -849,6 +934,8 @@ impl GitGpuiView {
         kind: DiffClickKind,
         shift: bool,
     ) {
+        self.diff_selection_scope = DiffSelectionScope::Patch;
+
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
             self.diff_selection_anchor = None;
@@ -890,6 +977,31 @@ impl GitGpuiView {
         self.diff_selection_range = Some((clicked_visible_ix, end));
     }
 
+    fn handle_file_diff_row_click(&mut self, clicked_ix: usize, shift: bool) {
+        self.diff_selection_scope = DiffSelectionScope::File;
+
+        let list_len = self.file_diff_cache.len();
+        if list_len == 0 {
+            self.diff_selection_anchor = None;
+            self.diff_selection_range = None;
+            return;
+        }
+
+        let clicked_ix = clicked_ix.min(list_len - 1);
+
+        if shift {
+            if let Some(anchor) = self.diff_selection_anchor {
+                let a = anchor.min(clicked_ix);
+                let b = anchor.max(clicked_ix);
+                self.diff_selection_range = Some((a, b));
+                return;
+            }
+        }
+
+        self.diff_selection_anchor = Some(clicked_ix);
+        self.diff_selection_range = Some((clicked_ix, clicked_ix));
+    }
+
     fn diff_next_boundary_visible_ix(
         &self,
         from_visible_ix: usize,
@@ -906,28 +1018,67 @@ impl GitGpuiView {
     }
 
     fn diff_selected_text_for_clipboard(&self) -> String {
-        if self.diff_cache.is_empty() || self.diff_visible_indices.is_empty() {
-            return String::new();
-        }
+        match self.diff_display {
+            DiffDisplayMode::Patch => {
+                if self.diff_cache.is_empty() || self.diff_visible_indices.is_empty() {
+                    return String::new();
+                }
 
-        let (start, end) = self
-            .diff_selection_range
-            .unwrap_or((0, self.diff_visible_indices.len().saturating_sub(1)));
-        let start = start.min(self.diff_visible_indices.len().saturating_sub(1));
-        let end = end.min(self.diff_visible_indices.len().saturating_sub(1));
-        let (start, end) = (start.min(end), start.max(end));
+                let (start, end) = if matches!(self.diff_selection_scope, DiffSelectionScope::Patch)
+                {
+                    self.diff_selection_range.unwrap_or((
+                        0,
+                        self.diff_visible_indices.len().saturating_sub(1),
+                    ))
+                } else {
+                    (0, self.diff_visible_indices.len().saturating_sub(1))
+                };
 
-        let mut out = String::new();
-        for visible_ix in start..=end {
-            let Some(&src_ix) = self.diff_visible_indices.get(visible_ix) else {
-                continue;
-            };
-            if let Some(line) = self.diff_cache.get(src_ix) {
-                out.push_str(&line.text);
-                out.push('\n');
+                let start = start.min(self.diff_visible_indices.len().saturating_sub(1));
+                let end = end.min(self.diff_visible_indices.len().saturating_sub(1));
+                let (start, end) = (start.min(end), start.max(end));
+
+                let mut out = String::new();
+                for visible_ix in start..=end {
+                    let Some(&src_ix) = self.diff_visible_indices.get(visible_ix) else {
+                        continue;
+                    };
+                    if let Some(line) = self.diff_cache.get(src_ix) {
+                        out.push_str(&line.text);
+                        out.push('\n');
+                    }
+                }
+                out
+            }
+            DiffDisplayMode::File => {
+                if self.file_diff_cache.is_empty() {
+                    return String::new();
+                }
+
+                let (start, end) = if matches!(self.diff_selection_scope, DiffSelectionScope::File) {
+                    self.diff_selection_range
+                        .unwrap_or((0, self.file_diff_cache.len().saturating_sub(1)))
+                } else {
+                    (0, self.file_diff_cache.len().saturating_sub(1))
+                };
+
+                let start = start.min(self.file_diff_cache.len().saturating_sub(1));
+                let end = end.min(self.file_diff_cache.len().saturating_sub(1));
+                let (start, end) = (start.min(end), start.max(end));
+
+                let mut out = String::new();
+                for ix in start..=end {
+                    let Some(row) = self.file_diff_cache.get(ix) else {
+                        continue;
+                    };
+                    if let Some(s) = row.new.as_deref().or(row.old.as_deref()) {
+                        out.push_str(s);
+                        out.push('\n');
+                    }
+                }
+                out
             }
         }
-        out
     }
 
     fn update_history_search_debounce(&mut self, cx: &mut gpui::Context<Self>) {
@@ -1102,6 +1253,7 @@ impl Render for GitGpuiView {
                     .flex()
                     .flex_col()
                     .flex_1()
+                    .min_h(px(0.0))
                     .gap_2()
                     .child(div().px_3().pt_3().child(self.repo_tabs_bar(cx)))
                     .child(div().px_3().child(self.open_repo_panel(cx)))
@@ -1112,12 +1264,14 @@ impl Render for GitGpuiView {
                             .flex_row()
                             .gap_3()
                             .flex_1()
+                            .min_h(px(0.0))
                             .px_3()
                             .pb_3()
                             .child(
                                 div()
                                     .id("sidebar_scroll")
                                     .w(px(280.0))
+                                    .min_h(px(0.0))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.sidebar_scroll)
                                     .child(self.sidebar(cx))
@@ -1129,11 +1283,20 @@ impl Render for GitGpuiView {
                                         .render(theme),
                                     ),
                             )
-                            .child(main_view)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .min_h(px(0.0))
+                                    .child(main_view),
+                            )
                             .child(
                                 div()
                                     .id("commit_scroll")
                                     .w(px(420.0))
+                                    .min_h(px(0.0))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.commit_scroll)
                                     .child(self.commit_details_view(cx))

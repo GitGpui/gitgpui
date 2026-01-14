@@ -1,6 +1,7 @@
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileStatus,
-    FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus,
+    FileDiffText, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
+    RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -483,6 +484,70 @@ impl GitRepository for GixRepo {
         }
     }
 
+    fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                let path_str = path.to_string_lossy();
+                let (old, new) = match area {
+                    DiffArea::Unstaged => {
+                        let old = git_show_path_utf8_optional(
+                            &self.spec.workdir,
+                            ":",
+                            path_str.as_ref(),
+                        )?;
+                        let new = read_worktree_file_utf8_optional(&self.spec.workdir, path)?;
+                        (old, new)
+                    }
+                    DiffArea::Staged => {
+                        let old = git_show_path_utf8_optional(
+                            &self.spec.workdir,
+                            "HEAD:",
+                            path_str.as_ref(),
+                        )?;
+                        let new = git_show_path_utf8_optional(
+                            &self.spec.workdir,
+                            ":",
+                            path_str.as_ref(),
+                        )?;
+                        (old, new)
+                    }
+                };
+
+                Ok(Some(FileDiffText {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
+            DiffTarget::Commit { commit_id, path } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let path_str = path.to_string_lossy();
+                let parent = git_first_parent_optional(&self.spec.workdir, commit_id.as_ref())?;
+
+                let old = match parent {
+                    Some(parent) => {
+                        let spec = format!("{parent}:");
+                        git_show_path_utf8_optional(&self.spec.workdir, &spec, path_str.as_ref())?
+                    }
+                    None => None,
+                };
+                let new = {
+                    let spec = format!("{}:", commit_id.as_ref());
+                    git_show_path_utf8_optional(&self.spec.workdir, &spec, path_str.as_ref())?
+                };
+
+                Ok(Some(FileDiffText {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
+        }
+    }
+
     fn create_branch(&self, _name: &str, _target: &gitgpui_core::domain::CommitId) -> Result<()> {
         let _ = _target;
         let mut cmd = Command::new("git");
@@ -738,6 +803,92 @@ impl GitRepository for GixRepo {
             "gix backend skeleton: discard not implemented yet",
         )))
     }
+}
+
+fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {
+    let full = workdir.join(path);
+    match std::fs::read(&full) {
+        Ok(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8"))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+    }
+}
+
+fn git_show_path_utf8_optional(workdir: &Path, rev_prefix: &str, path: &str) -> Result<Option<String>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("--no-pager")
+        .arg("show")
+        .arg("--no-ext-diff")
+        .arg("--pretty=format:")
+        .arg(format!("{rev_prefix}{path}"));
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        return String::from_utf8(output.stdout)
+            .map(Some)
+            .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.to_string();
+    if git_blob_missing_for_show(&stderr) {
+        return Ok(None);
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git show failed: {}",
+        stderr.trim()
+    ))))
+}
+
+fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<String>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("--no-pager")
+        .arg("rev-parse")
+        .arg(format!("{commit}^"));
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Ok(Some(stdout.trim().to_string()));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.to_string();
+    if stderr.contains("unknown revision") || stderr.contains("bad revision") || stderr.contains("bad object")
+    {
+        return Ok(None);
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git rev-parse failed: {}",
+        stderr.trim()
+    ))))
+}
+
+fn git_blob_missing_for_show(stderr: &str) -> bool {
+    let s = stderr;
+    s.contains("does not exist in") // `Path 'x' does not exist in 'REV'`
+        || s.contains("exists on disk, but not in") // common suggestion text
+        || s.contains("Path '") && s.contains("' does not exist")
+        || s.contains("fatal: invalid object name")
+        || s.contains("bad object")
+        || s.contains("unknown revision")
+        || s.contains("bad revision")
 }
 
 fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {

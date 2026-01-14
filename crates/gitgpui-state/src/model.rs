@@ -38,6 +38,7 @@ pub struct RepoState {
     pub commit_details: Loadable<CommitDetails>,
     pub diff_target: Option<DiffTarget>,
     pub diff: Loadable<Diff>,
+    pub diff_file: Loadable<Option<FileDiffText>>,
 
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
@@ -65,6 +66,7 @@ impl RepoState {
             commit_details: Loadable::NotLoaded,
             diff_target: None,
             diff: Loadable::NotLoaded,
+            diff_file: Loadable::NotLoaded,
             last_error: None,
             diagnostics: Vec::new(),
             command_log: Vec::new(),
