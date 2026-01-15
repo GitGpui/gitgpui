@@ -1471,66 +1471,36 @@ impl GitGpuiView {
                                     .child("No files.")
                                     .into_any_element()
                             } else {
-                                let repo_id = repo.id;
-                                let commit_id_for_list = details.id.clone();
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .children(details.files.iter().enumerate().map(|(ix, f)| {
-                                        let (label, color) = match f.kind {
-                                            FileStatusKind::Added => {
-                                                ("Added", theme.colors.success)
-                                            }
-                                            FileStatusKind::Modified => {
-                                                ("Modified", theme.colors.accent)
-                                            }
-                                            FileStatusKind::Deleted => {
-                                                ("Deleted", theme.colors.danger)
-                                            }
-                                            FileStatusKind::Renamed => {
-                                                ("Renamed", theme.colors.accent)
-                                            }
-                                            FileStatusKind::Untracked => {
-                                                ("Untracked", theme.colors.warning)
-                                            }
-                                            FileStatusKind::Conflicted => {
-                                                ("Conflicted", theme.colors.danger)
-                                            }
-                                        };
+                                use std::hash::{Hash, Hasher};
+                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                details.id.as_ref().hash(&mut hasher);
+                                let commit_key = hasher.finish();
 
-                                        let path = f.path.clone();
-                                        let path_for_click = path.clone();
-                                        let commit_id = commit_id_for_list.clone();
-                                        div()
-                                            .id(("commit_file", ix))
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded(px(theme.radii.row))
-                                            .hover(move |s| s.bg(theme.colors.hover))
-                                            .child(zed::pill(theme, label, color))
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .line_clamp(1)
-                                                    .child(path.display().to_string()),
-                                            )
-                                            .on_click(cx.listener(
-                                                move |this, _e: &ClickEvent, _w, cx| {
-                                                    this.store.dispatch(Msg::SelectDiff {
-                                                        repo_id,
-                                                        target: DiffTarget::Commit {
-                                                            commit_id: commit_id.clone(),
-                                                            path: Some(path_for_click.clone()),
-                                                        },
-                                                    });
-                                                    cx.notify();
-                                                },
-                                            ))
-                                    }))
+                                let list = uniform_list(
+                                    ("commit_files", commit_key),
+                                    details.files.len(),
+                                    cx.processor(Self::render_commit_file_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.commit_files_scroll.clone());
+
+                                let scroll_handle =
+                                    self.commit_files_scroll.0.borrow().base_handle.clone();
+
+                                div()
+                                    .id(("commit_files_scroll_container", commit_key))
+                                    .relative()
+                                    .h(px(240.0))
+                                    .min_h(px(0.0))
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new(
+                                            ("commit_files_scrollbar", commit_key),
+                                            scroll_handle,
+                                        )
+                                        .render(theme),
+                                    )
                                     .into_any_element()
                             };
 
@@ -2413,29 +2383,35 @@ impl GitGpuiView {
             )
             .child(controls);
 
-        let body: AnyElement = match repo.map(|r| &r.diff) {
+        let body: AnyElement = match repo {
             None => zed::empty_state(theme, "Diff", "No repository.").into_any_element(),
-            Some(Loadable::NotLoaded) => {
-                zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
-            }
-            Some(Loadable::Loading) => zed::empty_state(theme, "Diff", "Loading…").into_any_element(),
-            Some(Loadable::Error(e)) => zed::empty_state(theme, "Diff", e.clone()).into_any_element(),
-            Some(Loadable::Ready(diff)) => {
-                if self.diff_cache.len() != diff.lines.len() {
-                    self.rebuild_diff_cache();
+            Some(repo) => match &repo.diff {
+                Loadable::NotLoaded => {
+                    zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
                 }
-                self.update_diff_search_debounce(cx);
-                self.ensure_diff_visible_indices();
-                if self.diff_cache.is_empty() {
-                    zed::empty_state(theme, "Diff", "No differences.").into_any_element()
-                } else if !self.diff_visible_query.is_empty() && self.diff_query_match_count == 0 {
-                    zed::empty_state(theme, "Diff", "No matches.").into_any_element()
-                } else if self.diff_visible_indices.is_empty() {
-                    zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
-                } else {
-                    let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                    let markers = self.diff_scrollbar_markers_patch();
-                    match self.diff_view {
+                Loadable::Loading => zed::empty_state(theme, "Diff", "Loading…").into_any_element(),
+                Loadable::Error(e) => zed::empty_state(theme, "Diff", e.clone()).into_any_element(),
+                Loadable::Ready(diff) => {
+                    if self.diff_cache_repo_id != Some(repo.id)
+                        || self.diff_cache_rev != repo.diff_rev
+                        || self.diff_cache_target != repo.diff_target
+                        || self.diff_cache.len() != diff.lines.len()
+                    {
+                        self.rebuild_diff_cache();
+                    }
+
+                    self.update_diff_search_debounce(cx);
+                    self.ensure_diff_visible_indices();
+                    if self.diff_cache.is_empty() {
+                        zed::empty_state(theme, "Diff", "No differences.").into_any_element()
+                    } else if !self.diff_visible_query.is_empty() && self.diff_query_match_count == 0 {
+                        zed::empty_state(theme, "Diff", "No matches.").into_any_element()
+                    } else if self.diff_visible_indices.is_empty() {
+                        zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
+                    } else {
+                        let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                        let markers = self.diff_scrollbar_markers_patch();
+                        match self.diff_view {
                         DiffViewMode::Inline => {
                             let list = uniform_list(
                                 "diff",
@@ -2520,8 +2496,9 @@ impl GitGpuiView {
                                 .into_any_element()
                         }
                     }
+                    }
                 }
-            }
+            },
         };
 
         div()

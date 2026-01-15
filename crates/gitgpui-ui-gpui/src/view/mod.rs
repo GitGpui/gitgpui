@@ -149,6 +149,9 @@ pub struct GitGpuiView {
     theme: AppTheme,
 
     diff_view: DiffViewMode,
+    diff_cache_repo_id: Option<RepoId>,
+    diff_cache_rev: u64,
+    diff_cache_target: Option<DiffTarget>,
     diff_cache: Vec<AnnotatedDiffLine>,
     diff_file_for_src_ix: Vec<Option<String>>,
     diff_split_cache: Vec<PatchSplitRow>,
@@ -207,6 +210,7 @@ pub struct GitGpuiView {
     output_scroll: UniformListScrollHandle,
     conflicts_scroll: UniformListScrollHandle,
     blame_scroll: UniformListScrollHandle,
+    commit_files_scroll: UniformListScrollHandle,
     sidebar_scroll: ScrollHandle,
     commit_scroll: ScrollHandle,
 
@@ -322,6 +326,9 @@ impl GitGpuiView {
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
             diff_view: DiffViewMode::Split,
+            diff_cache_repo_id: None,
+            diff_cache_rev: 0,
+            diff_cache_target: None,
             diff_cache: Vec::new(),
             diff_file_for_src_ix: Vec::new(),
             diff_split_cache: Vec::new(),
@@ -375,6 +382,7 @@ impl GitGpuiView {
             output_scroll: UniformListScrollHandle::default(),
             conflicts_scroll: UniformListScrollHandle::default(),
             blame_scroll: UniformListScrollHandle::default(),
+            commit_files_scroll: UniformListScrollHandle::default(),
             sidebar_scroll: ScrollHandle::new(),
             commit_scroll: ScrollHandle::new(),
             toasts: Vec::new(),
@@ -662,6 +670,9 @@ impl GitGpuiView {
 
     fn rebuild_diff_cache(&mut self) {
         self.diff_cache.clear();
+        self.diff_cache_repo_id = None;
+        self.diff_cache_rev = 0;
+        self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
         self.diff_split_cache.clear();
         self.diff_split_cache_len = 0;
@@ -674,13 +685,27 @@ impl GitGpuiView {
         self.diff_text_segments_cache.clear();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
-        let Some(repo) = self.active_repo() else {
+
+        let (repo_id, diff_rev, diff_target, annotated) = {
+            let Some(repo) = self.active_repo() else {
+                return;
+            };
+            let annotated = match &repo.diff {
+                Loadable::Ready(diff) => Some(annotate_unified(diff)),
+                _ => None,
+            };
+            (repo.id, repo.diff_rev, repo.diff_target.clone(), annotated)
+        };
+
+        self.diff_cache_repo_id = Some(repo_id);
+        self.diff_cache_rev = diff_rev;
+        self.diff_cache_target = diff_target;
+
+        let Some(annotated) = annotated else {
             return;
         };
-        let Loadable::Ready(diff) = &repo.diff else {
-            return;
-        };
-        self.diff_cache = annotate_unified(diff);
+
+        self.diff_cache = annotated;
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(&self.diff_cache);
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
         self.rebuild_diff_word_highlights();
@@ -736,13 +761,13 @@ impl GitGpuiView {
     }
 
     fn apply_state_snapshot(&mut self, next: AppState, cx: &mut gpui::Context<Self>) {
+        let next_repo_id = next.active_repo;
+        let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
+        let next_diff_target = next_repo.and_then(|r| r.diff_target.as_ref()).cloned();
+        let next_diff_rev = next_repo.map(|r| r.diff_rev).unwrap_or(0);
+
         let prev_diff_target = self
             .active_repo()
-            .and_then(|r| r.diff_target.as_ref())
-            .cloned();
-        let next_diff_target = next
-            .active_repo
-            .and_then(|id| next.repos.iter().find(|r| r.id == id))
             .and_then(|r| r.diff_target.as_ref())
             .cloned();
 
@@ -791,7 +816,13 @@ impl GitGpuiView {
         }
 
         self.state = next;
-        self.rebuild_diff_cache();
+
+        let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
+            || self.diff_cache_rev != next_diff_rev
+            || self.diff_cache_target != next_diff_target;
+        if should_rebuild_diff_cache {
+            self.rebuild_diff_cache();
+        }
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {

@@ -361,6 +361,84 @@ impl GitGpuiView {
             .collect()
     }
 
+    pub(super) fn render_commit_file_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let Some(selected_id) = repo.selected_commit.as_ref() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(details) = &repo.commit_details else {
+            return Vec::new();
+        };
+        if &details.id != selected_id {
+            return Vec::new();
+        }
+
+        let theme = this.theme;
+        let repo_id = repo.id;
+
+        range
+            .filter_map(|ix| details.files.get(ix).map(|f| (ix, f)))
+            .map(|(ix, f)| {
+                let commit_id = details.id.clone();
+                let (label, color) = match f.kind {
+                    FileStatusKind::Added => ("Added", theme.colors.success),
+                    FileStatusKind::Modified => ("Modified", theme.colors.accent),
+                    FileStatusKind::Deleted => ("Deleted", theme.colors.danger),
+                    FileStatusKind::Renamed => ("Renamed", theme.colors.accent),
+                    FileStatusKind::Untracked => ("Untracked", theme.colors.warning),
+                    FileStatusKind::Conflicted => ("Conflicted", theme.colors.danger),
+                };
+
+                let path = f.path.clone();
+                let selected = repo.diff_target.as_ref().is_some_and(|t| match t {
+                    DiffTarget::Commit {
+                        commit_id: t_commit_id,
+                        path: Some(t_path),
+                    } => t_commit_id == &commit_id && t_path == &path,
+                    _ => false,
+                });
+                let commit_id_for_click = commit_id.clone();
+                let path_for_click = path.clone();
+
+                let mut row = div()
+                    .id(("commit_file", ix))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(theme.radii.row))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(zed::pill(theme, label, color))
+                    .child(div().text_sm().line_clamp(1).child(path.display().to_string()))
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::Commit {
+                                commit_id: commit_id_for_click.clone(),
+                                path: Some(path_for_click.clone()),
+                            },
+                        });
+                        cx.notify();
+                    }));
+
+                if selected {
+                    row = row.bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 }));
+                }
+
+                row.into_any_element()
+            })
+            .collect()
+    }
+
     pub(super) fn render_history_table_rows(
         this: &mut Self,
         range: Range<usize>,

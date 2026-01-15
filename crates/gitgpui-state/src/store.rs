@@ -492,6 +492,7 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
                 && repo_state.diff_target.as_ref() == Some(&target)
             {
+                repo_state.diff_rev = repo_state.diff_rev.wrapping_add(1);
                 repo_state.diff = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {

@@ -37,6 +37,7 @@ pub struct RepoState {
     pub selected_commit: Option<CommitId>,
     pub commit_details: Loadable<CommitDetails>,
     pub diff_target: Option<DiffTarget>,
+    pub diff_rev: u64,
     pub diff: Loadable<Diff>,
     pub diff_file: Loadable<Option<FileDiffText>>,
 
@@ -65,6 +66,7 @@ impl RepoState {
             selected_commit: None,
             commit_details: Loadable::NotLoaded,
             diff_target: None,
+            diff_rev: 0,
             diff: Loadable::NotLoaded,
             diff_file: Loadable::NotLoaded,
             last_error: None,
