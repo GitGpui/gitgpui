@@ -14,7 +14,7 @@ mod toast;
 mod tokens;
 
 pub use button::{Button, ButtonStyle};
-pub use components::{empty_state, key_value, panel, pill};
+pub use components::{empty_state, key_value, panel, pill, split_columns_header};
 pub use diff_stat::diff_stat;
 pub use picker_prompt::PickerPrompt;
 pub use split_button::{SplitButton, SplitButtonStyle};

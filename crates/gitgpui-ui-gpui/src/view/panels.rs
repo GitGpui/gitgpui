@@ -671,18 +671,44 @@ impl GitGpuiView {
                 let mut targets: Vec<usize> = Vec::new();
                 let mut current_file: Option<String> = None;
 
-                for (visible_ix, &src_ix) in self.diff_visible_indices.iter().enumerate() {
+                for (visible_ix, &ix) in self.diff_visible_indices.iter().enumerate() {
+                    let (src_ix, click_kind) = match self.diff_view {
+                        DiffViewMode::Inline => {
+                            let Some(line) = self.diff_cache.get(ix) else {
+                                continue;
+                            };
+                            let kind =
+                                if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                                    DiffClickKind::HunkHeader
+                                } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                                    && line.text.starts_with("diff --git ")
+                                {
+                                    DiffClickKind::FileHeader
+                                } else {
+                                    DiffClickKind::Line
+                                };
+                            (ix, kind)
+                        }
+                        DiffViewMode::Split => {
+                            let Some(row) = self.diff_split_cache.get(ix) else {
+                                continue;
+                            };
+                            let PatchSplitRow::Raw { src_ix, click_kind } = row else {
+                                continue;
+                            };
+                            (*src_ix, *click_kind)
+                        }
+                    };
+
                     let Some(line) = self.diff_cache.get(src_ix) else {
                         continue;
                     };
 
-                    if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-                        && line.text.starts_with("diff --git ")
-                    {
+                    if matches!(click_kind, DiffClickKind::FileHeader) {
                         current_file = parse_diff_git_header_path(&line.text);
                     }
 
-                    if !matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                    if !matches!(click_kind, DiffClickKind::HunkHeader) {
                         continue;
                     }
 
@@ -2304,20 +2330,9 @@ impl GitGpuiView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             let current = this.diff_selection_anchor.unwrap_or(0);
                             let hunks = this
-                                .diff_visible_indices
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(visible_ix, &src_ix)| {
-                                    this.diff_cache
-                                        .get(src_ix)
-                                        .is_some_and(|l| {
-                                            matches!(
-                                                l.kind,
-                                                gitgpui_core::domain::DiffLineKind::Hunk
-                                            )
-                                        })
-                                        .then_some(visible_ix)
-                                })
+                                .patch_hunk_entries()
+                                .into_iter()
+                                .map(|(visible_ix, _)| visible_ix)
                                 .collect::<Vec<_>>();
                             if let Some(&target) = hunks
                                 .iter()
@@ -2340,20 +2355,9 @@ impl GitGpuiView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             let current = this.diff_selection_anchor.unwrap_or(0);
                             let hunks = this
-                                .diff_visible_indices
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(visible_ix, &src_ix)| {
-                                    this.diff_cache
-                                        .get(src_ix)
-                                        .is_some_and(|l| {
-                                            matches!(
-                                                l.kind,
-                                                gitgpui_core::domain::DiffLineKind::Hunk
-                                            )
-                                        })
-                                        .then_some(visible_ix)
-                                })
+                                .patch_hunk_entries()
+                                .into_iter()
+                                .map(|(visible_ix, _)| visible_ix)
                                 .collect::<Vec<_>>();
                             if let Some(&target) = hunks
                                 .iter()
@@ -2527,28 +2531,98 @@ impl GitGpuiView {
                     } else if self.diff_visible_indices.is_empty() {
                         zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
                     } else {
-                        let list = uniform_list(
-                            "diff",
-                            self.diff_visible_indices.len(),
-                            cx.processor(Self::render_diff_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.diff_scroll.clone());
                         let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
                         let markers = self.diff_scrollbar_markers_patch();
-                        div()
-                            .id("diff_scroll_container")
-                            .relative()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .child(list)
-                            .child(
-                                zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                    .markers(markers)
-                                    .render(theme),
-                            )
-                            .into_any_element()
+                        match self.diff_view {
+                            DiffViewMode::Inline => {
+                                let list = uniform_list(
+                                    "diff",
+                                    self.diff_visible_indices.len(),
+                                    cx.processor(Self::render_diff_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.diff_scroll.clone());
+                                div()
+                                    .id("diff_scroll_container")
+                                    .relative()
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new("diff_scrollbar", scroll_handle)
+                                            .markers(markers)
+                                            .render(theme),
+                                    )
+                                    .into_any_element()
+                            }
+                            DiffViewMode::Split => {
+                                let count = self.diff_visible_indices.len();
+                                let left = uniform_list(
+                                    "diff_split_left",
+                                    count,
+                                    cx.processor(Self::render_diff_split_left_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.diff_scroll.clone());
+                                let right = uniform_list(
+                                    "diff_split_right",
+                                    count,
+                                    cx.processor(Self::render_diff_split_right_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.diff_scroll.clone());
+
+                                let columns_header = zed::split_columns_header(
+                                    theme,
+                                    "A (local / before)",
+                                    "B (remote / after)",
+                                );
+
+                                div()
+                                    .id("diff_split_scroll_container")
+                                    .relative()
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .flex()
+                                    .flex_col()
+                                    .child(columns_header)
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .flex()
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(left),
+                                            )
+                                            .child(
+                                                div()
+                                                    .w(px(1.0))
+                                                    .h_full()
+                                                    .bg(theme.colors.border),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(right),
+                                            ),
+                                    )
+                                    .child(
+                                        zed::Scrollbar::new("diff_scrollbar", scroll_handle)
+                                            .markers(markers)
+                                            .render(theme),
+                                    )
+                                    .into_any_element()
+                            }
+                        }
                     }
                 }
             },

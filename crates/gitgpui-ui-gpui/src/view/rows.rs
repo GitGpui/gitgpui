@@ -668,11 +668,7 @@ impl GitGpuiView {
                     this.diff_text_segments_cache
                         .entry(src_ix)
                         .or_insert_with(|| {
-                            build_diff_text_segments(
-                                diff_content_text(line),
-                                word_ranges,
-                                query.as_str(),
-                            )
+                            build_diff_text_segments(diff_content_text(line), word_ranges, query.as_str())
                         })
                         .as_slice()
                 } else {
@@ -684,12 +680,238 @@ impl GitGpuiView {
                     visible_ix,
                     click_kind,
                     selected,
-                    this.diff_view,
+                    DiffViewMode::Inline,
                     line,
                     file_stat,
                     segments,
                     cx,
                 )
+            })
+            .collect()
+    }
+
+    pub(super) fn render_diff_split_left_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        if this.diff_text_segments_cache_query != this.diff_visible_query {
+            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+            this.diff_text_segments_cache.clear();
+        }
+        let query = this.diff_visible_query.clone();
+        let empty_segments: &[CachedDiffTextSegment] = &[];
+        let empty_ranges: &[Range<usize>] = &[];
+        range
+            .map(|visible_ix| {
+                let selected = this
+                    .diff_selection_range
+                    .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                let Some(row_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                    return div()
+                        .id(("diff_split_left_missing", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+                let Some(row) = this.diff_split_cache.get(row_ix) else {
+                    return div()
+                        .id(("diff_split_left_oob", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+
+                match row {
+                    PatchSplitRow::Aligned {
+                        row,
+                        old_src_ix,
+                        ..
+                    } => {
+                        let text = row.old.as_deref().unwrap_or("");
+                        let segments = if let Some(src_ix) = *old_src_ix {
+                            let word_ranges: &[Range<usize>] = this
+                                .diff_word_highlights
+                                .get(&src_ix)
+                                .map(Vec::as_slice)
+                                .unwrap_or(empty_ranges);
+                            this.diff_text_segments_cache
+                                .entry(src_ix)
+                                .or_insert_with(|| {
+                                    build_diff_text_segments(text, word_ranges, query.as_str())
+                                })
+                                .as_slice()
+                        } else {
+                            empty_segments
+                        };
+
+                        let word_color = matches!(
+                            row.kind,
+                            gitgpui_core::file_diff::FileDiffRowKind::Remove
+                                | gitgpui_core::file_diff::FileDiffRowKind::Modify
+                        )
+                        .then_some(theme.colors.danger);
+
+                        patch_split_column_row(
+                            theme,
+                            PatchSplitColumn::Left,
+                            visible_ix,
+                            selected,
+                            row,
+                            segments,
+                            word_color,
+                            cx,
+                        )
+                    }
+                    PatchSplitRow::Raw { src_ix, click_kind } => {
+                        let Some(line) = this.diff_cache.get(*src_ix) else {
+                            return div()
+                                .id(("diff_split_left_src_oob", visible_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("…")
+                                .into_any_element();
+                        };
+                        let file_stat = this.diff_file_stats.get(src_ix).copied();
+                        patch_split_header_row(
+                            theme,
+                            PatchSplitColumn::Left,
+                            visible_ix,
+                            *click_kind,
+                            selected,
+                            line,
+                            file_stat,
+                            cx,
+                        )
+                    }
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn render_diff_split_right_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        if this.diff_text_segments_cache_query != this.diff_visible_query {
+            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+            this.diff_text_segments_cache.clear();
+        }
+        let query = this.diff_visible_query.clone();
+        let empty_segments: &[CachedDiffTextSegment] = &[];
+        let empty_ranges: &[Range<usize>] = &[];
+        range
+            .map(|visible_ix| {
+                let selected = this
+                    .diff_selection_range
+                    .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                let Some(row_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                    return div()
+                        .id(("diff_split_right_missing", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+                let Some(row) = this.diff_split_cache.get(row_ix) else {
+                    return div()
+                        .id(("diff_split_right_oob", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("…")
+                        .into_any_element();
+                };
+
+                match row {
+                    PatchSplitRow::Aligned {
+                        row,
+                        new_src_ix,
+                        ..
+                    } => {
+                        let text = row.new.as_deref().unwrap_or("");
+                        let segments = if let Some(src_ix) = *new_src_ix {
+                            let word_ranges: &[Range<usize>] = this
+                                .diff_word_highlights
+                                .get(&src_ix)
+                                .map(Vec::as_slice)
+                                .unwrap_or(empty_ranges);
+                            this.diff_text_segments_cache
+                                .entry(src_ix)
+                                .or_insert_with(|| {
+                                    build_diff_text_segments(text, word_ranges, query.as_str())
+                                })
+                                .as_slice()
+                        } else {
+                            empty_segments
+                        };
+
+                        let word_color = matches!(
+                            row.kind,
+                            gitgpui_core::file_diff::FileDiffRowKind::Add
+                                | gitgpui_core::file_diff::FileDiffRowKind::Modify
+                        )
+                        .then_some(theme.colors.success);
+
+                        patch_split_column_row(
+                            theme,
+                            PatchSplitColumn::Right,
+                            visible_ix,
+                            selected,
+                            row,
+                            segments,
+                            word_color,
+                            cx,
+                        )
+                    }
+                    PatchSplitRow::Raw { src_ix, click_kind } => {
+                        let Some(line) = this.diff_cache.get(*src_ix) else {
+                            return div()
+                                .id(("diff_split_right_src_oob", visible_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("…")
+                                .into_any_element();
+                        };
+                        let file_stat = this.diff_file_stats.get(src_ix).copied();
+                        patch_split_header_row(
+                            theme,
+                            PatchSplitColumn::Right,
+                            visible_ix,
+                            *click_kind,
+                            selected,
+                            line,
+                            file_stat,
+                            cx,
+                        )
+                    }
+                }
             })
             .collect()
     }
@@ -1209,7 +1431,7 @@ fn diff_row(
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
-        this.handle_diff_row_click(visible_ix, click_kind, e.modifiers().shift);
+        this.handle_patch_row_click(visible_ix, click_kind, e.modifiers().shift);
         cx.notify();
     });
 
@@ -1389,53 +1611,71 @@ fn diff_row(
                 .on_click(on_click)
                 .child(
                     div()
-                        .w(px(44.0))
-                        .px_2()
                         .bg(left_bg)
-                        .text_color(left_gutter)
-                        .whitespace_nowrap()
-                        .child(old),
-                )
-                .child(
-                    div()
-                        .w(px(44.0))
-                        .px_2()
-                        .bg(right_bg)
-                        .text_color(right_gutter)
-                        .whitespace_nowrap()
-                        .child(new),
-                )
-                .child(
-                    div()
                         .flex_1()
                         .min_w(px(0.0))
-                        .px_2()
-                        .bg(left_bg)
-                        .text_color(left_fg)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(render_cached_diff_text_segments(
-                            theme,
-                            left_fg,
-                            left_segments,
-                            left_word_color,
-                        )),
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(44.0))
+                                .px_2()
+                                .text_color(left_gutter)
+                                .whitespace_nowrap()
+                                .child(old),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .px_2()
+                                .text_color(left_fg)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(render_cached_diff_text_segments(
+                                    theme,
+                                    left_fg,
+                                    left_segments,
+                                    left_word_color,
+                                )),
+                        ),
                 )
                 .child(
                     div()
+                        .w(px(1.0))
+                        .h_full()
+                        .bg(theme.colors.border),
+                )
+                .child(
+                    div()
+                        .bg(right_bg)
                         .flex_1()
                         .min_w(px(0.0))
-                        .px_2()
-                        .bg(right_bg)
-                        .text_color(right_fg)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(render_cached_diff_text_segments(
-                            theme,
-                            right_fg,
-                            right_segments,
-                            right_word_color,
-                        )),
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(44.0))
+                                .px_2()
+                                .text_color(right_gutter)
+                                .whitespace_nowrap()
+                                .child(new),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .px_2()
+                                .text_color(right_fg)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(render_cached_diff_text_segments(
+                                    theme,
+                                    right_fg,
+                                    right_segments,
+                                    right_word_color,
+                                )),
+                        ),
                 );
 
             if selected {
@@ -1447,6 +1687,254 @@ fn diff_row(
             row.into_any_element()
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PatchSplitColumn {
+    Left,
+    Right,
+}
+
+fn patch_split_column_row(
+    theme: AppTheme,
+    column: PatchSplitColumn,
+    visible_ix: usize,
+    selected: bool,
+    row: &gitgpui_core::file_diff::FileDiffRow,
+    segments: &[CachedDiffTextSegment],
+    word_color: Option<gpui::Rgba>,
+    cx: &mut gpui::Context<GitGpuiView>,
+) -> AnyElement {
+    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, e.modifiers().shift);
+        cx.notify();
+    });
+
+    let (ctx_bg, ctx_fg, ctx_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Context);
+    let (add_bg, add_fg, add_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Add);
+    let (rem_bg, rem_fg, rem_gutter) =
+        diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Remove);
+
+    let (bg, fg, gutter_fg) = match (column, row.kind) {
+        (
+            PatchSplitColumn::Left,
+            gitgpui_core::file_diff::FileDiffRowKind::Remove
+            | gitgpui_core::file_diff::FileDiffRowKind::Modify,
+        ) => (rem_bg, rem_fg, rem_gutter),
+        (
+            PatchSplitColumn::Right,
+            gitgpui_core::file_diff::FileDiffRowKind::Add
+            | gitgpui_core::file_diff::FileDiffRowKind::Modify,
+        ) => (add_bg, add_fg, add_gutter),
+        _ => (ctx_bg, ctx_fg, ctx_gutter),
+    };
+
+    let line_no = match column {
+        PatchSplitColumn::Left => row.old_line.map(|n| n.to_string()).unwrap_or_default(),
+        PatchSplitColumn::Right => row.new_line.map(|n| n.to_string()).unwrap_or_default(),
+    };
+
+    let mut el = div()
+        .id((
+            match column {
+                PatchSplitColumn::Left => "diff_split_left_row",
+                PatchSplitColumn::Right => "diff_split_right_row",
+            },
+            visible_ix,
+        ))
+        .h(px(20.0))
+        .flex()
+        .items_center()
+        .font_family("monospace")
+        .text_xs()
+        .on_click(on_click)
+        .child(
+            div()
+                .bg(bg)
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .px_2()
+                        .text_color(gutter_fg)
+                        .whitespace_nowrap()
+                        .child(line_no),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .px_2()
+                        .text_color(fg)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(render_cached_diff_text_segments(
+                            theme,
+                            fg,
+                            segments,
+                            word_color,
+                        )),
+                ),
+        );
+
+    if selected {
+        el = el
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.55));
+    }
+
+    el.into_any_element()
+}
+
+fn patch_split_header_row(
+    theme: AppTheme,
+    column: PatchSplitColumn,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
+    line: &AnnotatedDiffLine,
+    file_stat: Option<(usize, usize)>,
+    cx: &mut gpui::Context<GitGpuiView>,
+) -> AnyElement {
+    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        this.handle_patch_row_click(visible_ix, click_kind, e.modifiers().shift);
+        cx.notify();
+    });
+
+    match click_kind {
+        DiffClickKind::FileHeader => {
+            let file = parse_diff_git_header_path(&line.text).unwrap_or_else(|| line.text.clone());
+            let mut row = div()
+                .id((
+                    match column {
+                        PatchSplitColumn::Left => "diff_split_left_file_hdr",
+                        PatchSplitColumn::Right => "diff_split_right_file_hdr",
+                    },
+                    visible_ix,
+                ))
+                .h(px(28.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .font_family("monospace")
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(file)
+                .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(zed::diff_stat(theme, a, r))
+                })
+                .on_click(on_click);
+
+            if selected {
+                row = row
+                    .border_1()
+                    .border_color(with_alpha(theme.colors.accent, 0.55));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::HunkHeader => {
+            let display = parse_unified_hunk_header_for_display(&line.text)
+                .map(|p| {
+                    let heading = p.heading.unwrap_or_default();
+                    if heading.is_empty() {
+                        format!("{} {}", p.old, p.new)
+                    } else {
+                        format!("{} {}  {heading}", p.old, p.new)
+                    }
+                })
+                .unwrap_or_else(|| line.text.clone());
+
+            let mut row = div()
+                .id((
+                    match column {
+                        PatchSplitColumn::Left => "diff_split_left_hunk_hdr",
+                        PatchSplitColumn::Right => "diff_split_right_hunk_hdr",
+                    },
+                    visible_ix,
+                ))
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .px_2()
+                .bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ))
+                .border_b_1()
+                .border_color(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.28 } else { 0.22 },
+                ))
+                .font_family("monospace")
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(display)
+                .on_click(on_click);
+
+            if selected {
+                row = row
+                    .border_1()
+                    .border_color(with_alpha(theme.colors.accent, 0.55));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::Line => patch_split_meta_row(theme, column, visible_ix, selected, line, cx),
+    }
+}
+
+fn patch_split_meta_row(
+    theme: AppTheme,
+    column: PatchSplitColumn,
+    visible_ix: usize,
+    selected: bool,
+    line: &AnnotatedDiffLine,
+    cx: &mut gpui::Context<GitGpuiView>,
+) -> AnyElement {
+    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, e.modifiers().shift);
+        cx.notify();
+    });
+
+    let (bg, fg, _) = diff_line_colors(theme, line.kind);
+    let mut row = div()
+        .id((
+            match column {
+                PatchSplitColumn::Left => "diff_split_left_meta",
+                PatchSplitColumn::Right => "diff_split_right_meta",
+            },
+            visible_ix,
+        ))
+        .h(px(20.0))
+        .flex()
+        .items_center()
+        .px_2()
+        .font_family("monospace")
+        .text_xs()
+        .bg(bg)
+        .text_color(fg)
+        .whitespace_nowrap()
+        .child(line.text.clone())
+        .on_click(on_click);
+
+    if selected {
+        row = row
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.55));
+    }
+
+    row.into_any_element()
 }
 
 fn file_diff_row(

@@ -8,6 +8,7 @@ use gpui::prelude::*;
 use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
 
 use super::CONTROL_HEIGHT_MD_PX;
+use super::CONTROL_HEIGHT_PX;
 
 pub fn panel(
     theme: AppTheme,
@@ -116,4 +117,24 @@ pub fn empty_state(
                 .text_color(theme.colors.text_muted)
                 .child(message.into()),
         )
+}
+
+pub fn split_columns_header(
+    theme: AppTheme,
+    left: impl Into<SharedString>,
+    right: impl Into<SharedString>,
+) -> Div {
+    div()
+        .h(px(CONTROL_HEIGHT_PX))
+        .flex()
+        .items_center()
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .bg(theme.colors.surface_bg_elevated)
+        .border_b_1()
+        .border_color(theme.colors.border)
+        .child(div().flex_1().min_w(px(0.0)).px_3().child(left.into()))
+        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+        .child(div().flex_1().min_w(px(0.0)).px_3().child(right.into()))
 }
