@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::OnceLock;
+use tree_sitter::StreamingIterator;
 
 impl GitGpuiView {
     pub(super) fn render_branch_rows(
@@ -664,11 +666,22 @@ impl GitGpuiView {
 
                 let file_stat = this.diff_file_stats.get(&src_ix).copied();
 
+                let language = this
+                    .diff_file_for_src_ix
+                    .get(src_ix)
+                    .and_then(|p| p.as_deref())
+                    .and_then(diff_syntax_language_for_path);
+
                 let segments = if matches!(click_kind, DiffClickKind::Line) {
                     this.diff_text_segments_cache
                         .entry(src_ix)
                         .or_insert_with(|| {
-                            build_diff_text_segments(diff_content_text(line), word_ranges, query.as_str())
+                            build_diff_text_segments(
+                                diff_content_text(line),
+                                word_ranges,
+                                query.as_str(),
+                                language,
+                            )
                         })
                         .as_slice()
                 } else {
@@ -741,6 +754,11 @@ impl GitGpuiView {
                     } => {
                         let text = row.old.as_deref().unwrap_or("");
                         let segments = if let Some(src_ix) = *old_src_ix {
+                            let language = this
+                                .diff_file_for_src_ix
+                                .get(src_ix)
+                                .and_then(|p| p.as_deref())
+                                .and_then(diff_syntax_language_for_path);
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(&src_ix)
@@ -749,7 +767,7 @@ impl GitGpuiView {
                             this.diff_text_segments_cache
                                 .entry(src_ix)
                                 .or_insert_with(|| {
-                                    build_diff_text_segments(text, word_ranges, query.as_str())
+                                    build_diff_text_segments(text, word_ranges, query.as_str(), language)
                                 })
                                 .as_slice()
                         } else {
@@ -854,6 +872,11 @@ impl GitGpuiView {
                     } => {
                         let text = row.new.as_deref().unwrap_or("");
                         let segments = if let Some(src_ix) = *new_src_ix {
+                            let language = this
+                                .diff_file_for_src_ix
+                                .get(src_ix)
+                                .and_then(|p| p.as_deref())
+                                .and_then(diff_syntax_language_for_path);
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(&src_ix)
@@ -862,7 +885,7 @@ impl GitGpuiView {
                             this.diff_text_segments_cache
                                 .entry(src_ix)
                                 .or_insert_with(|| {
-                                    build_diff_text_segments(text, word_ranges, query.as_str())
+                                    build_diff_text_segments(text, word_ranges, query.as_str(), language)
                                 })
                                 .as_slice()
                         } else {
@@ -923,6 +946,18 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let language = this
+            .active_repo()
+            .and_then(|r| r.diff_target.as_ref())
+            .and_then(|t| match t {
+                DiffTarget::WorkingTree { path, .. } => {
+                    diff_syntax_language_for_path(path.to_string_lossy().as_ref())
+                }
+                DiffTarget::Commit { path: Some(path), .. } => {
+                    diff_syntax_language_for_path(path.to_string_lossy().as_ref())
+                }
+                _ => None,
+            });
         range
             .map(|ix| {
                 let selected = matches!(this.diff_selection_scope, DiffSelectionScope::File)
@@ -940,9 +975,24 @@ impl GitGpuiView {
                         .text_color(theme.colors.text_muted)
                         .child("…")
                         .into_any_element();
-                };
+                    };
 
-                file_diff_row(theme, ix, row, selected, cx)
+                let old_segments = this
+                    .file_text_segments_cache_old
+                    .entry(ix)
+                    .or_insert_with(|| {
+                        build_diff_text_segments(row.old.as_deref().unwrap_or(""), &[], "", language)
+                    })
+                    .as_slice();
+                let new_segments = this
+                    .file_text_segments_cache_new
+                    .entry(ix)
+                    .or_insert_with(|| {
+                        build_diff_text_segments(row.new.as_deref().unwrap_or(""), &[], "", language)
+                    })
+                    .as_slice();
+
+                file_diff_row(theme, ix, row, old_segments, new_segments, selected, cx)
             })
             .collect()
     }
@@ -1941,6 +1991,8 @@ fn file_diff_row(
     theme: AppTheme,
     ix: usize,
     row: &gitgpui_core::file_diff::FileDiffRow,
+    old_segments: &[CachedDiffTextSegment],
+    new_segments: &[CachedDiffTextSegment],
     selected: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
@@ -1969,8 +2021,6 @@ fn file_diff_row(
 
     let old_no = row.old_line.map(|n| n.to_string()).unwrap_or_default();
     let new_no = row.new_line.map(|n| n.to_string()).unwrap_or_default();
-    let old_text = maybe_expand_tabs(row.old.as_deref().unwrap_or(""));
-    let new_text = maybe_expand_tabs(row.new.as_deref().unwrap_or(""));
 
     let mut el = div()
         .id(("file_diff_row", ix))
@@ -2007,7 +2057,12 @@ fn file_diff_row(
                 .text_color(left_fg)
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .child(old_text),
+                .child(render_cached_diff_text_segments(
+                    theme,
+                    left_fg,
+                    old_segments,
+                    None,
+                )),
         )
         .child(
             div()
@@ -2018,7 +2073,12 @@ fn file_diff_row(
                 .text_color(right_fg)
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .child(new_text),
+                .child(render_cached_diff_text_segments(
+                    theme,
+                    right_fg,
+                    new_segments,
+                    None,
+                )),
         );
 
     if selected {
@@ -2049,10 +2109,15 @@ fn build_diff_text_segments(
     text: &str,
     word_ranges: &[Range<usize>],
     query: &str,
+    language: Option<DiffSyntaxLanguage>,
 ) -> Vec<CachedDiffTextSegment> {
     if text.is_empty() {
         return Vec::new();
     }
+
+    let syntax_tokens = language
+        .map(|language| syntax_tokens_for_line(text, language))
+        .unwrap_or_default();
 
     let query = query.trim();
     let query_range = (!query.is_empty())
@@ -2060,7 +2125,9 @@ fn build_diff_text_segments(
         .flatten();
 
     let mut boundaries: Vec<usize> = Vec::with_capacity(
-        2 + word_ranges.len() * 2 + query_range.as_ref().map(|_| 2).unwrap_or(0),
+        2 + word_ranges.len() * 2
+            + query_range.as_ref().map(|_| 2).unwrap_or(0)
+            + syntax_tokens.len() * 2,
     );
     boundaries.push(0);
     boundaries.push(text.len());
@@ -2072,9 +2139,14 @@ fn build_diff_text_segments(
         boundaries.push(r.start);
         boundaries.push(r.end);
     }
+    for t in &syntax_tokens {
+        boundaries.push(t.range.start.min(text.len()));
+        boundaries.push(t.range.end.min(text.len()));
+    }
     boundaries.sort_unstable();
     boundaries.dedup();
 
+    let mut token_ix = 0usize;
     let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
     for w in boundaries.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -2083,6 +2155,15 @@ fn build_diff_text_segments(
         }
         let b = b.min(text.len());
         let seg = &text[a..b];
+
+        while token_ix < syntax_tokens.len() && syntax_tokens[token_ix].range.end <= a {
+            token_ix += 1;
+        }
+        let syntax = syntax_tokens
+            .get(token_ix)
+            .filter(|t| t.range.start <= a && t.range.end >= b)
+            .map(|t| t.kind)
+            .unwrap_or(SyntaxTokenKind::None);
 
         let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
         let in_query = query_range
@@ -2093,10 +2174,536 @@ fn build_diff_text_segments(
             text: maybe_expand_tabs(seg),
             in_word,
             in_query,
+            syntax,
         });
     }
 
     segments
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffSyntaxLanguage {
+    Rust,
+    Python,
+    JavaScript,
+    TypeScript,
+    Tsx,
+    Go,
+    Json,
+    Toml,
+    Yaml,
+    Bash,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SyntaxToken {
+    range: Range<usize>,
+    kind: SyntaxTokenKind,
+}
+
+fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    Some(match ext.as_str() {
+        "rs" => DiffSyntaxLanguage::Rust,
+        "py" => DiffSyntaxLanguage::Python,
+        "js" | "jsx" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
+        "ts" | "cts" | "mts" => DiffSyntaxLanguage::TypeScript,
+        "tsx" => DiffSyntaxLanguage::Tsx,
+        "go" => DiffSyntaxLanguage::Go,
+        "json" => DiffSyntaxLanguage::Json,
+        "toml" => DiffSyntaxLanguage::Toml,
+        "yaml" | "yml" => DiffSyntaxLanguage::Yaml,
+        "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
+        _ => return None,
+    })
+}
+
+fn syntax_tokens_for_line(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
+    if let Some(tokens) = syntax_tokens_for_line_treesitter(text, language) {
+        return tokens;
+    }
+    syntax_tokens_for_line_heuristic(text, language)
+}
+
+fn syntax_tokens_for_line_treesitter(
+    text: &str,
+    language: DiffSyntaxLanguage,
+) -> Option<Vec<SyntaxToken>> {
+    let ts_language = tree_sitter_language(language)?;
+    let query = tree_sitter_highlight_query(language)?;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&ts_language).ok()?;
+
+    let mut input = String::with_capacity(text.len() + 1);
+    input.push_str(text);
+    input.push('\n');
+
+    let tree = parser.parse(&input, None)?;
+    let mut cursor = tree_sitter::QueryCursor::new();
+
+    let mut tokens: Vec<SyntaxToken> = Vec::new();
+    let mut captures = cursor.captures(query, tree.root_node(), input.as_bytes());
+    tree_sitter::StreamingIterator::advance(&mut captures);
+    while let Some((m, capture_ix)) = captures.get() {
+        let capture = m.captures.get(*capture_ix)?;
+        let name = query.capture_names().get(capture.index as usize)?;
+        if let Some(kind) = syntax_kind_from_capture_name(name) {
+            let mut range = capture.node.byte_range();
+            range.start = range.start.min(text.len());
+            range.end = range.end.min(text.len());
+            if range.start < range.end {
+                tokens.push(SyntaxToken { range, kind });
+            }
+        }
+        tree_sitter::StreamingIterator::advance(&mut captures);
+    }
+
+    if tokens.is_empty() {
+        return Some(tokens);
+    }
+
+    tokens.sort_by(|a, b| a.range.start.cmp(&b.range.start).then(a.range.end.cmp(&b.range.end)));
+
+    // Ensure non-overlapping tokens so the segment splitter can pick a single style per range.
+    let mut out: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
+    for mut token in tokens {
+        if let Some(prev) = out.last() {
+            if token.range.start < prev.range.end {
+                if token.range.end <= prev.range.end {
+                    continue;
+                }
+                token.range.start = prev.range.end;
+                if token.range.start >= token.range.end {
+                    continue;
+                }
+            }
+        }
+        out.push(token);
+    }
+
+    Some(out)
+}
+
+fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
+    Some(match language {
+        DiffSyntaxLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
+        DiffSyntaxLanguage::Python => tree_sitter_python::LANGUAGE.into(),
+        DiffSyntaxLanguage::Go => tree_sitter_go::LANGUAGE.into(),
+        DiffSyntaxLanguage::Json => tree_sitter_json::LANGUAGE.into(),
+        DiffSyntaxLanguage::Yaml => tree_sitter_yaml::language(),
+        DiffSyntaxLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        DiffSyntaxLanguage::Tsx | DiffSyntaxLanguage::JavaScript => {
+            tree_sitter_typescript::LANGUAGE_TSX.into()
+        }
+        DiffSyntaxLanguage::Bash => tree_sitter_bash::LANGUAGE.into(),
+        DiffSyntaxLanguage::Toml => return None,
+    })
+}
+
+fn tree_sitter_highlight_query(language: DiffSyntaxLanguage) -> Option<&'static tree_sitter::Query> {
+    static RUST_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static PY_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static GO_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static JSON_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static YAML_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static TS_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static TSX_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static JS_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static BASH_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+
+    Some(match language {
+        DiffSyntaxLanguage::Rust => RUST_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_rust::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/rust/highlights.scm"),
+            )
+            .expect("rust highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Python => PY_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_python::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/python/highlights.scm"),
+            )
+            .expect("python highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Go => GO_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_go::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/go/highlights.scm"),
+            )
+            .expect("go highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Json => JSON_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_json::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/json/highlights.scm"),
+            )
+            .expect("json highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Yaml => YAML_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_yaml::language(),
+                include_str!("../../../../zed/crates/languages/src/yaml/highlights.scm"),
+            )
+            .expect("yaml highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::TypeScript => TS_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                include_str!("../../../../zed/crates/languages/src/typescript/highlights.scm"),
+            )
+            .expect("typescript highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Tsx => TSX_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_typescript::LANGUAGE_TSX.into(),
+                include_str!("../../../../zed/crates/languages/src/tsx/highlights.scm"),
+            )
+            .expect("tsx highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::JavaScript => JS_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_typescript::LANGUAGE_TSX.into(),
+                include_str!("../../../../zed/crates/languages/src/javascript/highlights.scm"),
+            )
+            .expect("javascript highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Bash => BASH_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_bash::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/bash/highlights.scm"),
+            )
+            .expect("bash highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Toml => return None,
+    })
+}
+
+fn syntax_kind_from_capture_name(name: &str) -> Option<SyntaxTokenKind> {
+    let base = name.split('.').next().unwrap_or(name);
+    Some(match base {
+        "comment" => SyntaxTokenKind::Comment,
+        "string" | "character" => SyntaxTokenKind::String,
+        "keyword" => SyntaxTokenKind::Keyword,
+        "include" | "preproc" => SyntaxTokenKind::Keyword,
+        "number" => SyntaxTokenKind::Number,
+        "boolean" => SyntaxTokenKind::Constant,
+        "function" | "constructor" | "method" => SyntaxTokenKind::Function,
+        "type" => SyntaxTokenKind::Type,
+        "property" | "field" | "attribute" => SyntaxTokenKind::Property,
+        "constant" => SyntaxTokenKind::Constant,
+        "punctuation" | "operator" => SyntaxTokenKind::Punctuation,
+        _ => return None,
+    })
+}
+
+fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
+    let mut tokens: Vec<SyntaxToken> = Vec::new();
+    let len = text.len();
+    let mut i = 0usize;
+
+    let is_ident_start = |ch: char| ch == '_' || ch.is_ascii_alphabetic();
+    let is_ident_continue = |ch: char| ch == '_' || ch.is_ascii_alphanumeric();
+    let is_digit = |ch: char| ch.is_ascii_digit();
+
+    while i < len {
+        let rest = &text[i..];
+
+        let (line_comment, hash_comment, block_comment) = match language {
+            DiffSyntaxLanguage::Python | DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => {
+                (None, Some('#'), false)
+            }
+            DiffSyntaxLanguage::Bash => (None, Some('#'), false),
+            DiffSyntaxLanguage::Rust
+            | DiffSyntaxLanguage::JavaScript
+            | DiffSyntaxLanguage::TypeScript
+            | DiffSyntaxLanguage::Tsx
+            | DiffSyntaxLanguage::Go => (Some("//"), None, true),
+            DiffSyntaxLanguage::Json => (None, None, false),
+        };
+
+        if let Some(prefix) = line_comment {
+            if rest.starts_with(prefix) {
+                tokens.push(SyntaxToken {
+                    range: i..len,
+                    kind: SyntaxTokenKind::Comment,
+                });
+                break;
+            }
+        }
+
+        if block_comment && rest.starts_with("/*") {
+            let end = rest.find("*/").map(|ix| i + ix + 2).unwrap_or(len);
+            tokens.push(SyntaxToken {
+                range: i..end,
+                kind: SyntaxTokenKind::Comment,
+            });
+            i = end;
+            continue;
+        }
+
+        if let Some('#') = hash_comment {
+            if rest.starts_with('#') {
+                tokens.push(SyntaxToken {
+                    range: i..len,
+                    kind: SyntaxTokenKind::Comment,
+                });
+                break;
+            }
+        }
+
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let mut j = i + quote.len_utf8();
+            let mut escaped = false;
+            while j < len {
+                let Some(next) = text[j..].chars().next() else {
+                    break;
+                };
+                let next_len = next.len_utf8();
+                if escaped {
+                    escaped = false;
+                    j += next_len;
+                    continue;
+                }
+                if next == '\\' {
+                    escaped = true;
+                    j += next_len;
+                    continue;
+                }
+                j += next_len;
+                if next == quote {
+                    break;
+                }
+            }
+            tokens.push(SyntaxToken {
+                range: i..j.min(len),
+                kind: SyntaxTokenKind::String,
+            });
+            i = j.min(len);
+            continue;
+        }
+
+        if is_digit(ch) {
+            let mut j = i + ch.len_utf8();
+            while j < len {
+                let Some(next) = text[j..].chars().next() else {
+                    break;
+                };
+                if next.is_ascii_digit() || matches!(next, '.' | '_' | 'x' | 'X' | 'a'..='f' | 'A'..='F')
+                {
+                    j += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            tokens.push(SyntaxToken {
+                range: i..j,
+                kind: SyntaxTokenKind::Number,
+            });
+            i = j;
+            continue;
+        }
+
+        if is_ident_start(ch) {
+            let mut j = i + ch.len_utf8();
+            while j < len {
+                let Some(next) = text[j..].chars().next() else {
+                    break;
+                };
+                if is_ident_continue(next) {
+                    j += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let ident = &text[i..j];
+            if is_keyword(language, ident) {
+                tokens.push(SyntaxToken {
+                    range: i..j,
+                    kind: SyntaxTokenKind::Keyword,
+                });
+            }
+            i = j;
+            continue;
+        }
+
+        i += ch.len_utf8();
+    }
+
+    tokens
+}
+
+fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
+    match language {
+        DiffSyntaxLanguage::Rust => matches!(
+            ident,
+            "fn"
+                | "let"
+                | "mut"
+                | "pub"
+                | "struct"
+                | "enum"
+                | "impl"
+                | "trait"
+                | "use"
+                | "mod"
+                | "crate"
+                | "super"
+                | "self"
+                | "Self"
+                | "const"
+                | "static"
+                | "match"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "loop"
+                | "in"
+                | "move"
+                | "async"
+                | "await"
+                | "return"
+                | "break"
+                | "continue"
+                | "where"
+                | "type"
+                | "ref"
+                | "unsafe"
+                | "extern"
+                | "dyn"
+                | "as"
+                | "true"
+                | "false"
+        ),
+        DiffSyntaxLanguage::Python => matches!(
+            ident,
+            "def"
+                | "class"
+                | "return"
+                | "if"
+                | "elif"
+                | "else"
+                | "for"
+                | "while"
+                | "break"
+                | "continue"
+                | "pass"
+                | "import"
+                | "from"
+                | "as"
+                | "with"
+                | "try"
+                | "except"
+                | "finally"
+                | "raise"
+                | "yield"
+                | "lambda"
+                | "True"
+                | "False"
+                | "None"
+                | "async"
+                | "await"
+        ),
+        DiffSyntaxLanguage::JavaScript | DiffSyntaxLanguage::TypeScript | DiffSyntaxLanguage::Tsx => matches!(
+            ident,
+            "function"
+                | "const"
+                | "let"
+                | "var"
+                | "return"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "break"
+                | "continue"
+                | "class"
+                | "extends"
+                | "import"
+                | "from"
+                | "export"
+                | "default"
+                | "new"
+                | "this"
+                | "super"
+                | "try"
+                | "catch"
+                | "finally"
+                | "throw"
+                | "async"
+                | "await"
+                | "typeof"
+                | "instanceof"
+                | "in"
+                | "of"
+                | "true"
+                | "false"
+                | "null"
+                | "undefined"
+        ),
+        DiffSyntaxLanguage::Go => matches!(
+            ident,
+            "func"
+                | "package"
+                | "import"
+                | "return"
+                | "if"
+                | "else"
+                | "for"
+                | "range"
+                | "switch"
+                | "case"
+                | "default"
+                | "break"
+                | "continue"
+                | "go"
+                | "defer"
+                | "struct"
+                | "interface"
+                | "type"
+                | "map"
+                | "chan"
+                | "select"
+                | "var"
+                | "const"
+                | "true"
+                | "false"
+                | "nil"
+        ),
+        DiffSyntaxLanguage::Json => matches!(ident, "true" | "false" | "null"),
+        DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => matches!(ident, "true" | "false" | "null"),
+        DiffSyntaxLanguage::Bash => matches!(
+            ident,
+            "if"
+                | "then"
+                | "else"
+                | "elif"
+                | "fi"
+                | "for"
+                | "in"
+                | "do"
+                | "done"
+                | "case"
+                | "esac"
+                | "while"
+                | "function"
+                | "return"
+                | "break"
+                | "continue"
+        ),
+    }
 }
 
 fn render_cached_diff_text_segments(
@@ -2119,6 +2726,24 @@ fn render_cached_diff_text_segments(
 
     for seg in segments {
         let mut el = div().child(seg.text.clone());
+
+        if !seg.in_query {
+            let syntax_fg = match seg.syntax {
+                SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
+                SyntaxTokenKind::String => Some(theme.colors.warning),
+                SyntaxTokenKind::Keyword => Some(theme.colors.accent),
+                SyntaxTokenKind::Number => Some(theme.colors.success),
+                SyntaxTokenKind::Function => Some(theme.colors.accent),
+                SyntaxTokenKind::Type => Some(theme.colors.warning),
+                SyntaxTokenKind::Property => Some(theme.colors.accent),
+                SyntaxTokenKind::Constant => Some(theme.colors.success),
+                SyntaxTokenKind::Punctuation => Some(theme.colors.text_muted),
+                SyntaxTokenKind::None => None,
+            };
+            if let Some(fg) = syntax_fg {
+                el = el.text_color(fg);
+            }
+        }
 
         if seg.in_word {
             if let Some(mut c) = word_color {

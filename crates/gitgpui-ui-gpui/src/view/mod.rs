@@ -80,6 +80,21 @@ struct CachedDiffTextSegment {
     text: SharedString,
     in_word: bool,
     in_query: bool,
+    syntax: SyntaxTokenKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SyntaxTokenKind {
+    None,
+    Comment,
+    String,
+    Keyword,
+    Number,
+    Function,
+    Type,
+    Property,
+    Constant,
+    Punctuation,
 }
 
 #[derive(Clone, Debug)]
@@ -148,9 +163,12 @@ pub struct GitGpuiView {
     diff_view: DiffViewMode,
     diff_display: DiffDisplayMode,
     diff_cache: Vec<AnnotatedDiffLine>,
+    diff_file_for_src_ix: Vec<Option<String>>,
     diff_split_cache: Vec<PatchSplitRow>,
     diff_split_cache_len: usize,
     file_diff_cache: Vec<FileDiffRow>,
+    file_text_segments_cache_old: HashMap<usize, Vec<CachedDiffTextSegment>>,
+    file_text_segments_cache_new: HashMap<usize, Vec<CachedDiffTextSegment>>,
     diff_search_input: Entity<zed::TextInput>,
     diff_search_raw: String,
     diff_search_debounced: String,
@@ -323,9 +341,12 @@ impl GitGpuiView {
             diff_view: DiffViewMode::Split,
             diff_display: DiffDisplayMode::File,
             diff_cache: Vec::new(),
+            diff_file_for_src_ix: Vec::new(),
             diff_split_cache: Vec::new(),
             diff_split_cache_len: 0,
             file_diff_cache: Vec::new(),
+            file_text_segments_cache_old: HashMap::new(),
+            file_text_segments_cache_new: HashMap::new(),
             diff_search_input,
             diff_search_raw: String::new(),
             diff_search_debounced: String::new(),
@@ -664,6 +685,7 @@ impl GitGpuiView {
 
     fn rebuild_diff_cache(&mut self) {
         self.diff_cache.clear();
+        self.diff_file_for_src_ix.clear();
         self.diff_split_cache.clear();
         self.diff_split_cache_len = 0;
         self.diff_visible_indices.clear();
@@ -683,6 +705,7 @@ impl GitGpuiView {
             return;
         };
         self.diff_cache = annotate_unified(diff);
+        self.diff_file_for_src_ix = compute_diff_file_for_src_ix(&self.diff_cache);
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
         self.rebuild_diff_word_highlights();
     }
@@ -697,6 +720,8 @@ impl GitGpuiView {
 
     fn rebuild_file_diff_cache(&mut self) {
         self.file_diff_cache.clear();
+        self.file_text_segments_cache_old.clear();
+        self.file_text_segments_cache_new.clear();
 
         let Some(repo) = self.active_repo() else {
             return;
@@ -1969,6 +1994,22 @@ fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> HashMap<usize, (usize,
     }
 
     stats
+}
+
+fn compute_diff_file_for_src_ix(diff: &[AnnotatedDiffLine]) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = Vec::with_capacity(diff.len());
+    let mut current_file: Option<String> = None;
+
+    for line in diff {
+        let is_file_header = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+            && line.text.starts_with("diff --git ");
+        if is_file_header {
+            current_file = parse_diff_git_header_path(&line.text);
+        }
+        out.push(current_file.clone());
+    }
+
+    out
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

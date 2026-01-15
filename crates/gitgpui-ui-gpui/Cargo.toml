@@ -13,6 +13,14 @@ gitgpui-core = { path = "../gitgpui-core" }
 gitgpui-state = { path = "../gitgpui-state" }
 gitgpui-ui = { path = "../gitgpui-ui" }
 gpui = "0.2.2"
+tree-sitter = "0.26"
+tree-sitter-bash = "0.25.1"
+tree-sitter-go = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-yaml = "0.6.1"
 unicode-segmentation = "1.12.0"
 
 [dev-dependencies]
