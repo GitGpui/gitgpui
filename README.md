@@ -44,6 +44,14 @@ Run (opens the repo passed as the first arg, or falls back to the current direct
 cargo run -p gitgpui-app --features ui-gpui,gix -- /path/to/repo
 ```
 
+### Crash logs
+
+If the app crashes due to a Rust panic, GitGpui writes a crash log to:
+
+- Linux: `$XDG_STATE_HOME/gitgpui/crashes/` (fallback: `~/.local/state/gitgpui/crashes/`)
+- macOS: `~/Library/Logs/gitgpui/crashes/`
+- Windows: `%LOCALAPPDATA%\\gitgpui\\crashes\\` (fallback: `%APPDATA%\\gitgpui\\crashes\\`)
+
 ### Roadmap (high level)
 
 - Open repositories; show status + commit history timeline.

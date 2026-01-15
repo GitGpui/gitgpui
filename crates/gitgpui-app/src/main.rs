@@ -1,6 +1,10 @@
+mod crashlog;
+
 fn main() {
     #[cfg(feature = "ui")]
     {
+        crashlog::install();
+
         use gitgpui_core::services::GitBackend;
         use std::sync::Arc;
 
