@@ -600,72 +600,52 @@ impl GitGpuiView {
     }
 
     fn prompt_open_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        #[cfg(target_os = "linux")]
-        {
-            let store = Arc::clone(&self.store);
-            let view = cx.weak_entity();
-            window
-                .spawn(cx, async move |cx| {
-                    use ashpd::desktop::file_chooser::OpenFileRequest;
+        let store = Arc::clone(&self.store);
+        let view = cx.weak_entity();
 
-                    let request = match OpenFileRequest::default()
-                        .title("Open Git Repository")
-                        .multiple(false)
-                        .directory(true)
-                        .send()
-                        .await
-                    {
-                        Ok(request) => request,
-                        Err(_) => {
-                            let _ = view.update(cx, |this, cx| {
-                                this.open_repo_panel = true;
-                                cx.notify();
-                            });
-                            return;
-                        }
-                    };
+        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open Git Repository".into()),
+        });
 
-                    let response = match request.response() {
-                        Ok(response) => response,
-                        Err(_) => return,
-                    };
-
-                    let Some(path) = response
-                        .uris()
-                        .first()
-                        .and_then(|uri| uri.to_file_path().ok())
-                    else {
-                        return;
-                    };
-
-                    if path.join(".git").is_dir() {
-                        store.dispatch(Msg::OpenRepo(path));
-                        let _ = view.update(cx, |this, cx| {
-                            this.open_repo_panel = false;
-                            cx.notify();
-                        });
-                    } else {
+        window
+            .spawn(cx, async move |cx| {
+                let result = rx.await;
+                let paths = match result {
+                    Ok(Ok(Some(paths))) => paths,
+                    Ok(Ok(None)) => return,
+                    Ok(Err(_)) | Err(_) => {
                         let _ = view.update(cx, |this, cx| {
                             this.open_repo_panel = true;
-                            this.open_repo_input.update(cx, |input, cx| {
-                                input.set_text(path.display().to_string(), cx)
-                            });
                             cx.notify();
                         });
+                        return;
                     }
-                })
-                .detach();
-            return;
-        }
+                };
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = window;
-            self.open_repo_panel = !self.open_repo_panel;
-            self.popover = None;
-            self.popover_anchor = None;
-            cx.notify();
-        }
+                let Some(path) = paths.into_iter().next() else {
+                    return;
+                };
+
+                if path.join(".git").is_dir() {
+                    store.dispatch(Msg::OpenRepo(path));
+                    let _ = view.update(cx, |this, cx| {
+                        this.open_repo_panel = false;
+                        cx.notify();
+                    });
+                } else {
+                    let _ = view.update(cx, |this, cx| {
+                        this.open_repo_panel = true;
+                        this.open_repo_input.update(cx, |input, cx| {
+                            input.set_text(path.display().to_string(), cx)
+                        });
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
     }
 
     fn rebuild_diff_cache(&mut self) {
