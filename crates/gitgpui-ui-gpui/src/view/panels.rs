@@ -2228,13 +2228,10 @@ impl GitGpuiView {
             }
             repo.map(|r| {
                 format!(
-                    "display={:?} patch={} file={} patch_cache={} patch_visible={} file_cache={}",
-                    self.diff_display,
+                    "patch={} patch_cache={} patch_visible={}",
                     loadable_tag(&r.diff),
-                    loadable_tag(&r.diff_file),
                     self.diff_cache.len(),
                     self.diff_visible_indices.len(),
-                    self.file_diff_cache.len(),
                 )
                 .into()
             })
@@ -2268,122 +2265,86 @@ impl GitGpuiView {
         let mut controls = div().flex().items_center().gap_1();
         controls = controls
             .child(
-                zed::Button::new("diff_file_view", "File")
-                    .style(if self.diff_display == DiffDisplayMode::File {
+                zed::Button::new("diff_inline", "Inline")
+                    .style(if self.diff_view == DiffViewMode::Inline {
                         zed::ButtonStyle::Filled
                     } else {
                         zed::ButtonStyle::Outlined
                     })
                     .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.diff_display = DiffDisplayMode::File;
-                        this.diff_selection_anchor = None;
-                        this.diff_selection_range = None;
-                        this.diff_selection_scope = DiffSelectionScope::File;
+                        this.diff_view = DiffViewMode::Inline;
                         cx.notify();
                     }),
             )
             .child(
-                zed::Button::new("diff_patch_view", "Patch")
-                    .style(if self.diff_display == DiffDisplayMode::Patch {
+                zed::Button::new("diff_split", "Split")
+                    .style(if self.diff_view == DiffViewMode::Split {
                         zed::ButtonStyle::Filled
                     } else {
                         zed::ButtonStyle::Outlined
                     })
                     .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.diff_display = DiffDisplayMode::Patch;
-                        this.diff_selection_anchor = None;
-                        this.diff_selection_range = None;
-                        this.diff_selection_scope = DiffSelectionScope::Patch;
+                        this.diff_view = DiffViewMode::Split;
+                        cx.notify();
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_prev_hunk", "Prev")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let current = this.diff_selection_anchor.unwrap_or(0);
+                        let hunks = this
+                            .patch_hunk_entries()
+                            .into_iter()
+                            .map(|(visible_ix, _)| visible_ix)
+                            .collect::<Vec<_>>();
+                        if let Some(&target) = hunks
+                            .iter()
+                            .rev()
+                            .find(|&&ix| ix < current)
+                            .or_else(|| hunks.last())
+                        {
+                            this.diff_scroll
+                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            this.diff_selection_anchor = Some(target);
+                            this.diff_selection_range = Some((target, target));
+                            cx.notify();
+                        }
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_next_hunk", "Next")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        let current = this.diff_selection_anchor.unwrap_or(0);
+                        let hunks = this
+                            .patch_hunk_entries()
+                            .into_iter()
+                            .map(|(visible_ix, _)| visible_ix)
+                            .collect::<Vec<_>>();
+                        if let Some(&target) = hunks
+                            .iter()
+                            .find(|&&ix| ix > current)
+                            .or_else(|| hunks.first())
+                        {
+                            this.diff_scroll
+                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            this.diff_selection_anchor = Some(target);
+                            this.diff_selection_range = Some((target, target));
+                            cx.notify();
+                        }
+                    }),
+            )
+            .child(
+                zed::Button::new("diff_hunks", "Hunks…")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, e, window, cx| {
+                        let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
+                        this.popover = Some(PopoverKind::DiffHunks);
+                        this.popover_anchor = Some(e.position());
                         cx.notify();
                     }),
             );
-
-        if self.diff_display == DiffDisplayMode::Patch {
-            controls = controls
-                .child(
-                    zed::Button::new("diff_inline", "Inline")
-                        .style(if self.diff_view == DiffViewMode::Inline {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_view = DiffViewMode::Inline;
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    zed::Button::new("diff_split", "Split")
-                        .style(if self.diff_view == DiffViewMode::Split {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_view = DiffViewMode::Split;
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    zed::Button::new("diff_prev_hunk", "Prev")
-                        .style(zed::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let current = this.diff_selection_anchor.unwrap_or(0);
-                            let hunks = this
-                                .patch_hunk_entries()
-                                .into_iter()
-                                .map(|(visible_ix, _)| visible_ix)
-                                .collect::<Vec<_>>();
-                            if let Some(&target) = hunks
-                                .iter()
-                                .rev()
-                                .find(|&&ix| ix < current)
-                                .or_else(|| hunks.last())
-                            {
-                                this.diff_scroll
-                                    .scroll_to_item(target, gpui::ScrollStrategy::Top);
-                                this.diff_selection_anchor = Some(target);
-                                this.diff_selection_range = Some((target, target));
-                                this.diff_selection_scope = DiffSelectionScope::Patch;
-                                cx.notify();
-                            }
-                        }),
-                )
-                .child(
-                    zed::Button::new("diff_next_hunk", "Next")
-                        .style(zed::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let current = this.diff_selection_anchor.unwrap_or(0);
-                            let hunks = this
-                                .patch_hunk_entries()
-                                .into_iter()
-                                .map(|(visible_ix, _)| visible_ix)
-                                .collect::<Vec<_>>();
-                            if let Some(&target) = hunks
-                                .iter()
-                                .find(|&&ix| ix > current)
-                                .or_else(|| hunks.first())
-                            {
-                                this.diff_scroll
-                                    .scroll_to_item(target, gpui::ScrollStrategy::Top);
-                                this.diff_selection_anchor = Some(target);
-                                this.diff_selection_range = Some((target, target));
-                                this.diff_selection_scope = DiffSelectionScope::Patch;
-                                cx.notify();
-                            }
-                        }),
-                )
-                .child(
-                    zed::Button::new("diff_hunks", "Hunks…")
-                        .style(zed::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, e, window, cx| {
-                            let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
-                            this.popover = Some(PopoverKind::DiffHunks);
-                            this.popover_anchor = Some(e.position());
-                            cx.notify();
-                        }),
-                );
-        }
 
         controls = controls
             .child(
@@ -2452,180 +2413,115 @@ impl GitGpuiView {
             )
             .child(controls);
 
-        let body: AnyElement = match self.diff_display {
-            DiffDisplayMode::File => match repo.map(|r| &r.diff_file) {
-                None => zed::empty_state(theme, "Diff", "No repository.").into_any_element(),
-                Some(Loadable::NotLoaded) => zed::empty_state(
-                    theme,
-                    "Diff",
-                    "File view is only available for single-file diffs.",
-                )
-                .into_any_element(),
-                Some(Loadable::Loading) => {
-                    zed::empty_state(theme, "Diff", "Loading…").into_any_element()
+        let body: AnyElement = match repo.map(|r| &r.diff) {
+            None => zed::empty_state(theme, "Diff", "No repository.").into_any_element(),
+            Some(Loadable::NotLoaded) => {
+                zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
+            }
+            Some(Loadable::Loading) => zed::empty_state(theme, "Diff", "Loading…").into_any_element(),
+            Some(Loadable::Error(e)) => zed::empty_state(theme, "Diff", e.clone()).into_any_element(),
+            Some(Loadable::Ready(diff)) => {
+                if self.diff_cache.len() != diff.lines.len() {
+                    self.rebuild_diff_cache();
                 }
-                Some(Loadable::Error(e)) => {
-                    zed::empty_state(theme, "Diff", e.clone()).into_any_element()
-                }
-                Some(Loadable::Ready(None)) => zed::empty_state(
-                    theme,
-                    "Diff",
-                    "File view is only available for single-file diffs.",
-                )
-                .into_any_element(),
-                Some(Loadable::Ready(Some(_))) => {
-                    if self.file_diff_cache.is_empty() {
-                        self.rebuild_file_diff_cache();
-                    }
-                    if self.file_diff_cache.is_empty() {
-                        zed::empty_state(theme, "Diff", "Empty file.").into_any_element()
-                    } else {
-                        let list = uniform_list(
-                            "file_diff",
-                            self.file_diff_cache.len(),
-                            cx.processor(Self::render_file_diff_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.diff_scroll.clone());
-                        let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                        let markers = self.diff_scrollbar_markers_file();
-                        div()
-                            .id("diff_scroll_container")
-                            .relative()
+                self.update_diff_search_debounce(cx);
+                self.ensure_diff_visible_indices();
+                if self.diff_cache.is_empty() {
+                    zed::empty_state(theme, "Diff", "No differences.").into_any_element()
+                } else if !self.diff_visible_query.is_empty() && self.diff_query_match_count == 0 {
+                    zed::empty_state(theme, "Diff", "No matches.").into_any_element()
+                } else if self.diff_visible_indices.is_empty() {
+                    zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
+                } else {
+                    let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                    let markers = self.diff_scrollbar_markers_patch();
+                    match self.diff_view {
+                        DiffViewMode::Inline => {
+                            let list = uniform_list(
+                                "diff",
+                                self.diff_visible_indices.len(),
+                                cx.processor(Self::render_diff_rows),
+                            )
                             .h_full()
                             .min_h(px(0.0))
-                            .child(list)
-                            .child(
-                                zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                    .markers(markers)
-                                    .render(theme),
+                            .track_scroll(self.diff_scroll.clone());
+                            div()
+                                .id("diff_scroll_container")
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .child(list)
+                                .child(
+                                    zed::Scrollbar::new("diff_scrollbar", scroll_handle)
+                                        .markers(markers)
+                                        .render(theme),
+                                )
+                                .into_any_element()
+                        }
+                        DiffViewMode::Split => {
+                            let count = self.diff_visible_indices.len();
+                            let left = uniform_list(
+                                "diff_split_left",
+                                count,
+                                cx.processor(Self::render_diff_split_left_rows),
                             )
-                            .into_any_element()
-                    }
-                }
-            },
-            DiffDisplayMode::Patch => match repo.map(|r| &r.diff) {
-                None => zed::empty_state(theme, "Diff", "No repository.").into_any_element(),
-                Some(Loadable::NotLoaded) => {
-                    zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
-                }
-                Some(Loadable::Loading) => {
-                    zed::empty_state(theme, "Diff", "Loading…").into_any_element()
-                }
-                Some(Loadable::Error(e)) => {
-                    zed::empty_state(theme, "Diff", e.clone()).into_any_element()
-                }
-                Some(Loadable::Ready(diff)) => {
-                    if self.diff_cache.len() != diff.lines.len() {
-                        self.rebuild_diff_cache();
-                    }
-                    self.update_diff_search_debounce(cx);
-                    self.ensure_diff_visible_indices();
-                    if self.diff_cache.is_empty() {
-                        zed::empty_state(theme, "Diff", "No differences.").into_any_element()
-                    } else if !self.diff_visible_query.is_empty()
-                        && self.diff_query_match_count == 0
-                    {
-                        zed::empty_state(theme, "Diff", "No matches.").into_any_element()
-                    } else if self.diff_visible_indices.is_empty() {
-                        zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
-                    } else {
-                        let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                        let markers = self.diff_scrollbar_markers_patch();
-                        match self.diff_view {
-                            DiffViewMode::Inline => {
-                                let list = uniform_list(
-                                    "diff",
-                                    self.diff_visible_indices.len(),
-                                    cx.processor(Self::render_diff_rows),
-                                )
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(self.diff_scroll.clone());
-                                div()
-                                    .id("diff_scroll_container")
-                                    .relative()
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .child(list)
-                                    .child(
-                                        zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                            .markers(markers)
-                                            .render(theme),
-                                    )
-                                    .into_any_element()
-                            }
-                            DiffViewMode::Split => {
-                                let count = self.diff_visible_indices.len();
-                                let left = uniform_list(
-                                    "diff_split_left",
-                                    count,
-                                    cx.processor(Self::render_diff_split_left_rows),
-                                )
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(self.diff_scroll.clone());
-                                let right = uniform_list(
-                                    "diff_split_right",
-                                    count,
-                                    cx.processor(Self::render_diff_split_right_rows),
-                                )
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(self.diff_scroll.clone());
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(self.diff_scroll.clone());
+                            let right = uniform_list(
+                                "diff_split_right",
+                                count,
+                                cx.processor(Self::render_diff_split_right_rows),
+                            )
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(self.diff_scroll.clone());
 
-                                let columns_header = zed::split_columns_header(
-                                    theme,
-                                    "A (local / before)",
-                                    "B (remote / after)",
-                                );
+                            let columns_header = zed::split_columns_header(
+                                theme,
+                                "A (local / before)",
+                                "B (remote / after)",
+                            );
 
-                                div()
-                                    .id("diff_split_scroll_container")
-                                    .relative()
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .flex_col()
-                                    .child(columns_header)
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_h(px(0.0))
-                                            .flex()
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w(px(0.0))
-                                                    .h_full()
-                                                    .child(left),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(px(1.0))
-                                                    .h_full()
-                                                    .bg(theme.colors.border),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w(px(0.0))
-                                                    .h_full()
-                                                    .child(right),
-                                            ),
-                                    )
-                                    .child(
-                                        zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                            .markers(markers)
-                                            .render(theme),
-                                    )
-                                    .into_any_element()
-                            }
+                            div()
+                                .id("diff_split_scroll_container")
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .child(columns_header)
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .flex()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .h_full()
+                                                .child(left),
+                                        )
+                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w(px(0.0))
+                                                .h_full()
+                                                .child(right),
+                                        ),
+                                )
+                                .child(
+                                    zed::Scrollbar::new("diff_scrollbar", scroll_handle)
+                                        .markers(markers)
+                                        .render(theme),
+                                )
+                                .into_any_element()
                         }
                     }
                 }
-            },
+            }
         };
 
         div()
