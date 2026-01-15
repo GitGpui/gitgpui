@@ -76,6 +76,13 @@ struct ToastState {
 }
 
 #[derive(Clone, Debug)]
+struct CachedDiffTextSegment {
+    text: SharedString,
+    in_word: bool,
+    in_query: bool,
+}
+
+#[derive(Clone, Debug)]
 struct HistoryCache {
     repo_id: RepoId,
     query: String,
@@ -142,6 +149,8 @@ pub struct GitGpuiView {
     diff_query_match_count: usize,
     diff_word_highlights: HashMap<usize, Vec<Range<usize>>>,
     diff_file_stats: HashMap<usize, (usize, usize)>,
+    diff_text_segments_cache_query: String,
+    diff_text_segments_cache: HashMap<usize, Vec<CachedDiffTextSegment>>,
     diff_selection_anchor: Option<usize>,
     diff_selection_range: Option<(usize, usize)>,
     diff_selection_scope: DiffSelectionScope,
@@ -298,7 +307,7 @@ impl GitGpuiView {
             _poller: poller,
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
-            diff_view: DiffViewMode::Inline,
+            diff_view: DiffViewMode::Split,
             diff_display: DiffDisplayMode::File,
             diff_cache: Vec::new(),
             file_diff_cache: Vec::new(),
@@ -312,6 +321,8 @@ impl GitGpuiView {
             diff_query_match_count: 0,
             diff_word_highlights: HashMap::new(),
             diff_file_stats: HashMap::new(),
+            diff_text_segments_cache_query: String::new(),
+            diff_text_segments_cache: HashMap::new(),
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_selection_scope: DiffSelectionScope::Patch,
@@ -480,18 +491,20 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> Entity<zed::TextInput> {
         let theme = self.theme;
-        let input = self.history_branch_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter branches…".into(),
-                        multiline: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
+        let input = self
+            .history_branch_picker_search_input
+            .get_or_insert_with(|| {
+                cx.new(|cx| {
+                    zed::TextInput::new(
+                        zed::TextInputOptions {
+                            placeholder: "Filter branches…".into(),
+                            multiline: false,
+                        },
+                        window,
+                        cx,
+                    )
+                })
+            });
         input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_text("", cx);
@@ -640,6 +653,8 @@ impl GitGpuiView {
         self.diff_query_match_count = 0;
         self.diff_word_highlights.clear();
         self.diff_file_stats.clear();
+        self.diff_text_segments_cache_query.clear();
+        self.diff_text_segments_cache.clear();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
         self.diff_selection_scope = DiffSelectionScope::Patch;
@@ -684,6 +699,36 @@ impl GitGpuiView {
         }
 
         self.file_diff_cache = side_by_side_rows(old, new);
+    }
+
+    fn diff_scrollbar_markers_patch(&self) -> Vec<zed::ScrollbarMarker> {
+        scrollbar_markers_from_flags(self.diff_visible_indices.len(), |visible_ix| {
+            let Some(&src_ix) = self.diff_visible_indices.get(visible_ix) else {
+                return 0;
+            };
+            let Some(line) = self.diff_cache.get(src_ix) else {
+                return 0;
+            };
+            match line.kind {
+                gitgpui_core::domain::DiffLineKind::Add => 1,
+                gitgpui_core::domain::DiffLineKind::Remove => 2,
+                _ => 0,
+            }
+        })
+    }
+
+    fn diff_scrollbar_markers_file(&self) -> Vec<zed::ScrollbarMarker> {
+        scrollbar_markers_from_flags(self.file_diff_cache.len(), |ix| {
+            let Some(row) = self.file_diff_cache.get(ix) else {
+                return 0;
+            };
+            match row.kind {
+                gitgpui_core::file_diff::FileDiffRowKind::Add => 1,
+                gitgpui_core::file_diff::FileDiffRowKind::Remove => 2,
+                gitgpui_core::file_diff::FileDiffRowKind::Modify => 3,
+                gitgpui_core::file_diff::FileDiffRowKind::Context => 0,
+            }
+        })
     }
 
     fn apply_state_snapshot(&mut self, next: AppState, cx: &mut gpui::Context<Self>) {
@@ -763,16 +808,22 @@ impl GitGpuiView {
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
-        let id = self.toasts.last().map(|t| t.id.wrapping_add(1)).unwrap_or(1);
+        let id = self
+            .toasts
+            .last()
+            .map(|t| t.id.wrapping_add(1))
+            .unwrap_or(1);
         self.toasts.push(ToastState { id, kind, message });
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_secs(5)).await;
-            let _ = view.update(cx, |this, cx| {
-                this.toasts.retain(|t| t.id != id);
-                cx.notify();
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_secs(5)).await;
+                let _ = view.update(cx, |this, cx| {
+                    this.toasts.retain(|t| t.id != id);
+                    cx.notify();
+                });
+            },
+        )
         .detach();
     }
 
@@ -831,12 +882,14 @@ impl GitGpuiView {
 
             for (old_ix, old_text) in removed.into_iter().skip(pairs) {
                 if !old_text.is_empty() {
-                    self.diff_word_highlights.insert(old_ix, vec![0..old_text.len()]);
+                    self.diff_word_highlights
+                        .insert(old_ix, vec![0..old_text.len()]);
                 }
             }
             for (new_ix, new_text) in added.into_iter().skip(pairs) {
                 if !new_text.is_empty() {
-                    self.diff_word_highlights.insert(new_ix, vec![0..new_text.len()]);
+                    self.diff_word_highlights
+                        .insert(new_ix, vec![0..new_text.len()]);
                 }
             }
         }
@@ -855,27 +908,30 @@ impl GitGpuiView {
         self.diff_search_seq = self.diff_search_seq.wrapping_add(1);
         let seq = self.diff_search_seq;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(150)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.diff_search_seq != seq {
-                    return;
-                }
-                if this.diff_search_raw != raw {
-                    return;
-                }
-                this.diff_search_debounced = raw;
-                this.diff_visible_indices.clear();
-                this.diff_visible_cache_len = 0;
-                cx.notify();
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(150)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.diff_search_seq != seq {
+                        return;
+                    }
+                    if this.diff_search_raw != raw {
+                        return;
+                    }
+                    this.diff_search_debounced = raw;
+                    this.diff_visible_indices.clear();
+                    this.diff_visible_cache_len = 0;
+                    cx.notify();
+                });
+            },
+        )
         .detach();
     }
 
     fn ensure_diff_visible_indices(&mut self) {
         let query = self.diff_search_debounced.trim().to_string();
-        if self.diff_visible_cache_len == self.diff_cache.len() && self.diff_visible_query == query {
+        if self.diff_visible_cache_len == self.diff_cache.len() && self.diff_visible_query == query
+        {
             return;
         }
 
@@ -1007,7 +1063,8 @@ impl GitGpuiView {
         from_visible_ix: usize,
         is_boundary: impl Fn(usize) -> bool,
     ) -> Option<usize> {
-        let from_visible_ix = from_visible_ix.min(self.diff_visible_indices.len().saturating_sub(1));
+        let from_visible_ix =
+            from_visible_ix.min(self.diff_visible_indices.len().saturating_sub(1));
         for visible_ix in (from_visible_ix + 1)..self.diff_visible_indices.len() {
             let src_ix = *self.diff_visible_indices.get(visible_ix)?;
             if is_boundary(src_ix) {
@@ -1026,10 +1083,8 @@ impl GitGpuiView {
 
                 let (start, end) = if matches!(self.diff_selection_scope, DiffSelectionScope::Patch)
                 {
-                    self.diff_selection_range.unwrap_or((
-                        0,
-                        self.diff_visible_indices.len().saturating_sub(1),
-                    ))
+                    self.diff_selection_range
+                        .unwrap_or((0, self.diff_visible_indices.len().saturating_sub(1)))
                 } else {
                     (0, self.diff_visible_indices.len().saturating_sub(1))
                 };
@@ -1055,7 +1110,8 @@ impl GitGpuiView {
                     return String::new();
                 }
 
-                let (start, end) = if matches!(self.diff_selection_scope, DiffSelectionScope::File) {
+                let (start, end) = if matches!(self.diff_selection_scope, DiffSelectionScope::File)
+                {
                     self.diff_selection_range
                         .unwrap_or((0, self.file_diff_cache.len().saturating_sub(1)))
                 } else {
@@ -1094,20 +1150,22 @@ impl GitGpuiView {
         self.history_search_seq = self.history_search_seq.wrapping_add(1);
         let seq = self.history_search_seq;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(150)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.history_search_seq != seq {
-                    return;
-                }
-                if this.history_search_raw != raw {
-                    return;
-                }
-                this.history_search_debounced = raw;
-                this.history_cache = None;
-                cx.notify();
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(150)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.history_search_seq != seq {
+                        return;
+                    }
+                    if this.history_search_raw != raw {
+                        return;
+                    }
+                    this.history_search_debounced = raw;
+                    this.history_cache = None;
+                    cx.notify();
+                });
+            },
+        )
         .detach();
     }
 
@@ -1388,9 +1446,64 @@ pub(super) fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color
 }
 
+fn scrollbar_markers_from_flags(
+    len: usize,
+    mut flag_at_index: impl FnMut(usize) -> u8,
+) -> Vec<zed::ScrollbarMarker> {
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let bucket_count = 240usize.min(len).max(1);
+    let mut buckets = vec![0u8; bucket_count];
+    for ix in 0..len {
+        let flag = flag_at_index(ix);
+        if flag == 0 {
+            continue;
+        }
+        let b = (ix * bucket_count) / len;
+        if let Some(cell) = buckets.get_mut(b) {
+            *cell |= flag;
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut ix = 0usize;
+    while ix < bucket_count {
+        let flag = buckets[ix];
+        if flag == 0 {
+            ix += 1;
+            continue;
+        }
+
+        let start = ix;
+        ix += 1;
+        while ix < bucket_count && buckets[ix] == flag {
+            ix += 1;
+        }
+        let end = ix; // exclusive
+
+        let kind = match flag {
+            1 => zed::ScrollbarMarkerKind::Add,
+            2 => zed::ScrollbarMarkerKind::Remove,
+            _ => zed::ScrollbarMarkerKind::Modify,
+        };
+
+        out.push(zed::ScrollbarMarker {
+            start: start as f32 / bucket_count as f32,
+            end: end as f32 / bucket_count as f32,
+            kind,
+        });
+    }
+
+    out
+}
+
 fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
     match line.kind {
-        gitgpui_core::domain::DiffLineKind::Add => line.text.strip_prefix('+').unwrap_or(&line.text),
+        gitgpui_core::domain::DiffLineKind::Add => {
+            line.text.strip_prefix('+').unwrap_or(&line.text)
+        }
         gitgpui_core::domain::DiffLineKind::Remove => {
             line.text.strip_prefix('-').unwrap_or(&line.text)
         }
@@ -1669,11 +1782,16 @@ impl GitGpuiView {
         }
         let theme = self.theme;
 
-        let toasts = self.toasts.iter().rev().take(3).cloned().collect::<Vec<_>>();
-        let children = toasts.into_iter().map(|t| {
-            zed::toast(theme, t.kind, t.message)
-                .id(("toast", t.id))
-        });
+        let toasts = self
+            .toasts
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>();
+        let children = toasts
+            .into_iter()
+            .map(|t| zed::toast(theme, t.kind, t.message).id(("toast", t.id)));
 
         div()
             .id("toast_layer")

@@ -7,6 +7,8 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
 
+use super::CONTROL_HEIGHT_MD_PX;
+
 pub fn panel(
     theme: AppTheme,
     title: impl Into<SharedString>,
@@ -17,11 +19,17 @@ pub fn panel(
         .flex()
         .items_center()
         .justify_between()
+        .h(px(CONTROL_HEIGHT_MD_PX))
         .px_3()
-        .py_2()
         .border_b_1()
         .border_color(theme.colors.border)
-        .child(div().text_sm().font_weight(FontWeight::BOLD).child(title.into()));
+        .bg(theme.colors.surface_bg_elevated)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(title.into()),
+        );
 
     if let Some(subtitle) = subtitle {
         header = header.child(
@@ -63,7 +71,11 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
-pub fn key_value(theme: AppTheme, key: impl Into<SharedString>, value: impl Into<SharedString>) -> Div {
+pub fn key_value(
+    theme: AppTheme,
+    key: impl Into<SharedString>,
+    value: impl Into<SharedString>,
+) -> Div {
     div()
         .flex()
         .items_center()
@@ -89,8 +101,15 @@ pub fn empty_state(
         .items_center()
         .justify_center()
         .gap_2()
+        .px_3()
         .py_6()
-        .child(div().text_lg().child(title.into()))
+        .child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.colors.text)
+                .child(title.into()),
+        )
         .child(
             div()
                 .text_sm()

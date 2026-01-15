@@ -1,7 +1,8 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{ClickEvent, Div, SharedString, Stateful, Window, div, px};
-use std::hash::{Hash as _, Hasher as _};
+use gpui::{ClickEvent, CursorStyle, Div, SharedString, Stateful, Window, div, px};
+
+use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ButtonStyle {
@@ -45,70 +46,96 @@ impl Button {
         cx: &gpui::Context<V>,
         f: impl Fn(&mut V, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Stateful<Div> {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.id.hash(&mut hasher);
-        let id_hash = hasher.finish();
         let disabled = self.disabled;
 
         self.render(theme)
-            .id(("zed_btn", id_hash))
             .when(!disabled, |this| this.on_click(cx.listener(f)))
     }
 
-    pub fn render(self, theme: AppTheme) -> Div {
+    pub fn render(self, theme: AppTheme) -> Stateful<Div> {
         let transparent = gpui::rgba(0x00000000);
-        let (bg, hover_bg, border, text) = match self.style {
+        let (bg, hover_bg, active_bg, border, text) = match self.style {
             ButtonStyle::Filled => (
                 theme.colors.accent,
                 with_alpha(theme.colors.accent, 0.85),
+                with_alpha(theme.colors.accent, 0.78),
                 with_alpha(theme.colors.accent, 0.9),
                 theme.colors.window_bg,
             ),
             ButtonStyle::Outlined => (
                 transparent,
                 with_alpha(theme.colors.hover, 0.65),
+                theme.colors.active,
                 theme.colors.border,
                 theme.colors.text,
             ),
             ButtonStyle::Subtle => (
                 transparent,
                 with_alpha(theme.colors.hover, 0.65),
+                theme.colors.active,
                 transparent,
                 theme.colors.text,
             ),
             ButtonStyle::Transparent => (
                 transparent,
-                transparent,
+                with_alpha(theme.colors.hover, 0.55),
+                theme.colors.active,
                 transparent,
                 theme.colors.text_muted,
             ),
             ButtonStyle::Danger => (
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.14 }),
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.26 } else { 0.20 }),
+                with_alpha(theme.colors.danger, if theme.is_dark { 0.32 } else { 0.26 }),
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.42 } else { 0.32 }),
                 theme.colors.text,
             ),
         };
 
+        let label = self.label.to_string();
+        let icon_only = looks_like_icon_button(&label);
+
         let mut base = div()
-            .px_3()
-            .py_2()
+            .id(self.id.clone())
+            .tab_index(0)
+            .h(px(CONTROL_HEIGHT_PX))
+            .px(px(if icon_only {
+                ICON_PAD_X_PX
+            } else {
+                CONTROL_PAD_X_PX
+            }))
+            .py(px(CONTROL_PAD_Y_PX))
+            .flex()
+            .items_center()
+            .justify_center()
             .rounded(px(theme.radii.row))
             .bg(bg)
             .border_1()
             .border_color(border)
+            .focus(move |s| {
+                s.border_color(theme.colors.focus_ring)
+                    .bg(theme.colors.focus_ring_bg)
+            })
             .text_sm()
             .text_color(text)
-            .child(self.label);
+            .cursor(CursorStyle::PointingHand)
+            .child(label);
 
         if self.disabled {
-            base = base.opacity(0.5);
+            base = base.opacity(0.5).cursor(CursorStyle::Arrow);
         } else {
-            base = base.hover(move |s| s.bg(hover_bg));
+            base = base
+                .hover(move |s| s.bg(hover_bg))
+                .active(move |s| s.bg(active_bg));
         }
 
         base
     }
+}
+
+fn looks_like_icon_button(label: &str) -> bool {
+    matches!(label.trim(), "✕" | "＋" | "▾" | "≡" | "…" | "⋯" | "⟳" | "↻")
+        || (label.chars().count() <= 2 && !label.chars().any(|c| c.is_alphanumeric()))
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {

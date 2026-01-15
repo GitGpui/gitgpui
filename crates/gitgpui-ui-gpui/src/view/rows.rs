@@ -149,12 +149,7 @@ impl GitGpuiView {
                             .gap_2()
                             .min_w(px(0.0))
                             .child(zed::pill(theme, label, color))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .line_clamp(1)
-                                    .child(entry.summary.clone()),
-                            )
+                            .child(div().text_sm().line_clamp(1).child(entry.summary.clone()))
                             .child(
                                 div()
                                     .text_xs()
@@ -608,6 +603,12 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        if this.diff_text_segments_cache_query != this.diff_visible_query {
+            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+            this.diff_text_segments_cache.clear();
+        }
+        let query = this.diff_visible_query.clone();
+        let empty_segments: &[CachedDiffTextSegment] = &[];
         range
             .map(|visible_ix| {
                 let selected = this
@@ -647,25 +648,38 @@ impl GitGpuiView {
                     DiffClickKind::Line
                 };
 
-                let word_ranges = this
+                let word_ranges: &[Range<usize>] = this
                     .diff_word_highlights
                     .get(&src_ix)
-                    .cloned()
-                    .unwrap_or_default();
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
 
                 let file_stat = this.diff_file_stats.get(&src_ix).copied();
+
+                let segments = if matches!(click_kind, DiffClickKind::Line) {
+                    this.diff_text_segments_cache
+                        .entry(src_ix)
+                        .or_insert_with(|| {
+                            build_diff_text_segments(
+                                diff_content_text(line),
+                                word_ranges,
+                                query.as_str(),
+                            )
+                        })
+                        .as_slice()
+                } else {
+                    empty_segments
+                };
 
                 diff_row(
                     theme,
                     visible_ix,
-                    src_ix,
                     click_kind,
                     selected,
                     this.diff_view,
                     line,
                     file_stat,
-                    &this.diff_visible_query,
-                    &word_ranges,
+                    segments,
                     cx,
                 )
             })
@@ -737,9 +751,15 @@ fn history_table_row(
                     .rounded(px(999.0))
                     .text_xs()
                     .text_color(theme.colors.text)
-                    .bg(with_alpha(node_color, if theme.is_dark { 0.22 } else { 0.16 }))
+                    .bg(with_alpha(
+                        node_color,
+                        if theme.is_dark { 0.22 } else { 0.16 },
+                    ))
                     .border_1()
-                    .border_color(with_alpha(node_color, if theme.is_dark { 0.48 } else { 0.36 }))
+                    .border_color(with_alpha(
+                        node_color,
+                        if theme.is_dark { 0.48 } else { 0.36 },
+                    ))
                     .child(label.to_string())
             })
             .collect::<Vec<_>>();
@@ -788,12 +808,7 @@ fn history_table_row(
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .w(px(3.0))
-                        .h_full()
-                        .bg(node_color),
-                )
+                .child(div().w(px(3.0)).h_full().bg(node_color))
                 .child(
                     div()
                         .flex_1()
@@ -1175,14 +1190,12 @@ fn status_row(
 fn diff_row(
     theme: AppTheme,
     visible_ix: usize,
-    _src_ix: usize,
     click_kind: DiffClickKind,
     selected: bool,
     mode: DiffViewMode,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
-    query: &str,
-    word_ranges: &[Range<usize>],
+    segments: &[CachedDiffTextSegment],
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1206,17 +1219,16 @@ fn diff_row(
             .text_sm()
             .font_weight(FontWeight::BOLD)
             .child(file)
-            .when(
-                file_stat.is_some_and(|(a, r)| a > 0 || r > 0),
-                |this| {
-                    let (a, r) = file_stat.unwrap_or_default();
-                    this.child(zed::diff_stat(theme, a, r))
-                },
-            )
+            .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                let (a, r) = file_stat.unwrap_or_default();
+                this.child(zed::diff_stat(theme, a, r))
+            })
             .on_click(on_click);
 
         if selected {
-            row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
+            row = row
+                .border_1()
+                .border_color(with_alpha(theme.colors.accent, 0.55));
         }
 
         return row.into_any_element();
@@ -1240,9 +1252,15 @@ fn diff_row(
             .flex()
             .items_center()
             .px_2()
-            .bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.10 } else { 0.07 }))
+            .bg(with_alpha(
+                theme.colors.accent,
+                if theme.is_dark { 0.10 } else { 0.07 },
+            ))
             .border_b_1()
-            .border_color(with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.22 }))
+            .border_color(with_alpha(
+                theme.colors.accent,
+                if theme.is_dark { 0.28 } else { 0.22 },
+            ))
             .font_family("monospace")
             .text_xs()
             .text_color(theme.colors.text_muted)
@@ -1250,118 +1268,174 @@ fn diff_row(
             .on_click(on_click);
 
         if selected {
-            row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
+            row = row
+                .border_1()
+                .border_color(with_alpha(theme.colors.accent, 0.55));
         }
 
         return row.into_any_element();
     }
 
     let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
-    let text = diff_content_text(line);
 
     let old = line.old_line.map(|n| n.to_string()).unwrap_or_default();
     let new = line.new_line.map(|n| n.to_string()).unwrap_or_default();
 
-    let (left_text, right_text) = match (mode, line.kind) {
-        (DiffViewMode::Split, gitgpui_core::domain::DiffLineKind::Remove) => {
-            (text.to_string(), String::new())
-        }
-        (DiffViewMode::Split, gitgpui_core::domain::DiffLineKind::Add) => {
-            (String::new(), text.to_string())
-        }
-        (DiffViewMode::Split, gitgpui_core::domain::DiffLineKind::Context) => {
-            (text.to_string(), text.to_string())
-        }
-        (DiffViewMode::Split, _) => (text.to_string(), String::new()),
-        (DiffViewMode::Inline, _) => (text.to_string(), String::new()),
-    };
-
-    let word_color = match line.kind {
-        gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-        gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
-        _ => None,
-    };
-
-    let mut row = div()
-        .id(("diff_row", visible_ix))
-        .h(px(20.0))
-        .flex()
-        .items_center()
-        .bg(bg)
-        .font_family("monospace")
-        .text_xs()
-        .on_click(on_click)
-        .child(
-            div()
-                .w(px(44.0))
-                .px_2()
-                .text_color(gutter_fg)
-                .whitespace_nowrap()
-                .child(old),
-        )
-        .child(
-            div()
-                .w(px(44.0))
-                .px_2()
-                .text_color(gutter_fg)
-                .whitespace_nowrap()
-                .child(new),
-        );
-
-    if selected {
-        row = row.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
-    }
-
     match mode {
-        DiffViewMode::Inline => row
-            .child(
+        DiffViewMode::Inline => {
+            let word_color = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                _ => None,
+            };
+
+            let mut row = div()
+                .id(("diff_row", visible_ix))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .bg(bg)
+                .font_family("monospace")
+                .text_xs()
+                .on_click(on_click)
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .px_2()
+                        .text_color(gutter_fg)
+                        .whitespace_nowrap()
+                        .child(old),
+                )
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .px_2()
+                        .text_color(gutter_fg)
+                        .whitespace_nowrap()
+                        .child(new),
+                );
+
+            if selected {
+                row = row
+                    .border_1()
+                    .border_color(with_alpha(theme.colors.accent, 0.55));
+            }
+
+            row.child(
                 div()
                     .flex_1()
                     .px_2()
                     .text_color(fg)
                     .whitespace_nowrap()
-                    .child(render_diff_text_segments(
-                        theme,
-                        fg,
-                        &left_text,
-                        word_ranges,
-                        query,
-                        word_color,
+                    .child(render_cached_diff_text_segments(
+                        theme, fg, segments, word_color,
                     )),
             )
-            .into_any_element(),
-        DiffViewMode::Split => row
-            .child(
-                div()
-                    .flex_1()
-                    .px_2()
-                    .text_color(fg)
-                    .whitespace_nowrap()
-                    .child(render_diff_text_segments(
-                        theme,
-                        fg,
-                        &left_text,
-                        word_ranges,
-                        query,
-                        word_color,
-                    )),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .px_2()
-                    .text_color(fg)
-                    .whitespace_nowrap()
-                    .child(render_diff_text_segments(
-                        theme,
-                        fg,
-                        &right_text,
-                        word_ranges,
-                        query,
-                        word_color,
-                    )),
-            )
-            .into_any_element(),
+            .into_any_element()
+        }
+        DiffViewMode::Split => {
+            let left_kind = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Remove => {
+                    gitgpui_core::domain::DiffLineKind::Remove
+                }
+                gitgpui_core::domain::DiffLineKind::Add => {
+                    gitgpui_core::domain::DiffLineKind::Context
+                }
+                _ => gitgpui_core::domain::DiffLineKind::Context,
+            };
+            let right_kind = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Add => gitgpui_core::domain::DiffLineKind::Add,
+                gitgpui_core::domain::DiffLineKind::Remove => {
+                    gitgpui_core::domain::DiffLineKind::Context
+                }
+                _ => gitgpui_core::domain::DiffLineKind::Context,
+            };
+
+            let (left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
+            let (right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+
+            let left_word_color = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Remove)
+                .then_some(theme.colors.danger);
+            let right_word_color = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Add)
+                .then_some(theme.colors.success);
+
+            let (left_segments, right_segments): (
+                &[CachedDiffTextSegment],
+                &[CachedDiffTextSegment],
+            ) = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Remove => (segments, &[]),
+                gitgpui_core::domain::DiffLineKind::Add => (&[], segments),
+                gitgpui_core::domain::DiffLineKind::Context => (segments, segments),
+                _ => (segments, &[]),
+            };
+
+            let mut row = div()
+                .id(("diff_row", visible_ix))
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .font_family("monospace")
+                .text_xs()
+                .on_click(on_click)
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .px_2()
+                        .bg(left_bg)
+                        .text_color(left_gutter)
+                        .whitespace_nowrap()
+                        .child(old),
+                )
+                .child(
+                    div()
+                        .w(px(44.0))
+                        .px_2()
+                        .bg(right_bg)
+                        .text_color(right_gutter)
+                        .whitespace_nowrap()
+                        .child(new),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .px_2()
+                        .bg(left_bg)
+                        .text_color(left_fg)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(render_cached_diff_text_segments(
+                            theme,
+                            left_fg,
+                            left_segments,
+                            left_word_color,
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .px_2()
+                        .bg(right_bg)
+                        .text_color(right_fg)
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(render_cached_diff_text_segments(
+                            theme,
+                            right_fg,
+                            right_segments,
+                            right_word_color,
+                        )),
+                );
+
+            if selected {
+                row = row
+                    .border_1()
+                    .border_color(with_alpha(theme.colors.accent, 0.55));
+            }
+
+            row.into_any_element()
+        }
     }
 }
 
@@ -1397,8 +1471,8 @@ fn file_diff_row(
 
     let old_no = row.old_line.map(|n| n.to_string()).unwrap_or_default();
     let new_no = row.new_line.map(|n| n.to_string()).unwrap_or_default();
-    let old_text = preserve_spaces(row.old.as_deref().unwrap_or(""));
-    let new_text = preserve_spaces(row.new.as_deref().unwrap_or(""));
+    let old_text = maybe_expand_tabs(row.old.as_deref().unwrap_or(""));
+    let new_text = maybe_expand_tabs(row.new.as_deref().unwrap_or(""));
 
     let mut el = div()
         .id(("file_diff_row", ix))
@@ -1450,29 +1524,48 @@ fn file_diff_row(
         );
 
     if selected {
-        el = el.border_1().border_color(with_alpha(theme.colors.accent, 0.55));
+        el = el
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.55));
     }
 
     el.into_any_element()
 }
 
-fn render_diff_text_segments(
-    theme: AppTheme,
-    base_fg: gpui::Rgba,
+fn maybe_expand_tabs(s: &str) -> SharedString {
+    if !s.contains('\t') {
+        return s.to_string().into();
+    }
+
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\t' => out.push_str("    "),
+            _ => out.push(ch),
+        }
+    }
+    out.into()
+}
+
+fn build_diff_text_segments(
     text: &str,
     word_ranges: &[Range<usize>],
     query: &str,
-    word_color: Option<gpui::Rgba>,
-) -> AnyElement {
+) -> Vec<CachedDiffTextSegment> {
     if text.is_empty() {
-        return div().into_any_element();
+        return Vec::new();
     }
 
     let query = query.trim();
-    let query_range =
-        (!query.is_empty()).then(|| find_ascii_case_insensitive(text, query)).flatten();
+    let query_range = (!query.is_empty())
+        .then(|| find_ascii_case_insensitive(text, query))
+        .flatten();
 
-    let mut boundaries: Vec<usize> = vec![0, text.len()];
+    let mut boundaries: Vec<usize> = Vec::with_capacity(
+        2 + word_ranges.len() * 2 + query_range.as_ref().map(|_| 2).unwrap_or(0),
+    );
+    boundaries.push(0);
+    boundaries.push(text.len());
     for r in word_ranges {
         boundaries.push(r.start.min(text.len()));
         boundaries.push(r.end.min(text.len()));
@@ -1484,6 +1577,40 @@ fn render_diff_text_segments(
     boundaries.sort_unstable();
     boundaries.dedup();
 
+    let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
+    for w in boundaries.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a >= b || a >= text.len() {
+            continue;
+        }
+        let b = b.min(text.len());
+        let seg = &text[a..b];
+
+        let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
+        let in_query = query_range
+            .as_ref()
+            .is_some_and(|r| a < r.end && b > r.start);
+
+        segments.push(CachedDiffTextSegment {
+            text: maybe_expand_tabs(seg),
+            in_word,
+            in_query,
+        });
+    }
+
+    segments
+}
+
+fn render_cached_diff_text_segments(
+    theme: AppTheme,
+    base_fg: gpui::Rgba,
+    segments: &[CachedDiffTextSegment],
+    word_color: Option<gpui::Rgba>,
+) -> AnyElement {
+    if segments.is_empty() {
+        return div().into_any_element();
+    }
+
     let mut container = div()
         .flex()
         .items_center()
@@ -1492,30 +1619,17 @@ fn render_diff_text_segments(
         .whitespace_nowrap()
         .text_color(base_fg);
 
-    for w in boundaries.windows(2) {
-        let (a, b) = (w[0], w[1]);
-        if a >= b || a >= text.len() {
-            continue;
-        }
-        let b = b.min(text.len());
-        let seg = &text[a..b];
-        let seg_text = preserve_spaces(seg);
+    for seg in segments {
+        let mut el = div().child(seg.text.clone());
 
-        let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
-        let in_query = query_range
-            .as_ref()
-            .is_some_and(|r| a < r.end && b > r.start);
-
-        let mut el = div().child(seg_text);
-
-        if in_word {
+        if seg.in_word {
             if let Some(mut c) = word_color {
                 c.a = if theme.is_dark { 0.22 } else { 0.16 };
                 el = el.bg(c);
             }
         }
 
-        if in_query {
+        if seg.in_query {
             el = el
                 .font_weight(FontWeight::BOLD)
                 .text_color(theme.colors.accent);
@@ -1525,18 +1639,6 @@ fn render_diff_text_segments(
     }
 
     container.into_any_element()
-}
-
-fn preserve_spaces(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            ' ' => out.push('\u{00A0}'),
-            '\t' => out.push_str("\u{00A0}\u{00A0}\u{00A0}\u{00A0}"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usize>> {

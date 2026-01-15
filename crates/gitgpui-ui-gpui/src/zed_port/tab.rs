@@ -86,6 +86,7 @@ impl Tab {
             (theme.colors.text_muted, theme.colors.surface_bg)
         };
         let hover_bg = theme.colors.hover;
+        let active_bg = theme.colors.active;
 
         let (start_slot, end_slot) = match self.close_side {
             TabCloseSide::End => (self.start_slot, self.end_slot),
@@ -111,11 +112,30 @@ impl Tab {
         let mut base = self
             .div
             .group("tab")
+            .tab_index(0)
             .h(Self::container_height())
             .bg(tab_bg)
             .border_color(theme.colors.border)
             .cursor_pointer()
             .hover(move |s| s.bg(hover_bg))
+            .active(move |s| s.bg(active_bg))
+            .focus(move |s| s.border_color(theme.colors.focus_ring))
+            .on_key_down(|event, window, cx| {
+                if event.keystroke.modifiers.modified() {
+                    return;
+                }
+                match event.keystroke.key.as_str() {
+                    "left" => {
+                        window.focus_prev();
+                        cx.stop_propagation();
+                    }
+                    "right" => {
+                        window.focus_next();
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            })
             .child(
                 div()
                     .flex()

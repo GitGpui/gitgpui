@@ -1,13 +1,50 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{ElementId, Pixels, ScrollHandle, canvas, div, fill, point, px, size};
+use gpui::{
+    Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, canvas, div, fill, point,
+    px, size,
+};
+use std::time::Duration;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollbarMarkerKind {
+    Add,
+    Remove,
+    Modify,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollbarMarker {
+    /// Start of the marker as a fraction of total content height in `[0, 1]`.
+    pub start: f32,
+    /// End of the marker as a fraction of total content height in `[0, 1]`.
+    pub end: f32,
+    pub kind: ScrollbarMarkerKind,
+}
 
 #[derive(Clone)]
 pub struct Scrollbar {
     id: ElementId,
     handle: ScrollHandle,
+    markers: Vec<ScrollbarMarker>,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
+}
+
+#[derive(Default)]
+struct ScrollbarInteractionState {
+    drag_offset_y: Option<Pixels>,
+    showing: bool,
+    hide_task: Option<gpui::Task<()>>,
+    last_scroll_y: Pixels,
+}
+
+#[derive(Clone, Debug)]
+struct ScrollbarPrepaintState {
+    track_bounds: Bounds<Pixels>,
+    thumb_bounds: Bounds<Pixels>,
+    cursor_hitbox: Hitbox,
 }
 
 impl Scrollbar {
@@ -15,9 +52,15 @@ impl Scrollbar {
         Self {
             id: id.into(),
             handle,
+            markers: Vec::new(),
             #[cfg(test)]
             debug_selector: None,
         }
+    }
+
+    pub fn markers(mut self, markers: Vec<ScrollbarMarker>) -> Self {
+        self.markers = markers;
+        self
     }
 
     #[cfg(test)]
@@ -28,26 +71,257 @@ impl Scrollbar {
 
     pub fn render(self, theme: AppTheme) -> impl IntoElement {
         let handle = self.handle.clone();
+        let markers = self.markers;
+        let id = self.id.clone();
+
+        let prepaint_handle = handle.clone();
         let paint = canvas(
-            |_, _, _| (),
-            move |bounds, _, window, _cx| {
+            move |bounds, window, _cx| {
                 let viewport_h = {
-                    let h = handle.bounds().size.height;
+                    let h = prepaint_handle.bounds().size.height;
                     if h > px(0.0) { h } else { bounds.size.height }
                 };
-                let max_offset = handle.max_offset().height.max(px(0.0));
-                let scroll_y = (-handle.offset().y).max(px(0.0)).min(max_offset);
+                let max_offset = prepaint_handle.max_offset().height.max(px(0.0));
+                let scroll_y = (-prepaint_handle.offset().y).max(px(0.0)).min(max_offset);
 
                 let Some(metrics) = vertical_thumb_metrics(viewport_h, max_offset, scroll_y) else {
+                    return None;
+                };
+
+                let margin = px(4.0);
+                let track_h = (viewport_h - margin * 2.0).max(px(0.0));
+                let track_bounds = Bounds::new(
+                    point(bounds.left(), bounds.top() + margin),
+                    size(bounds.size.width, track_h),
+                );
+
+                let thumb_x = bounds.right() - margin - metrics.width;
+                let thumb_bounds = Bounds::new(
+                    point(thumb_x, bounds.top() + metrics.top),
+                    size(metrics.width, metrics.height),
+                );
+
+                let cursor_hitbox =
+                    window.insert_hitbox(track_bounds, HitboxBehavior::BlockMouseExceptScroll);
+
+                Some(ScrollbarPrepaintState {
+                    track_bounds,
+                    thumb_bounds,
+                    cursor_hitbox,
+                })
+            },
+            move |bounds, prepaint, window, cx| {
+                let Some(prepaint) = prepaint else {
                     return;
                 };
 
-                let x = bounds.right() - px(4.0) - metrics.width;
-                let y = bounds.top() + metrics.top;
-                window.paint_quad(fill(
-                    gpui::Bounds::new(point(x, y), size(metrics.width, metrics.height)),
-                    thumb_bg(theme),
-                ));
+                let interaction = window.use_keyed_state(
+                    (id.clone(), "scrollbar_interaction"),
+                    cx,
+                    |_window, _cx| ScrollbarInteractionState::default(),
+                );
+
+                let capture_phase = if interaction.read(cx).drag_offset_y.is_some() {
+                    DispatchPhase::Capture
+                } else {
+                    DispatchPhase::Bubble
+                };
+
+                let margin = px(4.0);
+                let track_h = prepaint.track_bounds.size.height.max(px(0.0));
+
+                let thumb_x = prepaint.thumb_bounds.origin.x;
+                let marker_w = px(4.0);
+                let marker_x = (thumb_x - margin - marker_w).max(bounds.left());
+
+                for marker in &markers {
+                    let start = marker.start.clamp(0.0, 1.0);
+                    let end = marker.end.clamp(0.0, 1.0);
+                    if end <= start {
+                        continue;
+                    }
+
+                    let y0 = prepaint.track_bounds.top() + track_h * start;
+                    let y1 = prepaint.track_bounds.top() + track_h * end;
+                    let min_h = px(2.0);
+                    let h = (y1 - y0).max(min_h);
+
+                    let (left, right) = marker_colors(theme, marker.kind);
+                    if let Some(left) = left {
+                        window.paint_quad(fill(
+                            gpui::Bounds::new(point(marker_x, y0), size(marker_w / 2.0, h)),
+                            left,
+                        ));
+                    }
+                    if let Some(right) = right {
+                        window.paint_quad(fill(
+                            gpui::Bounds::new(
+                                point(marker_x + marker_w / 2.0, y0),
+                                size(marker_w / 2.0, h),
+                            ),
+                            right,
+                        ));
+                    }
+                }
+
+                let hovered = prepaint.cursor_hitbox.is_hovered(window);
+                let is_dragging = interaction.read(cx).drag_offset_y.is_some();
+
+                let max_offset = handle.max_offset().height.max(px(0.0));
+                let scroll_y = (-handle.offset().y).max(px(0.0)).min(max_offset);
+                let scrolled = interaction.read(cx).last_scroll_y != scroll_y;
+                if scrolled {
+                    interaction.update(cx, |state, _cx| {
+                        state.last_scroll_y = scroll_y;
+                        state.showing = true;
+                        state.hide_task.take();
+                    });
+                }
+
+                // Zed-style autohide: show on hover/drag, then hide after a delay.
+                let state = interaction.read(cx);
+                let show = hovered || is_dragging || state.showing;
+                let should_schedule_hide =
+                    !hovered && !is_dragging && state.showing && state.hide_task.is_none();
+                let _ = state;
+
+                if hovered || is_dragging {
+                    interaction.update(cx, |state, _cx| {
+                        state.showing = true;
+                        state.hide_task.take();
+                    });
+                } else if should_schedule_hide {
+                    interaction.update(cx, |state, cx| {
+                        state.hide_task.take();
+                        let task = cx.spawn(
+                            async move |state: gpui::WeakEntity<ScrollbarInteractionState>,
+                                        cx: &mut gpui::AsyncApp| {
+                                gpui::Timer::after(Duration::from_millis(1000)).await;
+                                let _ = state.update(cx, |s, cx| {
+                                    if s.drag_offset_y.is_none() {
+                                        s.showing = false;
+                                        cx.notify();
+                                    }
+                                    s.hide_task = None;
+                                });
+                            },
+                        );
+                        state.hide_task = Some(task);
+                    });
+                }
+                let thumb_color = if is_dragging {
+                    theme.colors.scrollbar_thumb_active
+                } else if hovered {
+                    theme.colors.scrollbar_thumb_hover
+                } else {
+                    theme.colors.scrollbar_thumb
+                };
+
+                if show {
+                    window.paint_quad(fill(prepaint.thumb_bounds, thumb_color));
+                }
+
+                if interaction.read(cx).drag_offset_y.is_some() {
+                    window.set_window_cursor_style(CursorStyle::Arrow);
+                } else {
+                    window.set_cursor_style(CursorStyle::Arrow, &prepaint.cursor_hitbox);
+                }
+
+                let track_bounds = prepaint.track_bounds;
+                let thumb_bounds = prepaint.thumb_bounds;
+                let thumb_h = thumb_bounds.size.height;
+
+                window.on_mouse_event({
+                    let interaction = interaction.clone();
+                    let handle = handle.clone();
+                    move |event: &MouseDownEvent, phase, window, cx| {
+                        if phase != capture_phase || event.button != MouseButton::Left {
+                            return;
+                        }
+                        if !track_bounds.contains(&event.position) {
+                            return;
+                        }
+
+                        let max_offset = handle.max_offset().height.max(px(0.0));
+                        if max_offset <= px(0.0) {
+                            return;
+                        }
+
+                        if thumb_bounds.contains(&event.position) {
+                            let grab = event.position.y - thumb_bounds.origin.y;
+                            interaction.update(cx, |state, _cx| {
+                                state.drag_offset_y = Some(grab);
+                                state.showing = true;
+                                state.hide_task.take();
+                            });
+                        } else {
+                            interaction.update(cx, |state, _cx| {
+                                state.drag_offset_y = None;
+                                state.showing = true;
+                                state.hide_task.take();
+                            });
+                            let offset_y = compute_vertical_click_offset(
+                                event.position.y,
+                                track_bounds,
+                                thumb_h,
+                                thumb_h / 2.0,
+                                max_offset,
+                            );
+                            let x = handle.offset().x;
+                            handle.set_offset(point(x, offset_y));
+                        }
+
+                        window.refresh();
+                        cx.stop_propagation();
+                    }
+                });
+
+                window.on_mouse_event({
+                    let interaction = interaction.clone();
+                    let handle = handle.clone();
+                    move |event: &MouseMoveEvent, phase, window, cx| {
+                        if phase != capture_phase || !event.dragging() {
+                            return;
+                        }
+
+                        let Some(grab) = interaction.read(cx).drag_offset_y else {
+                            return;
+                        };
+
+                        let max_offset = handle.max_offset().height.max(px(0.0));
+                        if max_offset <= px(0.0) {
+                            return;
+                        }
+
+                        let offset_y = compute_vertical_click_offset(
+                            event.position.y,
+                            track_bounds,
+                            thumb_h,
+                            grab,
+                            max_offset,
+                        );
+                        let x = handle.offset().x;
+                        handle.set_offset(point(x, offset_y));
+                        interaction.update(cx, |state, _cx| state.showing = true);
+                        window.refresh();
+                        cx.stop_propagation();
+                    }
+                });
+
+                window.on_mouse_event({
+                    let interaction = interaction.clone();
+                    move |event: &MouseUpEvent, phase, window, cx| {
+                        if phase != capture_phase || event.button != MouseButton::Left {
+                            return;
+                        }
+                        if interaction.read(cx).drag_offset_y.is_none() {
+                            return;
+                        }
+                        interaction.update(cx, |state, _cx| state.drag_offset_y = None);
+                        window.refresh();
+                        cx.stop_propagation();
+                    }
+                });
             },
         )
         .absolute()
@@ -59,8 +333,9 @@ impl Scrollbar {
             .id(self.id)
             .absolute()
             .top_0()
-            .left_0()
-            .size_full()
+            .right_0()
+            .bottom_0()
+            .w(px(16.0))
             .child(paint);
 
         #[cfg(test)]
@@ -93,10 +368,47 @@ struct ThumbMetrics {
     width: Pixels,
 }
 
-fn thumb_bg(theme: AppTheme) -> gpui::Rgba {
-    let mut color = theme.colors.text_muted;
-    color.a = if theme.is_dark { 0.32 } else { 0.28 };
-    color
+fn marker_colors(
+    theme: AppTheme,
+    kind: ScrollbarMarkerKind,
+) -> (Option<gpui::Rgba>, Option<gpui::Rgba>) {
+    let mut add = theme.colors.success;
+    let mut rem = theme.colors.danger;
+    let alpha = if theme.is_dark { 0.70 } else { 0.55 };
+    add.a = alpha;
+    rem.a = alpha;
+
+    match kind {
+        ScrollbarMarkerKind::Add => (Some(add), Some(add)),
+        ScrollbarMarkerKind::Remove => (Some(rem), Some(rem)),
+        ScrollbarMarkerKind::Modify => (Some(rem), Some(add)),
+    }
+}
+
+fn compute_vertical_click_offset(
+    event_y: Pixels,
+    track_bounds: Bounds<Pixels>,
+    thumb_size: Pixels,
+    thumb_offset: Pixels,
+    max_offset: Pixels,
+) -> Pixels {
+    let viewport_size = track_bounds.size.height.max(px(0.0));
+    if viewport_size <= px(0.0) || max_offset <= px(0.0) {
+        return px(0.0);
+    }
+
+    let max_thumb_start = (viewport_size - thumb_size).max(px(0.0));
+    let thumb_start = (event_y - track_bounds.origin.y - thumb_offset)
+        .max(px(0.0))
+        .min(max_thumb_start);
+
+    let pct = if max_thumb_start > px(0.0) {
+        thumb_start / max_thumb_start
+    } else {
+        0.0
+    };
+
+    (-max_offset * pct).max(-max_offset).min(px(0.0))
 }
 
 fn vertical_thumb_metrics(
@@ -139,10 +451,15 @@ mod tests {
     }
 
     #[test]
-    fn thumb_bg_alpha_in_range() {
+    fn scrollbar_thumb_alpha_in_range() {
         for theme in [AppTheme::zed_ayu_dark(), AppTheme::zed_one_light()] {
-            let bg = thumb_bg(theme);
-            assert!(bg.a >= 0.0 && bg.a <= 1.0);
+            for c in [
+                theme.colors.scrollbar_thumb,
+                theme.colors.scrollbar_thumb_hover,
+                theme.colors.scrollbar_thumb_active,
+            ] {
+                assert!(c.a >= 0.0 && c.a <= 1.0);
+            }
         }
     }
 }

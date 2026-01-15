@@ -34,6 +34,8 @@ struct TextInputStyle {
     is_dark: bool,
     background: Rgba,
     border: Rgba,
+    hover_border: Rgba,
+    focus_border: Rgba,
     radius: f32,
     cursor: Rgba,
     selection: Rgba,
@@ -41,10 +43,13 @@ struct TextInputStyle {
 
 impl TextInputStyle {
     fn from_theme(theme: AppTheme) -> Self {
+        let hover_border = with_alpha(theme.colors.border, if theme.is_dark { 0.95 } else { 1.0 });
         Self {
             is_dark: theme.is_dark,
             background: theme.colors.surface_bg_elevated,
             border: theme.colors.border,
+            hover_border,
+            focus_border: theme.colors.focus_ring,
             radius: theme.radii.row,
             cursor: theme.colors.accent,
             selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
@@ -76,7 +81,7 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(options: TextInputOptions, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
+        let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         window.focus(&focus_handle);
         Self {
             focus_handle,
@@ -696,6 +701,8 @@ impl Render for TextInput {
             .bg(style.background)
             .border_1()
             .border_color(style.border)
+            .hover(move |s| s.border_color(style.hover_border))
+            .focus(move |s| s.border_color(style.focus_border))
             .rounded(px(style.radius))
             .line_height(window.line_height())
             .text_size(px(13.0))

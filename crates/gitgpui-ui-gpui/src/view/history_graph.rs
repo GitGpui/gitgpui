@@ -194,7 +194,9 @@ pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
 
         // Remove ended lanes: lanes whose target is not part of the visible graph, or whose target
         // is this commit without a parent to follow.
-        lanes.retain(|l| known.contains(l.target.as_ref()) && l.target.as_ref() != commit.id.as_ref());
+        lanes.retain(|l| {
+            known.contains(l.target.as_ref()) && l.target.as_ref() != commit.id.as_ref()
+        });
 
         let lanes_next = lanes
             .iter()
@@ -214,7 +216,9 @@ pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
         }
         let lanes_now_ids: HashSet<LaneId> = lanes_now.iter().map(|l| l.id).collect();
         for parent in parent_ids.iter().skip(1) {
-            if let Some(lane) = lanes.iter().find(|l| l.target == *parent && lanes_now_ids.contains(&l.id))
+            if let Some(lane) = lanes
+                .iter()
+                .find(|l| l.target == *parent && lanes_now_ids.contains(&l.id))
                 && let Some(to_col) = next_index_by_lane.get(&lane.id).copied()
             {
                 edges_out.push(GraphEdge {

@@ -166,41 +166,40 @@ fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     if v[offset as usize] >= n && v[offset as usize] >= m {
         last_d = 0;
     } else {
-    'outer: for d in 1..=max {
-        let d_isize = d as isize;
-        let mut next = v.clone();
+        'outer: for d in 1..=max {
+            let d_isize = d as isize;
+            let mut next = v.clone();
 
-        for k in (-d_isize..=d_isize).step_by(2) {
-            let k_idx = (offset + k) as usize;
+            for k in (-d_isize..=d_isize).step_by(2) {
+                let k_idx = (offset + k) as usize;
 
-            let x = if k == -d_isize
-                || (k != d_isize
-                    && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
-            {
-                v[(offset + k + 1) as usize]
-            } else {
-                v[(offset + k - 1) as usize] + 1
-            };
+                let x = if k == -d_isize
+                    || (k != d_isize && v[(offset + k - 1) as usize] < v[(offset + k + 1) as usize])
+                {
+                    v[(offset + k + 1) as usize]
+                } else {
+                    v[(offset + k - 1) as usize] + 1
+                };
 
-            let mut x = x;
-            let mut y = x - k;
-            while x < n && y < m && old[x as usize] == new[y as usize] {
-                x += 1;
-                y += 1;
+                let mut x = x;
+                let mut y = x - k;
+                while x < n && y < m && old[x as usize] == new[y as usize] {
+                    x += 1;
+                    y += 1;
+                }
+                next[k_idx] = x;
+
+                if x >= n && y >= m {
+                    v = next;
+                    trace.push(v.clone());
+                    last_d = d;
+                    break 'outer;
+                }
             }
-            next[k_idx] = x;
 
-            if x >= n && y >= m {
-                v = next;
-                trace.push(v.clone());
-                last_d = d;
-                break 'outer;
-            }
+            v = next;
+            trace.push(v.clone());
         }
-
-        v = next;
-        trace.push(v.clone());
-    }
     }
 
     if n == 0 && m == 0 {

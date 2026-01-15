@@ -18,6 +18,12 @@ pub struct Colors {
     pub text_muted: Rgba,
     pub accent: Rgba,
     pub hover: Rgba,
+    pub active: Rgba,
+    pub focus_ring: Rgba,
+    pub focus_ring_bg: Rgba,
+    pub scrollbar_thumb: Rgba,
+    pub scrollbar_thumb_hover: Rgba,
+    pub scrollbar_thumb_active: Rgba,
     pub danger: Rgba,
     pub warning: Rgba,
     pub success: Rgba,
@@ -39,6 +45,10 @@ impl AppTheme {
     }
 
     pub fn dark_default() -> Self {
+        let accent = gpui::rgb(0x60A5FA);
+        let hover = gpui::rgb(0x172033);
+        let text_muted = gpui::rgb(0x94A3B8);
+        let scrollbar_thumb = with_alpha(text_muted, 0.30);
         Self {
             is_dark: true,
             colors: Colors {
@@ -47,9 +57,15 @@ impl AppTheme {
                 surface_bg_elevated: gpui::rgb(0x0B1220),
                 border: gpui::rgb(0x1F2A37),
                 text: gpui::rgb(0xE5E7EB),
-                text_muted: gpui::rgb(0x94A3B8),
-                accent: gpui::rgb(0x60A5FA),
-                hover: gpui::rgb(0x172033),
+                text_muted,
+                accent,
+                hover,
+                active: with_alpha(hover, 0.78),
+                focus_ring: with_alpha(accent, 0.58),
+                focus_ring_bg: with_alpha(accent, 0.16),
+                scrollbar_thumb,
+                scrollbar_thumb_hover: with_alpha(text_muted, 0.42),
+                scrollbar_thumb_active: with_alpha(text_muted, 0.52),
                 danger: gpui::rgb(0xF87171),
                 warning: gpui::rgb(0xFBBF24),
                 success: gpui::rgb(0x34D399),
@@ -64,6 +80,9 @@ impl AppTheme {
 
     /// Zed's "One Dark" theme (ported from `zed/assets/themes/one/one.json`).
     pub fn zed_one_dark() -> Self {
+        let accent = gpui::rgba(0x74ade8ff);
+        let hover = gpui::rgba(0x363c46ff);
+        let text_muted = gpui::rgba(0xa9afbcff);
         Self {
             is_dark: true,
             colors: Colors {
@@ -78,11 +97,17 @@ impl AppTheme {
                 // text
                 text: gpui::rgba(0xdce0e5ff),
                 // text.muted
-                text_muted: gpui::rgba(0xa9afbcff),
+                text_muted,
                 // text.accent
-                accent: gpui::rgba(0x74ade8ff),
+                accent,
                 // element.hover
-                hover: gpui::rgba(0x363c46ff),
+                hover,
+                active: with_alpha(hover, 0.78),
+                focus_ring: with_alpha(accent, 0.60),
+                focus_ring_bg: with_alpha(accent, 0.16),
+                scrollbar_thumb: with_alpha(text_muted, 0.30),
+                scrollbar_thumb_hover: with_alpha(text_muted, 0.42),
+                scrollbar_thumb_active: with_alpha(text_muted, 0.52),
                 // terminal.ansi.red
                 danger: gpui::rgba(0xe06c75ff),
                 // terminal.ansi.yellow
@@ -100,6 +125,9 @@ impl AppTheme {
 
     /// Zed's "Ayu Dark" theme (ported from `zed/assets/themes/ayu/ayu.json`).
     pub fn zed_ayu_dark() -> Self {
+        let accent = gpui::rgba(0x5ac1feff);
+        let hover = gpui::rgba(0x2d2f34ff);
+        let text_muted = gpui::rgba(0x8a8986ff);
         Self {
             is_dark: true,
             colors: Colors {
@@ -114,11 +142,17 @@ impl AppTheme {
                 // text
                 text: gpui::rgba(0xbfbdb6ff),
                 // text.muted
-                text_muted: gpui::rgba(0x8a8986ff),
+                text_muted,
                 // text.accent
-                accent: gpui::rgba(0x5ac1feff),
+                accent,
                 // element.hover
-                hover: gpui::rgba(0x2d2f34ff),
+                hover,
+                active: with_alpha(hover, 0.78),
+                focus_ring: with_alpha(accent, 0.60),
+                focus_ring_bg: with_alpha(accent, 0.16),
+                scrollbar_thumb: with_alpha(text_muted, 0.30),
+                scrollbar_thumb_hover: with_alpha(text_muted, 0.42),
+                scrollbar_thumb_active: with_alpha(text_muted, 0.52),
                 // terminal.ansi.red
                 danger: gpui::rgba(0xef7177ff),
                 // terminal.ansi.yellow
@@ -136,6 +170,9 @@ impl AppTheme {
 
     /// Zed's "One Light" theme (ported from `zed/assets/themes/one/one.json`).
     pub fn zed_one_light() -> Self {
+        let accent = gpui::rgba(0x5c78e2ff);
+        let hover = gpui::rgba(0xdfdfe0ff);
+        let text_muted = gpui::rgba(0x58585aff);
         Self {
             is_dark: false,
             colors: Colors {
@@ -150,11 +187,17 @@ impl AppTheme {
                 // text
                 text: gpui::rgba(0x242529ff),
                 // text.muted
-                text_muted: gpui::rgba(0x58585aff),
+                text_muted,
                 // text.accent
-                accent: gpui::rgba(0x5c78e2ff),
+                accent,
                 // element.hover
-                hover: gpui::rgba(0xdfdfe0ff),
+                hover,
+                active: with_alpha(hover, 0.88),
+                focus_ring: with_alpha(accent, 0.52),
+                focus_ring_bg: with_alpha(accent, 0.12),
+                scrollbar_thumb: with_alpha(text_muted, 0.26),
+                scrollbar_thumb_hover: with_alpha(text_muted, 0.36),
+                scrollbar_thumb_active: with_alpha(text_muted, 0.46),
                 // terminal.ansi.red
                 danger: gpui::rgba(0xde3e35ff),
                 // terminal.ansi.yellow
@@ -169,4 +212,9 @@ impl AppTheme {
             },
         }
     }
+}
+
+fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
+    color.a = alpha;
+    color
 }

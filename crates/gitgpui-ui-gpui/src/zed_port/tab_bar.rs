@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
+use gpui::{AnyElement, Div, ElementId, IntoElement, ScrollHandle, Stateful, div, px};
 
 use super::Tab;
 
@@ -10,6 +10,7 @@ pub struct TabBar {
     start: Vec<AnyElement>,
     tabs: Vec<AnyElement>,
     end: Vec<AnyElement>,
+    scroll_handle: Option<ScrollHandle>,
 }
 
 impl TabBar {
@@ -19,7 +20,13 @@ impl TabBar {
             start: Vec::new(),
             tabs: Vec::new(),
             end: Vec::new(),
+            scroll_handle: None,
         }
+    }
+
+    pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
+        self.scroll_handle = Some(scroll_handle.clone());
+        self
     }
 
     pub fn start_child(mut self, child: impl IntoElement) -> Self {
@@ -38,10 +45,24 @@ impl TabBar {
     }
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
+        let mut tabs = div()
+            .id((self.id.clone(), "tabs"))
+            .flex()
+            .items_center()
+            .h_full()
+            .overflow_x_scroll()
+            .scrollbar_width(px(0.0))
+            .children(self.tabs);
+
+        if let Some(scroll_handle) = self.scroll_handle {
+            tabs = tabs.track_scroll(&scroll_handle);
+        }
+
         div()
             .id(self.id)
             .group("tab_bar")
             .flex()
+            .flex_none()
             .items_center()
             .w_full()
             .h(Tab::container_height())
@@ -75,7 +96,7 @@ impl TabBar {
                             .border_b_1()
                             .border_color(theme.colors.border),
                     )
-                    .child(div().flex().items_center().h_full().children(self.tabs)),
+                    .child(tabs),
             )
             .when(!self.end.is_empty(), |this| {
                 this.child(

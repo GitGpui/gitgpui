@@ -1,6 +1,6 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileStatus,
-    FileDiffText, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
+    FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
     RepoStatus,
 };
 use gitgpui_core::error::{Error, ErrorKind};
@@ -816,7 +816,11 @@ fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Optio
     }
 }
 
-fn git_show_path_utf8_optional(workdir: &Path, rev_prefix: &str, path: &str) -> Result<Option<String>> {
+fn git_show_path_utf8_optional(
+    workdir: &Path,
+    rev_prefix: &str,
+    path: &str,
+) -> Result<Option<String>> {
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(workdir)
@@ -869,7 +873,9 @@ fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<Stri
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.to_string();
-    if stderr.contains("unknown revision") || stderr.contains("bad revision") || stderr.contains("bad object")
+    if stderr.contains("unknown revision")
+        || stderr.contains("bad revision")
+        || stderr.contains("bad object")
     {
         return Ok(None);
     }
@@ -959,7 +965,9 @@ fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
 
     for line in output.lines() {
         if line.starts_with('\t') {
-            let commit = current_commit.clone().unwrap_or_else(|| "0000000".to_string());
+            let commit = current_commit
+                .clone()
+                .unwrap_or_else(|| "0000000".to_string());
             let line_text = line.strip_prefix('\t').unwrap_or("").to_string();
 
             let (author_filled, author_time_filled, summary_filled) = if author.is_none()
@@ -978,7 +986,11 @@ fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
 
             cached_by_commit.insert(
                 commit.clone(),
-                (author_filled.clone(), author_time_filled, summary_filled.clone()),
+                (
+                    author_filled.clone(),
+                    author_time_filled,
+                    summary_filled.clone(),
+                ),
             );
 
             out.push(BlameLine {

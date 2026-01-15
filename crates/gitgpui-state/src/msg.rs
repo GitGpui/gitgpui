@@ -308,7 +308,11 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("ClearBlame")
                 .field("repo_id", repo_id)
                 .finish(),
-            Msg::CheckoutConflictSide { repo_id, path, side } => f
+            Msg::CheckoutConflictSide {
+                repo_id,
+                path,
+                side,
+            } => f
                 .debug_struct("CheckoutConflictSide")
                 .field("repo_id", repo_id)
                 .field("path", path)

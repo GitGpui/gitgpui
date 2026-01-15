@@ -270,21 +270,17 @@ impl gpui::Render for PanelLayoutTestView {
 
         let scroll_handle = self.handle.0.borrow().base_handle.clone();
 
-        let body = div()
-            .id("diff_body")
-            .debug_selector(|| "diff_body".to_string())
-            .flex()
-            .flex_col()
-            .h_full()
-            .child(header)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .relative()
-                    .child(list)
-                    .child(zed::Scrollbar::new("diff_scrollbar_test", scroll_handle).render(theme)),
-            );
+        let body =
+            div()
+                .id("diff_body")
+                .debug_selector(|| "diff_body".to_string())
+                .flex()
+                .flex_col()
+                .h_full()
+                .child(header)
+                .child(div().flex_1().min_h(px(0.0)).relative().child(list).child(
+                    zed::Scrollbar::new("diff_scrollbar_test", scroll_handle).render(theme),
+                ));
 
         div()
             .size_full()
@@ -479,6 +475,50 @@ fn scrollbar_thumb_hidden_when_not_overflowing(cx: &mut gpui::TestAppContext) {
         assert!(
             !zed::Scrollbar::thumb_visible_for_test(handle, px(120.0)),
             "expected scrollbar thumb to be hidden when not overflowing"
+        );
+    });
+}
+
+#[gpui::test]
+fn scrollbar_allows_dragging_thumb_to_scroll(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarTestView::new(50));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("test_scrollbar")
+        .expect("expected test_scrollbar in debug bounds");
+
+    let start = gpui::point(bounds.right() - px(2.0), bounds.top() + px(6.0));
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+
+    // First move crosses the drag threshold and starts the drag.
+    cx.simulate_mouse_move(
+        gpui::point(start.x, start.y + px(5.0)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    // Second move should scroll.
+    cx.simulate_mouse_move(
+        gpui::point(start.x, start.y + px(60.0)),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        gpui::point(start.x, start.y + px(60.0)),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let offset_y = view.read(app).handle.offset().y;
+        assert!(
+            offset_y < px(0.0),
+            "expected scrollbar drag to scroll (offset should become negative)"
         );
     });
 }

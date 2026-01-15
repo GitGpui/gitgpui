@@ -296,7 +296,11 @@ fn reduce(
             repo_id,
             path,
             side,
-        } => vec![Effect::CheckoutConflictSide { repo_id, path, side }],
+        } => vec![Effect::CheckoutConflictSide {
+            repo_id,
+            path,
+            side,
+        }],
         Msg::Stash {
             repo_id,
             message,
@@ -545,7 +549,13 @@ fn reduce(
                     Err(e) => {
                         repo_state.last_error = Some(e.to_string());
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                        push_command_log(repo_state, false, &command, &CommandOutput::default(), Some(&e));
+                        push_command_log(
+                            repo_state,
+                            false,
+                            &command,
+                            &CommandOutput::default(),
+                            Some(&e),
+                        );
                     }
                 }
             }
@@ -708,11 +718,7 @@ trait IfEmptyElse {
 
 impl IfEmptyElse for String {
     fn if_empty_else(self, f: impl FnOnce() -> String) -> String {
-        if self.trim().is_empty() {
-            f()
-        } else {
-            self
-        }
+        if self.trim().is_empty() { f() } else { self }
     }
 }
 
@@ -1603,7 +1609,11 @@ fn schedule_effect(
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
                     let result = repo.blame_file(&path, rev.as_deref());
-                    let _ = msg_tx.send(Msg::BlameLoaded { repo_id, path, result });
+                    let _ = msg_tx.send(Msg::BlameLoaded {
+                        repo_id,
+                        path,
+                        result,
+                    });
                 });
             }
         }
@@ -1735,7 +1745,11 @@ fn schedule_effect(
             }
         }
 
-        Effect::CheckoutConflictSide { repo_id, path, side } => {
+        Effect::CheckoutConflictSide {
+            repo_id,
+            path,
+            side,
+        } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
                     let result = repo.checkout_conflict_side(&path, side);
