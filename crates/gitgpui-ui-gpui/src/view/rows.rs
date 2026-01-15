@@ -23,6 +23,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(branch.name.clone())
                     .into_any_element()
             })
@@ -59,6 +60,7 @@ impl GitGpuiView {
                     .pl_4()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(name)
@@ -96,6 +98,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(zed::pill(theme, label, color))
                     .child(
                         div()
@@ -142,6 +145,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .flex()
@@ -217,6 +221,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .flex()
@@ -316,6 +321,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .flex_none()
@@ -429,6 +435,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .flex()
@@ -518,6 +525,7 @@ impl GitGpuiView {
                     .py_1()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .flex()
@@ -784,6 +792,7 @@ fn history_table_row(
         .px_2()
         .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
+        .active(move |s| s.bg(theme.colors.active))
         .child(
             div()
                 .w(px(HISTORY_COL_BRANCH_PX))
@@ -1136,6 +1145,7 @@ fn status_row(
         .py_1()
         .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
+        .active(move |s| s.bg(theme.colors.active))
         .child(
             div()
                 .flex()

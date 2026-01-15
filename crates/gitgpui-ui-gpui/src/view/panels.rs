@@ -185,6 +185,7 @@ impl GitGpuiView {
             .py_1()
             .rounded(px(theme.radii.row))
             .hover(move |s| s.bg(theme.colors.hover))
+            .active(move |s| s.bg(theme.colors.active))
             .child(
                 div()
                     .text_sm()
@@ -214,6 +215,7 @@ impl GitGpuiView {
             .py_1()
             .rounded(px(theme.radii.row))
             .hover(move |s| s.bg(theme.colors.hover))
+            .active(move |s| s.bg(theme.colors.active))
             .child(
                 div()
                     .text_sm()
@@ -372,6 +374,7 @@ impl GitGpuiView {
                                 .px_3()
                                 .py_2()
                                 .hover(move |s| s.bg(theme.colors.hover))
+                                .active(move |s| s.bg(theme.colors.active))
                                 .child("Close")
                                 .on_click(close),
                         )
@@ -386,6 +389,7 @@ impl GitGpuiView {
                                 .px_3()
                                 .py_2()
                                 .hover(move |s| s.bg(theme.colors.hover))
+                                .active(move |s| s.bg(theme.colors.active))
                                 .child(div().text_sm().line_clamp(1).child(label))
                                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                     this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
@@ -403,6 +407,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
+                            .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
                             .on_click(close),
                     )
@@ -452,6 +457,7 @@ impl GitGpuiView {
                                             .px_3()
                                             .py_2()
                                             .hover(move |s| s.bg(theme.colors.hover))
+                                            .active(move |s| s.bg(theme.colors.active))
                                             .child(name.clone())
                                             .on_click(cx.listener(
                                                 move |this, _e: &ClickEvent, _w, cx| {
@@ -512,6 +518,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
+                            .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
                             .on_click(close),
                     )
@@ -1157,6 +1164,7 @@ impl GitGpuiView {
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
+                            .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                 this.popover = None;
@@ -1176,6 +1184,7 @@ impl GitGpuiView {
                         .px_3()
                         .py_2()
                         .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
                         .child("Tools")
                         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
                             this.show_diagnostics_view = !this.show_diagnostics_view;
@@ -1194,6 +1203,7 @@ impl GitGpuiView {
                         .px_3()
                         .py_2()
                         .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
                         .child("Quit")
                         .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
                             cx.quit();
@@ -1206,6 +1216,7 @@ impl GitGpuiView {
                         .px_3()
                         .py_2()
                         .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
                         .child("Close")
                         .on_click(close),
                 ),
@@ -1223,7 +1234,7 @@ impl GitGpuiView {
                     .debug_selector(|| "app_popover".to_string())
                     .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
                     .occlude()
-                    .bg(theme.colors.surface_bg)
+                    .bg(theme.colors.surface_bg_elevated)
                     .border_1()
                     .border_color(theme.colors.border)
                     .rounded(px(theme.radii.panel))

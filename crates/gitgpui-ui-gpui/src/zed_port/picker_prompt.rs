@@ -5,7 +5,7 @@
 
 use crate::{theme::AppTheme, zed_port::TextInput};
 use gpui::prelude::*;
-use gpui::{ClickEvent, Div, Entity, FontWeight, SharedString, Window, div, px};
+use gpui::{ClickEvent, CursorStyle, Div, Entity, FontWeight, SharedString, Window, div, px};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -88,7 +88,10 @@ impl PickerPrompt {
                         .id(("picker_prompt_item", original_index))
                         .px_3()
                         .py_2()
+                        .rounded(px(theme.radii.row))
                         .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .cursor(CursorStyle::PointingHand)
                         .child(label)
                         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                             (on_select)(this, original_index, event, window, cx);

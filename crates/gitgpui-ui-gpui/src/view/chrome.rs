@@ -106,6 +106,7 @@ impl GitGpuiView {
             .items_center()
             .cursor(CursorStyle::PointingHand)
             .hover(move |s| s.bg(theme.colors.hover))
+            .active(move |s| s.bg(theme.colors.active))
             .child("≡")
             .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
                 this.popover = Some(PopoverKind::AppMenu);
@@ -162,6 +163,7 @@ impl GitGpuiView {
         let min = titlebar_control_button(theme, theme.colors.hover)
             .id("win_min")
             .window_control_area(WindowControlArea::Min)
+            .active(move |s| s.bg(theme.colors.active))
             .child("—")
             .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
@@ -171,6 +173,7 @@ impl GitGpuiView {
         let max = titlebar_control_button(theme, theme.colors.hover)
             .id("win_max")
             .window_control_area(WindowControlArea::Max)
+            .active(move |s| s.bg(theme.colors.active))
             .child(if window.is_maximized() { "❐" } else { "□" })
             .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
@@ -180,6 +183,7 @@ impl GitGpuiView {
         let close = titlebar_control_button(theme, with_alpha(theme.colors.danger, 0.25))
             .id("win_close")
             .window_control_area(WindowControlArea::Close)
+            .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.35)))
             .child("×")
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
