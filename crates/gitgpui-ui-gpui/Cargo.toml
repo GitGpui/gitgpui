@@ -15,7 +15,9 @@ gitgpui-ui = { path = "../gitgpui-ui" }
 gpui = "0.2.2"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25.1"
+tree-sitter-css = "0.23.2"
 tree-sitter-go = "0.23"
+tree-sitter-html = "0.23.2"
 tree-sitter-json = "0.24"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
@@ -25,6 +27,3 @@ unicode-segmentation = "1.12.0"
 
 [dev-dependencies]
 gpui = { version = "0.2.2", features = ["test-support"] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.12.1", default-features = false, features = ["tokio"] }

@@ -35,6 +35,13 @@ const HISTORY_COL_GRAPH_PX: f32 = 180.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
 
+fn should_hide_unified_diff_header_line(line: &AnnotatedDiffLine) -> bool {
+    matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+        && (line.text.starts_with("index ")
+            || line.text.starts_with("--- ")
+            || line.text.starts_with("+++ "))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiffViewMode {
     Inline,
@@ -173,6 +180,14 @@ pub struct GitGpuiView {
     diff_selection_range: Option<(usize, usize)>,
     diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
 
+    worktree_preview_path: Option<std::path::PathBuf>,
+    worktree_preview: Loadable<Arc<Vec<String>>>,
+    worktree_preview_scroll: UniformListScrollHandle,
+    worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
+    worktree_preview_segments_cache: HashMap<usize, Vec<CachedDiffTextSegment>>,
+    diff_preview_is_new_file: bool,
+    diff_preview_new_file_lines: Arc<Vec<String>>,
+
     history_tab: HistoryTab,
     history_search_input: Entity<zed::TextInput>,
     history_search_raw: String,
@@ -215,6 +230,8 @@ pub struct GitGpuiView {
     commit_scroll: ScrollHandle,
 
     toasts: Vec<ToastState>,
+
+    hovered_status_row: Option<(RepoId, DiffArea, std::path::PathBuf)>,
 }
 
 impl GitGpuiView {
@@ -349,6 +366,13 @@ impl GitGpuiView {
             diff_selection_anchor: None,
             diff_selection_range: None,
             diff_hunk_picker_search_input: None,
+            worktree_preview_path: None,
+            worktree_preview: Loadable::NotLoaded,
+            worktree_preview_scroll: UniformListScrollHandle::default(),
+            worktree_preview_segments_cache_path: None,
+            worktree_preview_segments_cache: HashMap::new(),
+            diff_preview_is_new_file: false,
+            diff_preview_new_file_lines: Arc::new(Vec::new()),
             history_tab: HistoryTab::Log,
             history_search_input,
             history_search_raw: String::new(),
@@ -386,6 +410,7 @@ impl GitGpuiView {
             sidebar_scroll: ScrollHandle::new(),
             commit_scroll: ScrollHandle::new(),
             toasts: Vec::new(),
+            hovered_status_row: None,
         };
 
         view.set_theme(initial_theme, cx);
@@ -648,6 +673,242 @@ impl GitGpuiView {
             .detach();
     }
 
+    fn untracked_worktree_preview_path(&self) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        let status = match &repo.status {
+            Loadable::Ready(s) => s,
+            _ => return None,
+        };
+        let workdir = repo.spec.workdir.clone();
+        let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+            return None;
+        };
+        if *area != DiffArea::Unstaged {
+            return None;
+        }
+        let is_untracked = status
+            .unstaged
+            .iter()
+            .any(|e| e.kind == FileStatusKind::Untracked && &e.path == path);
+        is_untracked.then(|| {
+            if path.is_absolute() {
+                path.clone()
+            } else {
+                workdir.join(path)
+            }
+        })
+    }
+
+    fn added_file_preview_abs_path(&self) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        let workdir = repo.spec.workdir.clone();
+        let target = repo.diff_target.as_ref()?;
+
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                if *area != DiffArea::Staged {
+                    return None;
+                }
+                let status = match &repo.status {
+                    Loadable::Ready(s) => s,
+                    _ => return None,
+                };
+                let is_added = status
+                    .staged
+                    .iter()
+                    .any(|e| e.kind == FileStatusKind::Added && &e.path == path);
+                if !is_added {
+                    return None;
+                }
+                Some(if path.is_absolute() {
+                    path.clone()
+                } else {
+                    workdir.join(path)
+                })
+            }
+            DiffTarget::Commit {
+                commit_id,
+                path: Some(path),
+            } => {
+                let details = match &repo.commit_details {
+                    Loadable::Ready(d) => d,
+                    _ => return None,
+                };
+                if &details.id != commit_id {
+                    return None;
+                }
+                let is_added = details
+                    .files
+                    .iter()
+                    .any(|f| f.kind == FileStatusKind::Added && &f.path == path);
+                if !is_added {
+                    return None;
+                }
+                Some(workdir.join(path))
+            }
+            _ => None,
+        }
+    }
+
+    fn ensure_preview_loading(&mut self, path: std::path::PathBuf) {
+        let should_reset = match self.worktree_preview_path.as_ref() {
+            Some(p) => p != &path,
+            None => true,
+        };
+        if should_reset {
+            self.worktree_preview_path = Some(path);
+            self.worktree_preview = Loadable::Loading;
+            self.worktree_preview_segments_cache_path = None;
+            self.worktree_preview_segments_cache.clear();
+        } else if matches!(self.worktree_preview, Loadable::NotLoaded | Loadable::Error(_)) {
+            self.worktree_preview = Loadable::Loading;
+        }
+    }
+
+    fn ensure_worktree_preview_loaded(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let should_reload = match self.worktree_preview_path.as_ref() {
+            Some(p) => p != &path,
+            None => true,
+        } || matches!(self.worktree_preview, Loadable::Error(_) | Loadable::NotLoaded);
+        if !should_reload {
+            return;
+        }
+
+        self.worktree_preview_path = Some(path.clone());
+        self.worktree_preview = Loadable::Loading;
+        self.worktree_preview_segments_cache_path = None;
+        self.worktree_preview_segments_cache.clear();
+
+        cx.spawn(async move |view, cx| {
+            const MAX_BYTES: u64 = 2 * 1024 * 1024;
+            let path_for_task = path.clone();
+            let task = cx.background_executor().spawn(async move {
+                let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
+                if meta.len() > MAX_BYTES {
+                    return Err(format!(
+                        "File is too large to preview ({} bytes).",
+                        meta.len()
+                    ));
+                }
+
+                let bytes = std::fs::read(&path_for_task).map_err(|e| e.to_string())?;
+                let text = String::from_utf8(bytes).map_err(|_| {
+                    "File is not valid UTF-8; binary preview is not supported.".to_string()
+                })?;
+
+                let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
+                Ok::<Arc<Vec<String>>, String>(Arc::new(lines))
+            });
+
+            let result = task.await;
+            let _ = view.update(cx, |this, cx| {
+                if this.worktree_preview_path.as_ref() != Some(&path) {
+                    return;
+                }
+                this.worktree_preview = match result {
+                    Ok(lines) => Loadable::Ready(lines),
+                    Err(e) => Loadable::Error(e),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn try_populate_worktree_preview_from_diff_file(&mut self) {
+        let Some((abs_path, preview_result)) = (|| {
+            let repo = self.active_repo()?;
+            let path_from_target = match repo.diff_target.as_ref()? {
+                DiffTarget::WorkingTree { path, .. } => Some(path),
+                DiffTarget::Commit {
+                    path: Some(path), ..
+                } => Some(path),
+                _ => None,
+            }?;
+
+            let abs_path = if path_from_target.is_absolute() {
+                path_from_target.clone()
+            } else {
+                repo.spec.workdir.join(path_from_target)
+            };
+
+            let mut diff_file_error: Option<String> = None;
+            let mut preview_result: Option<Result<Arc<Vec<String>>, String>> = match &repo.diff_file
+            {
+                Loadable::NotLoaded | Loadable::Loading => None,
+                Loadable::Error(e) => {
+                    diff_file_error = Some(e.clone());
+                    None
+                }
+                Loadable::Ready(file) => file.as_ref().and_then(|file| {
+                    file.new.as_deref().map(|text| {
+                        let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
+                        Ok(Arc::new(lines))
+                    })
+                }),
+            };
+
+            if preview_result.is_none() {
+                match &repo.diff {
+                    Loadable::Ready(diff) => {
+                        let annotated = annotate_unified(diff);
+                        if let Some((_abs_path, lines)) = build_new_file_preview_from_diff(
+                            &annotated,
+                            &repo.spec.workdir,
+                            repo.diff_target.as_ref(),
+                        ) {
+                            preview_result = Some(Ok(Arc::new(lines)));
+                        } else if let Some(e) = diff_file_error {
+                            preview_result = Some(Err(e));
+                        } else {
+                            preview_result =
+                                Some(Err("No text preview available for this file.".to_string()));
+                        }
+                    }
+                    Loadable::Error(e) => preview_result = Some(Err(e.clone())),
+                    Loadable::NotLoaded | Loadable::Loading => {}
+                }
+            }
+
+            Some((abs_path, preview_result))
+        })() else {
+            return;
+        };
+
+        if matches!(self.worktree_preview, Loadable::Ready(_))
+            && self.worktree_preview_path.as_ref() == Some(&abs_path)
+        {
+            return;
+        }
+
+        let Some(preview_result) = preview_result else {
+            return;
+        };
+
+        match preview_result {
+            Ok(lines) => {
+                self.worktree_preview_path = Some(abs_path);
+                self.worktree_preview = Loadable::Ready(lines);
+                self.worktree_preview_segments_cache_path = None;
+                self.worktree_preview_segments_cache.clear();
+            }
+            Err(e) => {
+                if self.worktree_preview_path.as_ref() != Some(&abs_path)
+                    || matches!(self.worktree_preview, Loadable::NotLoaded | Loadable::Loading)
+                {
+                    self.worktree_preview_path = Some(abs_path);
+                    self.worktree_preview = Loadable::Error(e);
+                    self.worktree_preview_segments_cache_path = None;
+                    self.worktree_preview_segments_cache.clear();
+                }
+            }
+        }
+    }
+
     fn rebuild_diff_cache(&mut self) {
         self.diff_cache.clear();
         self.diff_cache_repo_id = None;
@@ -665,16 +926,19 @@ impl GitGpuiView {
         self.diff_text_segments_cache.clear();
         self.diff_selection_anchor = None;
         self.diff_selection_range = None;
+        self.diff_preview_is_new_file = false;
+        self.diff_preview_new_file_lines = Arc::new(Vec::new());
 
-        let (repo_id, diff_rev, diff_target, annotated) = {
+        let (repo_id, diff_rev, diff_target, workdir, annotated) = {
             let Some(repo) = self.active_repo() else {
                 return;
             };
+            let workdir = repo.spec.workdir.clone();
             let annotated = match &repo.diff {
                 Loadable::Ready(diff) => Some(annotate_unified(diff)),
                 _ => None,
             };
-            (repo.id, repo.diff_rev, repo.diff_target.clone(), annotated)
+            (repo.id, repo.diff_rev, repo.diff_target.clone(), workdir, annotated)
         };
 
         self.diff_cache_repo_id = Some(repo_id);
@@ -689,6 +953,15 @@ impl GitGpuiView {
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(&self.diff_cache);
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
         self.rebuild_diff_word_highlights();
+
+        if let Some((abs_path, lines)) = build_new_file_preview_from_diff(&self.diff_cache, &workdir, self.diff_cache_target.as_ref()) {
+            self.diff_preview_is_new_file = true;
+            self.diff_preview_new_file_lines = Arc::new(lines);
+            self.worktree_preview_path = Some(abs_path);
+            self.worktree_preview = Loadable::Ready(self.diff_preview_new_file_lines.clone());
+            self.worktree_preview_segments_cache_path = None;
+            self.worktree_preview_segments_cache.clear();
+        }
     }
 
     fn ensure_diff_split_cache(&mut self) {
@@ -943,7 +1216,14 @@ impl GitGpuiView {
         match self.diff_view {
             DiffViewMode::Inline => {
                 if query.is_empty() {
-                    self.diff_visible_indices = (0..self.diff_cache.len()).collect();
+                    self.diff_visible_indices = self
+                        .diff_cache
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, line)| {
+                            (!should_hide_unified_diff_header_line(line)).then_some(ix)
+                        })
+                        .collect();
                     return;
                 }
 
@@ -951,6 +1231,9 @@ impl GitGpuiView {
                 let mut match_count = 0usize;
                 let mut indices = Vec::new();
                 for (ix, line) in self.diff_cache.iter().enumerate() {
+                    if should_hide_unified_diff_header_line(line) {
+                        continue;
+                    }
                     if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
                         indices.push(ix);
                         continue;
@@ -990,7 +1273,19 @@ impl GitGpuiView {
                 self.ensure_diff_split_cache();
 
                 if query.is_empty() {
-                    self.diff_visible_indices = (0..self.diff_split_cache.len()).collect();
+                    self.diff_visible_indices = self
+                        .diff_split_cache
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, row)| match row {
+                            PatchSplitRow::Raw { src_ix, .. } => self
+                                .diff_cache
+                                .get(*src_ix)
+                                .is_some_and(|line| !should_hide_unified_diff_header_line(line))
+                                .then_some(ix),
+                            PatchSplitRow::Aligned { .. } => Some(ix),
+                        })
+                        .collect();
                     return;
                 }
 
@@ -1009,6 +1304,9 @@ impl GitGpuiView {
                             let Some(line) = self.diff_cache.get(*src_ix) else {
                                 continue;
                             };
+                            if should_hide_unified_diff_header_line(line) {
+                                continue;
+                            }
                             if line.text.to_ascii_lowercase().contains(&q) {
                                 match_count += 1;
                                 indices.push(ix);
@@ -2023,6 +2321,56 @@ fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<R
         Vec::new()
     };
     (old_ranges, new_ranges)
+}
+
+fn build_new_file_preview_from_diff(
+    diff: &[AnnotatedDiffLine],
+    workdir: &std::path::Path,
+    target: Option<&DiffTarget>,
+) -> Option<(std::path::PathBuf, Vec<String>)> {
+    let mut file_header_count = 0usize;
+    let mut is_new_file = false;
+    let mut has_remove = false;
+
+    for line in diff {
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+            && line.text.starts_with("diff --git ")
+        {
+            file_header_count += 1;
+        }
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+            && (line.text.starts_with("new file mode ") || line.text == "--- /dev/null")
+        {
+            is_new_file = true;
+        }
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Remove) {
+            has_remove = true;
+        }
+    }
+
+    if file_header_count != 1 || !is_new_file || has_remove {
+        return None;
+    }
+
+    let rel_path = match target? {
+        DiffTarget::WorkingTree { path, .. } => path.clone(),
+        DiffTarget::Commit { path: Some(path), .. } => path.clone(),
+        _ => return None,
+    };
+
+    let abs_path = if rel_path.is_absolute() {
+        rel_path
+    } else {
+        workdir.join(rel_path)
+    };
+
+    let lines = diff
+        .iter()
+        .filter(|l| matches!(l.kind, gitgpui_core::domain::DiffLineKind::Add))
+        .map(|l| l.text.strip_prefix('+').unwrap_or(&l.text).to_string())
+        .collect::<Vec<_>>();
+
+    Some((abs_path, lines))
 }
 
 impl GitGpuiView {

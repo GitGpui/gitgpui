@@ -387,13 +387,13 @@ impl GitGpuiView {
             .filter_map(|ix| details.files.get(ix).map(|f| (ix, f)))
             .map(|(ix, f)| {
                 let commit_id = details.id.clone();
-                let (label, color) = match f.kind {
-                    FileStatusKind::Added => ("Added", theme.colors.success),
-                    FileStatusKind::Modified => ("Modified", theme.colors.accent),
-                    FileStatusKind::Deleted => ("Deleted", theme.colors.danger),
-                    FileStatusKind::Renamed => ("Renamed", theme.colors.accent),
-                    FileStatusKind::Untracked => ("Untracked", theme.colors.warning),
-                    FileStatusKind::Conflicted => ("Conflicted", theme.colors.danger),
+                let (icon, color) = match f.kind {
+                    FileStatusKind::Added => (Some("+"), theme.colors.success),
+                    FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
+                    FileStatusKind::Deleted => (None, theme.colors.text_muted),
+                    FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
+                    FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
+                    FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),
                 };
 
                 let path = f.path.clone();
@@ -417,7 +417,22 @@ impl GitGpuiView {
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
-                    .child(zed::pill(theme, label, color))
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon, |this, icon| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(color)
+                                        .child(icon),
+                                )
+                            }),
+                    )
                     .child(div().text_sm().line_clamp(1).child(path.display().to_string()))
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.store.dispatch(Msg::SelectDiff {
@@ -435,6 +450,79 @@ impl GitGpuiView {
                 }
 
                 row.into_any_element()
+            })
+            .collect()
+    }
+
+    pub(super) fn render_worktree_preview_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        let Some(path) = this.worktree_preview_path.as_ref() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(lines) = &this.worktree_preview else {
+            return Vec::new();
+        };
+
+        let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
+            Some(p) => p != path,
+            None => true,
+        };
+        if should_clear_cache {
+            this.worktree_preview_segments_cache_path = Some(path.clone());
+            this.worktree_preview_segments_cache.clear();
+        }
+
+        let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
+
+        range
+            .map(|ix| {
+                let line = lines.get(ix).map(String::as_str).unwrap_or("");
+
+                let segments = this
+                    .worktree_preview_segments_cache
+                    .entry(ix)
+                    .or_insert_with(|| build_diff_text_segments(line, &[], "", language))
+                    .as_slice();
+
+                let line_no = format!("{}", ix + 1);
+
+                div()
+                    .id(("worktree_preview_row", ix))
+                    .h(px(20.0))
+                    .flex()
+                    .items_center()
+                    .font_family("monospace")
+                    .text_xs()
+                    .bg(theme.colors.surface_bg)
+                    .child(
+                        div()
+                            .w(px(44.0))
+                            .px_2()
+                            .text_color(theme.colors.text_muted)
+                            .whitespace_nowrap()
+                            .child(line_no),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .px_2()
+                            .text_color(theme.colors.text)
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(render_cached_diff_text_segments(
+                                theme,
+                                theme.colors.text,
+                                segments,
+                                None,
+                            )),
+                    )
+                    .into_any_element()
             })
             .collect()
     }
@@ -661,7 +749,20 @@ impl GitGpuiView {
         let theme = this.theme;
         range
             .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
-            .map(|(ix, entry)| status_row(theme, ix, entry, DiffArea::Unstaged, repo.id, cx))
+            .map(|(ix, entry)| {
+                let show_stage_button = this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
+                    *r == repo.id && *a == DiffArea::Unstaged && p == &entry.path
+                });
+                status_row(
+                    theme,
+                    ix,
+                    entry,
+                    DiffArea::Unstaged,
+                    repo.id,
+                    show_stage_button,
+                    cx,
+                )
+            })
             .collect()
     }
 
@@ -680,7 +781,20 @@ impl GitGpuiView {
         let theme = this.theme;
         range
             .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
-            .map(|(ix, entry)| status_row(theme, ix, entry, DiffArea::Staged, repo.id, cx))
+            .map(|(ix, entry)| {
+                let show_stage_button = this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
+                    *r == repo.id && *a == DiffArea::Staged && p == &entry.path
+                });
+                status_row(
+                    theme,
+                    ix,
+                    entry,
+                    DiffArea::Staged,
+                    repo.id,
+                    show_stage_button,
+                    cx,
+                )
+            })
             .collect()
     }
 
@@ -1409,25 +1523,31 @@ fn status_row(
     entry: &FileStatus,
     area: DiffArea,
     repo_id: RepoId,
+    show_stage_button: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let (label, color) = match entry.kind {
-        FileStatusKind::Untracked => ("Untracked", theme.colors.warning),
-        FileStatusKind::Modified => ("Modified", theme.colors.accent),
-        FileStatusKind::Added => ("Added", theme.colors.success),
-        FileStatusKind::Deleted => ("Deleted", theme.colors.danger),
-        FileStatusKind::Renamed => ("Renamed", theme.colors.accent),
-        FileStatusKind::Conflicted => ("Conflicted", theme.colors.danger),
+    let (icon, color) = match entry.kind {
+        FileStatusKind::Untracked => match area {
+            DiffArea::Unstaged => ("+", theme.colors.success),
+            DiffArea::Staged => ("?", theme.colors.warning),
+        },
+        FileStatusKind::Modified => ("✎", theme.colors.warning),
+        FileStatusKind::Added => ("+", theme.colors.success),
+        FileStatusKind::Deleted => ("−", theme.colors.danger),
+        FileStatusKind::Renamed => ("→", theme.colors.accent),
+        FileStatusKind::Conflicted => ("!", theme.colors.danger),
     };
 
     let path = entry.path.clone();
     let path_for_stage = path.clone();
     let path_for_row = path.clone();
+    let path_for_hover = path.clone();
     let stage_label = match area {
         DiffArea::Unstaged => "Stage",
         DiffArea::Staged => "Unstage",
     };
 
+    let hover_area = area;
     div()
         .id(ix)
         .flex()
@@ -1436,15 +1556,41 @@ fn status_row(
         .gap_2()
         .px_2()
         .py_1()
+        .w_full()
         .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            if *hovering {
+                this.hovered_status_row = Some((repo_id, hover_area, path_for_hover.clone()));
+            } else if this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
+                *r == repo_id && *a == hover_area && p == &path_for_hover
+            }) {
+                this.hovered_status_row = None;
+            }
+            cx.notify();
+        }))
         .child(
             div()
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(zed::pill(theme, label, color))
+                .flex_1()
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .w(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(color)
+                                .child(icon),
+                        ),
+                )
                 .child(
                     div()
                         .text_sm()
@@ -1453,27 +1599,36 @@ fn status_row(
                 ),
         )
         .child(
-            zed::Button::new(format!("stage_btn_{ix}"), stage_label)
-                .style(zed::ButtonStyle::Outlined)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    this.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path_for_stage.clone(),
-                            area,
-                        },
-                    });
-                    match area {
-                        DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
-                            repo_id,
-                            path: path_for_stage.clone(),
-                        }),
-                        DiffArea::Staged => this.store.dispatch(Msg::UnstagePath {
-                            repo_id,
-                            path: path_for_stage.clone(),
-                        }),
-                    }
-                    cx.notify();
+            div()
+                .flex_none()
+                .w(px(78.0))
+                .flex()
+                .justify_end()
+                .when(show_stage_button, |this| {
+                    this.child(
+                        zed::Button::new(format!("stage_btn_{ix}"), stage_label)
+                            .style(zed::ButtonStyle::Outlined)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: DiffTarget::WorkingTree {
+                                        path: path_for_stage.clone(),
+                                        area,
+                                    },
+                                });
+                                match area {
+                                    DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
+                                        repo_id,
+                                        path: path_for_stage.clone(),
+                                    }),
+                                    DiffArea::Staged => this.store.dispatch(Msg::UnstagePath {
+                                        repo_id,
+                                        path: path_for_stage.clone(),
+                                    }),
+                                }
+                                cx.notify();
+                            }),
+                    )
                 }),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -2033,6 +2188,7 @@ fn build_diff_text_segments(
         return Vec::new();
     }
 
+    let language = language.or(Some(DiffSyntaxLanguage::Plain));
     let syntax_tokens = language
         .map(|language| syntax_tokens_for_line(text, language))
         .unwrap_or_default();
@@ -2101,12 +2257,29 @@ fn build_diff_text_segments(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiffSyntaxLanguage {
+    Plain,
+    Html,
+    Css,
+    Hcl,
+    Bicep,
+    Lua,
+    Makefile,
+    Kotlin,
+    Zig,
     Rust,
     Python,
     JavaScript,
     TypeScript,
     Tsx,
     Go,
+    C,
+    Cpp,
+    CSharp,
+    FSharp,
+    VisualBasic,
+    Java,
+    Php,
+    Ruby,
     Json,
     Toml,
     Yaml,
@@ -2120,24 +2293,53 @@ struct SyntaxToken {
 }
 
 fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
-    let ext = std::path::Path::new(path)
+    let p = std::path::Path::new(path);
+    let ext = p
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
 
+    let file_name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
     Some(match ext.as_str() {
+        "html" | "htm" => DiffSyntaxLanguage::Html,
+        "css" | "less" | "sass" | "scss" => DiffSyntaxLanguage::Css,
+        "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
+        "bicep" => DiffSyntaxLanguage::Bicep,
+        "lua" => DiffSyntaxLanguage::Lua,
+        "mk" => DiffSyntaxLanguage::Makefile,
+        "kt" | "kts" => DiffSyntaxLanguage::Kotlin,
+        "zig" => DiffSyntaxLanguage::Zig,
         "rs" => DiffSyntaxLanguage::Rust,
         "py" => DiffSyntaxLanguage::Python,
         "js" | "jsx" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
         "ts" | "cts" | "mts" => DiffSyntaxLanguage::TypeScript,
         "tsx" => DiffSyntaxLanguage::Tsx,
         "go" => DiffSyntaxLanguage::Go,
+        "c" | "h" => DiffSyntaxLanguage::C,
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => DiffSyntaxLanguage::Cpp,
+        "cs" => DiffSyntaxLanguage::CSharp,
+        "fs" | "fsx" | "fsi" => DiffSyntaxLanguage::FSharp,
+        "vb" | "vbs" => DiffSyntaxLanguage::VisualBasic,
+        "java" => DiffSyntaxLanguage::Java,
+        "php" | "phtml" => DiffSyntaxLanguage::Php,
+        "rb" => DiffSyntaxLanguage::Ruby,
         "json" => DiffSyntaxLanguage::Json,
         "toml" => DiffSyntaxLanguage::Toml,
         "yaml" | "yml" => DiffSyntaxLanguage::Yaml,
         "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
-        _ => return None,
+        _ => {
+            if file_name == "makefile" || file_name == "gnumakefile" {
+                DiffSyntaxLanguage::Makefile
+            } else {
+                return None;
+            }
+        }
     })
 }
 
@@ -2210,9 +2412,26 @@ fn syntax_tokens_for_line_treesitter(
 
 fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
     Some(match language {
+        DiffSyntaxLanguage::Plain => return None,
+        DiffSyntaxLanguage::Html => tree_sitter_html::LANGUAGE.into(),
+        DiffSyntaxLanguage::Css => tree_sitter_css::LANGUAGE.into(),
+        DiffSyntaxLanguage::Hcl => return None,
+        DiffSyntaxLanguage::Bicep => return None,
+        DiffSyntaxLanguage::Lua => return None,
+        DiffSyntaxLanguage::Makefile => return None,
+        DiffSyntaxLanguage::Kotlin => return None,
+        DiffSyntaxLanguage::Zig => return None,
         DiffSyntaxLanguage::Rust => tree_sitter_rust::LANGUAGE.into(),
         DiffSyntaxLanguage::Python => tree_sitter_python::LANGUAGE.into(),
         DiffSyntaxLanguage::Go => tree_sitter_go::LANGUAGE.into(),
+        DiffSyntaxLanguage::C => return None,
+        DiffSyntaxLanguage::Cpp => return None,
+        DiffSyntaxLanguage::CSharp => return None,
+        DiffSyntaxLanguage::FSharp => return None,
+        DiffSyntaxLanguage::VisualBasic => return None,
+        DiffSyntaxLanguage::Java => return None,
+        DiffSyntaxLanguage::Php => return None,
+        DiffSyntaxLanguage::Ruby => return None,
         DiffSyntaxLanguage::Json => tree_sitter_json::LANGUAGE.into(),
         DiffSyntaxLanguage::Yaml => tree_sitter_yaml::language(),
         DiffSyntaxLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -2225,6 +2444,8 @@ fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Lan
 }
 
 fn tree_sitter_highlight_query(language: DiffSyntaxLanguage) -> Option<&'static tree_sitter::Query> {
+    static HTML_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
+    static CSS_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
     static RUST_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
     static PY_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
     static GO_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
@@ -2236,6 +2457,27 @@ fn tree_sitter_highlight_query(language: DiffSyntaxLanguage) -> Option<&'static 
     static BASH_QUERY: OnceLock<tree_sitter::Query> = OnceLock::new();
 
     Some(match language {
+        DiffSyntaxLanguage::Plain => return None,
+        DiffSyntaxLanguage::Html => HTML_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_html::LANGUAGE.into(),
+                include_str!("../syntax/html_highlights.scm"),
+            )
+            .expect("html highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Css => CSS_QUERY.get_or_init(|| {
+            tree_sitter::Query::new(
+                &tree_sitter_css::LANGUAGE.into(),
+                include_str!("../../../../zed/crates/languages/src/css/highlights.scm"),
+            )
+            .expect("css highlights.scm should compile")
+        }),
+        DiffSyntaxLanguage::Hcl => return None,
+        DiffSyntaxLanguage::Bicep => return None,
+        DiffSyntaxLanguage::Lua => return None,
+        DiffSyntaxLanguage::Makefile => return None,
+        DiffSyntaxLanguage::Kotlin => return None,
+        DiffSyntaxLanguage::Zig => return None,
         DiffSyntaxLanguage::Rust => RUST_QUERY.get_or_init(|| {
             tree_sitter::Query::new(
                 &tree_sitter_rust::LANGUAGE.into(),
@@ -2257,6 +2499,14 @@ fn tree_sitter_highlight_query(language: DiffSyntaxLanguage) -> Option<&'static 
             )
             .expect("go highlights.scm should compile")
         }),
+        DiffSyntaxLanguage::C => return None,
+        DiffSyntaxLanguage::Cpp => return None,
+        DiffSyntaxLanguage::CSharp => return None,
+        DiffSyntaxLanguage::FSharp => return None,
+        DiffSyntaxLanguage::VisualBasic => return None,
+        DiffSyntaxLanguage::Java => return None,
+        DiffSyntaxLanguage::Php => return None,
+        DiffSyntaxLanguage::Ruby => return None,
         DiffSyntaxLanguage::Json => JSON_QUERY.get_or_init(|| {
             tree_sitter::Query::new(
                 &tree_sitter_json::LANGUAGE.into(),
@@ -2314,7 +2564,8 @@ fn syntax_kind_from_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "boolean" => SyntaxTokenKind::Constant,
         "function" | "constructor" | "method" => SyntaxTokenKind::Function,
         "type" => SyntaxTokenKind::Type,
-        "property" | "field" | "attribute" => SyntaxTokenKind::Property,
+        "property" | "field" | "attribute" | "variable" => SyntaxTokenKind::Property,
+        "tag" | "namespace" | "selector" => SyntaxTokenKind::Type,
         "constant" => SyntaxTokenKind::Constant,
         "punctuation" | "operator" => SyntaxTokenKind::Punctuation,
         _ => return None,
@@ -2333,17 +2584,71 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
     while i < len {
         let rest = &text[i..];
 
+        if matches!(language, DiffSyntaxLanguage::Html) && rest.starts_with("<!--") {
+            let end = rest.find("-->").map(|ix| i + ix + 3).unwrap_or(len);
+            tokens.push(SyntaxToken {
+                range: i..end,
+                kind: SyntaxTokenKind::Comment,
+            });
+            i = end;
+            continue;
+        }
+
+        if matches!(language, DiffSyntaxLanguage::FSharp) && rest.starts_with("(*") {
+            let end = rest.find("*)").map(|ix| i + ix + 2).unwrap_or(len);
+            tokens.push(SyntaxToken {
+                range: i..end,
+                kind: SyntaxTokenKind::Comment,
+            });
+            i = end;
+            continue;
+        }
+
+        if matches!(language, DiffSyntaxLanguage::Lua) && rest.starts_with("--") {
+            if rest.starts_with("--[[") {
+                let end = rest.find("]]").map(|ix| i + ix + 2).unwrap_or(len);
+                tokens.push(SyntaxToken {
+                    range: i..end,
+                    kind: SyntaxTokenKind::Comment,
+                });
+                i = end;
+                continue;
+            }
+            tokens.push(SyntaxToken {
+                range: i..len,
+                kind: SyntaxTokenKind::Comment,
+            });
+            break;
+        }
+
         let (line_comment, hash_comment, block_comment) = match language {
             DiffSyntaxLanguage::Python | DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => {
                 (None, Some('#'), false)
             }
             DiffSyntaxLanguage::Bash => (None, Some('#'), false),
+            DiffSyntaxLanguage::Makefile => (None, Some('#'), false),
             DiffSyntaxLanguage::Rust
             | DiffSyntaxLanguage::JavaScript
             | DiffSyntaxLanguage::TypeScript
             | DiffSyntaxLanguage::Tsx
-            | DiffSyntaxLanguage::Go => (Some("//"), None, true),
+            | DiffSyntaxLanguage::Go
+            | DiffSyntaxLanguage::C
+            | DiffSyntaxLanguage::Cpp
+            | DiffSyntaxLanguage::CSharp
+            | DiffSyntaxLanguage::Java
+            | DiffSyntaxLanguage::Kotlin
+            | DiffSyntaxLanguage::Zig
+            | DiffSyntaxLanguage::Bicep => (Some("//"), None, true),
+            DiffSyntaxLanguage::Hcl => (Some("//"), Some('#'), true),
+            DiffSyntaxLanguage::Php => (Some("//"), Some('#'), true),
+            DiffSyntaxLanguage::Ruby
+            | DiffSyntaxLanguage::FSharp
+            | DiffSyntaxLanguage::VisualBasic
+            | DiffSyntaxLanguage::Html
+            | DiffSyntaxLanguage::Css => (None, None, false),
             DiffSyntaxLanguage::Json => (None, None, false),
+            DiffSyntaxLanguage::Plain => (Some("//"), Some('#'), true),
+            DiffSyntaxLanguage::Lua => (None, None, false),
         };
 
         if let Some(prefix) = line_comment {
@@ -2366,6 +2671,24 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             continue;
         }
 
+        if matches!(language, DiffSyntaxLanguage::Ruby) && rest.starts_with('#') {
+            tokens.push(SyntaxToken {
+                range: i..len,
+                kind: SyntaxTokenKind::Comment,
+            });
+            break;
+        }
+
+        if matches!(language, DiffSyntaxLanguage::VisualBasic)
+            && (rest.starts_with('\'') || rest.to_ascii_lowercase().starts_with("rem "))
+        {
+            tokens.push(SyntaxToken {
+                range: i..len,
+                kind: SyntaxTokenKind::Comment,
+            });
+            break;
+        }
+
         if let Some('#') = hash_comment {
             if rest.starts_with('#') {
                 tokens.push(SyntaxToken {
@@ -2380,7 +2703,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             break;
         };
 
-        if ch == '"' || ch == '\'' {
+        if ch == '"' || ch == '\'' || (ch == '`' && matches!(language, DiffSyntaxLanguage::JavaScript | DiffSyntaxLanguage::TypeScript | DiffSyntaxLanguage::Tsx | DiffSyntaxLanguage::Go | DiffSyntaxLanguage::Bash | DiffSyntaxLanguage::Plain)) {
             let quote = ch;
             let mut j = i + quote.len_utf8();
             let mut escaped = false;
@@ -2446,14 +2769,73 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
                 }
             }
             let ident = &text[i..j];
-            if is_keyword(language, ident) {
+            let mut kind = if is_keyword(language, ident) {
+                Some(SyntaxTokenKind::Keyword)
+            } else {
+                None
+            };
+
+            if matches!(language, DiffSyntaxLanguage::Css) {
+                let mut k = j;
+                while k < len && text[k..].starts_with(char::is_whitespace) {
+                    k += text[k..].chars().next().unwrap().len_utf8();
+                }
+                if k < len && text[k..].starts_with(':') {
+                    kind = Some(SyntaxTokenKind::Property);
+                }
+            }
+
+            if matches!(language, DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Plain) {
+                let mut k = j;
+                while k < len && text[k..].starts_with(char::is_whitespace) {
+                    k += text[k..].chars().next().unwrap().len_utf8();
+                }
+                if k < len && text[k..].starts_with('=') {
+                    kind = Some(SyntaxTokenKind::Property);
+                }
+            }
+
+            if matches!(language, DiffSyntaxLanguage::Html) && i > 0 {
+                // Best-effort: highlight common attribute names (`foo=`) as properties.
+                let mut k = j;
+                while k < len && text[k..].starts_with(char::is_whitespace) {
+                    k += text[k..].chars().next().unwrap().len_utf8();
+                }
+                if k < len && text[k..].starts_with('=') {
+                    kind = Some(SyntaxTokenKind::Property);
+                }
+            }
+
+            if let Some(kind) = kind {
                 tokens.push(SyntaxToken {
                     range: i..j,
-                    kind: SyntaxTokenKind::Keyword,
+                    kind,
                 });
             }
             i = j;
             continue;
+        }
+
+        if matches!(language, DiffSyntaxLanguage::Css) && ch == '@' {
+            let mut j = i + 1;
+            while j < len {
+                let Some(next) = text[j..].chars().next() else {
+                    break;
+                };
+                if next.is_ascii_alphanumeric() || next == '-' {
+                    j += next.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            if j > i + 1 {
+                tokens.push(SyntaxToken {
+                    range: i..j,
+                    kind: SyntaxTokenKind::Keyword,
+                });
+                i = j;
+                continue;
+            }
         }
 
         i += ch.len_utf8();
@@ -2464,6 +2846,183 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
 
 fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     match language {
+        DiffSyntaxLanguage::Plain => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "if"
+                | "else"
+                | "for"
+                | "while"
+                | "do"
+                | "break"
+                | "continue"
+                | "return"
+                | "fn"
+                | "function"
+                | "let"
+                | "var"
+                | "const"
+                | "class"
+                | "struct"
+                | "enum"
+                | "import"
+                | "from"
+                | "package"
+                | "public"
+                | "private"
+                | "protected"
+                | "static"
+                | "new"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::Html => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "doctype" | "html" | "head" | "body" | "script" | "style"
+        ),
+        DiffSyntaxLanguage::Css => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "@media"
+                | "@import"
+                | "@supports"
+                | "@keyframes"
+                | "@font-face"
+                | "@layer"
+                | "url"
+                | "important"
+        ),
+        DiffSyntaxLanguage::Hcl => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "variable"
+                | "locals"
+                | "resource"
+                | "data"
+                | "provider"
+                | "module"
+                | "output"
+                | "terraform"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::Bicep => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "param"
+                | "var"
+                | "resource"
+                | "module"
+                | "output"
+                | "existing"
+                | "import"
+                | "targetScope"
+                | "true"
+                | "false"
+                | "null"
+                | "if"
+                | "for"
+        ),
+        DiffSyntaxLanguage::Lua => matches!(
+            ident,
+            "and"
+                | "break"
+                | "do"
+                | "else"
+                | "elseif"
+                | "end"
+                | "false"
+                | "for"
+                | "function"
+                | "goto"
+                | "if"
+                | "in"
+                | "local"
+                | "nil"
+                | "not"
+                | "or"
+                | "repeat"
+                | "return"
+                | "then"
+                | "true"
+                | "until"
+                | "while"
+        ),
+        DiffSyntaxLanguage::Makefile => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "include"
+                | "define"
+                | "endef"
+                | "ifeq"
+                | "ifneq"
+                | "ifdef"
+                | "ifndef"
+                | "else"
+                | "endif"
+                | "export"
+                | "override"
+        ),
+        DiffSyntaxLanguage::Kotlin => matches!(
+            ident,
+            "package"
+                | "import"
+                | "as"
+                | "class"
+                | "interface"
+                | "object"
+                | "fun"
+                | "val"
+                | "var"
+                | "typealias"
+                | "data"
+                | "sealed"
+                | "enum"
+                | "when"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "do"
+                | "return"
+                | "break"
+                | "continue"
+                | "try"
+                | "catch"
+                | "finally"
+                | "throw"
+                | "this"
+                | "super"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::Zig => matches!(
+            ident,
+            "const"
+                | "var"
+                | "fn"
+                | "pub"
+                | "comptime"
+                | "asm"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "switch"
+                | "return"
+                | "break"
+                | "continue"
+                | "try"
+                | "catch"
+                | "defer"
+                | "errdefer"
+                | "struct"
+                | "enum"
+                | "union"
+                | "opaque"
+                | "true"
+                | "false"
+                | "null"
+                | "undefined"
+        ),
         DiffSyntaxLanguage::Rust => matches!(
             ident,
             "fn"
@@ -2602,6 +3161,380 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         ),
         DiffSyntaxLanguage::Json => matches!(ident, "true" | "false" | "null"),
         DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => matches!(ident, "true" | "false" | "null"),
+        DiffSyntaxLanguage::C => matches!(
+            ident,
+            "auto"
+                | "break"
+                | "case"
+                | "char"
+                | "const"
+                | "continue"
+                | "default"
+                | "do"
+                | "double"
+                | "else"
+                | "enum"
+                | "extern"
+                | "float"
+                | "for"
+                | "goto"
+                | "if"
+                | "inline"
+                | "int"
+                | "long"
+                | "register"
+                | "restrict"
+                | "return"
+                | "short"
+                | "signed"
+                | "sizeof"
+                | "static"
+                | "struct"
+                | "switch"
+                | "typedef"
+                | "union"
+                | "unsigned"
+                | "void"
+                | "volatile"
+                | "while"
+                | "true"
+                | "false"
+                | "NULL"
+        ),
+        DiffSyntaxLanguage::Cpp => matches!(
+            ident,
+            "alignas"
+                | "alignof"
+                | "and"
+                | "and_eq"
+                | "asm"
+                | "auto"
+                | "bitand"
+                | "bitor"
+                | "bool"
+                | "break"
+                | "case"
+                | "catch"
+                | "char"
+                | "char16_t"
+                | "char32_t"
+                | "class"
+                | "const"
+                | "constexpr"
+                | "const_cast"
+                | "continue"
+                | "decltype"
+                | "default"
+                | "delete"
+                | "do"
+                | "double"
+                | "dynamic_cast"
+                | "else"
+                | "enum"
+                | "explicit"
+                | "export"
+                | "extern"
+                | "false"
+                | "float"
+                | "for"
+                | "friend"
+                | "goto"
+                | "if"
+                | "inline"
+                | "int"
+                | "long"
+                | "mutable"
+                | "namespace"
+                | "new"
+                | "noexcept"
+                | "not"
+                | "not_eq"
+                | "nullptr"
+                | "operator"
+                | "or"
+                | "or_eq"
+                | "private"
+                | "protected"
+                | "public"
+                | "register"
+                | "reinterpret_cast"
+                | "return"
+                | "short"
+                | "signed"
+                | "sizeof"
+                | "static"
+                | "static_assert"
+                | "static_cast"
+                | "struct"
+                | "switch"
+                | "template"
+                | "this"
+                | "thread_local"
+                | "throw"
+                | "true"
+                | "try"
+                | "typedef"
+                | "typeid"
+                | "typename"
+                | "union"
+                | "unsigned"
+                | "using"
+                | "virtual"
+                | "void"
+                | "volatile"
+                | "wchar_t"
+                | "while"
+                | "xor"
+                | "xor_eq"
+        ),
+        DiffSyntaxLanguage::CSharp => matches!(
+            ident,
+            "abstract"
+                | "as"
+                | "base"
+                | "bool"
+                | "break"
+                | "byte"
+                | "case"
+                | "catch"
+                | "char"
+                | "checked"
+                | "class"
+                | "const"
+                | "continue"
+                | "decimal"
+                | "default"
+                | "delegate"
+                | "do"
+                | "double"
+                | "else"
+                | "enum"
+                | "event"
+                | "explicit"
+                | "extern"
+                | "false"
+                | "finally"
+                | "fixed"
+                | "float"
+                | "for"
+                | "foreach"
+                | "goto"
+                | "if"
+                | "implicit"
+                | "in"
+                | "int"
+                | "interface"
+                | "internal"
+                | "is"
+                | "lock"
+                | "long"
+                | "namespace"
+                | "new"
+                | "null"
+                | "object"
+                | "operator"
+                | "out"
+                | "override"
+                | "params"
+                | "private"
+                | "protected"
+                | "public"
+                | "readonly"
+                | "ref"
+                | "return"
+                | "sbyte"
+                | "sealed"
+                | "short"
+                | "sizeof"
+                | "stackalloc"
+                | "static"
+                | "string"
+                | "struct"
+                | "switch"
+                | "this"
+                | "throw"
+                | "true"
+                | "try"
+                | "typeof"
+                | "uint"
+                | "ulong"
+                | "unchecked"
+                | "unsafe"
+                | "ushort"
+                | "using"
+                | "virtual"
+                | "void"
+                | "volatile"
+                | "while"
+        ),
+        DiffSyntaxLanguage::FSharp => matches!(
+            ident,
+            "let"
+                | "mutable"
+                | "use"
+                | "match"
+                | "with"
+                | "function"
+                | "type"
+                | "member"
+                | "interface"
+                | "inherit"
+                | "abstract"
+                | "override"
+                | "static"
+                | "if"
+                | "then"
+                | "else"
+                | "for"
+                | "while"
+                | "do"
+                | "done"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::VisualBasic => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "dim"
+                | "as"
+                | "function"
+                | "sub"
+                | "end"
+                | "if"
+                | "then"
+                | "else"
+                | "elseif"
+                | "for"
+                | "each"
+                | "while"
+                | "do"
+                | "loop"
+                | "select"
+                | "case"
+                | "return"
+                | "true"
+                | "false"
+                | "nothing"
+        ),
+        DiffSyntaxLanguage::Java => matches!(
+            ident,
+            "abstract"
+                | "assert"
+                | "boolean"
+                | "break"
+                | "byte"
+                | "case"
+                | "catch"
+                | "char"
+                | "class"
+                | "const"
+                | "continue"
+                | "default"
+                | "do"
+                | "double"
+                | "else"
+                | "enum"
+                | "extends"
+                | "final"
+                | "finally"
+                | "float"
+                | "for"
+                | "goto"
+                | "if"
+                | "implements"
+                | "import"
+                | "instanceof"
+                | "int"
+                | "interface"
+                | "long"
+                | "native"
+                | "new"
+                | "null"
+                | "package"
+                | "private"
+                | "protected"
+                | "public"
+                | "return"
+                | "short"
+                | "static"
+                | "strictfp"
+                | "super"
+                | "switch"
+                | "synchronized"
+                | "this"
+                | "throw"
+                | "throws"
+                | "transient"
+                | "true"
+                | "false"
+                | "try"
+                | "void"
+                | "volatile"
+                | "while"
+        ),
+        DiffSyntaxLanguage::Php => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "function"
+                | "class"
+                | "public"
+                | "private"
+                | "protected"
+                | "static"
+                | "final"
+                | "abstract"
+                | "extends"
+                | "implements"
+                | "use"
+                | "namespace"
+                | "return"
+                | "if"
+                | "else"
+                | "elseif"
+                | "for"
+                | "foreach"
+                | "while"
+                | "do"
+                | "switch"
+                | "case"
+                | "default"
+                | "try"
+                | "catch"
+                | "finally"
+                | "throw"
+                | "new"
+                | "true"
+                | "false"
+                | "null"
+        ),
+        DiffSyntaxLanguage::Ruby => matches!(
+            ident,
+            "def"
+                | "class"
+                | "module"
+                | "end"
+                | "if"
+                | "elsif"
+                | "else"
+                | "unless"
+                | "case"
+                | "when"
+                | "while"
+                | "until"
+                | "for"
+                | "in"
+                | "do"
+                | "break"
+                | "next"
+                | "redo"
+                | "retry"
+                | "return"
+                | "yield"
+                | "super"
+                | "self"
+                | "true"
+                | "false"
+                | "nil"
+        ),
         DiffSyntaxLanguage::Bash => matches!(
             ident,
             "if"
