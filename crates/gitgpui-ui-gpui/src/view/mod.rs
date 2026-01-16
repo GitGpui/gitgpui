@@ -162,7 +162,9 @@ pub struct GitGpuiView {
     diff_visible_cache_len: usize,
     diff_visible_query: String,
     diff_visible_view: DiffViewMode,
+    diff_visible_is_file_view: bool,
     diff_query_match_count: usize,
+    diff_scrollbar_markers_cache: Vec<zed::ScrollbarMarker>,
     diff_word_highlights: HashMap<usize, Vec<Range<usize>>>,
     diff_file_stats: HashMap<usize, (usize, usize)>,
     diff_text_segments_cache_query: String,
@@ -389,7 +391,9 @@ impl GitGpuiView {
             diff_visible_cache_len: 0,
             diff_visible_query: String::new(),
             diff_visible_view: DiffViewMode::Split,
+            diff_visible_is_file_view: false,
             diff_query_match_count: 0,
+            diff_scrollbar_markers_cache: Vec::new(),
             diff_word_highlights: HashMap::new(),
             diff_file_stats: HashMap::new(),
             diff_text_segments_cache_query: String::new(),
@@ -1119,7 +1123,9 @@ impl GitGpuiView {
         self.diff_split_cache_len = 0;
         self.diff_visible_indices.clear();
         self.diff_visible_cache_len = 0;
+        self.diff_visible_is_file_view = false;
         self.diff_query_match_count = 0;
+        self.diff_scrollbar_markers_cache.clear();
         self.diff_word_highlights.clear();
         self.diff_file_stats.clear();
         self.diff_text_segments_cache_query.clear();
@@ -1213,7 +1219,7 @@ impl GitGpuiView {
         }
     }
 
-    fn diff_scrollbar_markers(&self) -> Vec<zed::ScrollbarMarker> {
+    fn compute_diff_scrollbar_markers(&self) -> Vec<zed::ScrollbarMarker> {
         if !self.is_file_diff_view_active() {
             return self.diff_scrollbar_markers_patch();
         }
@@ -1410,13 +1416,13 @@ impl GitGpuiView {
     }
 
     fn update_diff_search_debounce(&mut self, cx: &mut gpui::Context<Self>) {
-        let raw = self
-            .diff_search_input
-            .read_with(cx, |i, _| i.text().to_string());
-
-        if raw == self.diff_search_raw {
-            return;
-        }
+        let mut raw: Option<String> = None;
+        self.diff_search_input.read_with(cx, |i, _| {
+            if i.text() != self.diff_search_raw {
+                raw = Some(i.text().to_string());
+            }
+        });
+        let Some(raw) = raw else { return; };
 
         self.diff_search_raw = raw.clone();
         self.diff_search_seq = self.diff_search_seq.wrapping_add(1);
@@ -1435,6 +1441,7 @@ impl GitGpuiView {
                     this.diff_search_debounced = raw;
                     this.diff_visible_indices.clear();
                     this.diff_visible_cache_len = 0;
+                    this.diff_scrollbar_markers_cache.clear();
                     cx.notify();
                 });
             },
@@ -1443,7 +1450,7 @@ impl GitGpuiView {
     }
 
     fn ensure_diff_visible_indices(&mut self) {
-        let query = self.diff_search_debounced.trim().to_string();
+        let query_trimmed = self.diff_search_debounced.trim();
         let is_file_view = self.is_file_diff_view_active();
         let current_len = if is_file_view {
             match self.diff_view {
@@ -1455,20 +1462,24 @@ impl GitGpuiView {
         };
 
         if self.diff_visible_cache_len == current_len
-            && self.diff_visible_query == query
+            && self.diff_visible_query == query_trimmed
             && self.diff_visible_view == self.diff_view
+            && self.diff_visible_is_file_view == is_file_view
         {
             return;
         }
 
+        let query = query_trimmed.to_string();
         self.diff_visible_cache_len = current_len;
         self.diff_visible_query = query.clone();
         self.diff_visible_view = self.diff_view;
+        self.diff_visible_is_file_view = is_file_view;
         self.diff_query_match_count = 0;
 
         if is_file_view {
             if query.is_empty() {
                 self.diff_visible_indices = (0..current_len).collect();
+                self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
                 return;
             }
 
@@ -1504,6 +1515,7 @@ impl GitGpuiView {
             }
             self.diff_query_match_count = match_count;
             self.diff_visible_indices = indices;
+            self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
             return;
         }
 
@@ -1518,6 +1530,7 @@ impl GitGpuiView {
                             (!should_hide_unified_diff_header_line(line)).then_some(ix)
                         })
                         .collect();
+                    self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
                     return;
                 }
 
@@ -1580,6 +1593,7 @@ impl GitGpuiView {
                             PatchSplitRow::Aligned { .. } => Some(ix),
                         })
                         .collect();
+                    self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
                     return;
                 }
 
@@ -1626,6 +1640,8 @@ impl GitGpuiView {
                 self.diff_visible_indices = indices;
             }
         }
+
+        self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
     }
 
     fn handle_patch_row_click(
@@ -2784,22 +2800,31 @@ impl Poller {
     ) -> Poller {
         window
             .spawn(cx, async move |cx| {
-                let events = events;
+                let mut events = events;
                 loop {
-                    let mut changed = false;
-                    while events.try_recv().is_ok() {
-                        changed = true;
-                    }
+                    let (snapshot, next_events) = cx
+                        .background_spawn({
+                            let store = Arc::clone(&store);
+                            async move {
+                                let events = events;
+                                if events.recv().is_err() {
+                                    return (None, events);
+                                }
+                                while events.try_recv().is_ok() {}
+                                (Some(store.snapshot()), events)
+                            }
+                        })
+                        .await;
+                    events = next_events;
 
-                    if changed {
-                        let snapshot = store.snapshot();
-                        let _ = view.update(cx, |view, cx| {
-                            view.apply_state_snapshot(snapshot, cx);
-                            cx.notify();
-                        });
-                    }
+                    let Some(snapshot) = snapshot else {
+                        break;
+                    };
 
-                    Timer::after(Duration::from_millis(33)).await;
+                    let _ = view.update(cx, |view, cx| {
+                        view.apply_state_snapshot(snapshot, cx);
+                        cx.notify();
+                    });
                 }
             })
             .detach();

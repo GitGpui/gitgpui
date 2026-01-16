@@ -1970,7 +1970,7 @@ impl GitGpuiView {
                                     } else {
                                         let scroll_handle =
                                             self.diff_scroll.0.borrow().base_handle.clone();
-                                        let markers = self.diff_scrollbar_markers();
+                                        let markers = self.diff_scrollbar_markers_cache.clone();
                                         match self.diff_view {
                                             DiffViewMode::Inline => {
                                                 let list = uniform_list(
@@ -2093,7 +2093,7 @@ impl GitGpuiView {
                             zed::empty_state(theme, "Diff", "Nothing to render.").into_any_element()
                         } else {
                             let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                            let markers = self.diff_scrollbar_markers();
+                            let markers = self.diff_scrollbar_markers_cache.clone();
                             match self.diff_view {
                                 DiffViewMode::Inline => {
                                     let list = uniform_list(
