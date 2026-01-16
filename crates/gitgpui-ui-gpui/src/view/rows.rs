@@ -2356,7 +2356,16 @@ fn build_diff_text_segments(
             continue;
         }
         let b = b.min(text.len());
-        let seg = &text[a..b];
+        let Some(seg) = text.get(a..b) else {
+            // Defensive fallback: if any boundary isn't a UTF-8 char boundary, avoid panicking and
+            // render the whole line without highlights.
+            return vec![CachedDiffTextSegment {
+                text: maybe_expand_tabs(text),
+                in_word: false,
+                in_query: false,
+                syntax: SyntaxTokenKind::None,
+            }];
+        };
 
         while token_ix < syntax_tokens.len() && syntax_tokens[token_ix].range.end <= a {
             token_ix += 1;
@@ -2740,6 +2749,16 @@ mod tests {
         let styled = build_cached_diff_styled_text(theme, "a\tb", &[], "", None, None);
         assert_eq!(styled.text.as_ref(), "a    b");
         assert!(styled.highlights.is_empty());
+    }
+
+    #[test]
+    fn build_segments_does_not_panic_on_non_char_boundary_ranges() {
+        // This can happen if token ranges are computed in bytes that don't align to UTF-8
+        // boundaries. We should never panic during diff rendering.
+        let text = "aé"; // 'é' is 2 bytes in UTF-8
+        let segments = build_diff_text_segments(text, &[1..2], "", None);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text.as_ref(), text);
     }
 
     #[test]

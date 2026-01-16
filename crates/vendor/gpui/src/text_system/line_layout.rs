@@ -185,10 +185,10 @@ impl LineLayout {
 
             if width > wrap_width && boundary > last_boundary {
                 // When used line_clamp, we should limit the number of lines.
-                if let Some(max_lines) = max_lines
-                    && boundaries.len() >= max_lines - 1
-                {
-                    break;
+                if let Some(max_lines) = max_lines {
+                    if max_lines <= 1 || boundaries.len() >= max_lines.saturating_sub(1) {
+                        break;
+                    }
                 }
 
                 if let Some(last_candidate_ix) = last_candidate_ix.take() {
@@ -483,6 +483,7 @@ impl LineLayoutCache {
             runs,
             wrap_width,
             force_width: None,
+            max_lines,
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
@@ -518,6 +519,7 @@ impl LineLayoutCache {
                 runs: SmallVec::from(runs),
                 wrap_width,
                 force_width: None,
+                max_lines,
             });
 
             let mut current_frame = self.current_frame.write();
@@ -547,6 +549,7 @@ impl LineLayoutCache {
             runs,
             wrap_width: None,
             force_width,
+            max_lines: None,
         } as &dyn AsCacheKeyRef;
 
         let current_frame = self.current_frame.upgradable_read();
@@ -583,6 +586,7 @@ impl LineLayoutCache {
                 runs: SmallVec::from(runs),
                 wrap_width: None,
                 force_width,
+                max_lines: None,
             });
             let layout = Arc::new(layout);
             current_frame.lines.insert(key.clone(), layout.clone());
@@ -610,6 +614,7 @@ struct CacheKey {
     runs: SmallVec<[FontRun; 1]>,
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
+    max_lines: Option<usize>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -619,6 +624,7 @@ struct CacheKeyRef<'a> {
     runs: &'a [FontRun],
     wrap_width: Option<Pixels>,
     force_width: Option<Pixels>,
+    max_lines: Option<usize>,
 }
 
 impl PartialEq for dyn AsCacheKeyRef + '_ {
@@ -643,6 +649,7 @@ impl AsCacheKeyRef for CacheKey {
             runs: self.runs.as_slice(),
             wrap_width: self.wrap_width,
             force_width: self.force_width,
+            max_lines: self.max_lines,
         }
     }
 }

@@ -419,10 +419,23 @@ impl WindowTextSystem {
 
         let mut lines = SmallVec::new();
         let mut line_start = 0;
-        let mut max_wrap_lines = line_clamp.unwrap_or(usize::MAX);
-        let mut wrapped_lines = 0;
+        let max_lines_total = line_clamp.unwrap_or(usize::MAX);
+        if max_lines_total == 0 {
+            self.font_runs_pool.lock().push(font_runs);
+            return Ok(lines);
+        }
 
-        let mut process_line = |line_text: SharedString| {
+        let mut lines_used = 0usize;
+
+        let mut process_line = |line_text: SharedString| -> bool {
+            if lines_used >= max_lines_total {
+                return false;
+            }
+            let remaining_lines = max_lines_total - lines_used;
+            if remaining_lines == 0 {
+                return false;
+            }
+
             font_runs.clear();
             let line_end = line_start + line_text.len();
 
@@ -481,9 +494,10 @@ impl WindowTextSystem {
                 font_size,
                 &font_runs,
                 wrap_width,
-                Some(max_wrap_lines - wrapped_lines),
+                Some(remaining_lines),
             );
-            wrapped_lines += layout.wrap_boundaries.len();
+            let produced_lines = layout.wrap_boundaries.len().saturating_add(1);
+            lines_used = (lines_used + produced_lines).min(max_lines_total);
 
             lines.push(WrappedLine {
                 layout,
@@ -499,6 +513,7 @@ impl WindowTextSystem {
                     runs.next();
                 }
             }
+            true
         };
 
         let mut split_lines = text.split('\n');
@@ -508,15 +523,23 @@ impl WindowTextSystem {
             && let Some(second_line) = split_lines.next()
         {
             processed = true;
-            process_line(first_line.to_string().into());
-            process_line(second_line.to_string().into());
+            if !process_line(first_line.to_string().into()) {
+                self.font_runs_pool.lock().push(font_runs);
+                return Ok(lines);
+            }
+            if !process_line(second_line.to_string().into()) {
+                self.font_runs_pool.lock().push(font_runs);
+                return Ok(lines);
+            }
             for line_text in split_lines {
-                process_line(line_text.to_string().into());
+                if !process_line(line_text.to_string().into()) {
+                    break;
+                }
             }
         }
 
         if !processed {
-            process_line(text);
+            let _ = process_line(text);
         }
 
         self.font_runs_pool.lock().push(font_runs);
@@ -825,6 +848,57 @@ impl Font {
     pub fn italic(mut self) -> Self {
         self.style = FontStyle::Italic;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::NoopTextSystem;
+    use std::sync::Arc;
+
+    #[test]
+    fn shape_text_line_clamp_does_not_panic_with_cached_wraps() {
+        let platform_text_system = Arc::new(NoopTextSystem::new());
+        let text_system = Arc::new(TextSystem::new(platform_text_system));
+        let window_text_system = WindowTextSystem::new(text_system);
+
+        let long_line = "a".repeat(500);
+        let text: SharedString = format!("{long_line}\n").into();
+        let runs = [TextRun {
+            len: text.len(),
+            font: font(".ZedMono"),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        }];
+
+        let wrap_width = Some(px(40.0));
+        let font_size = px(14.0);
+
+        // Prime the wrapped-line cache without a clamp.
+        window_text_system
+            .shape_text(text.clone(), font_size, &runs, wrap_width, None)
+            .unwrap();
+
+        // Now shape again with a clamp; previously this could reuse the uncapped cached layout and
+        // panic with a usize underflow in `shape_text`.
+        let shaped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            window_text_system
+                .shape_text(text.clone(), font_size, &runs, wrap_width, Some(1))
+                .unwrap()
+        }))
+        .expect("shape_text panicked with cached wrap boundaries");
+
+        let total_lines: usize = shaped
+            .iter()
+            .map(|line| line.layout.wrap_boundaries.len().saturating_add(1))
+            .sum();
+        assert!(
+            total_lines <= 1,
+            "line_clamp=1 should produce <= 1 wrapped line, got {total_lines}"
+        );
     }
 }
 

@@ -1935,18 +1935,35 @@ impl GitGpuiView {
                 Loadable::Error(e) => zed::empty_state(theme, "Diff", e.clone()).into_any_element(),
                 Loadable::Ready(diff) => {
                     if wants_file_diff {
-                        let diff_file = repo.diff_file.clone();
+                        enum DiffFileState {
+                            NotLoaded,
+                            Loading,
+                            Error(String),
+                            Ready { has_file: bool },
+                        }
+
+                        let diff_file_state = match &repo.diff_file {
+                            Loadable::NotLoaded => DiffFileState::NotLoaded,
+                            Loadable::Loading => DiffFileState::Loading,
+                            Loadable::Error(e) => DiffFileState::Error(e.clone()),
+                            Loadable::Ready(file) => {
+                                DiffFileState::Ready { has_file: file.is_some() }
+                            }
+                        };
+
                         self.ensure_file_diff_cache();
-                        match diff_file {
-                            Loadable::NotLoaded => {
+                        match diff_file_state {
+                            DiffFileState::NotLoaded => {
                                 zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
                             }
-                            Loadable::Loading => {
+                            DiffFileState::Loading => {
                                 zed::empty_state(theme, "Diff", "Loading…").into_any_element()
                             }
-                            Loadable::Error(e) => zed::empty_state(theme, "Diff", e).into_any_element(),
-                            Loadable::Ready(file) => {
-                                if file.is_none() || !self.is_file_diff_view_active() {
+                            DiffFileState::Error(e) => {
+                                zed::empty_state(theme, "Diff", e).into_any_element()
+                            }
+                            DiffFileState::Ready { has_file } => {
+                                if !has_file || !self.is_file_diff_view_active() {
                                     zed::empty_state(theme, "Diff", "No file contents available.")
                                         .into_any_element()
                                 } else {
