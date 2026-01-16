@@ -71,296 +71,6 @@ impl GitGpuiView {
             .collect()
     }
 
-    pub(super) fn render_diagnostic_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let theme = this.theme;
-
-        range
-            .filter_map(|ix| repo.diagnostics.get(ix).map(|d| (ix, d)))
-            .map(|(ix, d)| {
-                let (label, color) = match d.kind {
-                    DiagnosticKind::Info => ("Info", theme.colors.accent),
-                    DiagnosticKind::Warning => ("Warning", theme.colors.warning),
-                    DiagnosticKind::Error => ("Error", theme.colors.danger),
-                };
-
-                div()
-                    .id(("diag", ix))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child(zed::pill(theme, label, color))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.colors.text_muted)
-                            .line_clamp(2)
-                            .child(d.message.clone()),
-                    )
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    pub(super) fn render_command_log_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let theme = this.theme;
-        let repo_id = repo.id;
-
-        range
-            .filter_map(|ix| repo.command_log.get(ix).map(|e| (ix, e)))
-            .map(|(ix, entry)| {
-                let label = if entry.ok { "OK" } else { "Error" };
-                let color = if entry.ok {
-                    theme.colors.success
-                } else {
-                    theme.colors.danger
-                };
-                let when = format_relative_time(entry.time);
-
-                div()
-                    .id(("cmd", ix))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .min_w(px(0.0))
-                            .child(zed::pill(theme, label, color))
-                            .child(div().text_sm().line_clamp(1).child(entry.summary.clone()))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .font_family("monospace")
-                                    .line_clamp(1)
-                                    .child(entry.command.clone()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .whitespace_nowrap()
-                            .child(when),
-                    )
-                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                        this.popover = Some(PopoverKind::CommandLogDetails { repo_id, index: ix });
-                        this.popover_anchor = Some(e.position());
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    pub(super) fn render_conflict_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let Loadable::Ready(status) = &repo.status else {
-            return Vec::new();
-        };
-        let theme = this.theme;
-        let repo_id = repo.id;
-
-        let conflicts = status
-            .unstaged
-            .iter()
-            .map(|e| (DiffArea::Unstaged, e))
-            .chain(status.staged.iter().map(|e| (DiffArea::Staged, e)))
-            .filter(|(_area, e)| e.kind == FileStatusKind::Conflicted)
-            .map(|(area, e)| (area, e.path.clone()))
-            .collect::<Vec<_>>();
-
-        range
-            .filter_map(|ix| conflicts.get(ix).cloned().map(|e| (ix, e)))
-            .map(|(ix, (area, path))| {
-                let path_for_ours = path.clone();
-                let path_for_theirs = path.clone();
-                let path_for_view = path.clone();
-
-                div()
-                    .id(("conflict", ix))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .min_w(px(0.0))
-                            .child(zed::pill(theme, "Conflicted", theme.colors.danger))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .line_clamp(1)
-                                    .child(path.display().to_string()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                zed::Button::new(format!("conflict_ours_{ix}"), "Ours")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                                        this.store.dispatch(Msg::CheckoutConflictSide {
-                                            repo_id,
-                                            path: path_for_ours.clone(),
-                                            side: gitgpui_core::services::ConflictSide::Ours,
-                                        });
-                                        cx.notify();
-                                    }),
-                            )
-                            .child(
-                                zed::Button::new(format!("conflict_theirs_{ix}"), "Theirs")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                                        this.store.dispatch(Msg::CheckoutConflictSide {
-                                            repo_id,
-                                            path: path_for_theirs.clone(),
-                                            side: gitgpui_core::services::ConflictSide::Theirs,
-                                        });
-                                        cx.notify();
-                                    }),
-                            )
-                            .child(
-                                zed::Button::new(format!("conflict_view_{ix}"), "View diff")
-                                    .style(zed::ButtonStyle::Subtle)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                                        this.store.dispatch(Msg::SelectDiff {
-                                            repo_id,
-                                            target: DiffTarget::WorkingTree {
-                                                path: path_for_view.clone(),
-                                                area,
-                                            },
-                                        });
-                                        this.show_diagnostics_view = false;
-                                        this.rebuild_diff_cache();
-                                        cx.notify();
-                                    }),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .collect()
-    }
-
-    pub(super) fn render_blame_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
-            return Vec::new();
-        };
-        let Loadable::Ready(lines) = &repo.blame else {
-            return Vec::new();
-        };
-        let theme = this.theme;
-        let repo_id = repo.id;
-
-        range
-            .filter_map(|ix| lines.get(ix).map(|l| (ix, l)))
-            .map(|(ix, line)| {
-                let short = line.commit_id.get(0..8).unwrap_or(&line.commit_id);
-                let commit_id = CommitId(line.commit_id.clone());
-                let author = if line.author.trim().is_empty() {
-                    "—".to_string()
-                } else {
-                    line.author.clone()
-                };
-                div()
-                    .id(("blame", ix))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .rounded(px(theme.radii.row))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child(
-                        div()
-                            .flex_none()
-                            .font_family("monospace")
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(short.to_string()),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(author),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .font_family("monospace")
-                            .text_sm()
-                            .line_clamp(1)
-                            .child(line.line.clone()),
-                    )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.store.dispatch(Msg::SelectCommit {
-                            repo_id,
-                            commit_id: commit_id.clone(),
-                        });
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect()
-    }
-
     pub(super) fn render_commit_file_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -536,25 +246,66 @@ impl GitGpuiView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let Loadable::Ready(page) = &repo.log else {
-            return Vec::new();
-        };
-        let Some(cache) = this.history_cache.as_ref() else {
-            return Vec::new();
-        };
-        if cache.repo_id != repo.id {
-            return Vec::new();
-        }
 
         let theme = this.theme;
+
+        let (show_working_tree_summary_row, unstaged_counts, staged_counts) =
+            match &repo.status {
+                Loadable::Ready(status) => {
+                    let count_for = |entries: &[FileStatus]| {
+                        let mut added = 0usize;
+                        let mut modified = 0usize;
+                        let mut deleted = 0usize;
+                        for e in entries {
+                            match e.kind {
+                                FileStatusKind::Untracked | FileStatusKind::Added => added += 1,
+                                FileStatusKind::Deleted => deleted += 1,
+                                FileStatusKind::Modified
+                                | FileStatusKind::Renamed
+                                | FileStatusKind::Conflicted => modified += 1,
+                            }
+                        }
+                        (added, modified, deleted)
+                    };
+                    (
+                        !status.unstaged.is_empty(),
+                        count_for(&status.unstaged),
+                        count_for(&status.staged),
+                    )
+                }
+                _ => (false, (0, 0, 0), (0, 0, 0)),
+            };
+
+        let page = match &repo.log {
+            Loadable::Ready(page) => Some(page),
+            _ => None,
+        };
+        let cache = this
+            .history_cache
+            .as_ref()
+            .filter(|c| c.repo_id == repo.id);
+
         range
-            .filter_map(|visible_ix| {
+            .filter_map(|list_ix| {
+                if show_working_tree_summary_row && list_ix == 0 {
+                    return Some(working_tree_summary_history_row(
+                        theme,
+                        repo.id,
+                        unstaged_counts,
+                        staged_counts,
+                        cx,
+                    ));
+                }
+
+                let offset = usize::from(show_working_tree_summary_row);
+                let visible_ix = list_ix.checked_sub(offset)?;
+
+                let page = page?;
+                let cache = cache?;
+
                 let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
-                Some((visible_ix, commit, graph_row))
-            })
-            .map(|(visible_ix, commit, graph_row)| {
                 let is_head = page
                     .commits
                     .first()
@@ -562,9 +313,18 @@ impl GitGpuiView {
                 let refs = commit_refs(repo, is_head, commit);
                 let when = format_relative_time(commit.time);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
-                history_table_row(
-                    theme, visible_ix, repo.id, commit, graph_row, refs, when, selected, cx,
-                )
+
+                Some(history_table_row(
+                    theme,
+                    list_ix,
+                    repo.id,
+                    commit,
+                    graph_row,
+                    refs,
+                    when,
+                    selected,
+                    cx,
+                ))
             })
             .collect()
     }
@@ -804,6 +564,82 @@ impl GitGpuiView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        if this.is_file_diff_view_active() {
+            let theme = this.theme;
+            if this.diff_text_segments_cache_query != this.diff_visible_query {
+                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+                this.diff_text_segments_cache.clear();
+            }
+            let query = this.diff_visible_query.clone();
+            let empty_ranges: &[Range<usize>] = &[];
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                    let Some(inline_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                        return div()
+                            .id(("diff_missing", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+                    let Some(line) = this.file_diff_inline_cache.get(inline_ix) else {
+                        return div()
+                            .id(("diff_oob", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+
+                    let word_ranges: &[Range<usize>] = this
+                        .file_diff_inline_word_highlights
+                        .get(&inline_ix)
+                        .map(Vec::as_slice)
+                        .unwrap_or(empty_ranges);
+
+                    let segments = this
+                        .diff_text_segments_cache
+                        .entry(inline_ix)
+                        .or_insert_with(|| {
+                            build_diff_text_segments(
+                                diff_content_text(line),
+                                word_ranges,
+                                query.as_str(),
+                                language,
+                            )
+                        })
+                        .as_slice();
+
+                    diff_row(
+                        theme,
+                        visible_ix,
+                        DiffClickKind::Line,
+                        selected,
+                        DiffViewMode::Inline,
+                        line,
+                        None,
+                        segments,
+                        cx,
+                    )
+                })
+                .collect();
+        }
+
         let theme = this.theme;
         if this.diff_text_segments_cache_query != this.diff_visible_query {
             this.diff_text_segments_cache_query = this.diff_visible_query.clone();
@@ -901,6 +737,88 @@ impl GitGpuiView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        if this.is_file_diff_view_active() {
+            let theme = this.theme;
+            if this.diff_text_segments_cache_query != this.diff_visible_query {
+                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+                this.diff_text_segments_cache.clear();
+            }
+            let query = this.diff_visible_query.clone();
+            let empty_segments: &[CachedDiffTextSegment] = &[];
+            let empty_ranges: &[Range<usize>] = &[];
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                    let Some(row_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                        return div()
+                            .id(("diff_split_left_missing", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+                    let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
+                        return div()
+                            .id(("diff_split_left_oob", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+
+                    let text = row.old.as_deref().unwrap_or("");
+                    let segments = if row.old.is_some() {
+                        let word_ranges: &[Range<usize>] = this
+                            .file_diff_split_word_highlights_old
+                            .get(&row_ix)
+                            .map(Vec::as_slice)
+                            .unwrap_or(empty_ranges);
+                        let key = row_ix * 2;
+                        this.diff_text_segments_cache
+                            .entry(key)
+                            .or_insert_with(|| {
+                                build_diff_text_segments(text, word_ranges, query.as_str(), language)
+                            })
+                            .as_slice()
+                    } else {
+                        empty_segments
+                    };
+
+                    let word_color = matches!(
+                        row.kind,
+                        gitgpui_core::file_diff::FileDiffRowKind::Remove
+                            | gitgpui_core::file_diff::FileDiffRowKind::Modify
+                    )
+                    .then_some(theme.colors.danger);
+
+                    patch_split_column_row(
+                        theme,
+                        PatchSplitColumn::Left,
+                        visible_ix,
+                        selected,
+                        row,
+                        segments,
+                        word_color,
+                        cx,
+                    )
+                })
+                .collect();
+        }
+
         let theme = this.theme;
         if this.diff_text_segments_cache_query != this.diff_visible_query {
             this.diff_text_segments_cache_query = this.diff_visible_query.clone();
@@ -1019,6 +937,88 @@ impl GitGpuiView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        if this.is_file_diff_view_active() {
+            let theme = this.theme;
+            if this.diff_text_segments_cache_query != this.diff_visible_query {
+                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
+                this.diff_text_segments_cache.clear();
+            }
+            let query = this.diff_visible_query.clone();
+            let empty_segments: &[CachedDiffTextSegment] = &[];
+            let empty_ranges: &[Range<usize>] = &[];
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+
+                    let Some(row_ix) = this.diff_visible_indices.get(visible_ix).copied() else {
+                        return div()
+                            .id(("diff_split_right_missing", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+                    let Some(row) = this.file_diff_cache_rows.get(row_ix) else {
+                        return div()
+                            .id(("diff_split_right_oob", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .font_family("monospace")
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("…")
+                            .into_any_element();
+                    };
+
+                    let text = row.new.as_deref().unwrap_or("");
+                    let segments = if row.new.is_some() {
+                        let word_ranges: &[Range<usize>] = this
+                            .file_diff_split_word_highlights_new
+                            .get(&row_ix)
+                            .map(Vec::as_slice)
+                            .unwrap_or(empty_ranges);
+                        let key = row_ix * 2 + 1;
+                        this.diff_text_segments_cache
+                            .entry(key)
+                            .or_insert_with(|| {
+                                build_diff_text_segments(text, word_ranges, query.as_str(), language)
+                            })
+                            .as_slice()
+                    } else {
+                        empty_segments
+                    };
+
+                    let word_color = matches!(
+                        row.kind,
+                        gitgpui_core::file_diff::FileDiffRowKind::Add
+                            | gitgpui_core::file_diff::FileDiffRowKind::Modify
+                    )
+                    .then_some(theme.colors.success);
+
+                    patch_split_column_row(
+                        theme,
+                        PatchSplitColumn::Right,
+                        visible_ix,
+                        selected,
+                        row,
+                        segments,
+                        word_color,
+                        cx,
+                    )
+                })
+                .collect();
+        }
+
         let theme = this.theme;
         if this.diff_text_segments_cache_query != this.diff_visible_query {
             this.diff_text_segments_cache_query = this.diff_visible_query.clone();
@@ -1279,6 +1279,116 @@ fn history_table_row(
     }
 
     row.into_any_element()
+}
+
+fn working_tree_summary_history_row(
+    theme: AppTheme,
+    repo_id: RepoId,
+    unstaged: (usize, usize, usize),
+    staged: (usize, usize, usize),
+    cx: &mut gpui::Context<GitGpuiView>,
+) -> AnyElement {
+    let staged_total = staged.0 + staged.1 + staged.2;
+    let icon_count = |icon: &'static str, color: gpui::Rgba, count: usize| {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color)
+                    .child(icon),
+            )
+            .child(div().text_xs().text_color(theme.colors.text_muted).child(count.to_string()))
+            .into_any_element()
+    };
+
+    let group = |label: &'static str, (added, modified, deleted): (usize, usize, usize)| {
+        let mut parts: Vec<AnyElement> = Vec::new();
+        if modified > 0 {
+            parts.push(icon_count("✎", theme.colors.warning, modified));
+        }
+        if added > 0 {
+            parts.push(icon_count("+", theme.colors.success, added));
+        }
+        if deleted > 0 {
+            parts.push(icon_count("−", theme.colors.danger, deleted));
+        }
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .whitespace_nowrap()
+                    .child(label),
+            )
+            .children(parts)
+            .into_any_element()
+    };
+
+    div()
+        .id(("history_worktree_summary", repo_id.0))
+        .h(px(28.0))
+        .flex()
+        .w_full()
+        .items_center()
+        .gap_2()
+        .px_2()
+        .bg(theme.colors.surface_bg_elevated)
+        .border_1()
+        .border_color(theme.colors.border)
+        .rounded(px(theme.radii.row))
+        .hover(move |s| s.bg(theme.colors.hover))
+        .active(move |s| s.bg(theme.colors.active))
+        .child(
+            div()
+                .w(px(HISTORY_COL_BRANCH_PX))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
+                .child("Working tree"),
+        )
+        .child(div().w(px(HISTORY_COL_GRAPH_PX)).h_full())
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_w(px(0.0))
+                        .child(div().text_sm().line_clamp(1).child("Uncommitted changes"))
+                        .child(group("Unstaged", unstaged))
+                        .when(staged_total > 0, |this| this.child(group("Staged", staged))),
+                )
+        )
+        .child(
+            div()
+                .w(px(HISTORY_COL_DATE_PX))
+                .flex()
+                .justify_end()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
+                .child("Click to review"),
+        )
+        .child(div().w(px(HISTORY_COL_SHA_PX)))
+        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            this.store
+                .dispatch(Msg::ClearCommitSelection { repo_id });
+            cx.notify();
+        }))
+        .into_any_element()
 }
 
 fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl IntoElement {

@@ -92,14 +92,6 @@ pub enum Msg {
     Push {
         repo_id: RepoId,
     },
-    LoadBlame {
-        repo_id: RepoId,
-        path: PathBuf,
-        rev: Option<String>,
-    },
-    ClearBlame {
-        repo_id: RepoId,
-    },
     CheckoutConflictSide {
         repo_id: RepoId,
         path: PathBuf,
@@ -191,11 +183,6 @@ pub enum Msg {
         result: Result<CommandOutput, Error>,
     },
 
-    BlameLoaded {
-        repo_id: RepoId,
-        path: PathBuf,
-        result: Result<Vec<gitgpui_core::services::BlameLine>, Error>,
-    },
 }
 
 impl std::fmt::Debug for Msg {
@@ -298,16 +285,6 @@ impl std::fmt::Debug for Msg {
                 .field("mode", mode)
                 .finish(),
             Msg::Push { repo_id } => f.debug_struct("Push").field("repo_id", repo_id).finish(),
-            Msg::LoadBlame { repo_id, path, rev } => f
-                .debug_struct("LoadBlame")
-                .field("repo_id", repo_id)
-                .field("path", path)
-                .field("rev", rev)
-                .finish(),
-            Msg::ClearBlame { repo_id } => f
-                .debug_struct("ClearBlame")
-                .field("repo_id", repo_id)
-                .finish(),
             Msg::CheckoutConflictSide {
                 repo_id,
                 path,
@@ -439,16 +416,6 @@ impl std::fmt::Debug for Msg {
                 .field("command", command)
                 .field("result", result)
                 .finish(),
-            Msg::BlameLoaded {
-                repo_id,
-                path,
-                result,
-            } => f
-                .debug_struct("BlameLoaded")
-                .field("repo_id", repo_id)
-                .field("path", path)
-                .field("result", result)
-                .finish(),
         }
     }
 }
@@ -498,11 +465,6 @@ pub enum Effect {
     LoadDiffFile {
         repo_id: RepoId,
         target: DiffTarget,
-    },
-    LoadBlame {
-        repo_id: RepoId,
-        path: PathBuf,
-        rev: Option<String>,
     },
 
     CheckoutBranch {

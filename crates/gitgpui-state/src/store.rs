@@ -227,24 +227,6 @@ fn reduce(
             effects
         }
 
-        Msg::LoadBlame { repo_id, path, rev } => {
-            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-                return Vec::new();
-            };
-            repo_state.blame_target = Some(path.clone());
-            repo_state.blame = Loadable::Loading;
-            vec![Effect::LoadBlame { repo_id, path, rev }]
-        }
-
-        Msg::ClearBlame { repo_id } => {
-            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-                return Vec::new();
-            };
-            repo_state.blame_target = None;
-            repo_state.blame = Loadable::NotLoaded;
-            Vec::new()
-        }
-
         Msg::ClearDiffSelection { repo_id } => {
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
@@ -512,6 +494,7 @@ fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
                 && repo_state.diff_target.as_ref() == Some(&target)
             {
+                repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
                 repo_state.diff_file = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
@@ -563,24 +546,6 @@ fn reduce(
             refresh_effects(repo_id)
         }
 
-        Msg::BlameLoaded {
-            repo_id,
-            path,
-            result,
-        } => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-                && repo_state.blame_target.as_ref() == Some(&path)
-            {
-                repo_state.blame = match result {
-                    Ok(v) => Loadable::Ready(v),
-                    Err(e) => {
-                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                        Loadable::Error(e.to_string())
-                    }
-                };
-            }
-            Vec::new()
-        }
     }
 }
 
@@ -1600,19 +1565,6 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::DiffFileLoaded {
                         repo_id,
                         target,
-                        result,
-                    });
-                });
-            }
-        }
-
-        Effect::LoadBlame { repo_id, path, rev } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo.blame_file(&path, rev.as_deref());
-                    let _ = msg_tx.send(Msg::BlameLoaded {
-                        repo_id,
-                        path,
                         result,
                     });
                 });
