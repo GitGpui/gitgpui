@@ -71,6 +71,12 @@ struct CachedDiffTextSegment {
     syntax: SyntaxTokenKind,
 }
 
+#[derive(Clone, Debug)]
+struct CachedDiffStyledText {
+    text: SharedString,
+    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SyntaxTokenKind {
     None,
@@ -168,7 +174,7 @@ pub struct GitGpuiView {
     diff_word_highlights: HashMap<usize, Vec<Range<usize>>>,
     diff_file_stats: HashMap<usize, (usize, usize)>,
     diff_text_segments_cache_query: String,
-    diff_text_segments_cache: HashMap<usize, Vec<CachedDiffTextSegment>>,
+    diff_text_segments_cache: HashMap<usize, CachedDiffStyledText>,
     diff_selection_anchor: Option<usize>,
     diff_selection_range: Option<(usize, usize)>,
     diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
@@ -187,7 +193,7 @@ pub struct GitGpuiView {
     worktree_preview: Loadable<Arc<Vec<String>>>,
     worktree_preview_scroll: UniformListScrollHandle,
     worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
-    worktree_preview_segments_cache: HashMap<usize, Vec<CachedDiffTextSegment>>,
+    worktree_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
     diff_preview_is_new_file: bool,
     diff_preview_new_file_lines: Arc<Vec<String>>,
 
@@ -458,6 +464,10 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        self.diff_text_segments_cache_query.clear();
+        self.diff_text_segments_cache.clear();
+        self.worktree_preview_segments_cache_path = None;
+        self.worktree_preview_segments_cache.clear();
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_message_input

@@ -97,7 +97,7 @@ pub(crate) fn current_platform(headless: bool) -> Rc<dyn Platform> {
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) fn current_platform(headless: bool) -> Rc<dyn Platform> {
-    #[cfg(feature = "x11")]
+    #[cfg(any(feature = "x11", feature = "wayland"))]
     use anyhow::Context as _;
 
     if headless {
@@ -106,7 +106,28 @@ pub(crate) fn current_platform(headless: bool) -> Rc<dyn Platform> {
 
     match guess_compositor() {
         #[cfg(feature = "wayland")]
-        "Wayland" => Rc::new(WaylandClient::new()),
+        "Wayland" => {
+            let wayland = WaylandClient::new().context("Failed to initialize Wayland client.");
+            match wayland {
+                Ok(client) => Rc::new(client),
+                Err(wayland_err) => {
+                    #[cfg(feature = "x11")]
+                    {
+                        log::error!("Wayland initialization failed: {wayland_err:#}");
+                        log::error!("Falling back to X11 (XWayland)...");
+                        Rc::new(
+                            X11Client::new()
+                                .context("Failed to initialize X11 client after Wayland failure.")
+                                .unwrap(),
+                        )
+                    }
+                    #[cfg(not(feature = "x11"))]
+                    {
+                        panic!("Failed to initialize Wayland client: {wayland_err:#}");
+                    }
+                }
+            }
+        }
 
         #[cfg(feature = "x11")]
         "X11" => Rc::new(

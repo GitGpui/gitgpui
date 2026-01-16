@@ -445,11 +445,13 @@ fn wl_output_version(version: u32) -> u32 {
 }
 
 impl WaylandClient {
-    pub(crate) fn new() -> Self {
-        let conn = Connection::connect_to_env().unwrap();
+    pub(crate) fn new() -> anyhow::Result<Self> {
+        use anyhow::Context as _;
+
+        let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
 
         let (globals, mut event_queue) =
-            registry_queue_init::<WaylandClientStatePtr>(&conn).unwrap();
+            registry_queue_init::<WaylandClientStatePtr>(&conn).context("Failed to init registry")?;
         let qh = event_queue.handle();
 
         let mut seat: Option<wl_seat::WlSeat> = None;
@@ -480,7 +482,8 @@ impl WaylandClient {
             }
         });
 
-        let event_loop = EventLoop::<WaylandClientStatePtr>::try_new().unwrap();
+        let event_loop =
+            EventLoop::<WaylandClientStatePtr>::try_new().context("Failed to create event loop")?;
 
         let (common, main_receiver) = LinuxCommon::new(event_loop.get_signal());
 
@@ -496,11 +499,11 @@ impl WaylandClient {
                     }
                 }
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Failed to register main receiver: {e:?}"))?;
 
-        let gpu_context = BladeContext::new().expect("Unable to init GPU context");
+        let gpu_context = BladeContext::new().context("Unable to init GPU context")?;
 
-        let seat = seat.unwrap();
+        let seat = seat.context("Wayland compositor did not provide a seat")?;
         let globals = Globals::new(
             globals,
             common.foreground_executor.clone(),
@@ -548,7 +551,7 @@ impl WaylandClient {
                     }
                 }
             })
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Failed to register XDP event source: {e:?}"))?;
 
         let mut state = Rc::new(RefCell::new(WaylandClientState {
             serial_tracker: SerialTracker::new(),
@@ -619,9 +622,9 @@ impl WaylandClient {
 
         WaylandSource::new(conn, event_queue)
             .insert(handle)
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("Failed to register Wayland source: {e:?}"))?;
 
-        Self(state)
+        Ok(Self(state))
     }
 }
 

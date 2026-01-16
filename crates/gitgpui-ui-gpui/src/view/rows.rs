@@ -1,6 +1,10 @@
 use super::*;
-use std::sync::OnceLock;
+use std::cell::RefCell;
+use std::sync::{Arc, OnceLock};
 use tree_sitter::StreamingIterator;
+
+const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
+const MAX_TREESITTER_LINE_BYTES: usize = 512;
 
 impl GitGpuiView {
     pub(super) fn render_branch_rows(
@@ -187,17 +191,20 @@ impl GitGpuiView {
             this.worktree_preview_segments_cache.clear();
         }
 
-        let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
+        let language = (lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
+            .then(|| diff_syntax_language_for_path(path.to_string_lossy().as_ref()))
+            .flatten();
 
         range
             .map(|ix| {
                 let line = lines.get(ix).map(String::as_str).unwrap_or("");
 
-                let segments = this
+                let styled = this
                     .worktree_preview_segments_cache
                     .entry(ix)
-                    .or_insert_with(|| build_diff_text_segments(line, &[], "", language))
-                    .as_slice();
+                    .or_insert_with(|| {
+                        build_cached_diff_styled_text(theme, line, &[], "", language, None)
+                    });
 
                 let line_no = format!("{}", ix + 1);
 
@@ -225,11 +232,9 @@ impl GitGpuiView {
                             .text_color(theme.colors.text)
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .child(render_cached_diff_text_segments(
-                                theme,
+                            .child(render_cached_diff_styled_text(
                                 theme.colors.text,
-                                segments,
-                                None,
+                                Some(styled),
                             )),
                     )
                     .into_any_element()
@@ -572,10 +577,13 @@ impl GitGpuiView {
             }
             let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = (this.file_diff_inline_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
+                .then(|| {
+                    this.file_diff_cache_path
+                        .as_ref()
+                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
+                })
+                .flatten();
 
             return range
                 .map(|visible_ix| {
@@ -612,18 +620,25 @@ impl GitGpuiView {
                         .map(Vec::as_slice)
                         .unwrap_or(empty_ranges);
 
-                    let segments = this
+                    let word_color = match line.kind {
+                        gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                        gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                        _ => None,
+                    };
+
+                    let styled = this
                         .diff_text_segments_cache
                         .entry(inline_ix)
                         .or_insert_with(|| {
-                            build_diff_text_segments(
+                            build_cached_diff_styled_text(
+                                theme,
                                 diff_content_text(line),
                                 word_ranges,
                                 query.as_str(),
                                 language,
+                                word_color,
                             )
-                        })
-                        .as_slice();
+                        });
 
                     diff_row(
                         theme,
@@ -633,7 +648,7 @@ impl GitGpuiView {
                         DiffViewMode::Inline,
                         line,
                         None,
-                        segments,
+                        Some(styled),
                         cx,
                     )
                 })
@@ -646,7 +661,7 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let empty_segments: &[CachedDiffTextSegment] = &[];
+        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
         range
             .map(|visible_ix| {
                 let selected = this
@@ -694,27 +709,36 @@ impl GitGpuiView {
 
                 let file_stat = this.diff_file_stats.get(&src_ix).copied();
 
-                let language = this
-                    .diff_file_for_src_ix
-                    .get(src_ix)
-                    .and_then(|p| p.as_deref())
-                    .and_then(diff_syntax_language_for_path);
+                let language = if syntax_enabled {
+                    this.diff_file_for_src_ix
+                        .get(src_ix)
+                        .and_then(|p| p.as_deref())
+                        .and_then(diff_syntax_language_for_path)
+                } else {
+                    None
+                };
 
-                let segments = if matches!(click_kind, DiffClickKind::Line) {
-                    this.diff_text_segments_cache
-                        .entry(src_ix)
-                        .or_insert_with(|| {
-                            build_diff_text_segments(
+                let word_color = match line.kind {
+                    gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                    gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                    _ => None,
+                };
+
+                let styled: Option<&CachedDiffStyledText> =
+                    if matches!(click_kind, DiffClickKind::Line) {
+                        Some(this.diff_text_segments_cache.entry(src_ix).or_insert_with(|| {
+                            build_cached_diff_styled_text(
+                                theme,
                                 diff_content_text(line),
                                 word_ranges,
                                 query.as_str(),
                                 language,
+                                word_color,
                             )
-                        })
-                        .as_slice()
-                } else {
-                    empty_segments
-                };
+                        }))
+                    } else {
+                        None
+                    };
 
                 diff_row(
                     theme,
@@ -724,7 +748,7 @@ impl GitGpuiView {
                     DiffViewMode::Inline,
                     line,
                     file_stat,
-                    segments,
+                    styled,
                     cx,
                 )
             })
@@ -744,12 +768,14 @@ impl GitGpuiView {
                 this.diff_text_segments_cache.clear();
             }
             let query = this.diff_visible_query.clone();
-            let empty_segments: &[CachedDiffTextSegment] = &[];
             let empty_ranges: &[Range<usize>] = &[];
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = (this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
+                .then(|| {
+                    this.file_diff_cache_path
+                        .as_ref()
+                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
+                })
+                .flatten();
 
             return range
                 .map(|visible_ix| {
@@ -781,23 +807,6 @@ impl GitGpuiView {
                     };
 
                     let text = row.old.as_deref().unwrap_or("");
-                    let segments = if row.old.is_some() {
-                        let word_ranges: &[Range<usize>] = this
-                            .file_diff_split_word_highlights_old
-                            .get(&row_ix)
-                            .map(Vec::as_slice)
-                            .unwrap_or(empty_ranges);
-                        let key = row_ix * 2;
-                        this.diff_text_segments_cache
-                            .entry(key)
-                            .or_insert_with(|| {
-                                build_diff_text_segments(text, word_ranges, query.as_str(), language)
-                            })
-                            .as_slice()
-                    } else {
-                        empty_segments
-                    };
-
                     let word_color = matches!(
                         row.kind,
                         gitgpui_core::file_diff::FileDiffRowKind::Remove
@@ -805,14 +814,34 @@ impl GitGpuiView {
                     )
                     .then_some(theme.colors.danger);
 
+                    let styled: Option<&CachedDiffStyledText> = if row.old.is_some() {
+                        let word_ranges: &[Range<usize>] = this
+                            .file_diff_split_word_highlights_old
+                            .get(&row_ix)
+                            .map(Vec::as_slice)
+                            .unwrap_or(empty_ranges);
+                        let key = row_ix * 2;
+                        Some(this.diff_text_segments_cache.entry(key).or_insert_with(|| {
+                            build_cached_diff_styled_text(
+                                theme,
+                                text,
+                                word_ranges,
+                                query.as_str(),
+                                language,
+                                word_color,
+                            )
+                        }))
+                    } else {
+                        None
+                    };
+
                     patch_split_column_row(
                         theme,
                         PatchSplitColumn::Left,
                         visible_ix,
                         selected,
                         row,
-                        segments,
-                        word_color,
+                        styled,
                         cx,
                     )
                 })
@@ -825,7 +854,7 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let empty_segments: &[CachedDiffTextSegment] = &[];
+        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
         let empty_ranges: &[Range<usize>] = &[];
         range
             .map(|visible_ix| {
@@ -863,33 +892,38 @@ impl GitGpuiView {
                         ..
                     } => {
                         let text = row.old.as_deref().unwrap_or("");
-                        let segments = if let Some(src_ix) = *old_src_ix {
-                            let language = this
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|p| p.as_deref())
-                                .and_then(diff_syntax_language_for_path);
+                        let styled: Option<&CachedDiffStyledText> = if let Some(src_ix) = *old_src_ix {
+                            let language = if syntax_enabled {
+                                this.diff_file_for_src_ix
+                                    .get(src_ix)
+                                    .and_then(|p| p.as_deref())
+                                    .and_then(diff_syntax_language_for_path)
+                            } else {
+                                None
+                            };
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(&src_ix)
                                 .map(Vec::as_slice)
                                 .unwrap_or(empty_ranges);
-                            this.diff_text_segments_cache
-                                .entry(src_ix)
-                                .or_insert_with(|| {
-                                    build_diff_text_segments(text, word_ranges, query.as_str(), language)
-                                })
-                                .as_slice()
+                            let word_color = this.diff_cache.get(src_ix).and_then(|line| match line.kind {
+                                gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                                gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                                _ => None,
+                            });
+                            Some(this.diff_text_segments_cache.entry(src_ix).or_insert_with(|| {
+                                build_cached_diff_styled_text(
+                                    theme,
+                                    text,
+                                    word_ranges,
+                                    query.as_str(),
+                                    language,
+                                    word_color,
+                                )
+                            }))
                         } else {
-                            empty_segments
+                            None
                         };
-
-                        let word_color = matches!(
-                            row.kind,
-                            gitgpui_core::file_diff::FileDiffRowKind::Remove
-                                | gitgpui_core::file_diff::FileDiffRowKind::Modify
-                        )
-                        .then_some(theme.colors.danger);
 
                         patch_split_column_row(
                             theme,
@@ -897,8 +931,7 @@ impl GitGpuiView {
                             visible_ix,
                             selected,
                             row,
-                            segments,
-                            word_color,
+                            styled,
                             cx,
                         )
                     }
@@ -944,12 +977,14 @@ impl GitGpuiView {
                 this.diff_text_segments_cache.clear();
             }
             let query = this.diff_visible_query.clone();
-            let empty_segments: &[CachedDiffTextSegment] = &[];
             let empty_ranges: &[Range<usize>] = &[];
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = (this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
+                .then(|| {
+                    this.file_diff_cache_path
+                        .as_ref()
+                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
+                })
+                .flatten();
 
             return range
                 .map(|visible_ix| {
@@ -981,23 +1016,6 @@ impl GitGpuiView {
                     };
 
                     let text = row.new.as_deref().unwrap_or("");
-                    let segments = if row.new.is_some() {
-                        let word_ranges: &[Range<usize>] = this
-                            .file_diff_split_word_highlights_new
-                            .get(&row_ix)
-                            .map(Vec::as_slice)
-                            .unwrap_or(empty_ranges);
-                        let key = row_ix * 2 + 1;
-                        this.diff_text_segments_cache
-                            .entry(key)
-                            .or_insert_with(|| {
-                                build_diff_text_segments(text, word_ranges, query.as_str(), language)
-                            })
-                            .as_slice()
-                    } else {
-                        empty_segments
-                    };
-
                     let word_color = matches!(
                         row.kind,
                         gitgpui_core::file_diff::FileDiffRowKind::Add
@@ -1005,14 +1023,34 @@ impl GitGpuiView {
                     )
                     .then_some(theme.colors.success);
 
+                    let styled: Option<&CachedDiffStyledText> = if row.new.is_some() {
+                        let word_ranges: &[Range<usize>] = this
+                            .file_diff_split_word_highlights_new
+                            .get(&row_ix)
+                            .map(Vec::as_slice)
+                            .unwrap_or(empty_ranges);
+                        let key = row_ix * 2 + 1;
+                        Some(this.diff_text_segments_cache.entry(key).or_insert_with(|| {
+                            build_cached_diff_styled_text(
+                                theme,
+                                text,
+                                word_ranges,
+                                query.as_str(),
+                                language,
+                                word_color,
+                            )
+                        }))
+                    } else {
+                        None
+                    };
+
                     patch_split_column_row(
                         theme,
                         PatchSplitColumn::Right,
                         visible_ix,
                         selected,
                         row,
-                        segments,
-                        word_color,
+                        styled,
                         cx,
                     )
                 })
@@ -1025,7 +1063,7 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let empty_segments: &[CachedDiffTextSegment] = &[];
+        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
         let empty_ranges: &[Range<usize>] = &[];
         range
             .map(|visible_ix| {
@@ -1063,33 +1101,38 @@ impl GitGpuiView {
                         ..
                     } => {
                         let text = row.new.as_deref().unwrap_or("");
-                        let segments = if let Some(src_ix) = *new_src_ix {
-                            let language = this
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|p| p.as_deref())
-                                .and_then(diff_syntax_language_for_path);
+                        let styled: Option<&CachedDiffStyledText> = if let Some(src_ix) = *new_src_ix {
+                            let language = if syntax_enabled {
+                                this.diff_file_for_src_ix
+                                    .get(src_ix)
+                                    .and_then(|p| p.as_deref())
+                                    .and_then(diff_syntax_language_for_path)
+                            } else {
+                                None
+                            };
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(&src_ix)
                                 .map(Vec::as_slice)
                                 .unwrap_or(empty_ranges);
-                            this.diff_text_segments_cache
-                                .entry(src_ix)
-                                .or_insert_with(|| {
-                                    build_diff_text_segments(text, word_ranges, query.as_str(), language)
-                                })
-                                .as_slice()
+                            let word_color = this.diff_cache.get(src_ix).and_then(|line| match line.kind {
+                                gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                                gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                                _ => None,
+                            });
+                            Some(this.diff_text_segments_cache.entry(src_ix).or_insert_with(|| {
+                                build_cached_diff_styled_text(
+                                    theme,
+                                    text,
+                                    word_ranges,
+                                    query.as_str(),
+                                    language,
+                                    word_color,
+                                )
+                            }))
                         } else {
-                            empty_segments
+                            None
                         };
-
-                        let word_color = matches!(
-                            row.kind,
-                            gitgpui_core::file_diff::FileDiffRowKind::Add
-                                | gitgpui_core::file_diff::FileDiffRowKind::Modify
-                        )
-                        .then_some(theme.colors.success);
 
                         patch_split_column_row(
                             theme,
@@ -1097,8 +1140,7 @@ impl GitGpuiView {
                             visible_ix,
                             selected,
                             row,
-                            segments,
-                            word_color,
+                            styled,
                             cx,
                         )
                     }
@@ -1763,7 +1805,7 @@ fn diff_row(
     mode: DiffViewMode,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
-    segments: &[CachedDiffTextSegment],
+    styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1851,12 +1893,6 @@ fn diff_row(
 
     match mode {
         DiffViewMode::Inline => {
-            let word_color = match line.kind {
-                gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
-                _ => None,
-            };
-
             let mut row = div()
                 .id(("diff_row", visible_ix))
                 .h(px(20.0))
@@ -1895,9 +1931,7 @@ fn diff_row(
                     .px_2()
                     .text_color(fg)
                     .whitespace_nowrap()
-                    .child(render_cached_diff_text_segments(
-                        theme, fg, segments, word_color,
-                    )),
+                    .child(render_cached_diff_styled_text(fg, styled)),
             )
             .into_any_element()
         }
@@ -1922,19 +1956,11 @@ fn diff_row(
             let (left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
             let (right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
 
-            let left_word_color = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Remove)
-                .then_some(theme.colors.danger);
-            let right_word_color = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Add)
-                .then_some(theme.colors.success);
-
-            let (left_segments, right_segments): (
-                &[CachedDiffTextSegment],
-                &[CachedDiffTextSegment],
-            ) = match line.kind {
-                gitgpui_core::domain::DiffLineKind::Remove => (segments, &[]),
-                gitgpui_core::domain::DiffLineKind::Add => (&[], segments),
-                gitgpui_core::domain::DiffLineKind::Context => (segments, segments),
-                _ => (segments, &[]),
+            let (left_text, right_text) = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Remove => (styled, None),
+                gitgpui_core::domain::DiffLineKind::Add => (None, styled),
+                gitgpui_core::domain::DiffLineKind::Context => (styled, styled),
+                _ => (styled, None),
             };
 
             let mut row = div()
@@ -1968,12 +1994,7 @@ fn diff_row(
                                 .text_color(left_fg)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .child(render_cached_diff_text_segments(
-                                    theme,
-                                    left_fg,
-                                    left_segments,
-                                    left_word_color,
-                                )),
+                                .child(render_cached_diff_styled_text(left_fg, left_text)),
                         ),
                 )
                 .child(
@@ -2005,12 +2026,7 @@ fn diff_row(
                                 .text_color(right_fg)
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .child(render_cached_diff_text_segments(
-                                    theme,
-                                    right_fg,
-                                    right_segments,
-                                    right_word_color,
-                                )),
+                                .child(render_cached_diff_styled_text(right_fg, right_text)),
                         ),
                 );
 
@@ -2037,8 +2053,7 @@ fn patch_split_column_row(
     visible_ix: usize,
     selected: bool,
     row: &gitgpui_core::file_diff::FileDiffRow,
-    segments: &[CachedDiffTextSegment],
-    word_color: Option<gpui::Rgba>,
+    styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -2109,12 +2124,7 @@ fn patch_split_column_row(
                         .text_color(fg)
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .child(render_cached_diff_text_segments(
-                            theme,
-                            fg,
-                            segments,
-                            word_color,
-                        )),
+                        .child(render_cached_diff_styled_text(fg, styled)),
                 ),
         );
 
@@ -2298,12 +2308,20 @@ fn build_diff_text_segments(
         return Vec::new();
     }
 
-    let language = language.or(Some(DiffSyntaxLanguage::Plain));
+    let query = query.trim();
+    if word_ranges.is_empty() && query.is_empty() && language.is_none() {
+        return vec![CachedDiffTextSegment {
+            text: maybe_expand_tabs(text),
+            in_word: false,
+            in_query: false,
+            syntax: SyntaxTokenKind::None,
+        }];
+    }
+
     let syntax_tokens = language
         .map(|language| syntax_tokens_for_line(text, language))
         .unwrap_or_default();
 
-    let query = query.trim();
     let query_range = (!query.is_empty())
         .then(|| find_ascii_case_insensitive(text, query))
         .flatten();
@@ -2454,10 +2472,17 @@ fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
 }
 
 fn syntax_tokens_for_line(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
+    if !should_use_treesitter_for_line(text) {
+        return syntax_tokens_for_line_heuristic(text, language);
+    }
     if let Some(tokens) = syntax_tokens_for_line_treesitter(text, language) {
         return tokens;
     }
     syntax_tokens_for_line_heuristic(text, language)
+}
+
+fn should_use_treesitter_for_line(text: &str) -> bool {
+    text.len() <= MAX_TREESITTER_LINE_BYTES
 }
 
 fn syntax_tokens_for_line_treesitter(
@@ -2467,14 +2492,19 @@ fn syntax_tokens_for_line_treesitter(
     let ts_language = tree_sitter_language(language)?;
     let query = tree_sitter_highlight_query(language)?;
 
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&ts_language).ok()?;
+    thread_local! {
+        static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
+    }
 
     let mut input = String::with_capacity(text.len() + 1);
     input.push_str(text);
     input.push('\n');
 
-    let tree = parser.parse(&input, None)?;
+    let tree = TS_PARSER.with(|parser| {
+        let mut parser = parser.borrow_mut();
+        parser.set_language(&ts_language).ok()?;
+        parser.parse(&input, None)
+    })?;
     let mut cursor = tree_sitter::QueryCursor::new();
 
     let mut tokens: Vec<SyntaxToken> = Vec::new();
@@ -2680,6 +2710,79 @@ fn syntax_kind_from_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "punctuation" | "operator" => SyntaxTokenKind::Punctuation,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn treesitter_line_length_guard() {
+        assert!(should_use_treesitter_for_line("fn main() {}"));
+        assert!(!should_use_treesitter_for_line(
+            &"a".repeat(MAX_TREESITTER_LINE_BYTES + 1)
+        ));
+    }
+
+    #[test]
+    fn build_segments_fast_path_skips_syntax_work() {
+        let segments = build_diff_text_segments("a\tb", &[], "", None);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text.as_ref(), "a    b");
+        assert!(!segments[0].in_word);
+        assert!(!segments[0].in_query);
+        assert_eq!(segments[0].syntax, SyntaxTokenKind::None);
+    }
+
+    #[test]
+    fn build_cached_styled_text_plain_has_no_highlights() {
+        let theme = AppTheme::zed_ayu_dark();
+        let styled = build_cached_diff_styled_text(theme, "a\tb", &[], "", None, None);
+        assert_eq!(styled.text.as_ref(), "a    b");
+        assert!(styled.highlights.is_empty());
+    }
+
+    #[test]
+    fn styled_text_highlights_cover_combined_ranges() {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = vec![
+            CachedDiffTextSegment {
+                text: "abc".into(),
+                in_word: false,
+                in_query: false,
+                syntax: SyntaxTokenKind::None,
+            },
+            CachedDiffTextSegment {
+                text: "def".into(),
+                in_word: false,
+                in_query: true,
+                syntax: SyntaxTokenKind::Keyword,
+            },
+        ];
+
+        let (text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
+        assert_eq!(text.as_ref(), "abcdef");
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 3..6);
+        assert_eq!(highlights[0].1.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(highlights[0].1.color, Some(theme.colors.accent.into()));
+    }
+
+    #[test]
+    fn styled_text_word_highlight_sets_background() {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = vec![CachedDiffTextSegment {
+            text: "x".into(),
+            in_word: true,
+            in_query: false,
+            syntax: SyntaxTokenKind::None,
+        }];
+        let (text, highlights) =
+            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.danger));
+        assert_eq!(text.as_ref(), "x");
+        assert_eq!(highlights.len(), 1);
+        assert!(highlights[0].1.background_color.is_some());
+    }
 }
 
 fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
@@ -3667,28 +3770,108 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     }
 }
 
-fn render_cached_diff_text_segments(
-    theme: AppTheme,
+fn render_cached_diff_styled_text(
     base_fg: gpui::Rgba,
-    segments: &[CachedDiffTextSegment],
-    word_color: Option<gpui::Rgba>,
+    styled: Option<&CachedDiffStyledText>,
 ) -> AnyElement {
-    if segments.is_empty() {
+    let Some(styled) = styled else {
+        return div().into_any_element();
+    };
+    if styled.text.is_empty() {
         return div().into_any_element();
     }
 
-    let mut container = div()
+    if styled.highlights.is_empty() {
+        return div()
+            .min_w(px(0.0))
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_color(base_fg)
+            .child(styled.text.clone())
+            .into_any_element();
+    }
+
+    div()
         .flex()
         .items_center()
         .min_w(px(0.0))
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_color(base_fg);
+        .text_color(base_fg)
+        .child(
+            gpui::StyledText::new(styled.text.clone())
+                .with_highlights(styled.highlights.as_ref().iter().cloned()),
+        )
+        .into_any_element()
+}
 
+fn empty_highlights() -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+    static EMPTY: OnceLock<Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>> = OnceLock::new();
+    Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+}
+
+fn build_cached_diff_styled_text(
+    theme: AppTheme,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    language: Option<DiffSyntaxLanguage>,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    if text.is_empty() {
+        return CachedDiffStyledText {
+            text: "".into(),
+            highlights: empty_highlights(),
+        };
+    }
+
+    let segments = build_diff_text_segments(text, word_ranges, query, language);
+    if let [seg] = segments.as_slice()
+        && seg.syntax == SyntaxTokenKind::None
+        && !seg.in_word
+        && !seg.in_query
+    {
+        return CachedDiffStyledText {
+            text: seg.text.clone(),
+            highlights: empty_highlights(),
+        };
+    }
+
+    let (text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::new(highlights),
+    }
+}
+
+fn styled_text_for_diff_segments(
+    theme: AppTheme,
+    segments: &[CachedDiffTextSegment],
+    word_color: Option<gpui::Rgba>,
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    let combined_len: usize = segments.iter().map(|s| s.text.len()).sum();
+    let mut combined = String::with_capacity(combined_len);
+    let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> =
+        Vec::with_capacity(segments.len());
+
+    let mut offset = 0usize;
     for seg in segments {
-        let mut el = div().child(seg.text.clone());
+        combined.push_str(seg.text.as_ref());
+        let next_offset = offset + seg.text.len();
 
-        if !seg.in_query {
+        let mut style = gpui::HighlightStyle::default();
+
+        if seg.in_word {
+            if let Some(mut c) = word_color {
+                c.a = if theme.is_dark { 0.22 } else { 0.16 };
+                style.background_color = Some(c.into());
+            }
+        }
+
+        if seg.in_query {
+            style.color = Some(theme.colors.accent.into());
+            style.font_weight = Some(FontWeight::BOLD);
+        } else {
             let syntax_fg = match seg.syntax {
                 SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
                 SyntaxTokenKind::String => Some(theme.colors.warning),
@@ -3702,27 +3885,18 @@ fn render_cached_diff_text_segments(
                 SyntaxTokenKind::None => None,
             };
             if let Some(fg) = syntax_fg {
-                el = el.text_color(fg);
+                style.color = Some(fg.into());
             }
         }
 
-        if seg.in_word {
-            if let Some(mut c) = word_color {
-                c.a = if theme.is_dark { 0.22 } else { 0.16 };
-                el = el.bg(c);
-            }
+        if style != gpui::HighlightStyle::default() && offset < next_offset {
+            highlights.push((offset..next_offset, style));
         }
 
-        if seg.in_query {
-            el = el
-                .font_weight(FontWeight::BOLD)
-                .text_color(theme.colors.accent);
-        }
-
-        container = container.child(el);
+        offset = next_offset;
     }
 
-    container.into_any_element()
+    (combined.into(), highlights)
 }
 
 fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usize>> {
