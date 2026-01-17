@@ -84,9 +84,7 @@ impl Scrollbar {
                 let max_offset = prepaint_handle.max_offset().height.max(px(0.0));
                 let scroll_y = (-prepaint_handle.offset().y).max(px(0.0)).min(max_offset);
 
-                let Some(metrics) = vertical_thumb_metrics(viewport_h, max_offset, scroll_y) else {
-                    return None;
-                };
+                let metrics = vertical_thumb_metrics(viewport_h, max_offset, scroll_y)?;
 
                 let margin = px(4.0);
                 let track_h = (viewport_h - margin * 2.0).max(px(0.0));

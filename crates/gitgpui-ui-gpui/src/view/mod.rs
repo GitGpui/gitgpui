@@ -18,6 +18,7 @@ use gpui::{
     WindowControlArea, anchored, div, point, px, size, uniform_list,
 };
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -31,10 +32,37 @@ use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_
 
 pub(crate) use chrome::window_frame;
 
-const HISTORY_COL_BRANCH_PX: f32 = 160.0;
-const HISTORY_COL_GRAPH_PX: f32 = 180.0;
+const HISTORY_COL_BRANCH_PX: f32 = 130.0;
+const HISTORY_COL_GRAPH_PX: f32 = 80.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
+const HISTORY_COL_HANDLE_PX: f32 = 8.0;
+
+const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
+const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
+const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
+
+const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
+const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HistoryColResizeHandle {
+    Branch,
+    Graph,
+    Message,
+    Date,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HistoryColResizeState {
+    handle: HistoryColResizeHandle,
+    start_x: Pixels,
+    start_branch: Pixels,
+    start_graph: Pixels,
+    start_date: Pixels,
+    start_sha: Pixels,
+}
 
 fn should_hide_unified_diff_header_line(line: &AnnotatedDiffLine) -> bool {
     matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
@@ -95,10 +123,16 @@ enum SyntaxTokenKind {
 struct HistoryCache {
     repo_id: RepoId,
     query: String,
-    branch_filter: Option<String>,
-    commit_ids: Vec<CommitId>,
+    log_fingerprint: u64,
     visible_indices: Vec<usize>,
     graph_rows: Vec<history_graph::GraphRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistoryCacheRequest {
+    repo_id: RepoId,
+    query: String,
+    log_fingerprint: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -202,10 +236,17 @@ pub struct GitGpuiView {
     history_search_raw: String,
     history_search_debounced: String,
     history_search_seq: u64,
-    history_branch_filter: Option<String>,
+    history_cache_seq: u64,
+    history_cache_inflight: Option<HistoryCacheRequest>,
+    last_window_size: Size<Pixels>,
+    history_col_branch: Pixels,
+    history_col_graph: Pixels,
+    history_col_date: Pixels,
+    history_col_sha: Pixels,
+    history_col_graph_auto: bool,
+    history_col_resize: Option<HistoryColResizeState>,
     repo_picker_search_input: Option<Entity<zed::TextInput>>,
     branch_picker_search_input: Option<Entity<zed::TextInput>>,
-    history_branch_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
 
     open_repo_panel: bool,
@@ -238,6 +279,15 @@ pub struct GitGpuiView {
 }
 
 impl GitGpuiView {
+    fn log_fingerprint(commits: &[Commit]) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        commits.len().hash(&mut hasher);
+        for id in commits.iter().map(|c| c.id.as_ref()) {
+            id.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     fn is_file_diff_view_active(&self) -> bool {
         let Some(repo) = self.active_repo() else {
             return false;
@@ -257,13 +307,11 @@ impl GitGpuiView {
         }
 
         let clicked_visible_ix = clicked_visible_ix.min(list_len - 1);
-        if shift {
-            if let Some(anchor) = self.diff_selection_anchor {
-                let a = anchor.min(clicked_visible_ix);
-                let b = anchor.max(clicked_visible_ix);
-                self.diff_selection_range = Some((a, b));
-                return;
-            }
+        if shift && let Some(anchor) = self.diff_selection_anchor {
+            let a = anchor.min(clicked_visible_ix);
+            let b = anchor.max(clicked_visible_ix);
+            self.diff_selection_range = Some((a, b));
+            return;
         }
 
         self.diff_selection_anchor = Some(clicked_visible_ix);
@@ -428,10 +476,17 @@ impl GitGpuiView {
             history_search_raw: String::new(),
             history_search_debounced: String::new(),
             history_search_seq: 0,
-            history_branch_filter: None,
+            history_cache_seq: 0,
+            history_cache_inflight: None,
+            last_window_size: size(px(0.0), px(0.0)),
+            history_col_branch: px(HISTORY_COL_BRANCH_PX),
+            history_col_graph: px(HISTORY_COL_GRAPH_PX),
+            history_col_date: px(HISTORY_COL_DATE_PX),
+            history_col_sha: px(HISTORY_COL_SHA_PX),
+            history_col_graph_auto: true,
+            history_col_resize: None,
             repo_picker_search_input: None,
             branch_picker_search_input: None,
-            history_branch_picker_search_input: None,
             history_cache: None,
             open_repo_panel: false,
             open_repo_input,
@@ -487,9 +542,6 @@ impl GitGpuiView {
         if let Some(input) = &self.branch_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
-        if let Some(input) = &self.history_branch_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
         if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
@@ -502,6 +554,39 @@ impl GitGpuiView {
     fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    fn history_visible_columns(&self) -> (bool, bool) {
+        // Prefer keeping commit message visible. Hide SHA first, then date.
+        let mut available = self.last_window_size.width;
+        available -= px(280.0);
+        available -= px(420.0);
+        available -= px(64.0);
+        if available <= px(0.0) {
+            return (false, false);
+        }
+
+        let handle_w = px(HISTORY_COL_HANDLE_PX);
+        let min_message = px(220.0);
+
+        // Always show Branch + Graph; Message is flex.
+        let fixed_base = self.history_col_branch + handle_w + self.history_col_graph + handle_w;
+
+        // Show both by default.
+        let mut show_date = true;
+        let mut show_sha = true;
+        let mut fixed = fixed_base + handle_w + self.history_col_date + handle_w + self.history_col_sha;
+
+        if available - fixed < min_message {
+            show_sha = false;
+            fixed -= handle_w + self.history_col_sha;
+        }
+        if available - fixed < min_message {
+            show_date = false;
+            show_sha = false;
+        }
+
+        (show_date, show_sha)
     }
 
     fn ensure_repo_picker_search_input(
@@ -580,35 +665,6 @@ impl GitGpuiView {
         input.clone()
     }
 
-    fn ensure_history_branch_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self
-            .history_branch_picker_search_input
-            .get_or_insert_with(|| {
-                cx.new(|cx| {
-                    zed::TextInput::new(
-                        zed::TextInputOptions {
-                            placeholder: "Filter branches…".into(),
-                            multiline: false,
-                        },
-                        window,
-                        cx,
-                    )
-                })
-            });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
     fn ensure_diff_hunk_picker_search_input(
         &mut self,
         window: &mut Window,
@@ -648,11 +704,11 @@ impl GitGpuiView {
             }
         }
 
-        if grouped.is_empty() {
-            if let Loadable::Ready(remotes) = &repo.remotes {
-                for remote in remotes {
-                    grouped.entry(remote.name.clone()).or_default();
-                }
+        if grouped.is_empty()
+            && let Loadable::Ready(remotes) = &repo.remotes
+        {
+            for remote in remotes {
+                grouped.entry(remote.name.clone()).or_default();
             }
         }
 
@@ -1731,13 +1787,11 @@ impl GitGpuiView {
 
         let clicked_visible_ix = clicked_visible_ix.min(list_len - 1);
 
-        if shift {
-            if let Some(anchor) = self.diff_selection_anchor {
-                let a = anchor.min(clicked_visible_ix);
-                let b = anchor.max(clicked_visible_ix);
-                self.diff_selection_range = Some((a, b));
-                return;
-            }
+        if shift && let Some(anchor) = self.diff_selection_anchor {
+            let a = anchor.min(clicked_visible_ix);
+            let b = anchor.max(clicked_visible_ix);
+            self.diff_selection_range = Some((a, b));
+            return;
         }
 
         let end = match kind {
@@ -1831,13 +1885,11 @@ impl GitGpuiView {
 
         let clicked_visible_ix = clicked_visible_ix.min(list_len - 1);
 
-        if shift {
-            if let Some(anchor) = self.diff_selection_anchor {
-                let a = anchor.min(clicked_visible_ix);
-                let b = anchor.max(clicked_visible_ix);
-                self.diff_selection_range = Some((a, b));
-                return;
-            }
+        if shift && let Some(anchor) = self.diff_selection_anchor {
+            let a = anchor.min(clicked_visible_ix);
+            let b = anchor.max(clicked_visible_ix);
+            self.diff_selection_range = Some((a, b));
+            return;
         }
 
         let end = match kind {
@@ -2017,7 +2069,6 @@ impl GitGpuiView {
                         return;
                     }
                     this.history_search_debounced = raw;
-                    this.history_cache = None;
                     cx.notify();
                 });
             },
@@ -2025,101 +2076,127 @@ impl GitGpuiView {
         .detach();
     }
 
-    fn ensure_history_cache(&mut self, _cx: &mut gpui::Context<Self>) {
-        let Some(repo) = self.active_repo() else {
-            self.history_cache = None;
-            return;
-        };
-        let Loadable::Ready(page) = &repo.log else {
-            self.history_cache = None;
-            return;
-        };
-
-        let query = self.history_search_debounced.trim().to_string();
-        let branch_filter = self.history_branch_filter.clone();
-
-        let commit_ids = page
-            .commits
-            .iter()
-            .map(|c| c.id.clone())
-            .collect::<Vec<_>>();
-
-        let cache_ok = self.history_cache.as_ref().is_some_and(|c| {
-            c.repo_id == repo.id
-                && c.query == query
-                && c.branch_filter == branch_filter
-                && c.commit_ids == commit_ids
-        });
-        if cache_ok {
-            return;
+    fn ensure_history_cache(&mut self, cx: &mut gpui::Context<Self>) {
+        enum Next {
+            Clear,
+            CacheOk,
+            Inflight,
+            Build {
+                request: HistoryCacheRequest,
+                commits: Vec<Commit>,
+            },
         }
 
-        let query_lc = query.to_lowercase();
-        let mut visible_indices = if query_lc.is_empty() {
-            (0..page.commits.len()).collect::<Vec<_>>()
-        } else {
-            page.commits
-                .iter()
-                .enumerate()
-                .filter_map(|(ix, c)| {
-                    let haystack =
-                        format!("{} {} {}", c.summary, c.author, c.id.as_ref()).to_lowercase();
-                    if haystack.contains(&query_lc) {
-                        Some(ix)
-                    } else {
-                        None
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
+        let next = if let Some(repo) = self.active_repo() {
+            if let Loadable::Ready(page) = &repo.log {
+                let request = HistoryCacheRequest {
+                    repo_id: repo.id,
+                    query: self.history_search_debounced.trim().to_string(),
+                    log_fingerprint: Self::log_fingerprint(&page.commits),
+                };
 
-        if let Some(branch_name) = &branch_filter {
-            if let Loadable::Ready(branches) = &repo.branches {
-                if let Some(branch) = branches.iter().find(|b| &b.name == branch_name) {
-                    let mut by_id: std::collections::HashMap<&str, &Commit> =
-                        std::collections::HashMap::new();
-                    for c in &page.commits {
-                        by_id.insert(c.id.as_ref(), c);
+                let cache_ok = self.history_cache.as_ref().is_some_and(|c| {
+                    c.repo_id == request.repo_id
+                        && c.query == request.query
+                        && c.log_fingerprint == request.log_fingerprint
+                });
+                if cache_ok {
+                    Next::CacheOk
+                } else if self.history_cache_inflight.as_ref() == Some(&request) {
+                    Next::Inflight
+                } else {
+                    Next::Build {
+                        request,
+                        commits: page.commits.clone(),
                     }
-
-                    let mut reachable: std::collections::HashSet<&str> =
-                        std::collections::HashSet::new();
-                    let mut stack: Vec<&CommitId> = vec![&branch.target];
-                    while let Some(id) = stack.pop() {
-                        if !reachable.insert(id.as_ref()) {
-                            continue;
-                        }
-                        if let Some(c) = by_id.get(id.as_ref()) {
-                            for p in &c.parent_ids {
-                                stack.push(p);
-                            }
-                        }
-                    }
-
-                    visible_indices.retain(|ix| {
-                        page.commits
-                            .get(*ix)
-                            .is_some_and(|c| reachable.contains(c.id.as_ref()))
-                    });
                 }
+            } else {
+                Next::Clear
             }
-        }
+        } else {
+            Next::Clear
+        };
 
-        let visible_commits = visible_indices
-            .iter()
-            .filter_map(|ix| page.commits.get(*ix).cloned())
-            .collect::<Vec<_>>();
+        let (request_for_task, commits) = match next {
+            Next::Clear => {
+                self.history_cache_inflight = None;
+                self.history_cache = None;
+                return;
+            }
+            Next::CacheOk => {
+                self.history_cache_inflight = None;
+                return;
+            }
+            Next::Inflight => {
+                return;
+            }
+            Next::Build { request, commits } => (request, commits),
+        };
 
-        let graph_rows = history_graph::compute_graph(&visible_commits, self.theme);
+        self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
+        let seq = self.history_cache_seq;
+        self.history_cache_inflight = Some(request_for_task.clone());
 
-        self.history_cache = Some(HistoryCache {
-            repo_id: repo.id,
-            query,
-            branch_filter,
-            commit_ids,
-            visible_indices,
-            graph_rows,
-        });
+        let theme = self.theme;
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            let query_lc = request_for_task.query.to_lowercase();
+            let visible_indices = if query_lc.is_empty() {
+                (0..commits.len()).collect::<Vec<_>>()
+            } else {
+                commits
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, c)| {
+                        let haystack =
+                            format!("{} {} {}", c.summary, c.author, c.id.as_ref()).to_lowercase();
+                        haystack.contains(&query_lc).then_some(ix)
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            let visible_commits = visible_indices
+                .iter()
+                .filter_map(|ix| commits.get(*ix))
+                .collect::<Vec<_>>();
+
+            let graph_rows = history_graph::compute_graph(&visible_commits, theme);
+            let max_lanes = graph_rows
+                .iter()
+                .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
+                .max()
+                .unwrap_or(1);
+
+            let _ = view.update(cx, |this, cx| {
+                if this.history_cache_seq != seq {
+                    return;
+                }
+                if this.history_cache_inflight.as_ref() != Some(&request_for_task) {
+                    return;
+                }
+                if this.active_repo_id() != Some(request_for_task.repo_id) {
+                    return;
+                }
+
+                if this.history_col_graph_auto && this.history_col_resize.is_none() {
+                    let required = px(
+                        HISTORY_GRAPH_MARGIN_X_PX * 2.0 + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32),
+                    );
+                    this.history_col_graph = required.max(px(HISTORY_COL_GRAPH_MIN_PX));
+                }
+
+                this.history_cache_inflight = None;
+                this.history_cache = Some(HistoryCache {
+                    repo_id: request_for_task.repo_id,
+                    query: request_for_task.query.clone(),
+                    log_fingerprint: request_for_task.log_fingerprint,
+                    visible_indices,
+                    graph_rows,
+                });
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     #[cfg(test)]
@@ -2252,6 +2329,7 @@ fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
 impl Render for GitGpuiView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        self.last_window_size = window.window_bounds().get_bounds().size;
 
         let decorations = window.window_decorations();
         let (tiling, client_inset) = match decorations {
@@ -2626,11 +2704,11 @@ fn coalesce_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     ranges.sort_by_key(|r| (r.start, r.end));
     let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
     for r in ranges {
-        if let Some(last) = out.last_mut() {
-            if r.start <= last.end {
-                last.end = last.end.max(r.end);
-                continue;
-            }
+        if let Some(last) = out.last_mut()
+            && r.start <= last.end
+        {
+            last.end = last.end.max(r.end);
+            continue;
         }
         out.push(r);
     }
@@ -2803,7 +2881,7 @@ impl GitGpuiView {
         let popover = self
             .popover
             .clone()
-            .and_then(|kind| Some(self.popover_view(kind, cx).into_any_element()))
+            .map(|kind| self.popover_view(kind, cx).into_any_element())
             .unwrap_or_else(|| div().into_any_element());
 
         div()

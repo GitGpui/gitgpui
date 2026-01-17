@@ -16,6 +16,9 @@ pub struct PickerPrompt {
     max_height: gpui::Pixels,
 }
 
+type OnSelectFn<V> =
+    dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
+
 impl PickerPrompt {
     pub fn new(query_input: Entity<TextInput>) -> Self {
         Self {
@@ -47,9 +50,7 @@ impl PickerPrompt {
         cx: &gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
-        let on_select: Arc<
-            dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
-        > = Arc::new(on_select);
+        let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
 
         let query = self
             .query_input
@@ -184,7 +185,7 @@ fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usi
     'outer: for start in 0..=(haystack_bytes.len() - needle_bytes.len()) {
         for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
             let haystack_byte = haystack_bytes[start + offset];
-            if haystack_byte.to_ascii_lowercase() != needle_byte.to_ascii_lowercase() {
+            if !haystack_byte.eq_ignore_ascii_case(&needle_byte) {
                 continue 'outer;
             }
         }

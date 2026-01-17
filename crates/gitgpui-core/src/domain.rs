@@ -24,6 +24,12 @@ pub struct Commit {
     pub time: SystemTime,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum LogScope {
+    CurrentBranch,
+    AllBranches,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDetails {
     pub id: CommitId,
@@ -44,6 +50,12 @@ pub struct Branch {
     pub name: String,
     pub target: CommitId,
     pub upstream: Option<Upstream>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Tag {
+    pub name: String,
+    pub target: CommitId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

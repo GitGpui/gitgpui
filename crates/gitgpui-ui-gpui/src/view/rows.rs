@@ -253,6 +253,11 @@ impl GitGpuiView {
         };
 
         let theme = this.theme;
+        let col_branch = this.history_col_branch;
+        let col_graph = this.history_col_graph;
+        let col_date = this.history_col_date;
+        let col_sha = this.history_col_sha;
+        let (show_date, show_sha) = this.history_visible_columns();
 
         let (show_working_tree_summary_row, unstaged_counts, staged_counts) =
             match &repo.status {
@@ -295,6 +300,12 @@ impl GitGpuiView {
                 if show_working_tree_summary_row && list_ix == 0 {
                     return Some(working_tree_summary_history_row(
                         theme,
+                        col_branch,
+                        col_graph,
+                        col_date,
+                        col_sha,
+                        show_date,
+                        show_sha,
                         repo.id,
                         unstaged_counts,
                         staged_counts,
@@ -311,16 +322,18 @@ impl GitGpuiView {
                 let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
-                let is_head = page
-                    .commits
-                    .first()
-                    .is_some_and(|head| head.id == commit.id);
-                let refs = commit_refs(repo, is_head, commit);
+                let refs = commit_refs(repo, commit);
                 let when = format_relative_time(commit.time);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
 
                 Some(history_table_row(
                     theme,
+                    col_branch,
+                    col_graph,
+                    col_date,
+                    col_sha,
+                    show_date,
+                    show_sha,
                     list_ix,
                     repo.id,
                     commit,
@@ -1177,6 +1190,12 @@ impl GitGpuiView {
 
 fn history_table_row(
     theme: AppTheme,
+    col_branch: Pixels,
+    col_graph: Pixels,
+    col_date: Pixels,
+    col_sha: Pixels,
+    show_date: bool,
+    show_sha: bool,
     ix: usize,
     repo_id: RepoId,
     commit: &Commit,
@@ -1186,7 +1205,7 @@ fn history_table_row(
     selected: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let id: &str = <CommitId as AsRef<str>>::as_ref(&commit.id);
+    let id: &str = commit.id.as_ref();
     let short = id.get(0..8).unwrap_or(id);
     let graph = history_graph_cell(theme, graph_row);
     let node_color = graph_row
@@ -1198,33 +1217,68 @@ fn history_table_row(
     let refs = if refs.trim().is_empty() {
         div().into_any_element()
     } else {
-        let pills = refs
-            .split(", ")
-            .filter(|s| !s.trim().is_empty())
-            .map(|label| {
+        let max_pills = if col_branch <= px(80.0) {
+            1usize
+        } else if col_branch <= px(110.0) {
+            2usize
+        } else {
+            3usize
+        };
+
+        let mut pills = Vec::new();
+        let mut extra = 0usize;
+        for label in refs.split(", ").map(str::trim).filter(|s| !s.is_empty()) {
+            if pills.len() < max_pills {
+                pills.push(
+                    div()
+                        .px_1()
+                        .py(px(1.0))
+                        .rounded(px(999.0))
+                        .text_xs()
+                        .text_color(theme.colors.text)
+                        .bg(with_alpha(
+                            node_color,
+                            if theme.is_dark { 0.22 } else { 0.16 },
+                        ))
+                        .border_1()
+                        .border_color(with_alpha(
+                            node_color,
+                            if theme.is_dark { 0.48 } else { 0.36 },
+                        ))
+                        .child(label.to_string()),
+                );
+            } else {
+                extra += 1;
+            }
+        }
+
+        if extra > 0 {
+            pills.push(
                 div()
-                    .px_2()
+                    .px_1()
                     .py(px(1.0))
                     .rounded(px(999.0))
                     .text_xs()
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.text_muted)
                     .bg(with_alpha(
                         node_color,
-                        if theme.is_dark { 0.22 } else { 0.16 },
+                        if theme.is_dark { 0.14 } else { 0.10 },
                     ))
                     .border_1()
                     .border_color(with_alpha(
                         node_color,
-                        if theme.is_dark { 0.48 } else { 0.36 },
+                        if theme.is_dark { 0.32 } else { 0.24 },
                     ))
-                    .child(label.to_string())
-            })
-            .collect::<Vec<_>>();
+                    .child(format!("+{extra}")),
+            );
+        }
 
         div()
             .flex()
             .items_center()
             .gap_1()
+            .whitespace_nowrap()
+            .overflow_hidden()
             .children(pills)
             .into_any_element()
     };
@@ -1244,7 +1298,7 @@ fn history_table_row(
         .active(move |s| s.bg(theme.colors.active))
         .child(
             div()
-                .w(px(HISTORY_COL_BRANCH_PX))
+                .w(col_branch)
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .line_clamp(1)
@@ -1253,7 +1307,7 @@ fn history_table_row(
         )
         .child(
             div()
-                .w(px(HISTORY_COL_GRAPH_PX))
+                .w(col_graph)
                 .h_full()
                 .flex()
                 .justify_center()
@@ -1277,26 +1331,30 @@ fn history_table_row(
                         .child(commit.summary.clone()),
                 ),
         )
-        .child(
-            div()
-                .w(px(HISTORY_COL_DATE_PX))
-                .flex()
-                .justify_end()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .whitespace_nowrap()
-                .child(when),
-        )
-        .child(
-            div()
-                .w(px(HISTORY_COL_SHA_PX))
-                .flex()
-                .justify_end()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .whitespace_nowrap()
-                .child(short.to_string()),
-        )
+        .when(show_date, |row| {
+            row.child(
+                div()
+                    .w(col_date)
+                    .flex()
+                    .justify_end()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .whitespace_nowrap()
+                    .child(when),
+            )
+        })
+        .when(show_sha, |row| {
+            row.child(
+                div()
+                    .w(col_sha)
+                    .flex()
+                    .justify_end()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .whitespace_nowrap()
+                    .child(short.to_string()),
+            )
+        })
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
             this.store.dispatch(Msg::SelectCommit {
                 repo_id,
@@ -1325,6 +1383,12 @@ fn history_table_row(
 
 fn working_tree_summary_history_row(
     theme: AppTheme,
+    col_branch: Pixels,
+    col_graph: Pixels,
+    col_date: Pixels,
+    col_sha: Pixels,
+    show_date: bool,
+    show_sha: bool,
     repo_id: RepoId,
     unstaged: (usize, usize, usize),
     staged: (usize, usize, usize),
@@ -1389,13 +1453,13 @@ fn working_tree_summary_history_row(
         .active(move |s| s.bg(theme.colors.active))
         .child(
             div()
-                .w(px(HISTORY_COL_BRANCH_PX))
+                .w(col_branch)
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .whitespace_nowrap()
                 .child("Working tree"),
         )
-        .child(div().w(px(HISTORY_COL_GRAPH_PX)).h_full())
+        .child(div().w(col_graph).h_full())
         .child(
             div()
                 .flex_1()
@@ -1409,22 +1473,30 @@ fn working_tree_summary_history_row(
                         .items_center()
                         .gap_3()
                         .min_w(px(0.0))
-                        .child(div().text_sm().line_clamp(1).child("Uncommitted changes"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child("Uncommitted changes"),
+                        )
                         .child(group("Unstaged", unstaged))
                         .when(staged_total > 0, |this| this.child(group("Staged", staged))),
                 )
         )
-        .child(
-            div()
-                .w(px(HISTORY_COL_DATE_PX))
-                .flex()
-                .justify_end()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .whitespace_nowrap()
-                .child("Click to review"),
-        )
-        .child(div().w(px(HISTORY_COL_SHA_PX)))
+        .when(show_date, |row| {
+            row.child(
+                div()
+                    .w(col_date)
+                    .flex()
+                    .justify_end()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .whitespace_nowrap()
+                    .child("Click to review"),
+            )
+        })
+        .when(show_sha, |row| row.child(div().w(col_sha)))
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
             this.store
                 .dispatch(Msg::ClearCommitSelection { repo_id });
@@ -1446,8 +1518,8 @@ fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl In
                 return;
             }
 
-            let col_gap = px(16.0);
-            let margin_x = px(10.0);
+            let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+            let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
             let node_radius = if row.is_merge { px(3.5) } else { px(3.0) };
 
             let y_top = bounds.top();
@@ -1609,20 +1681,44 @@ fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl In
     .h_full()
 }
 
-fn commit_refs(repo: &RepoState, is_head: bool, commit: &Commit) -> String {
+fn commit_refs(repo: &RepoState, commit: &Commit) -> String {
     use std::collections::BTreeSet;
 
     let mut refs: BTreeSet<String> = BTreeSet::new();
-    if is_head {
-        if let Loadable::Ready(head) = &repo.head_branch {
-            refs.insert(format!("HEAD → {head}"));
+    let mut head_branch_name: Option<String> = None;
+    let head_target = match (&repo.head_branch, &repo.branches) {
+        (Loadable::Ready(head_name), Loadable::Ready(branches)) => {
+            head_branch_name = Some(head_name.clone());
+            branches
+                .iter()
+                .find(|b| b.name == *head_name)
+                .map(|b| b.target.clone())
         }
+        _ => None,
+    };
+    if head_target.as_ref() == Some(&commit.id)
+        && let Loadable::Ready(head) = &repo.head_branch
+    {
+        refs.insert(format!("HEAD → {head}"));
     }
 
     if let Loadable::Ready(branches) = &repo.branches {
         for branch in branches {
+            if head_target.as_ref() == Some(&commit.id)
+                && head_branch_name.as_ref() == Some(&branch.name)
+            {
+                continue;
+            }
             if branch.target == commit.id {
                 refs.insert(branch.name.clone());
+            }
+        }
+    }
+
+    if let Loadable::Ready(tags) = &repo.tags {
+        for tag in tags {
+            if tag.target == commit.id {
+                refs.insert(tag.name.clone());
             }
         }
     }
@@ -2542,15 +2638,15 @@ fn syntax_tokens_for_line_treesitter(
     // Ensure non-overlapping tokens so the segment splitter can pick a single style per range.
     let mut out: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
     for mut token in tokens {
-        if let Some(prev) = out.last() {
-            if token.range.start < prev.range.end {
-                if token.range.end <= prev.range.end {
-                    continue;
-                }
-                token.range.start = prev.range.end;
-                if token.range.start >= token.range.end {
-                    continue;
-                }
+        if let Some(prev) = out.last()
+            && token.range.start < prev.range.end
+        {
+            if token.range.end <= prev.range.end {
+                continue;
+            }
+            token.range.start = prev.range.end;
+            if token.range.start >= token.range.end {
+                continue;
             }
         }
         out.push(token);
@@ -2883,14 +2979,14 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             DiffSyntaxLanguage::Lua => (None, None, false),
         };
 
-        if let Some(prefix) = line_comment {
-            if rest.starts_with(prefix) {
-                tokens.push(SyntaxToken {
-                    range: i..len,
-                    kind: SyntaxTokenKind::Comment,
-                });
-                break;
-            }
+        if let Some(prefix) = line_comment
+            && rest.starts_with(prefix)
+        {
+            tokens.push(SyntaxToken {
+                range: i..len,
+                kind: SyntaxTokenKind::Comment,
+            });
+            break;
         }
 
         if block_comment && rest.starts_with("/*") {
@@ -2921,14 +3017,14 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             break;
         }
 
-        if let Some('#') = hash_comment {
-            if rest.starts_with('#') {
-                tokens.push(SyntaxToken {
-                    range: i..len,
-                    kind: SyntaxTokenKind::Comment,
-                });
-                break;
-            }
+        if let Some('#') = hash_comment
+            && rest.starts_with('#')
+        {
+            tokens.push(SyntaxToken {
+                range: i..len,
+                kind: SyntaxTokenKind::Comment,
+            });
+            break;
         }
 
         let Some(ch) = rest.chars().next() else {
@@ -3825,7 +3921,10 @@ fn render_cached_diff_styled_text(
 }
 
 fn empty_highlights() -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
-    static EMPTY: OnceLock<Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>> = OnceLock::new();
+    type Highlights = Vec<(Range<usize>, gpui::HighlightStyle)>;
+    type HighlightsRef = Arc<Highlights>;
+
+    static EMPTY: OnceLock<HighlightsRef> = OnceLock::new();
     Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
 }
 
@@ -3880,11 +3979,9 @@ fn styled_text_for_diff_segments(
 
         let mut style = gpui::HighlightStyle::default();
 
-        if seg.in_word {
-            if let Some(mut c) = word_color {
-                c.a = if theme.is_dark { 0.22 } else { 0.16 };
-                style.background_color = Some(c.into());
-            }
+        if seg.in_word && let Some(mut c) = word_color {
+            c.a = if theme.is_dark { 0.22 } else { 0.16 };
+            style.background_color = Some(c.into());
         }
 
         if seg.in_query {
@@ -3932,7 +4029,7 @@ fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usi
     'outer: for start in 0..=(haystack_bytes.len() - needle_bytes.len()) {
         for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
             let haystack_byte = haystack_bytes[start + offset];
-            if haystack_byte.to_ascii_lowercase() != needle_byte.to_ascii_lowercase() {
+            if !haystack_byte.eq_ignore_ascii_case(&needle_byte) {
                 continue 'outer;
             }
         }

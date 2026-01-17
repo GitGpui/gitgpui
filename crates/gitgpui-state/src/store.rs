@@ -168,6 +168,7 @@ fn reduce(
 
             repo_state.head_branch = Loadable::Loading;
             repo_state.branches = Loadable::Loading;
+            repo_state.tags = Loadable::Loading;
             repo_state.remotes = Loadable::Loading;
             repo_state.remote_branches = Loadable::Loading;
             repo_state.status = Loadable::Loading;
@@ -177,7 +178,27 @@ fn reduce(
             repo_state.selected_commit = None;
             repo_state.commit_details = Loadable::NotLoaded;
 
-            refresh_effects(repo_id)
+            refresh_effects(repo_id, repo_state.history_scope)
+        }
+
+        Msg::SetHistoryScope { repo_id, scope } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+
+            if repo_state.history_scope == scope {
+                return Vec::new();
+            }
+
+            repo_state.history_scope = scope;
+            repo_state.log = Loadable::Loading;
+
+            vec![Effect::LoadLog {
+                repo_id,
+                scope,
+                limit: 200,
+                cursor: None,
+            }]
         }
 
         Msg::SelectCommit { repo_id, commit_id } => {
@@ -310,6 +331,7 @@ fn reduce(
                 repo_state.open = Loadable::Ready(());
                 repo_state.head_branch = Loadable::Loading;
                 repo_state.branches = Loadable::Loading;
+                repo_state.tags = Loadable::Loading;
                 repo_state.remotes = Loadable::Loading;
                 repo_state.remote_branches = Loadable::Loading;
                 repo_state.status = Loadable::Loading;
@@ -321,9 +343,11 @@ fn reduce(
                 repo_state.diff_target = None;
                 repo_state.diff = Loadable::NotLoaded;
                 repo_state.last_error = None;
+
+                return refresh_effects(repo_id, repo_state.history_scope);
             }
 
-            refresh_effects(repo_id)
+            refresh_effects(repo_id, gitgpui_core::domain::LogScope::CurrentBranch)
         }
 
         Msg::RepoOpenedErr {
@@ -408,13 +432,37 @@ fn reduce(
             Vec::new()
         }
 
-        Msg::LogLoaded { repo_id, result } => {
+        Msg::LogLoaded {
+            repo_id,
+            scope,
+            result,
+        } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                if repo_state.history_scope != scope {
+                    return Vec::new();
+                }
                 repo_state.log = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::TagsLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.tags = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        if matches!(e.kind(), gitgpui_core::error::ErrorKind::Unsupported(_)) {
+                            Loadable::Ready(Vec::new())
+                        } else {
+                            push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                            Loadable::Error(e.to_string())
+                        }
                     }
                 };
             }
@@ -516,7 +564,13 @@ fn reduce(
                     }
                 }
             }
-            refresh_effects(repo_id)
+            let scope = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.history_scope)
+                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
+            refresh_effects(repo_id, scope)
         }
 
         Msg::RepoCommandFinished {
@@ -543,7 +597,13 @@ fn reduce(
                     }
                 }
             }
-            refresh_effects(repo_id)
+            let scope = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.history_scope)
+                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
+            refresh_effects(repo_id, scope)
         }
 
     }
@@ -688,10 +748,11 @@ impl IfEmptyElse for String {
     }
 }
 
-fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
+fn refresh_effects(repo_id: RepoId, history_scope: gitgpui_core::domain::LogScope) -> Vec<Effect> {
     vec![
         Effect::LoadHeadBranch { repo_id },
         Effect::LoadBranches { repo_id },
+        Effect::LoadTags { repo_id },
         Effect::LoadRemotes { repo_id },
         Effect::LoadRemoteBranches { repo_id },
         Effect::LoadStatus { repo_id },
@@ -700,8 +761,9 @@ fn refresh_effects(repo_id: RepoId) -> Vec<Effect> {
             repo_id,
             limit: 200,
         },
-        Effect::LoadHeadLog {
+        Effect::LoadLog {
             repo_id,
+            scope: history_scope,
             limit: 200,
             cursor: None,
         },
@@ -957,6 +1019,7 @@ mod tests {
         assert!(matches!(repo_state.open, Loadable::Ready(())));
         assert!(repo_state.head_branch.is_loading());
         assert!(repo_state.branches.is_loading());
+        assert!(repo_state.tags.is_loading());
         assert!(repo_state.remotes.is_loading());
         assert!(repo_state.remote_branches.is_loading());
         assert!(repo_state.status.is_loading());
@@ -968,12 +1031,13 @@ mod tests {
             [
                 Effect::LoadHeadBranch { .. },
                 Effect::LoadBranches { .. },
+                Effect::LoadTags { .. },
                 Effect::LoadRemotes { .. },
                 Effect::LoadRemoteBranches { .. },
                 Effect::LoadStatus { .. },
                 Effect::LoadStashes { .. },
                 Effect::LoadReflog { .. },
-                Effect::LoadHeadLog { .. }
+                Effect::LoadLog { .. }
             ]
         ));
     }
@@ -1280,6 +1344,7 @@ mod tests {
         let repo_state = &state.repos[0];
         assert!(repo_state.head_branch.is_loading());
         assert!(repo_state.branches.is_loading());
+        assert!(repo_state.tags.is_loading());
         assert!(repo_state.remotes.is_loading());
         assert!(repo_state.remote_branches.is_loading());
         assert!(repo_state.status.is_loading());
@@ -1489,8 +1554,9 @@ fn schedule_effect(
             }
         }
 
-        Effect::LoadHeadLog {
+        Effect::LoadLog {
             repo_id,
+            scope,
             limit,
             cursor,
         } => {
@@ -1499,7 +1565,26 @@ fn schedule_effect(
                     let cursor_ref = cursor.as_ref();
                     let _ = msg_tx.send(Msg::LogLoaded {
                         repo_id,
-                        result: repo.log_head_page(limit, cursor_ref),
+                        scope,
+                        result: match scope {
+                            gitgpui_core::domain::LogScope::CurrentBranch => {
+                                repo.log_head_page(limit, cursor_ref)
+                            }
+                            gitgpui_core::domain::LogScope::AllBranches => {
+                                repo.log_all_branches_page(limit, cursor_ref)
+                            }
+                        },
+                    });
+                });
+            }
+        }
+
+        Effect::LoadTags { repo_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::TagsLoaded {
+                        repo_id,
+                        result: repo.list_tags(),
                     });
                 });
             }

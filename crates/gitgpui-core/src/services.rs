@@ -56,10 +56,20 @@ pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "all-branches history is not implemented for this backend",
+        )))
+    }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
     fn list_branches(&self) -> Result<Vec<Branch>>;
+    fn list_tags(&self) -> Result<Vec<Tag>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tag listing is not implemented for this backend",
+        )))
+    }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
     fn status(&self) -> Result<RepoStatus>;

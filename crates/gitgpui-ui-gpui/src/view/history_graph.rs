@@ -38,7 +38,7 @@ struct LaneState {
     target: CommitId,
 }
 
-pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
+pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
     let mut palette: Vec<Rgba> = Vec::new();
     for i in 0..24 {
         let hue = (i as f32 * 0.13) % 1.0;
@@ -47,13 +47,17 @@ pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
         palette.push(gpui::hsla(hue, sat, light, 1.0).into());
     }
 
-    let known: HashSet<&str> = commits.iter().map(|c| c.id.as_ref()).collect();
-    let by_id: HashMap<&str, &Commit> = commits.iter().map(|c| (c.id.as_ref(), c)).collect();
+    let known: HashSet<&str> = commits.iter().copied().map(|c| c.id.as_ref()).collect();
+    let by_id: HashMap<&str, &Commit> = commits
+        .iter()
+        .copied()
+        .map(|c| (c.id.as_ref(), c))
+        .collect();
 
     // Approximate the "main line" as the first-parent chain from the first commit in the list,
     // which is typically the checked-out branch HEAD in our log view.
     let mut head_chain: HashSet<String> = HashSet::new();
-    if let Some(first) = commits.first() {
+    if let Some(&first) = commits.first() {
         let mut cur = first.id.clone();
         loop {
             if !head_chain.insert(cur.as_ref().to_string()) {
@@ -80,7 +84,7 @@ pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
     let mut rows: Vec<GraphRow> = Vec::with_capacity(commits.len());
     let mut main_lane_id: Option<LaneId> = None;
 
-    for commit in commits {
+    for commit in commits.iter().copied() {
         let incoming_ids = lanes.iter().map(|l| l.id).collect::<Vec<_>>();
 
         let mut hits = lanes
@@ -102,13 +106,13 @@ pub fn compute_graph(commits: &[Commit], theme: AppTheme) -> Vec<GraphRow> {
             hits.push(lanes.len() - 1);
         }
 
+        let is_merge = commit.parent_ids.len() > 1;
         let parent_ids = commit
             .parent_ids
             .iter()
             .filter(|p| known.contains(p.as_ref()))
             .cloned()
             .collect::<Vec<_>>();
-        let is_merge = parent_ids.len() > 1;
 
         // Snapshot of lanes used for drawing this row (including any lanes that have converged
         // onto this commit before we re-target them to parents).

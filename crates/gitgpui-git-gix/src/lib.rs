@@ -1,7 +1,7 @@
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
     FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
-    RepoStatus,
+    RepoStatus, Tag,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -64,6 +64,110 @@ impl GitRepository for GixRepo {
             .sorting(gix::revision::walk::Sorting::ByCommitTime(
                 CommitTimeOrder::NewestFirst,
             ))
+            .first_parent_only()
+            .all()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
+
+        let mut started = cursor.is_none();
+        let mut commits = Vec::with_capacity(limit.min(2048));
+        let mut next_cursor: Option<LogCursor> = None;
+
+        while let Some(info) = walk.next() {
+            let info =
+                info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+            let id = info.id().detach().to_string();
+
+            if !started {
+                if let Some(c) = cursor {
+                    if c.last_seen.0 == id {
+                        started = true;
+                    }
+                }
+                continue;
+            }
+
+            let commit_obj = info
+                .object()
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
+
+            let summary = commit_obj
+                .message_raw_sloppy()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_str_lossy()
+                .into_owned();
+
+            let author = commit_obj
+                .author()
+                .map(|s| s.name.to_str_lossy().into_owned())
+                .unwrap_or_else(|_| "unknown".to_string());
+
+            let seconds = commit_obj.time().map(|t| t.seconds).unwrap_or(0);
+            let time = if seconds >= 0 {
+                SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64)
+            } else {
+                SystemTime::UNIX_EPOCH
+            };
+
+            let parent_ids = info
+                .parent_ids()
+                .map(|p| CommitId(p.detach().to_string()))
+                .collect::<Vec<_>>();
+
+            commits.push(Commit {
+                id: CommitId(id),
+                parent_ids,
+                summary,
+                author,
+                time,
+            });
+
+            if commits.len() >= limit {
+                next_cursor = commits.last().map(|c| LogCursor {
+                    last_seen: c.id.clone(),
+                });
+                break;
+            }
+        }
+
+        Ok(LogPage {
+            commits,
+            next_cursor,
+        })
+    }
+
+    fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        let repo = self._repo.to_thread_local();
+        let head_id = repo
+            .head_id()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))?
+            .detach();
+
+        let refs = repo
+            .references()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+
+        let mut tips = vec![head_id];
+
+        // Local branches
+        let branches = refs
+            .local_branches()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?
+            .peeled()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+        for reference in branches {
+            let reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let id = reference.id().detach();
+            if id != head_id && !tips.iter().any(|t| *t == id) {
+                tips.push(id);
+            }
+        }
+
+        let mut walk = repo
+            .rev_walk(tips)
+            .sorting(gix::revision::walk::Sorting::BreadthFirst)
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
 
@@ -293,6 +397,32 @@ impl GitRepository for GixRepo {
 
         branches.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(branches)
+    }
+
+    fn list_tags(&self) -> Result<Vec<Tag>> {
+        let repo = self._repo.to_thread_local();
+
+        let refs = repo
+            .references()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+
+        let iter = refs
+            .tags()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tags: {e}"))))?
+            .peeled()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+
+        let mut tags = Vec::new();
+        for reference in iter {
+            let reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let name = reference.name().shorten().to_str_lossy().into_owned();
+            let target = CommitId(reference.id().detach().to_string());
+            tags.push(Tag { name, target });
+        }
+
+        tags.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(tags)
     }
 
     fn list_remotes(&self) -> Result<Vec<Remote>> {

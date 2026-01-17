@@ -1,13 +1,108 @@
 use super::*;
 
+struct HistoryColResizeDragGhost;
+
+impl Render for HistoryColResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
+}
+
 impl GitGpuiView {
-    fn history_column_headers(&self) -> gpui::Div {
+    fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        div()
+        let (show_date, show_sha) = self.history_visible_columns();
+        let col_date = self.history_col_date;
+        let col_sha = self.history_col_sha;
+        let resize_handle =
+            |id: &'static str, handle: HistoryColResizeHandle| {
+                div()
+                    .id(id)
+                    .w(px(HISTORY_COL_HANDLE_PX))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(div().w(px(1.0)).h(px(14.0)).bg(theme.colors.border))
+                    .on_drag(handle, |_handle, _offset, _window, cx| {
+                        cx.new(|_cx| HistoryColResizeDragGhost)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                            cx.stop_propagation();
+                            if handle == HistoryColResizeHandle::Graph {
+                                this.history_col_graph_auto = false;
+                            }
+                            this.history_col_resize = Some(HistoryColResizeState {
+                                handle,
+                                start_x: e.position.x,
+                                start_branch: this.history_col_branch,
+                                start_graph: this.history_col_graph,
+                                start_date: this.history_col_date,
+                                start_sha: this.history_col_sha,
+                            });
+                            cx.notify();
+                        }),
+                    )
+                    .on_drag_move(cx.listener(move |this, e: &gpui::DragMoveEvent<HistoryColResizeHandle>, _w, cx| {
+                        let Some(state) = this.history_col_resize else {
+                            return;
+                        };
+                        if state.handle != *e.drag(cx) {
+                            return;
+                        }
+
+                        let dx = e.event.position.x - state.start_x;
+                        match state.handle {
+                            HistoryColResizeHandle::Branch => {
+                                this.history_col_branch =
+                                    (state.start_branch + dx).max(px(HISTORY_COL_BRANCH_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Graph => {
+                                this.history_col_graph =
+                                    (state.start_graph + dx).max(px(HISTORY_COL_GRAPH_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Message => {
+                                this.history_col_date =
+                                    (state.start_date - dx).max(px(HISTORY_COL_DATE_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Date => {
+                                let total = state.start_date + state.start_sha;
+                                let min_date = px(HISTORY_COL_DATE_MIN_PX);
+                                let min_sha = px(HISTORY_COL_SHA_MIN_PX);
+                                let max_date = (total - min_sha).max(min_date);
+                                this.history_col_date = (state.start_date + dx)
+                                    .max(min_date)
+                                    .min(max_date);
+                                this.history_col_sha = (total - this.history_col_date).max(min_sha);
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _e, _w, cx| {
+                            this.history_col_resize = None;
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _e, _w, cx| {
+                            this.history_col_resize = None;
+                            cx.notify();
+                        }),
+                    )
+            };
+
+        let mut header = div()
             .flex()
             .w_full()
             .items_center()
-            .gap_2()
             .px_2()
             .py_1()
             .text_xs()
@@ -15,41 +110,59 @@ impl GitGpuiView {
             .text_color(theme.colors.text_muted)
             .child(
                 div()
-                    .w(px(HISTORY_COL_BRANCH_PX))
+                    .w(self.history_col_branch)
                     .whitespace_nowrap()
                     .child("Branch / Tag"),
             )
+            .child(resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch))
             .child(
                 div()
-                    .w(px(HISTORY_COL_GRAPH_PX))
+                    .w(self.history_col_graph)
                     .flex()
                     .justify_center()
                     .whitespace_nowrap()
                     .child("GRAPH"),
             )
+            .child(resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph))
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
                     .whitespace_nowrap()
                     .child("COMMIT MESSAGE"),
-            )
-            .child(
+            );
+
+        if show_date {
+            header = header.child(resize_handle(
+                "history_col_resize_message",
+                HistoryColResizeHandle::Message,
+            ));
+            header = header.child(
                 div()
-                    .w(px(HISTORY_COL_DATE_PX))
+                    .w(col_date)
                     .flex()
                     .justify_end()
                     .whitespace_nowrap()
                     .child("COMMIT DATE / TIME"),
-            )
-            .child(
+            );
+        }
+
+        if show_sha {
+            header = header.child(resize_handle(
+                "history_col_resize_date",
+                HistoryColResizeHandle::Date,
+            ));
+            header = header.child(
                 div()
-                    .w(px(HISTORY_COL_SHA_PX))
+                    .w(col_sha)
                     .flex()
                     .justify_end()
                     .whitespace_nowrap()
                     .child("SHA"),
-            )
+            );
+        }
+
+        header
     }
 
     pub(super) fn repo_tabs_bar(&mut self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -71,9 +184,7 @@ impl GitGpuiView {
                 .unwrap_or_else(|| repo.spec.workdir.display().to_string())
                 .into();
 
-            let position = if repos_len <= 1 {
-                zed::TabPosition::First
-            } else if ix == 0 {
+            let position = if ix == 0 {
                 zed::TabPosition::First
             } else if ix + 1 == repos_len {
                 zed::TabPosition::Last
@@ -289,7 +400,7 @@ impl GitGpuiView {
                 cx.notify();
             });
 
-        let bar = div()
+        div()
             .flex()
             .items_center()
             .justify_between()
@@ -318,9 +429,7 @@ impl GitGpuiView {
                     .child(push)
                     .child(create_branch)
                     .child(stash),
-            );
-
-        bar
+            )
     }
 
     pub(super) fn popover_view(
@@ -434,9 +543,7 @@ impl GitGpuiView {
                                         .empty_text("No branches")
                                         .max_height(px(240.0))
                                         .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                            if let Some(name) =
-                                                branch_names.get(ix).map(|n| n.clone())
-                                            {
+                                            if let Some(name) = branch_names.get(ix).cloned() {
                                                 this.store.dispatch(Msg::CheckoutBranch {
                                                     repo_id,
                                                     name,
@@ -526,96 +633,50 @@ impl GitGpuiView {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 let mut menu = div().flex().flex_col().min_w(px(260.0));
 
-                if let Some(search) = self.history_branch_picker_search_input.clone() {
-                    let mut items: Vec<SharedString> = vec!["All branches".into()];
-                    let mut branch_names: Vec<String> = Vec::new();
-                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
-                        && let Loadable::Ready(branches) = &repo.branches
-                    {
-                        branch_names = branches
-                            .iter()
-                            .map(|b| b.name.clone())
-                            .collect::<Vec<String>>();
-                        items.extend(branch_names.iter().map(|name| name.clone().into()));
-                    }
-
-                    menu = menu.child(
-                        zed::PickerPrompt::new(search)
-                            .items(items)
-                            .empty_text("No branches")
-                            .max_height(px(260.0))
-                            .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                if ix == 0 {
-                                    this.history_branch_filter = None;
-                                } else if let Some(name) = branch_names.get(ix - 1) {
-                                    this.history_branch_filter = Some(name.clone());
-                                }
+                menu = menu
+                    .child(
+                        div()
+                            .id("history_scope_current_branch")
+                            .px_3()
+                            .py_2()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .child("Current branch")
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                                this.store.dispatch(Msg::SetHistoryScope {
+                                    repo_id,
+                                    scope: gitgpui_core::domain::LogScope::CurrentBranch,
+                                });
                                 this.popover = None;
                                 this.popover_anchor = None;
                                 cx.notify();
-                            }),
-                    );
-                } else {
-                    menu = menu.child(
+                            })),
+                    )
+                    .child(
                         div()
-                            .id("history_branch_all")
+                            .id("history_scope_all_branches")
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("All branches")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.history_branch_filter = None;
+                                this.store.dispatch(Msg::SetHistoryScope {
+                                    repo_id,
+                                    scope: gitgpui_core::domain::LogScope::AllBranches,
+                                });
                                 this.popover = None;
                                 this.popover_anchor = None;
                                 cx.notify();
                             })),
-                    );
-
-                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                        match &repo.branches {
-                            Loadable::Ready(branches) => {
-                                for (ix, branch) in branches.iter().enumerate() {
-                                    let name = branch.name.clone();
-                                    menu = menu.child(
-                                        div()
-                                            .id(("history_branch_item", ix))
-                                            .px_3()
-                                            .py_2()
-                                            .hover(move |s| s.bg(theme.colors.hover))
-                                            .child(name.clone())
-                                            .on_click(cx.listener(
-                                                move |this, _e: &ClickEvent, _w, cx| {
-                                                    this.history_branch_filter = Some(name.clone());
-                                                    this.popover = None;
-                                                    this.popover_anchor = None;
-                                                    cx.notify();
-                                                },
-                                            )),
-                                    );
-                                }
-                            }
-                            Loadable::Loading => {
-                                menu = menu.child(div().px_3().py_2().child("Loading…"));
-                            }
-                            Loadable::Error(e) => {
-                                menu = menu.child(div().px_3().py_2().child(e.clone()));
-                            }
-                            Loadable::NotLoaded => {
-                                menu = menu.child(div().px_3().py_2().child("Not loaded"));
-                            }
-                        }
-                    }
-
-                    menu = menu.child(
+                    )
+                    .child(
                         div()
-                            .id("history_branch_close")
+                            .id("history_scope_close")
                             .px_3()
                             .py_2()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Close")
                             .on_click(close),
                     );
-                }
 
                 menu
             }
@@ -1189,9 +1250,10 @@ impl GitGpuiView {
         let theme = self.theme;
         let repo = self.active_repo();
 
-        if let Some(repo) = repo {
-            if let Some(selected_id) = repo.selected_commit.as_ref() {
-                let header = div()
+        if let Some(repo) = repo
+            && let Some(selected_id) = repo.selected_commit.as_ref()
+        {
+            let header = div()
                     .flex()
                     .items_center()
                     .justify_between()
@@ -1212,7 +1274,7 @@ impl GitGpuiView {
                             }),
                     );
 
-                let body: AnyElement = match &repo.commit_details {
+            let body: AnyElement = match &repo.commit_details {
                     Loadable::Loading => {
                         zed::empty_state(theme, "Commit", "Loading…").into_any_element()
                     }
@@ -1343,13 +1405,12 @@ impl GitGpuiView {
                     }
                 };
 
-                return div().flex().flex_col().gap_3().child(zed::panel(
+            return div().flex().flex_col().gap_3().child(zed::panel(
                     theme,
                     "Commit",
                     None,
                     div().flex().flex_col().gap_2().child(header).child(body),
                 ));
-            }
         }
 
         let (staged_count, unstaged_count) = repo
@@ -1530,10 +1591,16 @@ impl GitGpuiView {
                             .child(self.history_search_input.clone()),
                     )
                     .child({
-                        let current: SharedString = self
-                            .history_branch_filter
-                            .clone()
-                            .unwrap_or_else(|| "All branches".to_string())
+                        let current: SharedString = repo
+                            .map(|r| match r.history_scope {
+                                gitgpui_core::domain::LogScope::CurrentBranch => {
+                                    "Current branch".to_string()
+                                }
+                                gitgpui_core::domain::LogScope::AllBranches => {
+                                    "All branches".to_string()
+                                }
+                            })
+                            .unwrap_or_else(|| "Current branch".to_string())
                             .into();
                         div()
                             .id("history_branch_filter")
@@ -1555,10 +1622,8 @@ impl GitGpuiView {
                                     .child("Branch"),
                             )
                             .child(div().text_sm().child(current))
-                            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                            .on_click(cx.listener(|this, e: &ClickEvent, _window, cx| {
                                 if let Some(repo_id) = this.active_repo_id() {
-                                    let _ =
-                                        this.ensure_history_branch_picker_search_input(window, cx);
                                     this.popover =
                                         Some(PopoverKind::HistoryBranchFilter { repo_id });
                                     this.popover_anchor = Some(e.position());
@@ -1609,7 +1674,7 @@ impl GitGpuiView {
                     .gap_2()
                     .h_full()
                     .child(filter)
-                    .child(self.history_column_headers())
+                    .child(self.history_column_headers(cx))
                     .child(div().flex_1().child(body));
 
                 ("History".into(), table.into_any_element())

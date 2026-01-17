@@ -30,6 +30,10 @@ pub enum Msg {
     ReloadRepo {
         repo_id: RepoId,
     },
+    SetHistoryScope {
+        repo_id: RepoId,
+        scope: LogScope,
+    },
     SelectCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -144,7 +148,12 @@ pub enum Msg {
     },
     LogLoaded {
         repo_id: RepoId,
+        scope: LogScope,
         result: Result<LogPage, Error>,
+    },
+    TagsLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Tag>, Error>,
     },
     StashesLoaded {
         repo_id: RepoId,
@@ -208,6 +217,11 @@ impl std::fmt::Debug for Msg {
             Msg::ReloadRepo { repo_id } => f
                 .debug_struct("ReloadRepo")
                 .field("repo_id", repo_id)
+                .finish(),
+            Msg::SetHistoryScope { repo_id, scope } => f
+                .debug_struct("SetHistoryScope")
+                .field("repo_id", repo_id)
+                .field("scope", scope)
                 .finish(),
             Msg::SelectCommit { repo_id, commit_id } => f
                 .debug_struct("SelectCommit")
@@ -356,8 +370,18 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
-            Msg::LogLoaded { repo_id, result } => f
+            Msg::LogLoaded {
+                repo_id,
+                scope,
+                result,
+            } => f
                 .debug_struct("LogLoaded")
+                .field("repo_id", repo_id)
+                .field("scope", scope)
+                .field("result", result)
+                .finish(),
+            Msg::TagsLoaded { repo_id, result } => f
+                .debug_struct("TagsLoaded")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
@@ -441,10 +465,14 @@ pub enum Effect {
     LoadHeadBranch {
         repo_id: RepoId,
     },
-    LoadHeadLog {
+    LoadLog {
         repo_id: RepoId,
+        scope: LogScope,
         limit: usize,
         cursor: Option<LogCursor>,
+    },
+    LoadTags {
+        repo_id: RepoId,
     },
     LoadStashes {
         repo_id: RepoId,
