@@ -16,12 +16,14 @@ pub fn panel(
     subtitle: Option<SharedString>,
     content: impl IntoElement,
 ) -> Div {
+    let title: SharedString = title.into();
+    let show_header = !title.as_ref().is_empty() || subtitle.is_some();
     let mut header = div()
         .flex()
         .items_center()
         .justify_between()
         .h(px(CONTROL_HEIGHT_MD_PX))
-        .px_3()
+        .px_2()
         .border_b_1()
         .border_color(theme.colors.border)
         .bg(theme.colors.surface_bg_elevated)
@@ -29,7 +31,7 @@ pub fn panel(
             div()
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
-                .child(title.into()),
+                .child(title),
         );
 
     if let Some(subtitle) = subtitle {
@@ -49,15 +51,22 @@ pub fn panel(
         .border_color(theme.colors.border)
         .rounded(px(theme.radii.panel))
         .overflow_hidden()
-        .child(header)
+        .when(show_header, |this| this.child(header))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .p_3()
-                .child(div().flex_1().min_h(px(0.0)).child(content)),
+                .p_2()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(content),
+                ),
         )
 }
 
@@ -81,7 +90,7 @@ pub fn key_value(
         .flex()
         .items_center()
         .justify_between()
-        .gap_3()
+        .gap_2()
         .child(
             div()
                 .text_sm()
@@ -102,8 +111,8 @@ pub fn empty_state(
         .items_center()
         .justify_center()
         .gap_2()
-        .px_3()
-        .py_6()
+        .px_2()
+        .py_4()
         .child(
             div()
                 .text_lg()
@@ -134,7 +143,7 @@ pub fn split_columns_header(
         .bg(theme.colors.surface_bg_elevated)
         .border_b_1()
         .border_color(theme.colors.border)
-        .child(div().flex_1().min_w(px(0.0)).px_3().child(left.into()))
+        .child(div().flex_1().min_w(px(0.0)).px_2().child(left.into()))
         .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-        .child(div().flex_1().min_w(px(0.0)).px_3().child(right.into()))
+        .child(div().flex_1().min_w(px(0.0)).px_2().child(right.into()))
 }

@@ -290,7 +290,9 @@ fn reduce(
         }
         Msg::CreateBranch { repo_id, name } => vec![Effect::CreateBranch { repo_id, name }],
         Msg::StagePath { repo_id, path } => vec![Effect::StagePath { repo_id, path }],
+        Msg::StagePaths { repo_id, paths } => vec![Effect::StagePaths { repo_id, paths }],
         Msg::UnstagePath { repo_id, path } => vec![Effect::UnstagePath { repo_id, path }],
+        Msg::UnstagePaths { repo_id, paths } => vec![Effect::UnstagePaths { repo_id, paths }],
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
         Msg::Pull { repo_id, mode } => vec![Effect::Pull { repo_id, mode }],
@@ -1724,6 +1726,21 @@ fn schedule_effect(
             }
         }
 
+        Effect::StagePaths { repo_id, paths } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let mut unique = paths;
+                    unique.sort();
+                    unique.dedup();
+                    let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.stage(&refs),
+                    });
+                });
+            }
+        }
+
         Effect::UnstagePath { repo_id, path } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
@@ -1731,6 +1748,21 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::RepoActionFinished {
                         repo_id,
                         result: repo.unstage(&[path_ref]),
+                    });
+                });
+            }
+        }
+
+        Effect::UnstagePaths { repo_id, paths } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let mut unique = paths;
+                    unique.sort();
+                    unique.dedup();
+                    let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.unstage(&refs),
                     });
                 });
             }

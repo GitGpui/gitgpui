@@ -53,7 +53,7 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl Into<SharedString>)
         .shadow_sm()
         .text_sm()
         .child(div().w(px(3.0)).h(px(18.0)).bg(accent).rounded(px(2.0)))
-        .child(div().flex_1().px_3().py_2().child(message))
+        .child(div().flex_1().px_2().py_1().child(message))
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {

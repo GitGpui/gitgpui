@@ -231,8 +231,8 @@ impl GitGpuiView {
             .flex()
             .items_center()
             .gap_2()
-            .px_3()
-            .py_2()
+            .px_2()
+            .py_1()
             .bg(theme.colors.surface_bg)
             .border_1()
             .border_color(theme.colors.border)
@@ -480,8 +480,8 @@ impl GitGpuiView {
                             div()
                                 .id("repo_popover_close")
                                 .debug_selector(|| "repo_popover_close".to_string())
-                                .px_3()
-                                .py_2()
+                                .px_2()
+                                .py_1()
                                 .hover(move |s| s.bg(theme.colors.hover))
                                 .active(move |s| s.bg(theme.colors.active))
                                 .child("Close")
@@ -495,8 +495,8 @@ impl GitGpuiView {
                         menu = menu.child(
                             div()
                                 .id(("repo_item", id.0))
-                                .px_3()
-                                .py_2()
+                                .px_2()
+                                .py_1()
                                 .hover(move |s| s.bg(theme.colors.hover))
                                 .active(move |s| s.bg(theme.colors.active))
                                 .child(div().text_sm().line_clamp(1).child(label))
@@ -513,8 +513,8 @@ impl GitGpuiView {
                         div()
                             .id("repo_popover_close")
                             .debug_selector(|| "repo_popover_close".to_string())
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
@@ -561,8 +561,8 @@ impl GitGpuiView {
                                     menu = menu.child(
                                         div()
                                             .id(("branch_item", ix))
-                                            .px_3()
-                                            .py_2()
+                                            .px_2()
+                                            .py_1()
                                             .hover(move |s| s.bg(theme.colors.hover))
                                             .active(move |s| s.bg(theme.colors.active))
                                             .child(name.clone())
@@ -582,13 +582,13 @@ impl GitGpuiView {
                             }
                         }
                         Loadable::Loading => {
-                            menu = menu.child(div().px_3().py_2().child("Loading…"));
+                            menu = menu.child(div().px_2().py_1().child("Loading…"));
                         }
                         Loadable::Error(e) => {
-                            menu = menu.child(div().px_3().py_2().child(e.clone()));
+                            menu = menu.child(div().px_2().py_1().child(e.clone()));
                         }
                         Loadable::NotLoaded => {
-                            menu = menu.child(div().px_3().py_2().child("Not loaded"));
+                            menu = menu.child(div().px_2().py_1().child("Not loaded"));
                         }
                     }
                 }
@@ -596,8 +596,8 @@ impl GitGpuiView {
                 menu.child(div().border_t_1().border_color(theme.colors.border))
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .text_color(theme.colors.text_muted)
                             .child("Create branch"),
                     )
@@ -622,8 +622,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id(("branch_popover_close", 0usize))
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
@@ -637,8 +637,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("history_scope_current_branch")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Current branch")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -654,8 +654,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("history_scope_all_branches")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("All branches")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -671,8 +671,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("history_scope_close")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Close")
                             .on_click(close),
@@ -699,8 +699,8 @@ impl GitGpuiView {
                     menu = menu.child(
                         div()
                             .id(("pull_item", ix))
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child(label)
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -720,8 +720,8 @@ impl GitGpuiView {
                 menu.child(
                     div()
                         .id(("pull_popover_close", 0usize))
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1()
                         .hover(move |s| s.bg(theme.colors.hover))
                         .child("Close")
                         .on_click(close),
@@ -812,8 +812,8 @@ impl GitGpuiView {
                         .child(
                             div()
                                 .id("diff_hunks_close")
-                                .px_3()
-                                .py_2()
+                                .px_2()
+                                .py_1()
                                 .hover(move |s| s.bg(theme.colors.hover))
                                 .child("Close")
                                 .on_click(close),
@@ -825,8 +825,8 @@ impl GitGpuiView {
                         menu = menu.child(
                             div()
                                 .id(("diff_hunk_item", ix))
-                                .px_3()
-                                .py_2()
+                                .px_2()
+                                .py_1()
                                 .hover(move |s| s.bg(theme.colors.hover))
                                 .child(div().text_sm().line_clamp(1).child(label))
                                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -843,8 +843,8 @@ impl GitGpuiView {
                     menu.child(
                         div()
                             .id("diff_hunks_close")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Close")
                             .on_click(close),
@@ -866,8 +866,8 @@ impl GitGpuiView {
                 let staged_summary = format!("Staged files: {}", staged.len());
                 let staged_list = if staged.is_empty() {
                     div()
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1()
                         .text_sm()
                         .text_color(theme.colors.text_muted)
                         .child("No staged changes.")
@@ -890,7 +890,7 @@ impl GitGpuiView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .px_3()
+                                .px_2()
                                 .py_1()
                                 .child(zed::pill(theme, label, color))
                                 .child(
@@ -920,8 +920,8 @@ impl GitGpuiView {
                     .max_w(px(760.0))
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .justify_between()
@@ -945,20 +945,20 @@ impl GitGpuiView {
                     .child(div().border_t_1().border_color(theme.colors.border))
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .text_xs()
                             .text_color(theme.colors.text_muted)
                             .child(staged_summary),
                     )
                     .child(staged_list)
                     .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(div().px_3().py_2().h(px(140.0)).child(input))
+                    .child(div().px_2().py_1().h(px(140.0)).child(input))
                     .child(div().border_t_1().border_color(theme.colors.border))
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .flex()
                             .items_center()
                             .justify_between()
@@ -1025,8 +1025,8 @@ impl GitGpuiView {
                     .min_w(px(240.0))
                     .child(
                         div()
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .text_xs()
                             .text_color(theme.colors.text_muted)
                             .child(format!("Commit {short}")),
@@ -1034,8 +1034,8 @@ impl GitGpuiView {
                     .when(!commit_summary.is_empty(), |this| {
                         this.child(
                             div()
-                                .px_3()
-                                .pb_2()
+                                .px_2()
+                                .pb_1()
                                 .text_sm()
                                 .line_clamp(2)
                                 .child(commit_summary),
@@ -1045,8 +1045,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("commit_menu_open_diff")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Open diff  (Enter)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -1066,8 +1066,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("commit_menu_checkout")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Checkout (detached)  (D)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -1083,8 +1083,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("commit_menu_cherry_pick")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Cherry-pick  (P)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -1100,8 +1100,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("commit_menu_revert")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .child("Revert  (R)")
                             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -1117,8 +1117,8 @@ impl GitGpuiView {
                     .child(
                         div()
                             .id("commit_menu_close")
-                            .px_3()
-                            .py_2()
+                            .px_2()
+                            .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .active(move |s| s.bg(theme.colors.active))
                             .child("Close")
@@ -1137,8 +1137,8 @@ impl GitGpuiView {
                     div()
                         .id("app_menu_quit")
                         .debug_selector(|| "app_menu_quit".to_string())
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1()
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .child("Quit")
@@ -1150,8 +1150,8 @@ impl GitGpuiView {
                     div()
                         .id("app_menu_close")
                         .debug_selector(|| "app_menu_close".to_string())
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1()
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .child("Close")
@@ -1184,69 +1184,44 @@ impl GitGpuiView {
 
     pub(super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let repo = self.active_repo();
-
-        let branches_count = repo
-            .and_then(|r| match &r.branches {
-                Loadable::Ready(v) => Some(v.len()),
-                _ => None,
-            })
-            .unwrap_or(0);
-
-        let remotes_count = repo
-            .map(Self::remote_rows)
-            .map(|rows| rows.len())
-            .unwrap_or(0);
-
-        let branches_list: AnyElement = if branches_count == 0 {
-            zed::empty_state(theme, "Local", "No branches loaded.").into_any_element()
-        } else {
-            let list = uniform_list(
-                "branches",
-                branches_count,
-                cx.processor(Self::render_branch_rows),
-            )
-            .h(px(140.0))
-            .track_scroll(self.branches_scroll.clone());
-            let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("branches_scroll_container")
-                .relative()
-                .h(px(140.0))
-                .child(list)
-                .child(zed::Scrollbar::new("branches_scrollbar", scroll_handle).render(theme))
-                .into_any_element()
+        let Some(repo) = self.active_repo() else {
+            return div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(zed::panel(
+                    theme,
+                    "Branches",
+                    None,
+                    zed::empty_state(theme, "Branches", "No repository selected."),
+                ));
         };
 
-        let remotes_list: AnyElement = if remotes_count == 0 {
-            zed::empty_state(theme, "Remote", "No remotes loaded.").into_any_element()
-        } else {
-            let list = uniform_list(
-                "remotes",
-                remotes_count,
-                cx.processor(Self::render_remote_rows),
-            )
-            .h(px(160.0))
-            .track_scroll(self.remotes_scroll.clone());
-            let scroll_handle = self.remotes_scroll.0.borrow().base_handle.clone();
-            div()
-                .id("remotes_scroll_container")
-                .relative()
-                .h(px(160.0))
-                .child(list)
-                .child(zed::Scrollbar::new("remotes_scrollbar", scroll_handle).render(theme))
-                .into_any_element()
-        };
+        let row_count = Self::branch_sidebar_rows(repo).len();
+        let list = uniform_list(
+            "branch_sidebar",
+            row_count,
+            cx.processor(Self::render_branch_sidebar_rows),
+        )
+        .h(px(320.0))
+        .track_scroll(self.branches_scroll.clone());
+        let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
+        let panel_body: AnyElement = div()
+            .id("branch_sidebar_scroll_container")
+            .relative()
+            .h(px(320.0))
+            .child(list)
+            .child(zed::Scrollbar::new("branch_sidebar_scrollbar", scroll_handle).render(theme))
+            .into_any_element();
 
         div()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(zed::panel(theme, "Local", None, branches_list))
-            .child(zed::panel(theme, "Remote", None, remotes_list))
+            .gap_2()
+            .child(zed::panel(theme, "Branches", None, panel_body))
     }
 
-    pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let theme = self.theme;
         let repo = self.active_repo();
 
@@ -1254,25 +1229,19 @@ impl GitGpuiView {
             && let Some(selected_id) = repo.selected_commit.as_ref()
         {
             let header = div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Commit"),
-                    )
-                    .child(
-                        zed::Button::new("commit_details_close", "✕")
-                            .style(zed::ButtonStyle::Transparent)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                if let Some(repo_id) = this.active_repo_id() {
-                                    this.store.dispatch(Msg::ClearCommitSelection { repo_id });
-                                }
-                                cx.notify();
-                            }),
-                    );
+                .flex()
+                .items_center()
+                .justify_end()
+                .child(
+                    zed::Button::new("commit_details_close", "✕")
+                        .style(zed::ButtonStyle::Transparent)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            if let Some(repo_id) = this.active_repo_id() {
+                                this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                            }
+                            cx.notify();
+                        }),
+                );
 
             let body: AnyElement = match &repo.commit_details {
                     Loadable::Loading => {
@@ -1285,10 +1254,10 @@ impl GitGpuiView {
                         zed::empty_state(theme, "Commit", "Select a commit in History.")
                             .into_any_element()
                     }
-                    Loadable::Ready(details) => {
-                        if &details.id != selected_id {
-                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
-                        } else {
+	                    Loadable::Ready(details) => {
+	                        if &details.id != selected_id {
+	                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+	                        } else {
                             let parent = details
                                 .parent_ids
                                 .first()
@@ -1335,29 +1304,38 @@ impl GitGpuiView {
                                     .into_any_element()
                             };
 
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(theme.colors.text_muted)
-                                                .child("Commit message"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .min_w(px(0.0))
-                                                .line_clamp(8)
-                                                .child(details.message.clone()),
-                                        ),
-                                )
+	                            let needs_update = self
+	                                .commit_details_message_input
+	                                .read(cx)
+	                                .text()
+	                                != details.message.as_str();
+	                            if needs_update {
+	                                self.commit_details_message_input.update(cx, |input, cx| {
+	                                    input.set_text(details.message.clone(), cx);
+	                                });
+	                            }
+
+	                            div()
+	                                .flex()
+	                                .flex_col()
+	                                .gap_2()
+	                                .child(
+	                                    div()
+	                                        .flex()
+	                                        .flex_col()
+	                                        .gap_1()
+	                                        .child(
+	                                            div()
+	                                                .text_sm()
+	                                                .text_color(theme.colors.text_muted)
+	                                                .child("Commit message"),
+	                                        )
+	                                        .child(
+	                                            div()
+	                                                .min_w(px(0.0))
+	                                                .child(self.commit_details_message_input.clone()),
+	                                        ),
+	                                )
                                 .child(zed::key_value(
                                     theme,
                                     "Commit SHA",
@@ -1405,12 +1383,32 @@ impl GitGpuiView {
                     }
                 };
 
-            return div().flex().flex_col().gap_3().child(zed::panel(
-                    theme,
-                    "Commit",
-                    None,
-                    div().flex().flex_col().gap_2().child(header).child(body),
-                ));
+            let content = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+	                .child(zed::panel(
+	                    theme,
+	                    "",
+	                    None,
+	                    div().flex().flex_col().gap_2().child(header).child(body),
+	                ));
+
+            return div()
+                .id("commit_details_scroll")
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.commit_scroll)
+                .child(content)
+                .child(
+                    zed::Scrollbar::new("commit_details_scrollbar", self.commit_scroll.clone())
+                        .render(theme),
+                )
+                .into_any_element();
         }
 
         let (staged_count, unstaged_count) = repo
@@ -1420,31 +1418,160 @@ impl GitGpuiView {
             })
             .unwrap_or((0, 0));
 
-        let unstaged_list = self.status_list(cx, DiffArea::Unstaged, unstaged_count);
-        let staged_list = self.status_list(cx, DiffArea::Staged, staged_count);
-        let commit_box = self.commit_box(cx);
+        let repo_id = self.active_repo_id();
+
+        let stage_all = zed::Button::new("stage_all", "Stage all changes")
+            .style(zed::ButtonStyle::Subtle)
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                this.store.dispatch(Msg::StagePaths {
+                    repo_id,
+                    paths: Vec::new(),
+                });
+                cx.notify();
+            });
+
+        let unstage_all = zed::Button::new("unstage_all", "Unstage all changes")
+            .style(zed::ButtonStyle::Subtle)
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                this.store.dispatch(Msg::UnstagePaths {
+                    repo_id,
+                    paths: Vec::new(),
+                });
+                cx.notify();
+            });
+
+        let section_header = |id: &'static str,
+                              label: &'static str,
+                              show_action: bool,
+                              action: gpui::AnyElement|
+         -> gpui::AnyElement {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_between()
+                .h(px(zed::CONTROL_HEIGHT_MD_PX))
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .child(label),
+                )
+                .when(show_action, |d| d.child(action))
+                .into_any_element()
+        };
+
+        let unstaged_body = if unstaged_count == 0 {
+            zed::empty_state(theme, "Unstaged", "Clean.").into_any_element()
+        } else {
+            self.status_list(cx, DiffArea::Unstaged, unstaged_count)
+        };
+
+        let staged_list = if staged_count == 0 {
+            zed::empty_state(theme, "Staged", "No staged changes.").into_any_element()
+        } else {
+            self.status_list(cx, DiffArea::Staged, staged_count)
+        };
+
+        let staged_body = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(staged_list),
+            )
+            .child(self.commit_box(cx).flex_none())
+            .into_any_element();
+
+        let unstaged_section = div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .child(section_header(
+                "unstaged_header",
+                "Unstaged",
+                unstaged_count > 0,
+                stage_all.into_any_element(),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .when(unstaged_count > 0, |d| d.h(px(180.0)))
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(unstaged_body),
+            );
+
+        let staged_section = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(section_header(
+                "staged_header",
+                "Staged",
+                staged_count > 0,
+                unstage_all.into_any_element(),
+            ))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(staged_body),
+            );
 
         div()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(zed::panel(
-                theme,
-                "Unstaged",
-                Some(format!("{unstaged_count}").into()),
-                unstaged_list,
-            ))
-            .child(zed::panel(
-                theme,
-                "Staged",
-                Some(format!("{staged_count}").into()),
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(staged_list)
-                    .child(commit_box),
-            ))
+            .flex_1()
+            .min_h(px(0.0))
+            .h_full()
+	            .child(if repo_id.is_some() {
+	                zed::panel(
+	                    theme,
+	                    "",
+	                    None,
+	                    div()
+	                        .flex()
+	                        .flex_col()
+	                        .flex_1()
+	                        .min_h(px(0.0))
+	                        .child(unstaged_section)
+	                        .child(div().border_t_1().border_color(theme.colors.border))
+	                        .child(staged_section),
+	                )
+	                .flex_1()
+	                .min_h(px(0.0))
+	            } else {
+	                zed::panel(
+	                    theme,
+	                    "",
+	                    None,
+	                    zed::empty_state(theme, "Changes", "No repository selected."),
+	                )
+	            })
+            .into_any_element()
     }
 
     pub(super) fn status_list(
@@ -1459,28 +1586,37 @@ impl GitGpuiView {
         }
         match area {
             DiffArea::Unstaged => {
-                let list =
-                    uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
-                        .h(px(140.0))
-                        .track_scroll(self.unstaged_scroll.clone());
+                let list = uniform_list("unstaged", count, cx.processor(Self::render_unstaged_rows))
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .track_scroll(self.unstaged_scroll.clone());
                 let scroll_handle = self.unstaged_scroll.0.borrow().base_handle.clone();
                 div()
                     .id("unstaged_scroll_container")
                     .relative()
-                    .h(px(140.0))
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
                     .child(list)
                     .child(zed::Scrollbar::new("unstaged_scrollbar", scroll_handle).render(theme))
                     .into_any_element()
             }
             DiffArea::Staged => {
                 let list = uniform_list("staged", count, cx.processor(Self::render_staged_rows))
-                    .h(px(140.0))
+                    .flex_1()
+                    .min_h(px(0.0))
                     .track_scroll(self.staged_scroll.clone());
                 let scroll_handle = self.staged_scroll.0.borrow().base_handle.clone();
                 div()
                     .id("staged_scroll_container")
                     .relative()
-                    .h(px(140.0))
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
                     .child(list)
                     .child(zed::Scrollbar::new("staged_scrollbar", scroll_handle).render(theme))
                     .into_any_element()
@@ -1562,7 +1698,7 @@ impl GitGpuiView {
             bar.render(theme)
         };
 
-        let (title, body): (SharedString, AnyElement) = match self.history_tab {
+        let (_title, body): (SharedString, AnyElement) = match self.history_tab {
             HistoryTab::Log => {
                 self.update_history_search_debounce(cx);
                 self.ensure_history_cache(cx);
@@ -1772,53 +1908,33 @@ impl GitGpuiView {
         div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .flex_1()
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .child(
-                zed::panel(
-                    theme,
-                    title,
-                    None,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .h_full()
-                        .child(tabs)
-                        .child(div().flex_1().child(body)),
-                )
-                .flex_1(),
-            )
+	            .child(
+	                zed::panel(
+	                    theme,
+	                    "",
+	                    None,
+	                    div()
+	                        .flex()
+	                        .flex_col()
+	                        .gap_2()
+	                        .h_full()
+	                        .child(tabs)
+	                        .child(div().flex_1().child(body)),
+	                )
+	                .flex_1(),
+	            )
     }
 
     pub(super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo_id = self.active_repo_id();
 
-        let subtitle: Option<SharedString> = if cfg!(debug_assertions) {
-            fn loadable_tag<T>(l: &Loadable<T>) -> &'static str {
-                match l {
-                    Loadable::NotLoaded => "notloaded",
-                    Loadable::Loading => "loading",
-                    Loadable::Ready(_) => "ready",
-                    Loadable::Error(_) => "error",
-                }
-            }
-            self.active_repo().map(|r| {
-                format!(
-                    "patch={} patch_cache={} patch_visible={}",
-                    loadable_tag(&r.diff),
-                    self.diff_cache.len(),
-                    self.diff_visible_indices.len(),
-                )
-                .into()
-            })
-        } else {
-            None
-        };
+        // Intentionally no outer panel header; keep diff controls in the inner header.
 
         let title = self
             .active_repo()
@@ -1863,6 +1979,13 @@ impl GitGpuiView {
 
         let mut controls = div().flex().items_center().gap_1();
         if !is_file_preview {
+            let nav_entries = self.diff_nav_entries();
+            let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
+            let can_nav_prev =
+                Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_next =
+                Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+
             controls = controls
                 .child(
                     zed::Button::new("diff_inline", "Inline")
@@ -1893,8 +2016,21 @@ impl GitGpuiView {
                         }),
                 )
                 .child(
+                    zed::Button::new("diff_raw", "Raw")
+                        .style(if self.diff_raw_mode {
+                            zed::ButtonStyle::Filled
+                        } else {
+                            zed::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.diff_raw_mode = !this.diff_raw_mode;
+                            cx.notify();
+                        }),
+                )
+                .child(
                     zed::Button::new("diff_prev_hunk", "Prev")
                         .style(zed::ButtonStyle::Outlined)
+                        .disabled(!can_nav_prev)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_jump_prev();
                             cx.notify();
@@ -1903,6 +2039,7 @@ impl GitGpuiView {
                 .child(
                     zed::Button::new("diff_next_hunk", "Next")
                         .style(zed::ButtonStyle::Outlined)
+                        .disabled(!can_nav_next)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_jump_next();
                             cx.notify();
@@ -1960,27 +2097,42 @@ impl GitGpuiView {
                 Loadable::NotLoaded | Loadable::Loading => {
                     zed::empty_state(theme, "File", "Loading…").into_any_element()
                 }
-                Loadable::Error(e) => zed::empty_state(theme, "File", e.clone()).into_any_element(),
+                Loadable::Error(e) => {
+                    self.diff_raw_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(e.clone(), cx);
+                        input.set_read_only(true, cx);
+                    });
+                    div()
+                        .id("worktree_preview_error_scroll")
+                        .font_family("monospace")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .child(self.diff_raw_input.clone())
+                        .into_any_element()
+                }
                 Loadable::Ready(lines) => {
                     if lines.is_empty() {
                         zed::empty_state(theme, "File", "Empty file.").into_any_element()
                     } else {
-                        let list = uniform_list(
-                            "worktree_preview",
-                            lines.len(),
-                            cx.processor(Self::render_worktree_preview_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.worktree_preview_scroll.clone());
-                        let scroll_handle =
-                            self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                        let text = lines.join("\n");
+                        self.diff_raw_input.update(cx, |input, cx| {
+                            input.set_theme(theme, cx);
+                            input.set_text(text, cx);
+                            input.set_read_only(true, cx);
+                        });
+                        let scroll_handle = self.worktree_preview_scroll.0.borrow().base_handle.clone();
                         div()
                             .id("worktree_preview_scroll_container")
                             .relative()
                             .h_full()
                             .min_h(px(0.0))
-                            .child(list)
+                            .overflow_y_scroll()
+                            .track_scroll(&scroll_handle)
+                            .child(div().font_family("monospace").child(self.diff_raw_input.clone()))
                             .child(
                                 zed::Scrollbar::new("worktree_preview_scrollbar", scroll_handle)
                                     .render(theme),
@@ -1997,15 +2149,53 @@ impl GitGpuiView {
                     zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
                 }
                 Loadable::Loading => zed::empty_state(theme, "Diff", "Loading…").into_any_element(),
-                Loadable::Error(e) => zed::empty_state(theme, "Diff", e.clone()).into_any_element(),
-                Loadable::Ready(diff) => {
-                    if wants_file_diff {
-                        enum DiffFileState {
-                            NotLoaded,
-                            Loading,
-                            Error(String),
-                            Ready { has_file: bool },
-                        }
+                Loadable::Error(e) => {
+                    self.diff_raw_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(e.clone(), cx);
+                        input.set_read_only(true, cx);
+                    });
+                    div()
+                        .id("diff_error_scroll")
+                        .font_family("monospace")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .overflow_y_scroll()
+                        .child(self.diff_raw_input.clone())
+                        .into_any_element()
+                }
+	                Loadable::Ready(diff) => {
+	                    if self.diff_raw_mode {
+	                        let text = diff
+	                            .lines
+	                            .iter()
+	                            .map(|l| l.text.as_str())
+	                            .collect::<Vec<_>>()
+	                            .join("\n");
+	                        self.diff_raw_input.update(cx, |input, cx| {
+	                            input.set_theme(theme, cx);
+	                            input.set_text(text, cx);
+	                            input.set_read_only(true, cx);
+	                        });
+	                        div()
+	                            .id("diff_raw_scroll")
+	                            .font_family("monospace")
+	                            .flex()
+	                            .flex_col()
+	                            .flex_1()
+	                            .min_h(px(0.0))
+	                            .overflow_y_scroll()
+	                            .child(self.diff_raw_input.clone())
+	                            .into_any_element()
+	                    } else if wants_file_diff {
+	                        enum DiffFileState {
+	                            NotLoaded,
+	                            Loading,
+	                            Error(String),
+	                            Ready { has_file: bool },
+	                        }
 
                         let diff_file_state = match &repo.diff_file {
                             Loadable::NotLoaded => DiffFileState::NotLoaded,
@@ -2025,7 +2215,21 @@ impl GitGpuiView {
                                 zed::empty_state(theme, "Diff", "Loading…").into_any_element()
                             }
                             DiffFileState::Error(e) => {
-                                zed::empty_state(theme, "Diff", e).into_any_element()
+                                self.diff_raw_input.update(cx, |input, cx| {
+                                    input.set_theme(theme, cx);
+                                    input.set_text(e, cx);
+                                    input.set_read_only(true, cx);
+                                });
+	                                div()
+	                                    .id("diff_file_error_scroll")
+	                                    .font_family("monospace")
+	                                    .flex()
+	                                    .flex_col()
+	                                    .flex_1()
+	                                    .min_h(px(0.0))
+	                                    .overflow_y_scroll()
+	                                    .child(self.diff_raw_input.clone())
+	                                    .into_any_element()
                             }
                             DiffFileState::Ready { has_file } => {
                                 if !has_file || !self.is_file_diff_view_active() {
@@ -2268,41 +2472,54 @@ impl GitGpuiView {
         }
         };
 
+        self.diff_text_hitboxes.clear();
+
         div()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .flex_1()
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .child(
-                zed::panel(
-                    theme,
-                    "Diff",
-                    subtitle,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .track_focus(&self.diff_panel_focus_handle)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-                                window.focus(&this.diff_panel_focus_handle);
-                            }),
-                        )
-                        .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _w, cx| {
-                            let is_file_preview = this.untracked_worktree_preview_path().is_some()
-                                || this.added_file_preview_abs_path().is_some();
-                            if is_file_preview {
-                                return;
-                            }
+	            .child(
+	                zed::panel(
+	                    theme,
+	                    "",
+	                    None,
+	                    div()
+	                        .flex()
+	                        .flex_col()
+	                        .gap_2()
+	                        .track_focus(&self.diff_panel_focus_handle)
+	                        .on_mouse_down(
+	                            MouseButton::Left,
+	                            cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
+	                                window.focus(&this.diff_panel_focus_handle);
+	                            }),
+	                        )
+	                        .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+	                            let is_file_preview = this.untracked_worktree_preview_path().is_some()
+	                                || this.added_file_preview_abs_path().is_some();
+	                            if is_file_preview {
+	                                return;
+	                            }
 
                             let key = e.keystroke.key.as_str();
                             let mods = e.keystroke.modifiers;
 
                             let mut handled = false;
+
+                            let copy_target_is_focused = this
+                                .diff_search_input
+                                .read(cx)
+                                .focus_handle()
+                                .is_focused(window)
+                                || this
+                                    .diff_raw_input
+                                    .read(cx)
+                                    .focus_handle()
+                                    .is_focused(window);
 
                             if mods.alt && !mods.control && !mods.platform && !mods.function {
                                 match key {
@@ -2333,23 +2550,47 @@ impl GitGpuiView {
                                 handled = true;
                             }
 
+                            if !handled
+                                && !copy_target_is_focused
+                                && (mods.control || mods.platform)
+                                && !mods.alt
+                                && !mods.function
+                                && key == "c"
+                                && this.diff_text_has_selection()
+                            {
+                                this.copy_selected_diff_text_to_clipboard(cx);
+                                handled = true;
+                            }
+
+                            if !handled
+                                && !copy_target_is_focused
+                                && (mods.control || mods.platform)
+                                && !mods.alt
+                                && !mods.function
+                                && key == "a"
+                            {
+                                this.select_all_diff_text();
+                                handled = true;
+                            }
+
                             if handled {
                                 cx.stop_propagation();
                                 cx.notify();
                             }
-                        }))
-                        .h_full()
-                        .child(header)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h(px(120.0))
-                                .w_full()
-                                .h_full()
-                                .child(body),
-                        ),
-                )
-                .flex_1(),
-            )
+	                        }))
+	                        .h_full()
+	                        .child(header)
+	                        .child(
+	                            div()
+	                                .flex_1()
+	                                .min_h(px(120.0))
+	                                .w_full()
+	                                .h_full()
+	                                .child(body),
+	                        )
+                            .child(DiffTextSelectionTracker { view: cx.entity() }),
+	                )
+	                .flex_1(),
+	            )
     }
 }

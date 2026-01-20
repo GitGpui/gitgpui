@@ -78,9 +78,17 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
+    StagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
     UnstagePath {
         repo_id: RepoId,
         path: PathBuf,
+    },
+    UnstagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
     },
     Commit {
         repo_id: RepoId,
@@ -279,10 +287,20 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .finish(),
+            Msg::StagePaths { repo_id, paths } => f
+                .debug_struct("StagePaths")
+                .field("repo_id", repo_id)
+                .field("paths_len", &paths.len())
+                .finish(),
             Msg::UnstagePath { repo_id, path } => f
                 .debug_struct("UnstagePath")
                 .field("repo_id", repo_id)
                 .field("path", path)
+                .finish(),
+            Msg::UnstagePaths { repo_id, paths } => f
+                .debug_struct("UnstagePaths")
+                .field("repo_id", repo_id)
+                .field("paths_len", &paths.len())
                 .finish(),
             Msg::Commit { repo_id, message } => f
                 .debug_struct("Commit")
@@ -519,9 +537,17 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
     },
+    StagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
     UnstagePath {
         repo_id: RepoId,
         path: PathBuf,
+    },
+    UnstagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
     },
     Commit {
         repo_id: RepoId,

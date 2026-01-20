@@ -5,7 +5,7 @@ pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 fn titlebar_control_button(theme: AppTheme, hover_bg: gpui::Rgba) -> gpui::Div {
     div()
         .h_full()
-        .px_3()
+        .px_2()
         .flex()
         .items_center()
         .cursor(CursorStyle::PointingHand)

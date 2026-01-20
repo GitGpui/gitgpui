@@ -106,6 +106,7 @@ impl SmokeView {
                 zed::TextInputOptions {
                     placeholder: "Enter…".into(),
                     multiline: false,
+                    read_only: false,
                 },
                 window,
                 cx,
@@ -190,6 +191,7 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
                     zed::TextInputOptions {
                         placeholder: "Commit message…".into(),
                         multiline: false,
+                        read_only: false,
                     },
                     window,
                     cx,

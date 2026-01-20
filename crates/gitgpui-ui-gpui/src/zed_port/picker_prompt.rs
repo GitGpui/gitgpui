@@ -73,8 +73,8 @@ impl PickerPrompt {
         if matches.is_empty() {
             list = list.child(
                 div()
-                    .px_3()
-                    .py_2()
+                    .px_2()
+                    .py_1()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(self.empty_text),
@@ -87,8 +87,8 @@ impl PickerPrompt {
                 list = list.child(
                     div()
                         .id(("picker_prompt_item", original_index))
-                        .px_3()
-                        .py_2()
+                        .px_2()
+                        .py_1()
                         .rounded(px(theme.radii.row))
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))

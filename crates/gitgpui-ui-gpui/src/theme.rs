@@ -71,9 +71,9 @@ impl AppTheme {
                 success: gpui::rgb(0x34D399),
             },
             radii: Radii {
-                panel: 10.0,
+                panel: 8.0,
                 pill: 999.0,
-                row: 8.0,
+                row: 6.0,
             },
         }
     }
@@ -116,9 +116,9 @@ impl AppTheme {
                 success: gpui::rgba(0x98c379ff),
             },
             radii: Radii {
-                panel: 8.0,
+                panel: 6.0,
                 pill: 999.0,
-                row: 6.0,
+                row: 4.0,
             },
         }
     }
@@ -161,9 +161,9 @@ impl AppTheme {
                 success: gpui::rgba(0xaad84cff),
             },
             radii: Radii {
-                panel: 8.0,
+                panel: 6.0,
                 pill: 999.0,
-                row: 6.0,
+                row: 4.0,
             },
         }
     }
@@ -206,9 +206,9 @@ impl AppTheme {
                 success: gpui::rgba(0x3f953aff),
             },
             radii: Radii {
-                panel: 8.0,
+                panel: 6.0,
                 pill: 999.0,
-                row: 6.0,
+                row: 4.0,
             },
         }
     }

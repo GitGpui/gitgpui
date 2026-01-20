@@ -11,11 +11,14 @@ use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Entity, FocusHandle,
-    FontWeight,
-    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
-    SharedString, Size, Tiling, Timer, UniformListScrollHandle, WeakEntity, Window,
+    AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Element, ElementId,
+    Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId, IsZero, LayoutId, Style,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge,
+    ScrollHandle,
+    ShapedLine, SharedString, Size, TextRun, Tiling, Timer, UniformListScrollHandle, WeakEntity,
+    Window,
     WindowControlArea, anchored, div, point, px, size, uniform_list,
+    fill, relative,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -82,6 +85,40 @@ enum HistoryTab {
     Log,
     Stash,
     Reflog,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum DiffTextRegion {
+    Inline,
+    SplitLeft,
+    SplitRight,
+}
+
+impl DiffTextRegion {
+    fn order(self) -> u8 {
+        match self {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft => 0,
+            DiffTextRegion::SplitRight => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DiffTextPos {
+    visible_ix: usize,
+    region: DiffTextRegion,
+    offset: usize,
+}
+
+impl DiffTextPos {
+    fn cmp_key(self) -> (usize, u8, usize) {
+        (self.visible_ix, self.region.order(), self.offset)
+    }
+}
+
+struct DiffTextHitbox {
+    bounds: Bounds<Pixels>,
+    layout: ShapedLine,
 }
 
 #[derive(Clone, Debug)]
@@ -154,10 +191,42 @@ enum PopoverKind {
     },
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RemoteRow {
     Header(String),
     Branch { remote: String, name: String },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BranchSection {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BranchSidebarRow {
+    SectionHeader { section: BranchSection, top_border: bool },
+    Placeholder { section: BranchSection, message: SharedString },
+    RemoteHeader { name: SharedString },
+    GroupHeader { label: SharedString, depth: usize },
+    Branch { label: SharedString, depth: usize, muted: bool },
+}
+
+#[derive(Default)]
+struct SlashTree {
+    is_leaf: bool,
+    children: BTreeMap<String, SlashTree>,
+}
+
+impl SlashTree {
+    fn insert(&mut self, name: &str) {
+        let mut node = self;
+        for part in name.split('/').filter(|p| !p.is_empty()) {
+            node = node.children.entry(part.to_string()).or_default();
+        }
+        node.is_leaf = true;
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,7 +258,7 @@ pub struct GitGpuiView {
     diff_cache_rev: u64,
     diff_cache_target: Option<DiffTarget>,
     diff_cache: Vec<AnnotatedDiffLine>,
-    diff_file_for_src_ix: Vec<Option<String>>,
+    diff_file_for_src_ix: Vec<Option<Arc<str>>>,
     diff_split_cache: Vec<PatchSplitRow>,
     diff_split_cache_len: usize,
     diff_search_input: Entity<zed::TextInput>,
@@ -198,6 +267,8 @@ pub struct GitGpuiView {
     diff_search_seq: u64,
     diff_panel_focus_handle: FocusHandle,
     diff_autoscroll_pending: bool,
+    diff_raw_mode: bool,
+    diff_raw_input: Entity<zed::TextInput>,
     diff_visible_indices: Vec<usize>,
     diff_visible_cache_len: usize,
     diff_visible_query: String,
@@ -205,12 +276,17 @@ pub struct GitGpuiView {
     diff_visible_is_file_view: bool,
     diff_query_match_count: usize,
     diff_scrollbar_markers_cache: Vec<zed::ScrollbarMarker>,
-    diff_word_highlights: HashMap<usize, Vec<Range<usize>>>,
-    diff_file_stats: HashMap<usize, (usize, usize)>,
+    diff_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+    diff_file_stats: Vec<Option<(usize, usize)>>,
     diff_text_segments_cache_query: String,
-    diff_text_segments_cache: HashMap<usize, CachedDiffStyledText>,
+    diff_text_segments_cache: Vec<Option<CachedDiffStyledText>>,
     diff_selection_anchor: Option<usize>,
     diff_selection_range: Option<(usize, usize)>,
+    diff_text_selecting: bool,
+    diff_text_anchor: Option<DiffTextPos>,
+    diff_text_head: Option<DiffTextPos>,
+    diff_suppress_clicks_remaining: u8,
+    diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
 
     file_diff_cache_repo_id: Option<RepoId>,
@@ -219,9 +295,9 @@ pub struct GitGpuiView {
     file_diff_cache_path: Option<std::path::PathBuf>,
     file_diff_cache_rows: Vec<FileDiffRow>,
     file_diff_inline_cache: Vec<AnnotatedDiffLine>,
-    file_diff_inline_word_highlights: HashMap<usize, Vec<Range<usize>>>,
-    file_diff_split_word_highlights_old: HashMap<usize, Vec<Range<usize>>>,
-    file_diff_split_word_highlights_new: HashMap<usize, Vec<Range<usize>>>,
+    file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+    file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
+    file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
 
     worktree_preview_path: Option<std::path::PathBuf>,
     worktree_preview: Loadable<Arc<Vec<String>>>,
@@ -262,7 +338,6 @@ pub struct GitGpuiView {
     hover_resize_edge: Option<ResizeEdge>,
 
     branches_scroll: UniformListScrollHandle,
-    remotes_scroll: UniformListScrollHandle,
     history_scroll: UniformListScrollHandle,
     stashes_scroll: UniformListScrollHandle,
     reflog_scroll: UniformListScrollHandle,
@@ -276,9 +351,30 @@ pub struct GitGpuiView {
     toasts: Vec<ToastState>,
 
     hovered_status_row: Option<(RepoId, DiffArea, std::path::PathBuf)>,
+
+    commit_details_message_input: Entity<zed::TextInput>,
+    error_banner_input: Entity<zed::TextInput>,
 }
 
 impl GitGpuiView {
+    fn diff_text_segments_cache_get(&self, key: usize) -> Option<&CachedDiffStyledText> {
+        self.diff_text_segments_cache.get(key).and_then(Option::as_ref)
+    }
+
+    fn diff_text_segments_cache_set(
+        &mut self,
+        key: usize,
+        value: CachedDiffStyledText,
+    ) -> &CachedDiffStyledText {
+        if self.diff_text_segments_cache.len() <= key {
+            self.diff_text_segments_cache.resize_with(key + 1, || None);
+        }
+        self.diff_text_segments_cache[key] = Some(value);
+        self.diff_text_segments_cache[key]
+            .as_ref()
+            .expect("just set")
+    }
+
     fn log_fingerprint(commits: &[Commit]) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         commits.len().hash(&mut hasher);
@@ -369,6 +465,7 @@ impl GitGpuiView {
                 zed::TextInputOptions {
                     placeholder: "/path/to/repo".into(),
                     multiline: false,
+                    read_only: false,
                 },
                 window,
                 cx,
@@ -380,6 +477,7 @@ impl GitGpuiView {
                 zed::TextInputOptions {
                     placeholder: "Enter commit message…".into(),
                     multiline: false,
+                    read_only: false,
                 },
                 window,
                 cx,
@@ -391,6 +489,7 @@ impl GitGpuiView {
                 zed::TextInputOptions {
                     placeholder: "new-branch-name".into(),
                     multiline: false,
+                    read_only: false,
                 },
                 window,
                 cx,
@@ -402,6 +501,7 @@ impl GitGpuiView {
                 zed::TextInputOptions {
                     placeholder: "Search commits…".into(),
                     multiline: false,
+                    read_only: false,
                 },
                 window,
                 cx,
@@ -413,6 +513,43 @@ impl GitGpuiView {
                 zed::TextInputOptions {
                     placeholder: "Search diff…".into(),
                     multiline: false,
+                    read_only: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let diff_raw_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: true,
+                    read_only: true,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let error_banner_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: true,
+                    read_only: true,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let commit_details_message_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: true,
+                    read_only: true,
                 },
                 window,
                 cx,
@@ -441,6 +578,8 @@ impl GitGpuiView {
             diff_search_seq: 0,
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
+            diff_raw_mode: false,
+            diff_raw_input,
             diff_visible_indices: Vec::new(),
             diff_visible_cache_len: 0,
             diff_visible_query: String::new(),
@@ -448,12 +587,17 @@ impl GitGpuiView {
             diff_visible_is_file_view: false,
             diff_query_match_count: 0,
             diff_scrollbar_markers_cache: Vec::new(),
-            diff_word_highlights: HashMap::new(),
-            diff_file_stats: HashMap::new(),
+            diff_word_highlights: Vec::new(),
+            diff_file_stats: Vec::new(),
             diff_text_segments_cache_query: String::new(),
-            diff_text_segments_cache: HashMap::new(),
+            diff_text_segments_cache: Vec::new(),
             diff_selection_anchor: None,
             diff_selection_range: None,
+            diff_text_selecting: false,
+            diff_text_anchor: None,
+            diff_text_head: None,
+            diff_suppress_clicks_remaining: 0,
+            diff_text_hitboxes: HashMap::new(),
             diff_hunk_picker_search_input: None,
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
@@ -461,9 +605,9 @@ impl GitGpuiView {
             file_diff_cache_path: None,
             file_diff_cache_rows: Vec::new(),
             file_diff_inline_cache: Vec::new(),
-            file_diff_inline_word_highlights: HashMap::new(),
-            file_diff_split_word_highlights_old: HashMap::new(),
-            file_diff_split_word_highlights_new: HashMap::new(),
+            file_diff_inline_word_highlights: Vec::new(),
+            file_diff_split_word_highlights_old: Vec::new(),
+            file_diff_split_word_highlights_new: Vec::new(),
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_scroll: UniformListScrollHandle::default(),
@@ -498,7 +642,6 @@ impl GitGpuiView {
             title_should_move: false,
             hover_resize_edge: None,
             branches_scroll: UniformListScrollHandle::default(),
-            remotes_scroll: UniformListScrollHandle::default(),
             history_scroll: UniformListScrollHandle::default(),
             stashes_scroll: UniformListScrollHandle::default(),
             reflog_scroll: UniformListScrollHandle::default(),
@@ -510,6 +653,8 @@ impl GitGpuiView {
             commit_scroll: ScrollHandle::new(),
             toasts: Vec::new(),
             hovered_status_row: None,
+            commit_details_message_input,
+            error_banner_input,
         };
 
         view.set_theme(initial_theme, cx);
@@ -536,6 +681,12 @@ impl GitGpuiView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.diff_raw_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.commit_details_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.error_banner_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         if let Some(input) = &self.repo_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
@@ -554,6 +705,559 @@ impl GitGpuiView {
     fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    fn diff_visible_ix_for_mouse_position(&self, position: Point<Pixels>) -> Option<usize> {
+        let list_len = self.diff_visible_indices.len();
+        if list_len == 0 {
+            return None;
+        }
+
+        let state = self.diff_scroll.0.borrow();
+        let bounds = state.base_handle.bounds();
+        if bounds.size.width.is_zero() || bounds.size.height.is_zero() {
+            return None;
+        }
+
+        let item_height = state
+            .last_item_size
+            .map(|s| s.item.height)
+            .unwrap_or(px(20.0));
+
+        if item_height.is_zero() {
+            return Some(0);
+        }
+
+        let mut y = position.y - bounds.top() + state.base_handle.offset().y;
+        if y < px(0.0) {
+            y = px(0.0);
+        }
+        let mut ix = (y / item_height).floor() as isize;
+        ix = ix.clamp(0, list_len.saturating_sub(1) as isize);
+        Some(ix as usize)
+    }
+
+    fn consume_suppress_click_after_drag(&mut self) -> bool {
+        if self.diff_suppress_clicks_remaining > 0 {
+            self.diff_suppress_clicks_remaining = self.diff_suppress_clicks_remaining.saturating_sub(1);
+            return true;
+        }
+        false
+    }
+
+    fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
+        let a = self.diff_text_anchor?;
+        let b = self.diff_text_head?;
+        Some(if a.cmp_key() <= b.cmp_key() { (a, b) } else { (b, a) })
+    }
+
+    fn diff_text_selection_color(&self) -> gpui::Rgba {
+        with_alpha(
+            self.theme.colors.accent,
+            if self.theme.is_dark { 0.28 } else { 0.18 },
+        )
+    }
+
+    fn set_diff_text_hitbox(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        hitbox: DiffTextHitbox,
+    ) {
+        self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
+    }
+
+    fn diff_text_pos_from_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        let local = hitbox.bounds.localize(&position)?;
+        let x = local.x.max(px(0.0));
+        let offset = hitbox.layout.closest_index_for_x(x).min(hitbox.layout.len());
+        Some(DiffTextPos {
+            visible_ix,
+            region,
+            offset,
+        })
+    }
+
+    fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
+        if self.diff_text_hitboxes.is_empty() {
+            return None;
+        }
+
+        for ((visible_ix, region), hitbox) in &self.diff_text_hitboxes {
+            if hitbox.bounds.contains(&position) {
+                return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
+            }
+        }
+
+        let mut best: Option<((usize, DiffTextRegion), Pixels)> = None;
+        for (key, hitbox) in &self.diff_text_hitboxes {
+            let dy = if position.y < hitbox.bounds.top() {
+                hitbox.bounds.top() - position.y
+            } else if position.y > hitbox.bounds.bottom() {
+                position.y - hitbox.bounds.bottom()
+            } else {
+                px(0.0)
+            };
+            let dx = if position.x < hitbox.bounds.left() {
+                hitbox.bounds.left() - position.x
+            } else if position.x > hitbox.bounds.right() {
+                position.x - hitbox.bounds.right()
+            } else {
+                px(0.0)
+            };
+            let score = dy + dx;
+            if best.is_none() || score < best.unwrap().1 {
+                best = Some((*key, score));
+            }
+        }
+        let ((visible_ix, region), _) = best?;
+        self.diff_text_pos_from_hitbox(visible_ix, region, position)
+    }
+
+    fn begin_diff_text_selection(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) {
+        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+            return;
+        };
+        self.diff_text_selecting = true;
+        self.diff_text_anchor = Some(pos);
+        self.diff_text_head = Some(pos);
+        self.diff_suppress_clicks_remaining = 0;
+    }
+
+    fn update_diff_text_selection_from_mouse(&mut self, position: Point<Pixels>) {
+        if !self.diff_text_selecting {
+            return;
+        }
+        let Some(pos) = self.diff_text_pos_for_mouse(position) else {
+            return;
+        };
+        if self.diff_text_head != Some(pos) {
+            self.diff_text_head = Some(pos);
+            if self
+                .diff_text_normalized_selection()
+                .is_some_and(|(a, b)| a != b)
+            {
+                self.diff_suppress_clicks_remaining = 1;
+            }
+        }
+    }
+
+    fn end_diff_text_selection(&mut self) {
+        self.diff_text_selecting = false;
+    }
+
+    fn diff_text_has_selection(&self) -> bool {
+        self.diff_text_normalized_selection()
+            .is_some_and(|(a, b)| a != b)
+    }
+
+    fn diff_text_local_selection_range(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        text_len: usize,
+    ) -> Option<Range<usize>> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+        if visible_ix < start.visible_ix || visible_ix > end.visible_ix {
+            return None;
+        }
+
+        let region_order = region.order();
+        let start_order = start.region.order();
+        let end_order = end.region.order();
+
+        let mut a = 0usize;
+        let mut b = text_len;
+
+        if start.visible_ix == end.visible_ix && visible_ix == start.visible_ix {
+            if region_order < start_order || region_order > end_order {
+                return None;
+            }
+            if region == start.region {
+                a = start.offset.min(text_len);
+            }
+            if region == end.region {
+                b = end.offset.min(text_len);
+            }
+        } else if visible_ix == start.visible_ix {
+            if region_order < start_order {
+                return None;
+            }
+            if region == start.region {
+                a = start.offset.min(text_len);
+            }
+        } else if visible_ix == end.visible_ix {
+            if region_order > end_order {
+                return None;
+            }
+            if region == end.region {
+                b = end.offset.min(text_len);
+            }
+        }
+
+        if a >= b {
+            return None;
+        }
+        Some(a..b)
+    }
+
+    fn diff_text_line_for_region(&self, visible_ix: usize, region: DiffTextRegion) -> SharedString {
+        let fallback = SharedString::default();
+        let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
+            return fallback;
+        };
+
+        let expand_tabs = |s: &str| -> SharedString {
+            if !s.contains('\t') {
+                return s.to_string().into();
+            }
+            let mut out = String::with_capacity(s.len());
+            for ch in s.chars() {
+                match ch {
+                    '\t' => out.push_str("    "),
+                    _ => out.push(ch),
+                }
+            }
+            out.into()
+        };
+
+        if self.diff_view == DiffViewMode::Inline {
+            if region != DiffTextRegion::Inline {
+                return fallback;
+            }
+            if self.is_file_diff_view_active() {
+                if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix) {
+                    return styled.text.clone();
+                }
+                return self
+                    .file_diff_inline_cache
+                    .get(mapped_ix)
+                    .map(|l| expand_tabs(diff_content_text(l)))
+                    .unwrap_or(fallback);
+            }
+
+            if let Some(styled) = self.diff_text_segments_cache_get(mapped_ix) {
+                return styled.text.clone();
+            }
+            let Some(line) = self.diff_cache.get(mapped_ix) else {
+                return fallback;
+            };
+            let display = if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                parse_unified_hunk_header_for_display(line.text.as_ref())
+                    .map(|p| {
+                        let heading = p.heading.unwrap_or_default();
+                        if heading.is_empty() {
+                            format!("{} {}", p.old, p.new)
+                        } else {
+                            format!("{} {}  {heading}", p.old, p.new)
+                        }
+                    })
+                    .unwrap_or_else(|| line.text.clone())
+            } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                && line.text.starts_with("diff --git ")
+            {
+                parse_diff_git_header_path(line.text.as_ref()).unwrap_or_else(|| line.text.clone())
+            } else {
+                line.text.clone()
+            };
+            return expand_tabs(display.as_str());
+        }
+
+        match region {
+            DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => {}
+            DiffTextRegion::Inline => return fallback,
+        }
+
+        if self.is_file_diff_view_active() {
+            let key = match region {
+                DiffTextRegion::SplitLeft => mapped_ix * 2,
+                DiffTextRegion::SplitRight => mapped_ix * 2 + 1,
+                DiffTextRegion::Inline => unreachable!(),
+            };
+            if let Some(styled) = self.diff_text_segments_cache_get(key) {
+                return styled.text.clone();
+            }
+            let Some(row) = self.file_diff_cache_rows.get(mapped_ix) else {
+                return fallback;
+            };
+            let text = match region {
+                DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                DiffTextRegion::Inline => unreachable!(),
+            };
+            return expand_tabs(text);
+        }
+
+        let Some(split_row) = self.diff_split_cache.get(mapped_ix) else {
+            return fallback;
+        };
+        match split_row {
+            PatchSplitRow::Raw { src_ix, click_kind } => {
+                let Some(line) = self.diff_cache.get(*src_ix) else {
+                    return fallback;
+                };
+                let display = match click_kind {
+                    DiffClickKind::HunkHeader => parse_unified_hunk_header_for_display(line.text.as_ref())
+                        .map(|p| {
+                            let heading = p.heading.unwrap_or_default();
+                            if heading.is_empty() {
+                                format!("{} {}", p.old, p.new)
+                            } else {
+                                format!("{} {}  {heading}", p.old, p.new)
+                            }
+                        })
+                        .unwrap_or_else(|| line.text.clone()),
+                    DiffClickKind::FileHeader => parse_diff_git_header_path(line.text.as_ref())
+                        .unwrap_or_else(|| line.text.clone()),
+                    DiffClickKind::Line => line.text.clone(),
+                };
+                expand_tabs(display.as_str())
+            }
+            PatchSplitRow::Aligned { row, .. } => {
+                let text = match region {
+                    DiffTextRegion::SplitLeft => row.old.as_deref().unwrap_or(""),
+                    DiffTextRegion::SplitRight => row.new.as_deref().unwrap_or(""),
+                    DiffTextRegion::Inline => unreachable!(),
+                };
+                expand_tabs(text)
+            }
+        }
+    }
+
+    fn diff_text_combined_offset(&self, pos: DiffTextPos, left_len: usize) -> usize {
+        match self.diff_view {
+            DiffViewMode::Inline => pos.offset,
+            DiffViewMode::Split => match pos.region {
+                DiffTextRegion::SplitLeft => pos.offset,
+                DiffTextRegion::SplitRight => left_len.saturating_add(1).saturating_add(pos.offset),
+                DiffTextRegion::Inline => pos.offset,
+            },
+        }
+    }
+
+    fn selected_diff_text_string(&self) -> Option<String> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end {
+            return None;
+        }
+
+        let mut out = String::new();
+        for visible_ix in start.visible_ix..=end.visible_ix {
+            if self.diff_view == DiffViewMode::Inline {
+                let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                let line_len = text.len();
+                let a = if visible_ix == start.visible_ix {
+                    start.offset.min(line_len)
+                } else {
+                    0
+                };
+                let b = if visible_ix == end.visible_ix {
+                    end.offset.min(line_len)
+                } else {
+                    line_len
+                };
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                if a < b {
+                    out.push_str(&text[a..b]);
+                }
+                continue;
+            }
+
+            let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+            let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+            let combined = format!("{}\t{}", left.as_ref(), right.as_ref());
+            let left_len = left.len();
+            let combined_len = combined.len();
+
+            let a = if visible_ix == start.visible_ix {
+                self.diff_text_combined_offset(start, left_len).min(combined_len)
+            } else {
+                0
+            };
+            let b = if visible_ix == end.visible_ix {
+                self.diff_text_combined_offset(end, left_len).min(combined_len)
+            } else {
+                combined_len
+            };
+
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            if a < b {
+                out.push_str(&combined[a..b]);
+            }
+        }
+
+        if out.is_empty() { None } else { Some(out) }
+    }
+
+    fn copy_selected_diff_text_to_clipboard(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(text) = self.selected_diff_text_string() else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+    }
+
+    fn copy_diff_text_selection_or_region_line_to_clipboard(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_text_has_selection() {
+            self.copy_selected_diff_text_to_clipboard(cx);
+            return;
+        }
+        let text = self.diff_text_line_for_region(visible_ix, region);
+        if text.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+    }
+
+    fn select_all_diff_text(&mut self) {
+        if self.diff_visible_indices.is_empty() {
+            return;
+        }
+
+        let start_region = match self.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+        };
+
+        let end_visible_ix = self.diff_visible_indices.len() - 1;
+        let end_region = match self.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitRight,
+        };
+        let end_text = self.diff_text_line_for_region(end_visible_ix, end_region);
+
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = Some(DiffTextPos {
+            visible_ix: 0,
+            region: start_region,
+            offset: 0,
+        });
+        self.diff_text_head = Some(DiffTextPos {
+            visible_ix: end_visible_ix,
+            region: end_region,
+            offset: end_text.len(),
+        });
+    }
+
+    fn select_diff_text_rows_range(&mut self, start_visible_ix: usize, end_visible_ix: usize) {
+        let list_len = self.diff_visible_indices.len();
+        if list_len == 0 {
+            return;
+        }
+
+        let a = start_visible_ix.min(list_len - 1);
+        let b = end_visible_ix.min(list_len - 1);
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+
+        let start_region = match self.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+        };
+        let end_region = match self.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitRight,
+        };
+
+        let end_text = self.diff_text_line_for_region(b, end_region);
+
+        self.diff_text_selecting = false;
+        self.diff_text_anchor = Some(DiffTextPos {
+            visible_ix: a,
+            region: start_region,
+            offset: 0,
+        });
+        self.diff_text_head = Some(DiffTextPos {
+            visible_ix: b,
+            region: end_region,
+            offset: end_text.len(),
+        });
+
+        // Double-click produces two click events; suppress both.
+        self.diff_suppress_clicks_remaining = 2;
+    }
+
+    fn double_click_select_diff_text(&mut self, visible_ix: usize, kind: DiffClickKind) {
+        let list_len = self.diff_visible_indices.len();
+        if list_len == 0 {
+            return;
+        }
+        let visible_ix = visible_ix.min(list_len - 1);
+
+        // File-diff view doesn't have file/hunk header blocks; treat as row selection.
+        if self.is_file_diff_view_active() {
+            self.select_diff_text_rows_range(visible_ix, visible_ix);
+            return;
+        }
+
+        let end = match self.diff_view {
+            DiffViewMode::Inline => match kind {
+                DiffClickKind::Line => visible_ix,
+                DiffClickKind::HunkHeader => self
+                    .diff_next_boundary_visible_ix(visible_ix, |src_ix| {
+                        let line = &self.diff_cache[src_ix];
+                        matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                            || (matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                                && line.text.starts_with("diff --git "))
+                    })
+                    .unwrap_or(list_len - 1),
+                DiffClickKind::FileHeader => self
+                    .diff_next_boundary_visible_ix(visible_ix, |src_ix| {
+                        let line = &self.diff_cache[src_ix];
+                        matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                            && line.text.starts_with("diff --git ")
+                    })
+                    .unwrap_or(list_len - 1),
+            },
+            DiffViewMode::Split => match kind {
+                DiffClickKind::Line => visible_ix,
+                DiffClickKind::HunkHeader => self
+                    .split_next_boundary_visible_ix(visible_ix, |row| {
+                        matches!(
+                            row,
+                            PatchSplitRow::Raw {
+                                click_kind: DiffClickKind::HunkHeader | DiffClickKind::FileHeader,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap_or(list_len - 1),
+                DiffClickKind::FileHeader => self
+                    .split_next_boundary_visible_ix(visible_ix, |row| {
+                        matches!(
+                            row,
+                            PatchSplitRow::Raw {
+                                click_kind: DiffClickKind::FileHeader,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap_or(list_len - 1),
+            },
+        };
+
+        self.select_diff_text_rows_range(visible_ix, end);
     }
 
     fn history_visible_columns(&self) -> (bool, bool) {
@@ -601,6 +1305,7 @@ impl GitGpuiView {
                     zed::TextInputOptions {
                         placeholder: "Filter repositories…".into(),
                         multiline: false,
+                        read_only: false,
                     },
                     window,
                     cx,
@@ -628,6 +1333,7 @@ impl GitGpuiView {
                     zed::TextInputOptions {
                         placeholder: "Commit message…".into(),
                         multiline: true,
+                        read_only: false,
                     },
                     window,
                     cx,
@@ -650,6 +1356,7 @@ impl GitGpuiView {
                     zed::TextInputOptions {
                         placeholder: "Filter branches…".into(),
                         multiline: false,
+                        read_only: false,
                     },
                     window,
                     cx,
@@ -677,6 +1384,7 @@ impl GitGpuiView {
                     zed::TextInputOptions {
                         placeholder: "Filter hunks…".into(),
                         multiline: false,
+                        read_only: false,
                     },
                     window,
                     cx,
@@ -692,6 +1400,7 @@ impl GitGpuiView {
         input.clone()
     }
 
+    #[cfg(test)]
     fn remote_rows(repo: &RepoState) -> Vec<RemoteRow> {
         let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
@@ -723,6 +1432,108 @@ impl GitGpuiView {
                     name,
                 });
             }
+        }
+
+        rows
+    }
+
+    fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
+        let mut rows = Vec::new();
+
+        rows.push(BranchSidebarRow::SectionHeader {
+            section: BranchSection::Local,
+            top_border: false,
+        });
+
+        match &repo.branches {
+            Loadable::Ready(branches) if branches.is_empty() => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Local,
+                    message: "No branches".into(),
+                });
+            }
+            Loadable::Ready(branches) => {
+                let mut tree = SlashTree::default();
+                for branch in branches {
+                    tree.insert(&branch.name);
+                }
+                push_slash_tree_rows(&tree, &mut rows, 0, false);
+            }
+            Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: "Loading…".into(),
+            }),
+            Loadable::NotLoaded => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: "Not loaded".into(),
+            }),
+            Loadable::Error(e) => rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Local,
+                message: e.clone().into(),
+            }),
+        }
+
+        rows.push(BranchSidebarRow::SectionHeader {
+            section: BranchSection::Remote,
+            top_border: true,
+        });
+
+        let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        match &repo.remote_branches {
+            Loadable::Ready(branches) => {
+                for branch in branches {
+                    remotes
+                        .entry(branch.remote.clone())
+                        .or_default()
+                        .push(branch.name.clone());
+                }
+            }
+            Loadable::Loading => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Remote,
+                    message: "Loading…".into(),
+                });
+                return rows;
+            }
+            Loadable::Error(e) => {
+                rows.push(BranchSidebarRow::Placeholder {
+                    section: BranchSection::Remote,
+                    message: e.clone().into(),
+                });
+                return rows;
+            }
+            Loadable::NotLoaded => {
+                if let Loadable::Ready(known) = &repo.remotes {
+                    for remote in known {
+                        remotes.entry(remote.name.clone()).or_default();
+                    }
+                }
+            }
+        }
+
+        if remotes.is_empty() {
+            rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Remote,
+                message: "No remotes".into(),
+            });
+            return rows;
+        }
+
+        for (remote, mut branches) in remotes {
+            branches.sort();
+            branches.dedup();
+            rows.push(BranchSidebarRow::RemoteHeader {
+                name: remote.clone().into(),
+            });
+            if branches.is_empty() {
+                continue;
+            }
+
+            let mut tree = SlashTree::default();
+            for branch in branches {
+                tree.insert(&branch);
+            }
+            push_slash_tree_rows(&tree, &mut rows, 1, true);
         }
 
         rows
@@ -1028,9 +1839,9 @@ impl GitGpuiView {
             file_path: Option<std::path::PathBuf>,
             rows: Vec<FileDiffRow>,
             inline_rows: Vec<AnnotatedDiffLine>,
-            inline_word_highlights: HashMap<usize, Vec<Range<usize>>>,
-            split_word_highlights_old: HashMap<usize, Vec<Range<usize>>>,
-            split_word_highlights_new: HashMap<usize, Vec<Range<usize>>>,
+            inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+            split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
+            split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
         }
 
         enum Action {
@@ -1092,25 +1903,26 @@ impl GitGpuiView {
             });
 
             // Precompute word highlights and inline rows.
-            let mut split_word_highlights_old: HashMap<usize, Vec<Range<usize>>> = HashMap::new();
-            let mut split_word_highlights_new: HashMap<usize, Vec<Range<usize>>> = HashMap::new();
+            let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
+                vec![None; rows.len()];
+            let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
+                vec![None; rows.len()];
             for (row_ix, row) in rows.iter().enumerate() {
                 if matches!(row.kind, gitgpui_core::file_diff::FileDiffRowKind::Modify) {
                     let old = row.old.as_deref().unwrap_or("");
                     let new = row.new.as_deref().unwrap_or("");
                     let (old_ranges, new_ranges) = word_diff_ranges(old, new);
                     if !old_ranges.is_empty() {
-                        split_word_highlights_old.insert(row_ix, old_ranges);
+                        split_word_highlights_old[row_ix] = Some(old_ranges);
                     }
                     if !new_ranges.is_empty() {
-                        split_word_highlights_new.insert(row_ix, new_ranges);
+                        split_word_highlights_new[row_ix] = Some(new_ranges);
                     }
                 }
             }
 
             let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::new();
-            let mut inline_word_highlights: HashMap<usize, Vec<Range<usize>>> = HashMap::new();
-            let mut inline_ix = 0usize;
+            let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> = Vec::new();
             for row in &rows {
                 use gitgpui_core::file_diff::FileDiffRowKind as K;
                 match row.kind {
@@ -1121,7 +1933,7 @@ impl GitGpuiView {
                             old_line: row.old_line,
                             new_line: row.new_line,
                         });
-                        inline_ix += 1;
+                        inline_word_highlights.push(None);
                     }
                     K::Add => {
                         inline_rows.push(AnnotatedDiffLine {
@@ -1130,7 +1942,7 @@ impl GitGpuiView {
                             old_line: None,
                             new_line: row.new_line,
                         });
-                        inline_ix += 1;
+                        inline_word_highlights.push(None);
                     }
                     K::Remove => {
                         inline_rows.push(AnnotatedDiffLine {
@@ -1139,7 +1951,7 @@ impl GitGpuiView {
                             old_line: row.old_line,
                             new_line: None,
                         });
-                        inline_ix += 1;
+                        inline_word_highlights.push(None);
                     }
                     K::Modify => {
                         let old = row.old.as_deref().unwrap_or("");
@@ -1152,10 +1964,7 @@ impl GitGpuiView {
                             old_line: row.old_line,
                             new_line: None,
                         });
-                        if !old_ranges.is_empty() {
-                            inline_word_highlights.insert(inline_ix, old_ranges);
-                        }
-                        inline_ix += 1;
+                        inline_word_highlights.push((!old_ranges.is_empty()).then_some(old_ranges));
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
@@ -1163,10 +1972,7 @@ impl GitGpuiView {
                             old_line: None,
                             new_line: row.new_line,
                         });
-                        if !new_ranges.is_empty() {
-                            inline_word_highlights.insert(inline_ix, new_ranges);
-                        }
-                        inline_ix += 1;
+                        inline_word_highlights.push((!new_ranges.is_empty()).then_some(new_ranges));
                     }
                 }
             }
@@ -1466,6 +2272,8 @@ impl GitGpuiView {
 
     fn rebuild_diff_word_highlights(&mut self) {
         self.diff_word_highlights.clear();
+        self.diff_word_highlights
+            .resize_with(self.diff_cache.len(), || None);
 
         let mut ix = 0usize;
         while ix < self.diff_cache.len() {
@@ -1480,53 +2288,51 @@ impl GitGpuiView {
                 continue;
             }
 
-            let mut removed: Vec<(usize, String)> = Vec::new();
+            let mut removed: Vec<(usize, &str)> = Vec::new();
             while ix < self.diff_cache.len()
                 && matches!(
                     self.diff_cache[ix].kind,
                     gitgpui_core::domain::DiffLineKind::Remove
                 )
             {
-                let text = diff_content_text(&self.diff_cache[ix]).to_string();
+                let text = diff_content_text(&self.diff_cache[ix]);
                 removed.push((ix, text));
                 ix += 1;
             }
 
-            let mut added: Vec<(usize, String)> = Vec::new();
+            let mut added: Vec<(usize, &str)> = Vec::new();
             while ix < self.diff_cache.len()
                 && matches!(
                     self.diff_cache[ix].kind,
                     gitgpui_core::domain::DiffLineKind::Add
                 )
             {
-                let text = diff_content_text(&self.diff_cache[ix]).to_string();
+                let text = diff_content_text(&self.diff_cache[ix]);
                 added.push((ix, text));
                 ix += 1;
             }
 
             let pairs = removed.len().min(added.len());
             for i in 0..pairs {
-                let (old_ix, ref old_text) = removed[i];
-                let (new_ix, ref new_text) = added[i];
+                let (old_ix, old_text) = removed[i];
+                let (new_ix, new_text) = added[i];
                 let (old_ranges, new_ranges) = word_diff_ranges(old_text, new_text);
                 if !old_ranges.is_empty() {
-                    self.diff_word_highlights.insert(old_ix, old_ranges);
+                    self.diff_word_highlights[old_ix] = Some(old_ranges);
                 }
                 if !new_ranges.is_empty() {
-                    self.diff_word_highlights.insert(new_ix, new_ranges);
+                    self.diff_word_highlights[new_ix] = Some(new_ranges);
                 }
             }
 
             for (old_ix, old_text) in removed.into_iter().skip(pairs) {
                 if !old_text.is_empty() {
-                    self.diff_word_highlights
-                        .insert(old_ix, vec![0..old_text.len()]);
+                    self.diff_word_highlights[old_ix] = Some(vec![0..old_text.len()]);
                 }
             }
             for (new_ix, new_text) in added.into_iter().skip(pairs) {
                 if !new_text.is_empty() {
-                    self.diff_word_highlights
-                        .insert(new_ix, vec![0..new_text.len()]);
+                    self.diff_word_highlights[new_ix] = Some(vec![0..new_text.len()]);
                 }
             }
         }
@@ -1988,6 +2794,14 @@ impl GitGpuiView {
             .collect()
     }
 
+    fn diff_nav_prev_target(entries: &[usize], current: usize) -> Option<usize> {
+        entries.iter().rev().find(|&&ix| ix < current).copied()
+    }
+
+    fn diff_nav_next_target(entries: &[usize], current: usize) -> Option<usize> {
+        entries.iter().find(|&&ix| ix > current).copied()
+    }
+
     fn diff_jump_prev(&mut self) {
         let entries = self.diff_nav_entries();
         if entries.is_empty() {
@@ -1995,12 +2809,9 @@ impl GitGpuiView {
         }
 
         let current = self.diff_selection_anchor.unwrap_or(0);
-        let target = entries
-            .iter()
-            .rev()
-            .find(|&&ix| ix < current)
-            .copied()
-            .unwrap_or_else(|| *entries.last().unwrap_or(&0));
+        let Some(target) = Self::diff_nav_prev_target(&entries, current) else {
+            return;
+        };
 
         self.diff_scroll
             .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
@@ -2015,11 +2826,9 @@ impl GitGpuiView {
         }
 
         let current = self.diff_selection_anchor.unwrap_or(0);
-        let target = entries
-            .iter()
-            .find(|&&ix| ix > current)
-            .copied()
-            .unwrap_or_else(|| *entries.first().unwrap_or(&0));
+        let Some(target) = Self::diff_nav_next_target(&entries, current) else {
+            return;
+        };
 
         self.diff_scroll
             .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
@@ -2205,6 +3014,41 @@ impl GitGpuiView {
     }
 }
 
+fn push_slash_tree_rows(
+    tree: &SlashTree,
+    out: &mut Vec<BranchSidebarRow>,
+    depth: usize,
+    muted: bool,
+) {
+    for (label, node) in &tree.children {
+        if node.children.is_empty() {
+            if node.is_leaf {
+                out.push(BranchSidebarRow::Branch {
+                    label: label.clone().into(),
+                    depth,
+                    muted,
+                });
+            }
+            continue;
+        }
+
+        out.push(BranchSidebarRow::GroupHeader {
+            label: format!("{label}/").into(),
+            depth,
+        });
+
+        if node.is_leaf {
+            out.push(BranchSidebarRow::Branch {
+                label: label.clone().into(),
+                depth: depth + 1,
+                muted,
+            });
+        }
+
+        push_slash_tree_rows(node, out, depth + 1, muted);
+    }
+}
+
 fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
     use gitgpui_core::file_diff::FileDiffRowKind as K;
     use gitgpui_core::domain::DiffLineKind as DK;
@@ -2365,19 +3209,19 @@ impl Render for GitGpuiView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap_2()
-                    .child(div().px_3().pt_3().child(self.repo_tabs_bar(cx)))
-                    .child(div().px_3().child(self.open_repo_panel(cx)))
-                    .child(div().px_3().child(self.action_bar(cx)))
+                    .gap_1()
+                    .child(div().px_2().pt_2().child(self.repo_tabs_bar(cx)))
+                    .child(div().px_2().child(self.open_repo_panel(cx)))
+                    .child(div().px_2().child(self.action_bar(cx)))
                     .child(
                         div()
                             .flex()
                             .flex_row()
-                            .gap_3()
+                            .gap_2()
                             .flex_1()
                             .min_h(px(0.0))
-                            .px_3()
-                            .pb_3()
+                            .px_2()
+                            .pb_2()
                             .child(
                                 div()
                                     .id("sidebar_scroll")
@@ -2408,15 +3252,13 @@ impl Render for GitGpuiView {
                                     .id("commit_scroll")
                                     .w(px(420.0))
                                     .min_h(px(0.0))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.commit_scroll)
-                                    .child(self.commit_details_view(cx))
+                                    .flex()
+                                    .flex_col()
                                     .child(
-                                        zed::Scrollbar::new(
-                                            "commit_scrollbar",
-                                            self.commit_scroll.clone(),
-                                        )
-                                        .render(theme),
+                                        div()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .child(self.commit_details_view(cx)),
                                     ),
                             ),
                     ),
@@ -2425,15 +3267,20 @@ impl Render for GitGpuiView {
         if let Some(repo) = self.active_repo()
             && let Some(err) = repo.last_error.as_ref()
         {
+            self.error_banner_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text(err.clone(), cx);
+                input.set_read_only(true, cx);
+            });
             body = body.child(
                 div()
-                    .px_3()
-                    .py_2()
+                    .px_2()
+                    .py_1()
                     .bg(with_alpha(theme.colors.danger, 0.15))
                     .border_1()
                     .border_color(with_alpha(theme.colors.danger, 0.3))
                     .rounded(px(theme.radii.panel))
-                    .child(err.clone()),
+                    .child(self.error_banner_input.clone()),
             );
         }
 
@@ -2602,8 +3449,8 @@ fn parse_unified_hunk_header_for_display(text: &str) -> Option<ParsedHunkHeader>
     })
 }
 
-fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> HashMap<usize, (usize, usize)> {
-    let mut stats: HashMap<usize, (usize, usize)> = HashMap::new();
+fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> Vec<Option<(usize, usize)>> {
+    let mut stats: Vec<Option<(usize, usize)>> = vec![None; diff.len()];
 
     let mut current_file_header_ix: Option<usize> = None;
     let mut adds = 0usize;
@@ -2615,7 +3462,7 @@ fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> HashMap<usize, (usize,
 
         if is_file_header {
             if let Some(header_ix) = current_file_header_ix.take() {
-                stats.insert(header_ix, (adds, removes));
+                stats[header_ix] = Some((adds, removes));
             }
             current_file_header_ix = Some(ix);
             adds = 0;
@@ -2631,21 +3478,21 @@ fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> HashMap<usize, (usize,
     }
 
     if let Some(header_ix) = current_file_header_ix {
-        stats.insert(header_ix, (adds, removes));
+        stats[header_ix] = Some((adds, removes));
     }
 
     stats
 }
 
-fn compute_diff_file_for_src_ix(diff: &[AnnotatedDiffLine]) -> Vec<Option<String>> {
-    let mut out: Vec<Option<String>> = Vec::with_capacity(diff.len());
-    let mut current_file: Option<String> = None;
+fn compute_diff_file_for_src_ix(diff: &[AnnotatedDiffLine]) -> Vec<Option<Arc<str>>> {
+    let mut out: Vec<Option<Arc<str>>> = Vec::with_capacity(diff.len());
+    let mut current_file: Option<Arc<str>> = None;
 
     for line in diff {
         let is_file_header = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
             && line.text.starts_with("diff --git ");
         if is_file_header {
-            current_file = parse_diff_git_header_path(&line.text);
+            current_file = parse_diff_git_header_path(&line.text).map(Arc::<str>::from);
         }
         out.push(current_file.clone());
     }
@@ -2917,7 +3764,7 @@ impl GitGpuiView {
             .absolute()
             .right_0()
             .bottom_0()
-            .p_3()
+            .p_2()
             .flex()
             .flex_col()
             .items_end()
@@ -2972,11 +3819,230 @@ impl Poller {
     }
 }
 
+struct DiffTextSelectionTracker {
+    view: Entity<GitGpuiView>,
+}
+
+impl IntoElement for DiffTextSelectionTracker {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for DiffTextSelectionTracker {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+        ()
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !self.view.read(cx).diff_text_selecting {
+            return;
+        }
+
+        let view_for_move = self.view.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+            let _ = view_for_move.update(cx, |this, cx| {
+                if !this.diff_text_selecting {
+                    return;
+                }
+                this.update_diff_text_selection_from_mouse(event.position);
+                cx.notify();
+            });
+        });
+
+        let view_for_up = self.view.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
+            if event.button != MouseButton::Left {
+                return;
+            }
+            let _ = view_for_up.update(cx, |this, cx| {
+                if this.diff_text_selecting {
+                    this.end_diff_text_selection();
+                    cx.notify();
+                }
+            });
+        });
+    }
+}
+
+struct DiffTextSelectionOverlay {
+    view: Entity<GitGpuiView>,
+    visible_ix: usize,
+    region: DiffTextRegion,
+    text: SharedString,
+}
+
+impl IntoElement for DiffTextSelectionOverlay {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+struct DiffTextSelectionOverlayPrepaint {
+    layout: Option<ShapedLine>,
+}
+
+impl Element for DiffTextSelectionOverlay {
+    type RequestLayoutState = ();
+    type PrepaintState = DiffTextSelectionOverlayPrepaint;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = relative(1.).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let run = TextRun {
+            len: self.text.len(),
+            font: style.font(),
+            color: style.color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let layout = window
+            .text_system()
+            .shape_line(self.text.clone(), font_size, &[run], None);
+        DiffTextSelectionOverlayPrepaint { layout: Some(layout) }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let selection = self
+            .view
+            .read(cx)
+            .diff_text_local_selection_range(self.visible_ix, self.region, self.text.len());
+        let Some(layout) = prepaint.layout.take() else {
+            return;
+        };
+
+        if let Some(range) = selection {
+            let x0 = layout.x_for_index(range.start.min(self.text.len()));
+            let x1 = layout.x_for_index(range.end.min(self.text.len()));
+            if x1 > x0 {
+                let color = self.view.read(cx).diff_text_selection_color();
+                window.paint_quad(fill(
+                    Bounds::from_corners(
+                        point(bounds.left() + x0, bounds.top()),
+                        point(bounds.left() + x1, bounds.bottom()),
+                    ),
+                    color,
+                ));
+            }
+        }
+
+        let hitbox = DiffTextHitbox {
+            bounds,
+            layout,
+        };
+
+        let visible_ix = self.visible_ix;
+        let region = self.region;
+        let view = self.view.clone();
+        let _ = view.update(cx, |this, _cx| {
+            this.set_diff_text_hitbox(visible_ix, region, hitbox);
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gitgpui_core::domain::{RemoteBranch, RepoSpec};
     use std::path::PathBuf;
+
+    #[test]
+    fn diff_nav_prev_next_targets_do_not_wrap() {
+        let entries = vec![10, 20, 30];
+
+        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 10), None);
+        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 30), None);
+
+        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 25), Some(20));
+        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 25), Some(30));
+
+        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 0), Some(10));
+        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 100), Some(30));
+    }
 
     #[test]
     fn remote_rows_groups_and_sorts() {

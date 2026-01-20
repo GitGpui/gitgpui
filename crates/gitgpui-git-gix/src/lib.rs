@@ -802,24 +802,72 @@ impl GitRepository for GixRepo {
 
     fn stage(&self, paths: &[&Path]) -> Result<()> {
         let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("add").arg("--");
-        for path in paths {
-            cmd.arg(path);
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("add")
+            .arg("-A");
+        if !paths.is_empty() {
+            cmd.arg("--");
+            for path in paths {
+                cmd.arg(path);
+            }
         }
         run_git_simple(cmd, "git add")
     }
 
     fn unstage(&self, paths: &[&Path]) -> Result<()> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
+        if paths.is_empty() {
+            let head = Command::new("git")
+                .arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("rev-parse")
+                .arg("--verify")
+                .arg("HEAD")
+                .output()
+                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+            if head.status.success() {
+                let mut cmd = Command::new("git");
+                cmd.arg("-C").arg(&self.spec.workdir).arg("reset");
+                return run_git_simple(cmd, "git reset");
+            }
+
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("rm")
+                .arg("--cached")
+                .arg("-r")
+                .arg("--")
+                .arg(".");
+            return run_git_simple(cmd, "git rm --cached -r");
+        }
+
+        let head = Command::new("git")
+            .arg("-C")
             .arg(&self.spec.workdir)
-            .arg("restore")
-            .arg("--staged")
-            .arg("--");
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir);
+        if head.status.success() {
+            cmd.arg("reset").arg("HEAD").arg("--");
+        } else {
+            cmd.arg("rm").arg("--cached").arg("--");
+        }
         for path in paths {
             cmd.arg(path);
         }
-        run_git_simple(cmd, "git restore --staged")
+
+        if head.status.success() {
+            run_git_simple(cmd, "git reset HEAD")
+        } else {
+            run_git_simple(cmd, "git rm --cached")
+        }
     }
 
     fn commit(&self, message: &str) -> Result<()> {
