@@ -154,6 +154,10 @@ pub enum Msg {
         repo_id: RepoId,
         result: Result<String, Error>,
     },
+    UpstreamDivergenceLoaded {
+        repo_id: RepoId,
+        result: Result<Option<UpstreamDivergence>, Error>,
+    },
     LogLoaded {
         repo_id: RepoId,
         scope: LogScope,
@@ -388,6 +392,11 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::UpstreamDivergenceLoaded { repo_id, result } => f
+                .debug_struct("UpstreamDivergenceLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             Msg::LogLoaded {
                 repo_id,
                 scope,
@@ -481,6 +490,9 @@ pub enum Effect {
         repo_id: RepoId,
     },
     LoadHeadBranch {
+        repo_id: RepoId,
+    },
+    LoadUpstreamDivergence {
         repo_id: RepoId,
     },
     LoadLog {

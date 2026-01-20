@@ -13,6 +13,7 @@ pub struct Colors {
     pub window_bg: Rgba,
     pub surface_bg: Rgba,
     pub surface_bg_elevated: Rgba,
+    pub active_section: Rgba,
     pub border: Rgba,
     pub text: Rgba,
     pub text_muted: Rgba,
@@ -55,6 +56,7 @@ impl AppTheme {
                 window_bg: gpui::rgb(0x0E1116),
                 surface_bg: gpui::rgb(0x111827),
                 surface_bg_elevated: gpui::rgb(0x0B1220),
+                active_section: hover,
                 border: gpui::rgb(0x1F2A37),
                 text: gpui::rgb(0xE5E7EB),
                 text_muted,
@@ -92,6 +94,7 @@ impl AppTheme {
                 surface_bg: gpui::rgba(0x2f343eff),
                 // elevated_surface.background
                 surface_bg_elevated: gpui::rgba(0x2f343eff),
+                active_section: hover,
                 // border.variant
                 border: gpui::rgba(0x363c46ff),
                 // text
@@ -137,6 +140,7 @@ impl AppTheme {
                 surface_bg: gpui::rgba(0x1f2127ff),
                 // elevated_surface.background
                 surface_bg_elevated: gpui::rgba(0x1f2127ff),
+                active_section: hover,
                 // border.variant
                 border: gpui::rgba(0x2d2f34ff),
                 // text
@@ -182,6 +186,7 @@ impl AppTheme {
                 surface_bg: gpui::rgba(0xebebecff),
                 // elevated_surface.background
                 surface_bg_elevated: gpui::rgba(0xebebecff),
+                active_section: gpui::rgba(0xfafafaff),
                 // border.variant
                 border: gpui::rgba(0xdfdfe0ff),
                 // text

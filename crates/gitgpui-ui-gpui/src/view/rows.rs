@@ -44,7 +44,7 @@ impl GitGpuiView {
         let rows = Self::branch_sidebar_rows(repo);
 
         fn indent_px(depth: usize) -> Pixels {
-            px(8.0 + depth as f32 * 12.0)
+            px(6.0 + depth as f32 * 10.0)
         }
 
         range
@@ -53,13 +53,18 @@ impl GitGpuiView {
                 BranchSidebarRow::SectionHeader { section, top_border } => {
                     let (icon, label) = match section {
                         BranchSection::Local => ("🖥", "Local"),
-                        BranchSection::Remote => ("☁", "Remote"),
+                        BranchSection::Remote => ("☁︎", "Remote"),
                     };
 
                     div()
                         .id(("branch_section", ix))
+                        .h(if section == BranchSection::Local {
+                            px(24.0)
+                        } else {
+                            px(22.0)
+                        })
+                        .w_full()
                         .px_2()
-                        .py_1()
                         .flex()
                         .items_center()
                         .gap_1()
@@ -94,16 +99,20 @@ impl GitGpuiView {
                 }
                 BranchSidebarRow::Placeholder { section: _, message } => div()
                     .id(("branch_placeholder", ix))
+                    .h(px(22.0))
+                    .w_full()
                     .px_2()
-                    .py_1()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(message)
                     .into_any_element(),
                 BranchSidebarRow::RemoteHeader { name } => div()
                     .id(("branch_remote", ix))
+                    .h(px(22.0))
+                    .w_full()
                     .px_2()
-                    .py_1()
+                    .flex()
+                    .items_center()
                     .text_sm()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text)
@@ -111,9 +120,12 @@ impl GitGpuiView {
                     .into_any_element(),
                 BranchSidebarRow::GroupHeader { label, depth } => div()
                     .id(("branch_group", ix))
-                    .py_1()
+                    .h(px(20.0))
+                    .w_full()
                     .pl(indent_px(depth))
                     .pr_2()
+                    .flex()
+                    .items_center()
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text_muted)
@@ -127,15 +139,29 @@ impl GitGpuiView {
                     muted,
                 } => div()
                     .id(("branch_item", ix))
-                    .py_1()
+                    .h(if section == BranchSection::Local {
+                        px(24.0)
+                    } else {
+                        px(22.0)
+                    })
+                    .w_full()
+                    .flex()
+                    .items_center()
                     .pl(indent_px(depth))
                     .pr_2()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
-                    .text_sm()
                     .when(muted, |d| d.text_color(theme.colors.text_muted))
-                    .child(label)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(label),
+                    )
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {

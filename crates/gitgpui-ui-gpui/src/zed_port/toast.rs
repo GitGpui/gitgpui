@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{Div, SharedString, div, px};
+use gpui::{Div, div, px};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToastKind {
@@ -9,8 +9,7 @@ pub enum ToastKind {
     Error,
 }
 
-pub fn toast(theme: AppTheme, kind: ToastKind, message: impl Into<SharedString>) -> Div {
-    let message: SharedString = message.into();
+pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div {
     let (accent, bg, border) = match kind {
         ToastKind::Info => (
             theme.colors.accent,
@@ -52,6 +51,7 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl Into<SharedString>)
         .rounded(px(theme.radii.panel))
         .shadow_sm()
         .text_sm()
+        .text_color(theme.colors.text)
         .child(div().w(px(3.0)).h(px(18.0)).bg(accent).rounded(px(2.0)))
         .child(div().flex_1().px_2().py_1().child(message))
 }

@@ -1,6 +1,6 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{ClickEvent, CursorStyle, Div, SharedString, Stateful, Window, div, px};
+use gpui::{AnyElement, ClickEvent, CursorStyle, Div, IntoElement, SharedString, Stateful, Window, div, px};
 
 use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX};
 
@@ -18,6 +18,8 @@ pub struct Button {
     label: SharedString,
     style: ButtonStyle,
     disabled: bool,
+    start_slot: Option<AnyElement>,
+    end_slot: Option<AnyElement>,
 }
 
 impl Button {
@@ -27,7 +29,19 @@ impl Button {
             label: label.into(),
             style: ButtonStyle::Subtle,
             disabled: false,
+            start_slot: None,
+            end_slot: None,
         }
+    }
+
+    pub fn start_slot(mut self, slot: impl IntoElement) -> Self {
+        self.start_slot = Some(slot.into_any_element());
+        self
+    }
+
+    pub fn end_slot(mut self, slot: impl IntoElement) -> Self {
+        self.end_slot = Some(slot.into_any_element());
+        self
     }
 
     pub fn style(mut self, style: ButtonStyle) -> Self {
@@ -54,6 +68,10 @@ impl Button {
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
         let transparent = gpui::rgba(0x00000000);
+        let outlined_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.38 } else { 0.28 },
+        );
         let (bg, hover_bg, active_bg, border, text) = match self.style {
             ButtonStyle::Filled => (
                 theme.colors.accent,
@@ -66,7 +84,7 @@ impl Button {
                 transparent,
                 with_alpha(theme.colors.hover, 0.65),
                 theme.colors.active,
-                theme.colors.border,
+                outlined_border,
                 theme.colors.text,
             ),
             ButtonStyle::Subtle => (
@@ -95,6 +113,17 @@ impl Button {
         let label = self.label.to_string();
         let icon_only = looks_like_icon_button(&label);
 
+        let mut inner = div().flex().items_center().gap_1();
+        if let Some(start_slot) = self.start_slot {
+            inner = inner.child(start_slot);
+        }
+        if !label.is_empty() {
+            inner = inner.child(label);
+        }
+        if let Some(end_slot) = self.end_slot {
+            inner = inner.child(end_slot);
+        }
+
         let mut base = div()
             .id(self.id.clone())
             .tab_index(0)
@@ -119,7 +148,7 @@ impl Button {
             .text_sm()
             .text_color(text)
             .cursor(CursorStyle::PointingHand)
-            .child(label);
+            .child(inner);
 
         if self.disabled {
             base = base.opacity(0.5).cursor(CursorStyle::Arrow);

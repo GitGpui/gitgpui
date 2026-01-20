@@ -81,7 +81,7 @@ impl Tab {
 
     pub fn render(self, theme: AppTheme) -> Stateful<Div> {
         let (text_color, tab_bg) = if self.selected {
-            (theme.colors.text, theme.colors.window_bg)
+            (theme.colors.text, theme.colors.active_section)
         } else {
             (theme.colors.text_muted, theme.colors.surface_bg)
         };
@@ -152,19 +152,25 @@ impl Tab {
         base = match self.position {
             TabPosition::First => {
                 if self.selected {
-                    base.pl(px(1.0)).border_r_1().pb(px(1.0))
+                    base.pl(px(1.0)).pb(px(1.0))
                 } else {
                     base.pl(px(1.0)).pr(px(1.0)).border_b_1()
                 }
             }
             TabPosition::Last => {
                 if self.selected {
-                    base.border_l_1().border_r_1().pb(px(1.0))
+                    base.pb(px(1.0))
                 } else {
                     base.pl(px(1.0)).border_b_1().border_r_1()
                 }
             }
-            TabPosition::Middle(Ordering::Equal) => base.border_l_1().border_r_1().pb(px(1.0)),
+            TabPosition::Middle(Ordering::Equal) => {
+                if self.selected {
+                    base.pb(px(1.0))
+                } else {
+                    base.border_l_1().border_r_1().pb(px(1.0))
+                }
+            }
             TabPosition::Middle(Ordering::Less) => base.border_l_1().pr(px(1.0)).border_b_1(),
             TabPosition::Middle(Ordering::Greater) => base.border_r_1().pl(px(1.0)).border_b_1(),
         };

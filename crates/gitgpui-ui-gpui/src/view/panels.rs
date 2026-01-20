@@ -10,6 +10,7 @@ enum ContextMenuAction {
     StagePath { repo_id: RepoId, path: std::path::PathBuf },
     UnstagePath { repo_id: RepoId, path: std::path::PathBuf },
     FetchAll { repo_id: RepoId },
+    Pull { repo_id: RepoId, mode: PullMode },
     OpenPopover { kind: PopoverKind },
     CopyText { text: String },
 }
@@ -101,7 +102,8 @@ impl GitGpuiView {
     ) {
         let is_context_menu = matches!(
             &kind,
-            PopoverKind::CommitMenu { .. }
+            PopoverKind::PullPicker
+                | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
                 | PopoverKind::BranchSectionMenu { .. }
@@ -122,6 +124,64 @@ impl GitGpuiView {
 
     fn context_menu_model(&self, kind: &PopoverKind) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::PullPicker => {
+                let repo_id = self.active_repo_id();
+                let disabled = repo_id.is_none();
+                let repo_id = repo_id.unwrap_or(RepoId(0));
+
+                Some(ContextMenuModel::new(vec![
+                    ContextMenuItem::Header("Pull".into()),
+                    ContextMenuItem::Separator,
+                    ContextMenuItem::Entry {
+                        label: "Pull (default)".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("Enter".into()),
+                        disabled,
+                        action: ContextMenuAction::Pull {
+                            repo_id,
+                            mode: PullMode::Default,
+                        },
+                    },
+                    ContextMenuItem::Entry {
+                        label: "Pull (fast-forward if possible)".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("F".into()),
+                        disabled,
+                        action: ContextMenuAction::Pull {
+                            repo_id,
+                            mode: PullMode::FastForwardIfPossible,
+                        },
+                    },
+                    ContextMenuItem::Entry {
+                        label: "Pull (fast-forward only)".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("O".into()),
+                        disabled,
+                        action: ContextMenuAction::Pull {
+                            repo_id,
+                            mode: PullMode::FastForwardOnly,
+                        },
+                    },
+                    ContextMenuItem::Entry {
+                        label: "Pull (rebase)".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("R".into()),
+                        disabled,
+                        action: ContextMenuAction::Pull {
+                            repo_id,
+                            mode: PullMode::Rebase,
+                        },
+                    },
+                    ContextMenuItem::Separator,
+                    ContextMenuItem::Entry {
+                        label: "Fetch all".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("A".into()),
+                        disabled,
+                        action: ContextMenuAction::FetchAll { repo_id },
+                    },
+                ]))
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 let sha = commit_id.as_ref().to_string();
                 let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
@@ -411,6 +471,9 @@ impl GitGpuiView {
             }
             ContextMenuAction::FetchAll { repo_id } => {
                 self.store.dispatch(Msg::FetchAll { repo_id });
+            }
+            ContextMenuAction::Pull { repo_id, mode } => {
+                self.store.dispatch(Msg::Pull { repo_id, mode });
             }
             ContextMenuAction::OpenPopover { kind } => {
                 self.popover = Some(kind);
@@ -765,12 +828,50 @@ impl GitGpuiView {
             bar = bar.tab(tab);
         }
 
+        let show_add_repo_tooltip = self.add_repo_button_hovered;
         bar.end_child(
-            zed::Button::new("add_repo", "＋")
-                .style(zed::ButtonStyle::Subtle)
-                .on_click(theme, cx, |this, _e, window, cx| {
-                    this.prompt_open_repo(window, cx)
-                }),
+            div()
+                .id("add_repo_container")
+                .relative()
+                .h_full()
+                .flex()
+                .items_center()
+                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                    this.add_repo_button_hovered = *hovering;
+                    cx.notify();
+                }))
+                .when(show_add_repo_tooltip, |this| {
+                    this.child(
+                        div()
+                            .id("add_repo_tooltip")
+                            .absolute()
+                            .right(px(34.0))
+                            .top_0()
+                            .bottom_0()
+                            .flex()
+                            .items_center()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .bg(theme.colors.surface_bg_elevated)
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .rounded(px(theme.radii.row))
+                                    .shadow_sm()
+                                    .text_xs()
+                                    .text_color(theme.colors.text)
+                                    .child("Add repository"),
+                            ),
+                    )
+                })
+                .child(
+                    zed::Button::new("add_repo", "⨁")
+                        .style(zed::ButtonStyle::Subtle)
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.prompt_open_repo(window, cx)
+                        }),
+                ),
         )
         .render(theme)
     }
@@ -825,6 +926,28 @@ impl GitGpuiView {
 
     pub(super) fn action_bar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let icon = |path: &'static str| {
+            gpui::svg()
+                .path(path)
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(theme.colors.text)
+        };
+        let count_badge = |count: usize| {
+            div()
+                .px(px(6.0))
+                .py(px(1.0))
+                .rounded(px(theme.radii.pill))
+                .bg(with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.22 } else { 0.18 },
+                ))
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .child(count.to_string())
+                .into_any_element()
+        };
+
         let repo_title: SharedString = self
             .active_repo()
             .map(|r| r.spec.workdir.display().to_string().into())
@@ -839,6 +962,14 @@ impl GitGpuiView {
                 Loadable::NotLoaded => "—".into(),
             })
             .unwrap_or_else(|| "—".into());
+
+        let (pull_count, push_count) = self
+            .active_repo()
+            .and_then(|r| match &r.upstream_divergence {
+                Loadable::Ready(Some(d)) => Some((d.behind, d.ahead)),
+                _ => None,
+            })
+            .unwrap_or((0, 0));
 
         let repo_picker = div()
             .id("repo_picker")
@@ -900,39 +1031,48 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
+        let mut pull_main = zed::Button::new("pull_main", "Pull")
+            .start_slot(icon("icons/arrow_down.svg"))
+            .style(zed::ButtonStyle::Subtle);
+        if pull_count > 0 {
+            pull_main = pull_main.end_slot(count_badge(pull_count));
+        }
+        let pull_menu = zed::Button::new("pull_menu", "")
+            .start_slot(icon("icons/chevron_down.svg"))
+            .style(zed::ButtonStyle::Subtle);
+
         let pull = zed::SplitButton::new(
-            zed::Button::new("pull_main", "Pull")
-                .style(zed::ButtonStyle::Subtle)
-                .on_click(theme, cx, |this, _e, _w, cx| {
-                    if let Some(repo_id) = this.active_repo_id() {
-                        this.store.dispatch(Msg::Pull {
-                            repo_id,
-                            mode: PullMode::Default,
-                        });
-                    }
-                    cx.notify();
-                }),
-            zed::Button::new("pull_menu", "▾")
-                .style(zed::ButtonStyle::Subtle)
-                .on_click(theme, cx, |this, e, _w, cx| {
-                    this.popover = Some(PopoverKind::PullPicker);
-                    this.popover_anchor = Some(e.position());
-                    cx.notify();
-                }),
+            pull_main.on_click(theme, cx, |this, _e, _w, cx| {
+                if let Some(repo_id) = this.active_repo_id() {
+                    this.store.dispatch(Msg::Pull {
+                        repo_id,
+                        mode: PullMode::Default,
+                    });
+                }
+                cx.notify();
+            }),
+            pull_menu.on_click(theme, cx, |this, e, window, cx| {
+                this.open_popover_at(PopoverKind::PullPicker, e.position(), window, cx);
+            }),
         )
         .style(zed::SplitButtonStyle::Outlined)
         .render(theme);
 
-        let push = zed::Button::new("push", "Push")
-            .style(zed::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::Push { repo_id });
-                }
-                cx.notify();
-            });
+        let mut push = zed::Button::new("push", "Push")
+            .start_slot(icon("icons/arrow_up.svg"))
+            .style(zed::ButtonStyle::Outlined);
+        if push_count > 0 {
+            push = push.end_slot(count_badge(push_count));
+        }
+        let push = push.on_click(theme, cx, |this, _e, _w, cx| {
+            if let Some(repo_id) = this.active_repo_id() {
+                this.store.dispatch(Msg::Push { repo_id });
+            }
+            cx.notify();
+        });
 
         let stash = zed::Button::new("stash", "Stash")
+            .start_slot(icon("icons/box.svg"))
             .style(zed::ButtonStyle::Outlined)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 if let Some(repo_id) = this.active_repo_id() {
@@ -945,13 +1085,17 @@ impl GitGpuiView {
                 cx.notify();
             });
 
-        let create_branch = zed::Button::new("create_branch", "Branch…")
+        let create_branch = zed::Button::new("create_branch", "Branch")
+            .start_slot(icon("icons/git_branch.svg"))
             .style(zed::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, _e, window, cx| {
-                let _ = this.ensure_branch_picker_search_input(window, cx);
-                this.popover = Some(PopoverKind::BranchPicker);
-                this.popover_anchor = Some(point(px(300.0), px(120.0)));
-                cx.notify();
+            .on_click(theme, cx, |this, e, window, cx| {
+                this.create_branch_input
+                    .update(cx, |i, cx| i.set_text(String::new(), cx));
+                let focus = this
+                    .create_branch_input
+                    .read_with(cx, |i, _| i.focus_handle());
+                window.focus(&focus);
+                this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);
             });
 
         div()
@@ -960,11 +1104,9 @@ impl GitGpuiView {
             .justify_between()
             .px_2()
             .py_1()
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
+            .bg(theme.colors.active_section)
+            .border_b_1()
             .border_color(theme.colors.border)
-            .rounded(px(theme.radii.panel))
-            .shadow_sm()
             .child(
                 div()
                     .flex()
@@ -997,6 +1139,10 @@ impl GitGpuiView {
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+        let anchor_corner = match &kind {
+            PopoverKind::PullPicker | PopoverKind::CreateBranch => Corner::TopRight,
+            _ => Corner::TopLeft,
+        };
 
         let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
@@ -1180,6 +1326,54 @@ impl GitGpuiView {
                             .on_click(close),
                     )
             }
+            PopoverKind::CreateBranch => div()
+                .flex()
+                .flex_col()
+                .min_w(px(260.0))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .child("Create branch"),
+                )
+                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(div().px_2().py_1().child(self.create_branch_input.clone()))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            zed::Button::new("create_branch_cancel", "Cancel")
+                                .style(zed::ButtonStyle::Outlined)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        )
+                        .child(
+                            zed::Button::new("create_branch_go", "Create")
+                                .style(zed::ButtonStyle::Filled)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    let name = this
+                                        .create_branch_input
+                                        .read_with(cx, |i, _| i.text().trim().to_string());
+                                    if let Some(repo_id) = this.active_repo_id()
+                                        && !name.is_empty()
+                                    {
+                                        this.store.dispatch(Msg::CreateBranch { repo_id, name });
+                                    }
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        ),
+                ),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 let mut menu = div().flex().flex_col().min_w(px(260.0));
 
@@ -1231,51 +1425,7 @@ impl GitGpuiView {
                 menu
             }
             PopoverKind::PullPicker => {
-                let repo_id = self.active_repo_id();
-                let mut menu = div().flex().flex_col().min_w(px(280.0));
-                for (ix, (label, mode)) in [
-                    ("Fetch all", None),
-                    ("Pull (default)", Some(PullMode::Default)),
-                    (
-                        "Pull (fast-forward if possible)",
-                        Some(PullMode::FastForwardIfPossible),
-                    ),
-                    ("Pull (fast-forward only)", Some(PullMode::FastForwardOnly)),
-                    ("Pull (rebase)", Some(PullMode::Rebase)),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    menu = menu.child(
-                        div()
-                            .id(("pull_item", ix))
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child(label)
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                if let Some(repo_id) = repo_id {
-                                    if let Some(mode) = mode {
-                                        this.store.dispatch(Msg::Pull { repo_id, mode });
-                                    } else {
-                                        this.store.dispatch(Msg::FetchAll { repo_id });
-                                    }
-                                }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    );
-                }
-                menu.child(
-                    div()
-                        .id(("pull_popover_close", 0usize))
-                        .px_2()
-                        .py_1()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .child("Close")
-                        .on_click(close),
-                )
+                self.context_menu_view(PopoverKind::PullPicker, cx)
             }
             PopoverKind::DiffHunks => {
                 let mut items: Vec<SharedString> = Vec::new();
@@ -1609,11 +1759,17 @@ impl GitGpuiView {
                 ),
         };
 
-        let offset_y = if is_app_menu { px(40.0) } else { px(8.0) };
+        let offset_y = if is_app_menu {
+            px(40.0)
+        } else if matches!(anchor_corner, Corner::TopRight) {
+            px(10.0)
+        } else {
+            px(8.0)
+        };
 
         anchored()
             .position(anchor)
-            .anchor(Corner::TopLeft)
+            .anchor(anchor_corner)
             .offset(point(px(0.0), offset_y))
             .child(
                 div()
@@ -1638,6 +1794,8 @@ impl GitGpuiView {
             return div()
                 .flex()
                 .flex_col()
+                .h_full()
+                .min_h(px(0.0))
                 .gap_2()
                 .child(zed::panel(
                     theme,
@@ -1653,13 +1811,17 @@ impl GitGpuiView {
             row_count,
             cx.processor(Self::render_branch_sidebar_rows),
         )
-        .h(px(320.0))
+        .flex_1()
+        .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
         let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .relative()
-            .h(px(320.0))
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
             .child(list)
             .child(zed::Scrollbar::new("branch_sidebar_scrollbar", scroll_handle).render(theme))
             .into_any_element();
@@ -1667,8 +1829,10 @@ impl GitGpuiView {
         div()
             .flex()
             .flex_col()
+            .h_full()
+            .min_h(px(0.0))
             .gap_2()
-            .child(zed::panel(theme, "Branches", None, panel_body))
+            .child(zed::panel(theme, "Branches", None, panel_body).flex_1().min_h(px(0.0)))
     }
 
     pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {

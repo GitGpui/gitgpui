@@ -332,6 +332,7 @@ fn reduce(
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Ready(());
                 repo_state.head_branch = Loadable::Loading;
+                repo_state.upstream_divergence = Loadable::Loading;
                 repo_state.branches = Loadable::Loading;
                 repo_state.tags = Loadable::Loading;
                 repo_state.remotes = Loadable::Loading;
@@ -424,6 +425,19 @@ fn reduce(
         Msg::HeadBranchLoaded { repo_id, result } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.head_branch = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::UpstreamDivergenceLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.upstream_divergence = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -753,6 +767,7 @@ impl IfEmptyElse for String {
 fn refresh_effects(repo_id: RepoId, history_scope: gitgpui_core::domain::LogScope) -> Vec<Effect> {
     vec![
         Effect::LoadHeadBranch { repo_id },
+        Effect::LoadUpstreamDivergence { repo_id },
         Effect::LoadBranches { repo_id },
         Effect::LoadTags { repo_id },
         Effect::LoadRemotes { repo_id },
@@ -1551,6 +1566,17 @@ fn schedule_effect(
                     let _ = msg_tx.send(Msg::HeadBranchLoaded {
                         repo_id,
                         result: repo.current_branch(),
+                    });
+                });
+            }
+        }
+
+        Effect::LoadUpstreamDivergence { repo_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::UpstreamDivergenceLoaded {
+                        repo_id,
+                        result: repo.upstream_divergence(),
                     });
                 });
             }

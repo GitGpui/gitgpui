@@ -1,4 +1,5 @@
 use crate::view::GitGpuiView;
+use crate::assets::GitGpuiAssets;
 use gitgpui_core::services::GitBackend;
 use gitgpui_state::store::AppStore;
 use gpui::{
@@ -10,7 +11,7 @@ use std::sync::Arc;
 pub fn run(backend: Arc<dyn GitBackend>) {
     let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
 
-    Application::new().run(move |cx: &mut App| {
+    Application::new().with_assets(GitGpuiAssets).run(move |cx: &mut App| {
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();

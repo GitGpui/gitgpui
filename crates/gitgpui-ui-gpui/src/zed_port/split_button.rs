@@ -43,29 +43,42 @@ impl SplitButton {
             SplitButtonStyle::Filled => theme.colors.surface_bg_elevated,
             SplitButtonStyle::Outlined | SplitButtonStyle::Transparent => gpui::rgba(0x00000000),
         };
+        let border_color = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.34 } else { 0.26 },
+        );
+
+        let inner = div()
+            .flex()
+            .items_center()
+            .h_full()
+            .w_full()
+            .rounded(px(theme.radii.row))
+            .bg(bg)
+            .overflow_hidden()
+            .when(bordered, |this| this.p(px(1.0)))
+            .child(div().flex_1().h_full().flex().items_center().child(self.left))
+            .child(
+                div()
+                    .h_full()
+                    .w(px(1.0))
+                    .bg(with_alpha(border_color, 0.9)),
+            )
+            .child(div().h_full().flex().items_center().child(self.right));
 
         div()
             .flex()
             .items_center()
             .h(px(CONTROL_HEIGHT_PX))
             .rounded(px(theme.radii.row))
-            .bg(bg)
-            .overflow_hidden()
             .when(bordered, |this| {
                 this.border_1()
-                    .border_color(with_alpha(theme.colors.border, 0.8))
+                    .border_color(border_color)
             })
             .when(self.style == SplitButtonStyle::Filled, |this| {
                 this.shadow_sm()
             })
-            .child(div().flex_1().h_full().child(self.left))
-            .child(
-                div()
-                    .h_full()
-                    .w(px(1.0))
-                    .bg(with_alpha(theme.colors.border, 0.6)),
-            )
-            .child(div().h_full().child(self.right))
+            .child(inner)
     }
 }
 

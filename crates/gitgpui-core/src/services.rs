@@ -73,6 +73,9 @@ pub trait GitRepository: Send + Sync {
     fn list_remotes(&self) -> Result<Vec<Remote>>;
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
     fn status(&self) -> Result<RepoStatus>;
+    fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
+        Ok(None)
+    }
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
     fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
         Err(Error::new(ErrorKind::Unsupported(

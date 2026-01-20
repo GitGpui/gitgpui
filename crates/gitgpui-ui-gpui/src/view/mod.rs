@@ -121,11 +121,11 @@ struct DiffTextHitbox {
     layout: ShapedLine,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct ToastState {
     id: u64,
     kind: zed::ToastKind,
-    message: String,
+    input: Entity<zed::TextInput>,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +176,7 @@ struct HistoryCacheRequest {
 enum PopoverKind {
     RepoPicker,
     BranchPicker,
+    CreateBranch,
     PullPicker,
     AppMenu,
     DiffHunks,
@@ -363,6 +364,7 @@ pub struct GitGpuiView {
 
     title_should_move: bool,
     hover_resize_edge: Option<ResizeEdge>,
+    add_repo_button_hovered: bool,
 
     branches_scroll: UniformListScrollHandle,
     history_scroll: UniformListScrollHandle,
@@ -493,6 +495,7 @@ impl GitGpuiView {
                     placeholder: "/path/to/repo".into(),
                     multiline: false,
                     read_only: false,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -505,6 +508,7 @@ impl GitGpuiView {
                     placeholder: "Enter commit message…".into(),
                     multiline: false,
                     read_only: false,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -517,6 +521,7 @@ impl GitGpuiView {
                     placeholder: "new-branch-name".into(),
                     multiline: false,
                     read_only: false,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -529,6 +534,7 @@ impl GitGpuiView {
                     placeholder: "Search commits…".into(),
                     multiline: false,
                     read_only: false,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -541,6 +547,7 @@ impl GitGpuiView {
                     placeholder: "Search diff…".into(),
                     multiline: false,
                     read_only: false,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -553,6 +560,7 @@ impl GitGpuiView {
                     placeholder: "".into(),
                     multiline: true,
                     read_only: true,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -565,6 +573,7 @@ impl GitGpuiView {
                     placeholder: "".into(),
                     multiline: true,
                     read_only: true,
+                    chromeless: true,
                 },
                 window,
                 cx,
@@ -577,6 +586,7 @@ impl GitGpuiView {
                     placeholder: "".into(),
                     multiline: true,
                     read_only: true,
+                    chromeless: false,
                 },
                 window,
                 cx,
@@ -671,6 +681,7 @@ impl GitGpuiView {
             context_menu_selected_ix: None,
             title_should_move: false,
             hover_resize_edge: None,
+            add_repo_button_hovered: false,
             branches_scroll: UniformListScrollHandle::default(),
             history_scroll: UniformListScrollHandle::default(),
             stashes_scroll: UniformListScrollHandle::default(),
@@ -1395,6 +1406,7 @@ impl GitGpuiView {
                         placeholder: "Filter repositories…".into(),
                         multiline: false,
                         read_only: false,
+                        chromeless: false,
                     },
                     window,
                     cx,
@@ -1423,6 +1435,7 @@ impl GitGpuiView {
                         placeholder: "Commit message…".into(),
                         multiline: true,
                         read_only: false,
+                        chromeless: false,
                     },
                     window,
                     cx,
@@ -1446,6 +1459,7 @@ impl GitGpuiView {
                         placeholder: "Filter branches…".into(),
                         multiline: false,
                         read_only: false,
+                        chromeless: false,
                     },
                     window,
                     cx,
@@ -1474,6 +1488,7 @@ impl GitGpuiView {
                         placeholder: "Filter hunks…".into(),
                         multiline: false,
                         read_only: false,
+                        chromeless: false,
                     },
                     window,
                     cx,
@@ -2353,7 +2368,25 @@ impl GitGpuiView {
             .last()
             .map(|t| t.id.wrapping_add(1))
             .unwrap_or(1);
-        self.toasts.push(ToastState { id, kind, message });
+        let theme = self.theme;
+        let input = cx.new(|cx| {
+            zed::TextInput::new_inert(
+                zed::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: true,
+                    read_only: true,
+                    chromeless: true,
+                },
+                cx,
+            )
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(message, cx);
+            input.set_read_only(true, cx);
+        });
+
+        self.toasts.push(ToastState { id, kind, input });
 
         cx.spawn(
             async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
@@ -3313,10 +3346,9 @@ impl Render for GitGpuiView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .gap_1()
-                    .child(div().px_2().pt_2().child(self.repo_tabs_bar(cx)))
-                    .child(div().px_2().child(self.open_repo_panel(cx)))
-                    .child(div().px_2().child(self.action_bar(cx)))
+                    .child(self.repo_tabs_bar(cx))
+                    .child(self.open_repo_panel(cx))
+                    .child(self.action_bar(cx))
                     .child(
                         div()
                             .flex()
@@ -3388,7 +3420,7 @@ impl Render for GitGpuiView {
             );
         }
 
-        let mut root = div().size_full().cursor(cursor);
+        let mut root = div().size_full().cursor(cursor).text_color(theme.colors.text);
         root = root.relative();
 
         if tiling.is_some() {
@@ -3857,7 +3889,7 @@ impl GitGpuiView {
             .collect::<Vec<_>>();
         let children = toasts
             .into_iter()
-            .map(|t| zed::toast(theme, t.kind, t.message).id(("toast", t.id)));
+            .map(|t| zed::toast(theme, t.kind, t.input.clone()).id(("toast", t.id)));
 
         div()
             .id("toast_layer")

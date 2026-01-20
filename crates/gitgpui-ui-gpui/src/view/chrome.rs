@@ -2,15 +2,53 @@ use super::*;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 
-fn titlebar_control_button(theme: AppTheme, hover_bg: gpui::Rgba) -> gpui::Div {
+fn titlebar_control_icon(theme: AppTheme, path: &'static str) -> gpui::Svg {
+    gpui::svg()
+        .path(path)
+        .w(px(16.0))
+        .h(px(16.0))
+        .text_color(theme.colors.text)
+}
+
+fn titlebar_control_button(
+    theme: AppTheme,
+    id: &'static str,
+    icon: gpui::Svg,
+    hover_bg: gpui::Rgba,
+    active_bg: gpui::Rgba,
+) -> gpui::Div {
     div()
         .h_full()
-        .px_2()
+        .w(px(46.0))
         .flex()
         .items_center()
-        .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(hover_bg))
-        .text_color(theme.colors.text)
+        .justify_center()
+        .child(
+            div()
+                .id(id)
+                .size(px(26.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(theme.radii.pill))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(hover_bg))
+                .active(move |s| s.bg(active_bg))
+                .child(icon),
+        )
+}
+
+fn mix(mut a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    a.r = a.r + (b.r - a.r) * t;
+    a.g = a.g + (b.g - a.g) * t;
+    a.b = a.b + (b.b - a.b) * t;
+    a.a = a.a + (b.a - a.a) * t;
+    a
+}
+
+fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
+    mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
 pub(super) fn cursor_style_for_resize_edge(edge: ResizeEdge) -> CursorStyle {
@@ -87,9 +125,12 @@ impl GitGpuiView {
     ) -> AnyElement {
         let theme = self.theme;
         let bar_bg = if window.is_window_active() {
-            theme.colors.surface_bg
+            lighten(
+                theme.colors.surface_bg,
+                if theme.is_dark { 0.06 } else { 0.03 },
+            )
         } else {
-            with_alpha(theme.colors.surface_bg, 0.92)
+            theme.colors.surface_bg
         };
         let bar_border = if window.is_window_active() {
             theme.colors.border
@@ -160,31 +201,54 @@ impl GitGpuiView {
                     .child("GitGpui"),
             );
 
-        let min = titlebar_control_button(theme, theme.colors.hover)
-            .id("win_min")
-            .window_control_area(WindowControlArea::Min)
-            .active(move |s| s.bg(theme.colors.active))
-            .child("—")
+        let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
+        let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
+        let min = titlebar_control_button(
+            theme,
+            "win_min_btn",
+            titlebar_control_icon(theme, "icons/generic_minimize.svg"),
+            min_hover,
+            min_active,
+        )
+        .id("win_min")
+        .window_control_area(WindowControlArea::Min)
             .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 window.minimize_window();
             }));
 
-        let max = titlebar_control_button(theme, theme.colors.hover)
-            .id("win_max")
-            .window_control_area(WindowControlArea::Max)
-            .active(move |s| s.bg(theme.colors.active))
-            .child(if window.is_maximized() { "❐" } else { "□" })
+        let max_icon = if window.is_maximized() {
+            "icons/generic_restore.svg"
+        } else {
+            "icons/generic_maximize.svg"
+        };
+        let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
+        let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
+        let max = titlebar_control_button(
+            theme,
+            "win_max_btn",
+            titlebar_control_icon(theme, max_icon),
+            max_hover,
+            max_active,
+        )
+        .id("win_max")
+        .window_control_area(WindowControlArea::Max)
             .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
                 cx.stop_propagation();
                 window.zoom_window();
             }));
 
-        let close = titlebar_control_button(theme, with_alpha(theme.colors.danger, 0.25))
-            .id("win_close")
-            .window_control_area(WindowControlArea::Close)
-            .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.35)))
-            .child("×")
+        let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
+        let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
+        let close = titlebar_control_button(
+            theme,
+            "win_close_btn",
+            titlebar_control_icon(theme, "icons/generic_close.svg"),
+            close_hover,
+            close_active,
+        )
+        .id("win_close")
+        .window_control_area(WindowControlArea::Close)
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
                 cx.quit();
@@ -254,13 +318,25 @@ mod tests {
         let theme = AppTheme::zed_ayu_dark();
         assert!(
             std::panic::catch_unwind(|| {
-                let _ = titlebar_control_button(theme, theme.colors.hover);
+                let _ = titlebar_control_button(
+                    theme,
+                    "test_btn_1",
+                    titlebar_control_icon(theme, "icons/generic_minimize.svg"),
+                    theme.colors.hover,
+                    theme.colors.active,
+                );
             })
             .is_ok()
         );
         assert!(
             std::panic::catch_unwind(|| {
-                let _ = titlebar_control_button(theme, with_alpha(theme.colors.danger, 0.25));
+                let _ = titlebar_control_button(
+                    theme,
+                    "test_btn_2",
+                    titlebar_control_icon(theme, "icons/generic_close.svg"),
+                    with_alpha(theme.colors.danger, 0.25),
+                    with_alpha(theme.colors.danger, 0.35),
+                );
             })
             .is_ok()
         );

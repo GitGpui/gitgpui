@@ -1,4 +1,5 @@
 mod app;
+mod assets;
 mod kit;
 mod theme;
 mod view;

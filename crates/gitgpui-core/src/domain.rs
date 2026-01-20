@@ -64,6 +64,12 @@ pub struct Upstream {
     pub branch: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UpstreamDivergence {
+    pub ahead: usize,
+    pub behind: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Remote {
     pub name: String,

@@ -1,7 +1,7 @@
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
     FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
-    RepoStatus, Tag,
+    RepoStatus, Tag, UpstreamDivergence,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -559,6 +559,31 @@ impl GitRepository for GixRepo {
         unstaged.sort_by(|a, b| a.path.cmp(&b.path));
 
         Ok(RepoStatus { staged, unstaged })
+    }
+
+    fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rev-list")
+            .arg("--left-right")
+            .arg("--count")
+            .arg("@{upstream}...HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut parts = stdout.split_whitespace();
+        let behind = parts.next().and_then(|s| s.parse::<usize>().ok());
+        let ahead = parts.next().and_then(|s| s.parse::<usize>().ok());
+        Ok(match (ahead, behind) {
+            (Some(ahead), Some(behind)) => Some(UpstreamDivergence { ahead, behind }),
+            _ => None,
+        })
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {

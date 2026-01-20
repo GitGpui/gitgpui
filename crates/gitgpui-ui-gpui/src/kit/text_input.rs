@@ -62,6 +62,7 @@ pub struct TextInputOptions {
     pub placeholder: SharedString,
     pub multiline: bool,
     pub read_only: bool,
+    pub chromeless: bool,
 }
 
 pub struct TextInput {
@@ -70,6 +71,7 @@ pub struct TextInput {
     placeholder: SharedString,
     multiline: bool,
     read_only: bool,
+    chromeless: bool,
     style: TextInputStyle,
 
     selected_range: Range<usize>,
@@ -92,6 +94,27 @@ impl TextInput {
             placeholder: options.placeholder,
             multiline: options.multiline,
             read_only: options.read_only,
+            chromeless: options.chromeless,
+            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
+            selected_range: 0..0,
+            selection_reversed: false,
+            marked_range: None,
+            last_layout: None,
+            last_line_starts: None,
+            last_bounds: None,
+            is_selecting: false,
+        }
+    }
+
+    pub fn new_inert(options: TextInputOptions, cx: &mut Context<Self>) -> Self {
+        let focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        Self {
+            focus_handle,
+            content: "".into(),
+            placeholder: options.placeholder,
+            multiline: options.multiline,
+            read_only: options.read_only,
+            chromeless: options.chromeless,
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             selected_range: 0..0,
             selection_reversed: false,
@@ -763,8 +786,10 @@ impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let style = self.style;
         let focus = self.focus_handle.clone();
+        let chromeless = self.chromeless;
+        let padding = if chromeless { px(0.0) } else { px(8.0) };
 
-        div()
+        let mut outer = div()
             .flex()
             .track_focus(&focus)
             .key_context("TextInput")
@@ -794,16 +819,22 @@ impl Render for TextInput {
                     ));
                 }
             }))
-            .bg(style.background)
-            .border_1()
-            .border_color(style.border)
-            .hover(move |s| s.border_color(style.hover_border))
-            .focus(move |s| s.border_color(style.focus_border))
-            .rounded(px(style.radius))
             .line_height(window.line_height())
             .text_size(px(13.0))
             .when(self.multiline, |d| d.items_start())
-            .child(div().p(px(8.0)).child(TextElement { input: cx.entity() }))
+            .child(div().p(padding).child(TextElement { input: cx.entity() }));
+
+        if !chromeless {
+            outer = outer
+                .bg(style.background)
+                .border_1()
+                .border_color(style.border)
+                .hover(move |s| s.border_color(style.hover_border))
+                .focus(move |s| s.border_color(style.focus_border))
+                .rounded(px(style.radius));
+        }
+
+        outer
     }
 }
 
