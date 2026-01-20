@@ -9,6 +9,8 @@ use gpui::{ClickEvent, CursorStyle, Div, Entity, FontWeight, SharedString, Windo
 use std::ops::Range;
 use std::sync::Arc;
 
+use super::CONTROL_HEIGHT_MD_PX;
+
 pub struct PickerPrompt {
     query_input: Entity<TextInput>,
     items: Vec<SharedString>,
@@ -60,7 +62,8 @@ impl PickerPrompt {
         let body = div()
             .flex()
             .flex_col()
-            .child(div().p_2().child(self.query_input.clone()))
+            .w_full()
+            .child(div().flex().w_full().min_w(px(0.0)).child(self.query_input.clone()))
             .child(div().border_t_1().border_color(theme.colors.border));
 
         let mut list = div()
@@ -73,8 +76,11 @@ impl PickerPrompt {
         if matches.is_empty() {
             list = list.child(
                 div()
+                    .h(px(CONTROL_HEIGHT_MD_PX))
+                    .w_full()
+                    .flex()
+                    .items_center()
                     .px_2()
-                    .py_1()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(self.empty_text),
@@ -87,8 +93,11 @@ impl PickerPrompt {
                 list = list.child(
                     div()
                         .id(("picker_prompt_item", original_index))
+                        .h(px(CONTROL_HEIGHT_MD_PX))
+                        .w_full()
+                        .flex()
+                        .items_center()
                         .px_2()
-                        .py_1()
                         .rounded(px(theme.radii.row))
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))

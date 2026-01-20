@@ -1157,46 +1157,40 @@ impl GitGpuiView {
                         .map(|r| r.spec.workdir.display().to_string().into())
                         .collect::<Vec<SharedString>>();
 
-                    zed::PickerPrompt::new(search)
-                        .items(items)
-                        .empty_text("No repositories")
-                        .max_height(px(260.0))
-                        .render(theme, cx, move |this, ix, _e, _w, cx| {
-                            if let Some(&repo_id) = repo_ids.get(ix) {
-                                this.store.dispatch(Msg::SetActiveRepo { repo_id });
-                                this.rebuild_diff_cache();
-                            }
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        })
-                        .min_w(px(320.0))
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .id("repo_popover_close")
-                                .debug_selector(|| "repo_popover_close".to_string())
-                                .px_2()
-                                .py_1()
-                                .hover(move |s| s.bg(theme.colors.hover))
-                                .active(move |s| s.bg(theme.colors.active))
-                                .child("Close")
-                                .on_click(close),
-                        )
+                    zed::context_menu(
+                        theme,
+                        zed::PickerPrompt::new(search)
+                            .items(items)
+                            .empty_text("No repositories")
+                            .max_height(px(260.0))
+                            .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                if let Some(&repo_id) = repo_ids.get(ix) {
+                                    this.store.dispatch(Msg::SetActiveRepo { repo_id });
+                                    this.rebuild_diff_cache();
+                                }
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            }),
+                    )
+                    .min_w(px(320.0))
                 } else {
                     let mut menu = div().flex().flex_col().min_w(px(320.0));
                     for repo in self.state.repos.iter() {
                         let id = repo.id;
                         let label: SharedString = repo.spec.workdir.display().to_string().into();
                         menu = menu.child(
-                            div()
-                                .id(("repo_item", id.0))
-                                .px_2()
-                                .py_1()
-                                .hover(move |s| s.bg(theme.colors.hover))
-                                .active(move |s| s.bg(theme.colors.active))
-                                .child(div().text_sm().line_clamp(1).child(label))
-                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                            zed::context_menu_entry(
+                                ("repo_item", id.0),
+                                theme,
+                                false,
+                                false,
+                                None,
+                                label.clone(),
+                                None,
+                                false,
+                            )
+                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                                     this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
                                     this.popover = None;
                                     this.popover_anchor = None;
@@ -1205,17 +1199,7 @@ impl GitGpuiView {
                                 })),
                         );
                     }
-                    menu.child(
-                        div()
-                            .id("repo_popover_close")
-                            .debug_selector(|| "repo_popover_close".to_string())
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                            .child("Close")
-                            .on_click(close),
-                    )
+                    zed::context_menu(theme, menu)
                 }
             }
             PopoverKind::BranchPicker => {
@@ -1254,77 +1238,73 @@ impl GitGpuiView {
                                 for (ix, branch) in branches.iter().enumerate() {
                                     let repo_id = repo.id;
                                     let name = branch.name.clone();
+                                    let label: SharedString = name.clone().into();
                                     menu = menu.child(
-                                        div()
-                                            .id(("branch_item", ix))
-                                            .px_2()
-                                            .py_1()
-                                            .hover(move |s| s.bg(theme.colors.hover))
-                                            .active(move |s| s.bg(theme.colors.active))
-                                            .child(name.clone())
-                                            .on_click(cx.listener(
-                                                move |this, _e: &ClickEvent, _w, cx| {
-                                                    this.store.dispatch(Msg::CheckoutBranch {
-                                                        repo_id,
-                                                        name: name.clone(),
-                                                    });
-                                                    this.popover = None;
-                                                    this.popover_anchor = None;
-                                                    cx.notify();
-                                                },
-                                            )),
+                                        zed::context_menu_entry(
+                                            ("branch_item", ix),
+                                            theme,
+                                            false,
+                                            false,
+                                            None,
+                                            label,
+                                            None,
+                                            false,
+                                        )
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _w, cx| {
+                                                this.store.dispatch(Msg::CheckoutBranch {
+                                                    repo_id,
+                                                    name: name.clone(),
+                                                });
+                                                this.popover = None;
+                                                this.popover_anchor = None;
+                                                cx.notify();
+                                            },
+                                        )),
                                     );
                                 }
                             }
                         }
                         Loadable::Loading => {
-                            menu = menu.child(div().px_2().py_1().child("Loading…"));
+                            menu = menu.child(zed::context_menu_label(theme, "Loading…"));
                         }
                         Loadable::Error(e) => {
-                            menu = menu.child(div().px_2().py_1().child(e.clone()));
+                            menu = menu.child(zed::context_menu_label(theme, e.clone()));
                         }
                         Loadable::NotLoaded => {
-                            menu = menu.child(div().px_2().py_1().child("Not loaded"));
+                            menu = menu.child(zed::context_menu_label(theme, "Not loaded"));
                         }
                     }
                 }
 
-                menu.child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_color(theme.colors.text_muted)
-                            .child("Create branch"),
-                    )
-                    .child(self.create_branch_input.clone())
-                    .child(
-                        zed::Button::new("create_branch_go", "Create")
-                            .style(zed::ButtonStyle::Filled)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                let name = this
-                                    .create_branch_input
-                                    .read_with(cx, |i, _| i.text().trim().to_string());
-                                if let Some(repo_id) = this.active_repo_id()
-                                    && !name.is_empty()
-                                {
-                                    this.store.dispatch(Msg::CreateBranch { repo_id, name });
-                                }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            }),
-                    )
-                    .child(
-                        div()
-                            .id(("branch_popover_close", 0usize))
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                            .child("Close")
-                            .on_click(close),
-                    )
+                zed::context_menu(
+                    theme,
+                    menu.child(zed::context_menu_separator(theme))
+                        .child(zed::context_menu_header(theme, "Create branch"))
+                        .child(
+                            div()
+                                .px_2()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .child(self.create_branch_input.clone()),
+                        )
+                        .child(div().px_2().child(
+                            zed::Button::new("create_branch_go", "Create")
+                                .style(zed::ButtonStyle::Filled)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    let name = this
+                                        .create_branch_input
+                                        .read_with(cx, |i, _| i.text().trim().to_string());
+                                    if let Some(repo_id) = this.active_repo_id() && !name.is_empty() {
+                                        this.store.dispatch(Msg::CreateBranch { repo_id, name });
+                                    }
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        )),
+                )
+                .min_w(px(260.0))
             }
             PopoverKind::CreateBranch => div()
                 .flex()
@@ -1339,7 +1319,14 @@ impl GitGpuiView {
                         .child("Create branch"),
                 )
                 .child(div().border_t_1().border_color(theme.colors.border))
-                .child(div().px_2().py_1().child(self.create_branch_input.clone()))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .child(self.create_branch_input.clone()),
+                )
                 .child(
                     div()
                         .px_2()

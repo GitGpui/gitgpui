@@ -8,6 +8,7 @@ use gpui::{
     point, px, relative, size,
 };
 use std::ops::Range;
+use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation as _;
 
 actions!(
@@ -43,7 +44,10 @@ struct TextInputStyle {
 
 impl TextInputStyle {
     fn from_theme(theme: AppTheme) -> Self {
-        let hover_border = with_alpha(theme.colors.border, if theme.is_dark { 0.95 } else { 1.0 });
+        let hover_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.55 } else { 0.40 },
+        );
         Self {
             is_dark: theme.is_dark,
             background: theme.colors.surface_bg_elevated,
@@ -51,7 +55,7 @@ impl TextInputStyle {
             hover_border,
             focus_border: theme.colors.focus_ring,
             radius: theme.radii.row,
-            cursor: theme.colors.accent,
+            cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),
             selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
         }
     }
@@ -82,6 +86,10 @@ pub struct TextInput {
     last_line_starts: Option<Vec<usize>>,
     last_bounds: Option<Bounds<Pixels>>,
     is_selecting: bool,
+
+    has_focus: bool,
+    cursor_blink_visible: bool,
+    cursor_blink_task: Option<gpui::Task<()>>,
 }
 
 impl TextInput {
@@ -103,6 +111,9 @@ impl TextInput {
             last_line_starts: None,
             last_bounds: None,
             is_selecting: false,
+            has_focus: false,
+            cursor_blink_visible: true,
+            cursor_blink_task: None,
         }
     }
 
@@ -123,6 +134,9 @@ impl TextInput {
             last_line_starts: None,
             last_bounds: None,
             is_selecting: false,
+            has_focus: false,
+            cursor_blink_visible: true,
+            cursor_blink_task: None,
         }
     }
 
@@ -142,6 +156,7 @@ impl TextInput {
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
+        self.cursor_blink_visible = true;
         cx.notify();
     }
 
@@ -277,6 +292,7 @@ impl TextInput {
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         self.selected_range = offset..offset;
         self.selection_reversed = false;
+        self.cursor_blink_visible = true;
         cx.notify();
     }
 
@@ -290,6 +306,7 @@ impl TextInput {
             self.selection_reversed = !self.selection_reversed;
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
+        self.cursor_blink_visible = true;
         cx.notify();
     }
 
@@ -316,6 +333,7 @@ impl TextInput {
     ) {
         cx.stop_propagation();
         window.focus(&self.focus_handle);
+        self.cursor_blink_visible = true;
         if self.read_only && event.button == MouseButton::Left && event.click_count >= 2 {
             self.move_to(0, cx);
             self.select_to(self.content.len(), cx);
@@ -481,6 +499,7 @@ impl EntityInputHandler for TextInput {
                 .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
+        self.cursor_blink_visible = true;
         cx.notify();
     }
 
@@ -519,6 +538,7 @@ impl EntityInputHandler for TextInput {
             .map(|new_range| new_range.start + range.start..new_range.end + range.end)
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
 
+        self.cursor_blink_visible = true;
         cx.notify();
     }
 
@@ -673,9 +693,11 @@ impl Element for TextElement {
         let cursor_quad = if selected_range.is_empty() {
             let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
             let x = lines[line_ix].x_for_index(local_ix);
-            let top = bounds.top() + line_height * line_ix as f32;
+            let caret_inset_y = px(2.0);
+            let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
+            let top = bounds.top() + line_height * line_ix as f32 + caret_inset_y;
             Some(fill(
-                Bounds::new(point(bounds.left() + x, top), size(px(2.0), line_height)),
+                Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
                 style_colors.cursor,
             ))
         } else {
@@ -767,7 +789,9 @@ impl Element for TextElement {
             .unwrap();
         }
 
+        let cursor_blink_visible = self.input.read(cx).cursor_blink_visible;
         if focus_handle.is_focused(window)
+            && cursor_blink_visible
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
@@ -788,8 +812,50 @@ impl Render for TextInput {
         let focus = self.focus_handle.clone();
         let chromeless = self.chromeless;
         let padding = if chromeless { px(0.0) } else { px(8.0) };
+        let is_focused = focus.is_focused(window);
+
+        if self.has_focus != is_focused {
+            self.has_focus = is_focused;
+            self.cursor_blink_visible = true;
+            if !is_focused {
+                self.cursor_blink_task.take();
+            }
+        }
+
+        if is_focused && self.cursor_blink_task.is_none() {
+            let task = cx.spawn(async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    gpui::Timer::after(Duration::from_millis(800)).await;
+                    let should_continue = input
+                        .update(cx, |input, cx| {
+                            if !input.has_focus {
+                                input.cursor_blink_visible = true;
+                                input.cursor_blink_task = None;
+                                cx.notify();
+                                return false;
+                            }
+
+                            if input.selected_range.is_empty() {
+                                input.cursor_blink_visible = !input.cursor_blink_visible;
+                            } else {
+                                input.cursor_blink_visible = true;
+                            }
+                            cx.notify();
+                            true
+                        })
+                        .unwrap_or(false);
+
+                    if !should_continue {
+                        break;
+                    }
+                }
+            });
+            self.cursor_blink_task = Some(task);
+        }
 
         let mut outer = div()
+            .w_full()
+            .min_w(px(0.0))
             .flex()
             .track_focus(&focus)
             .key_context("TextInput")
@@ -822,16 +888,26 @@ impl Render for TextInput {
             .line_height(window.line_height())
             .text_size(px(13.0))
             .when(self.multiline, |d| d.items_start())
-            .child(div().p(padding).child(TextElement { input: cx.entity() }));
+            .child(
+                div()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .p(padding)
+                    .child(TextElement { input: cx.entity() }),
+            );
 
         if !chromeless {
-            outer = outer
-                .bg(style.background)
-                .border_1()
-                .border_color(style.border)
-                .hover(move |s| s.border_color(style.hover_border))
-                .focus(move |s| s.border_color(style.focus_border))
-                .rounded(px(style.radius));
+            outer = outer.bg(style.background).border_1().rounded(px(style.radius));
+
+            if is_focused {
+                outer = outer.border_color(style.focus_border);
+            } else {
+                outer = outer
+                    .border_color(style.border)
+                    .hover(move |s| s.border_color(style.hover_border));
+            }
+
+            outer = outer.focus(move |s| s.border_color(style.focus_border));
         }
 
         outer
