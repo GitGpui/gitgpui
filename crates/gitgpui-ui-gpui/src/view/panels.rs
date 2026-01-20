@@ -1,5 +1,81 @@
 use super::*;
 
+#[derive(Clone)]
+enum ContextMenuAction {
+    SelectDiff { repo_id: RepoId, target: DiffTarget },
+    CheckoutCommit { repo_id: RepoId, commit_id: CommitId },
+    CherryPickCommit { repo_id: RepoId, commit_id: CommitId },
+    RevertCommit { repo_id: RepoId, commit_id: CommitId },
+    CheckoutBranch { repo_id: RepoId, name: String },
+    StagePath { repo_id: RepoId, path: std::path::PathBuf },
+    UnstagePath { repo_id: RepoId, path: std::path::PathBuf },
+    FetchAll { repo_id: RepoId },
+    OpenPopover { kind: PopoverKind },
+    CopyText { text: String },
+}
+
+#[derive(Clone)]
+enum ContextMenuItem {
+    Separator,
+    Header(SharedString),
+    Label(SharedString),
+    Entry {
+        label: SharedString,
+        icon: Option<SharedString>,
+        shortcut: Option<SharedString>,
+        disabled: bool,
+        action: ContextMenuAction,
+    },
+}
+
+#[derive(Clone)]
+struct ContextMenuModel {
+    items: Vec<ContextMenuItem>,
+}
+
+impl ContextMenuModel {
+    fn new(items: Vec<ContextMenuItem>) -> Self {
+        Self { items }
+    }
+
+    fn is_selectable(&self, ix: usize) -> bool {
+        matches!(
+            self.items.get(ix),
+            Some(ContextMenuItem::Entry { disabled, .. }) if !*disabled
+        )
+    }
+
+    fn first_selectable(&self) -> Option<usize> {
+        (0..self.items.len()).find(|&ix| self.is_selectable(ix))
+    }
+
+    fn last_selectable(&self) -> Option<usize> {
+        (0..self.items.len()).rev().find(|&ix| self.is_selectable(ix))
+    }
+
+    fn next_selectable(&self, from: Option<usize>, dir: isize) -> Option<usize> {
+        if self.items.is_empty() {
+            return None;
+        }
+        let Some(mut ix) = from else {
+            return if dir >= 0 {
+                self.first_selectable()
+            } else {
+                self.last_selectable()
+            };
+        };
+
+        let n = self.items.len() as isize;
+        for _ in 0..self.items.len() {
+            ix = ((ix as isize + dir).rem_euclid(n)) as usize;
+            if self.is_selectable(ix) {
+                return Some(ix);
+            }
+        }
+        None
+    }
+}
+
 struct HistoryColResizeDragGhost;
 
 impl Render for HistoryColResizeDragGhost {
@@ -9,6 +85,484 @@ impl Render for HistoryColResizeDragGhost {
 }
 
 impl GitGpuiView {
+    pub(super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.popover = None;
+        self.popover_anchor = None;
+        self.context_menu_selected_ix = None;
+        cx.notify();
+    }
+
+    pub(super) fn open_popover_at(
+        &mut self,
+        kind: PopoverKind,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let is_context_menu = matches!(
+            &kind,
+            PopoverKind::CommitMenu { .. }
+                | PopoverKind::StatusFileMenu { .. }
+                | PopoverKind::BranchMenu { .. }
+                | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::CommitFileMenu { .. }
+        );
+
+        self.popover = Some(kind.clone());
+        self.popover_anchor = Some(anchor);
+        self.context_menu_selected_ix = None;
+        if is_context_menu {
+            self.context_menu_selected_ix = self
+                .context_menu_model(&kind)
+                .and_then(|m| m.first_selectable());
+            window.focus(&self.context_menu_focus_handle);
+        }
+        cx.notify();
+    }
+
+    fn context_menu_model(&self, kind: &PopoverKind) -> Option<ContextMenuModel> {
+        match kind {
+            PopoverKind::CommitMenu { repo_id, commit_id } => {
+                let sha = commit_id.as_ref().to_string();
+                let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
+
+                let commit_summary = self
+                    .active_repo()
+                    .and_then(|r| match &r.log {
+                        Loadable::Ready(page) => page
+                            .commits
+                            .iter()
+                            .find(|c| c.id == *commit_id)
+                            .map(|c| format!("{} — {}", c.author, c.summary)),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+
+                let mut items = vec![ContextMenuItem::Header(format!("Commit {short}").into())];
+                if !commit_summary.is_empty() {
+                    items.push(ContextMenuItem::Label(commit_summary.into()));
+                }
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Entry {
+                    label: "Open diff".into(),
+                    icon: Some("↗".into()),
+                    shortcut: Some("Enter".into()),
+                    disabled: false,
+                    action: ContextMenuAction::SelectDiff {
+                        repo_id: *repo_id,
+                        target: DiffTarget::Commit {
+                            commit_id: commit_id.clone(),
+                            path: None,
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Checkout (detached)".into(),
+                    icon: Some("⎇".into()),
+                    shortcut: Some("D".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CheckoutCommit {
+                        repo_id: *repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Cherry-pick".into(),
+                    icon: Some("⇡".into()),
+                    shortcut: Some("P".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CherryPickCommit {
+                        repo_id: *repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Revert".into(),
+                    icon: Some("↶".into()),
+                    shortcut: Some("R".into()),
+                    disabled: false,
+                    action: ContextMenuAction::RevertCommit {
+                        repo_id: *repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                });
+
+                Some(ContextMenuModel::new(items))
+            }
+            PopoverKind::StatusFileMenu { repo_id, area, path } => {
+                let mut items = vec![ContextMenuItem::Header(
+                    path.file_name()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string())
+                        .into(),
+                )];
+                items.push(ContextMenuItem::Label(path.display().to_string().into()));
+                items.push(ContextMenuItem::Separator);
+
+                items.push(ContextMenuItem::Entry {
+                    label: "Open diff".into(),
+                    icon: Some("↗".into()),
+                    shortcut: Some("Enter".into()),
+                    disabled: false,
+                    action: ContextMenuAction::SelectDiff {
+                        repo_id: *repo_id,
+                        target: DiffTarget::WorkingTree {
+                            path: path.clone(),
+                            area: *area,
+                        },
+                    },
+                });
+
+                match area {
+                    DiffArea::Unstaged => items.push(ContextMenuItem::Entry {
+                        label: "Stage".into(),
+                        icon: Some("+".into()),
+                        shortcut: Some("S".into()),
+                        disabled: false,
+                        action: ContextMenuAction::StagePath {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                        },
+                    }),
+                    DiffArea::Staged => items.push(ContextMenuItem::Entry {
+                        label: "Unstage".into(),
+                        icon: Some("−".into()),
+                        shortcut: Some("U".into()),
+                        disabled: false,
+                        action: ContextMenuAction::UnstagePath {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                        },
+                    }),
+                };
+
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Entry {
+                    label: "Copy path".into(),
+                    icon: Some("⧉".into()),
+                    shortcut: Some("C".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CopyText {
+                        text: path.display().to_string(),
+                    },
+                });
+
+                Some(ContextMenuModel::new(items))
+            }
+            PopoverKind::BranchMenu {
+                repo_id,
+                section,
+                name,
+            } => {
+                let header: SharedString = match section {
+                    BranchSection::Local => "Local branch".into(),
+                    BranchSection::Remote => "Remote branch".into(),
+                };
+                let mut items = vec![ContextMenuItem::Header(header)];
+                items.push(ContextMenuItem::Label(name.clone().into()));
+                items.push(ContextMenuItem::Separator);
+
+                items.push(ContextMenuItem::Entry {
+                    label: "Checkout".into(),
+                    icon: Some("⎇".into()),
+                    shortcut: Some("Enter".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CheckoutBranch {
+                        repo_id: *repo_id,
+                        name: name.clone(),
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Copy name".into(),
+                    icon: Some("⧉".into()),
+                    shortcut: Some("C".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CopyText { text: name.clone() },
+                });
+
+                if *section == BranchSection::Remote {
+                    items.push(ContextMenuItem::Separator);
+                    items.push(ContextMenuItem::Entry {
+                        label: "Fetch all".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("F".into()),
+                        disabled: false,
+                        action: ContextMenuAction::FetchAll { repo_id: *repo_id },
+                    });
+                }
+
+                Some(ContextMenuModel::new(items))
+            }
+            PopoverKind::BranchSectionMenu { repo_id, section } => {
+                let header: SharedString = match section {
+                    BranchSection::Local => "Local".into(),
+                    BranchSection::Remote => "Remote".into(),
+                };
+                let mut items = vec![ContextMenuItem::Header(header)];
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Entry {
+                    label: "Switch branch…".into(),
+                    icon: Some("⎇".into()),
+                    shortcut: Some("Enter".into()),
+                    disabled: false,
+                    action: ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::BranchPicker,
+                    },
+                });
+
+                if *section == BranchSection::Remote {
+                    items.push(ContextMenuItem::Entry {
+                        label: "Fetch all".into(),
+                        icon: Some("↓".into()),
+                        shortcut: Some("F".into()),
+                        disabled: false,
+                        action: ContextMenuAction::FetchAll { repo_id: *repo_id },
+                    });
+                }
+
+                Some(ContextMenuModel::new(items))
+            }
+            PopoverKind::CommitFileMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => {
+                let mut items = vec![ContextMenuItem::Header(
+                    path.file_name()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.display().to_string())
+                        .into(),
+                )];
+                items.push(ContextMenuItem::Label(path.display().to_string().into()));
+                items.push(ContextMenuItem::Separator);
+                items.push(ContextMenuItem::Entry {
+                    label: "Open diff".into(),
+                    icon: Some("↗".into()),
+                    shortcut: Some("Enter".into()),
+                    disabled: false,
+                    action: ContextMenuAction::SelectDiff {
+                        repo_id: *repo_id,
+                        target: DiffTarget::Commit {
+                            commit_id: commit_id.clone(),
+                            path: Some(path.clone()),
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Copy path".into(),
+                    icon: Some("⧉".into()),
+                    shortcut: Some("C".into()),
+                    disabled: false,
+                    action: ContextMenuAction::CopyText {
+                        text: path.display().to_string(),
+                    },
+                });
+                Some(ContextMenuModel::new(items))
+            }
+            _ => None,
+        }
+    }
+
+    fn context_menu_activate_action(
+        &mut self,
+        action: ContextMenuAction,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match action {
+            ContextMenuAction::SelectDiff { repo_id, target } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
+                self.store.dispatch(Msg::CheckoutCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::CherryPickCommit { repo_id, commit_id } => {
+                self.store.dispatch(Msg::CherryPickCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::RevertCommit { repo_id, commit_id } => {
+                self.store.dispatch(Msg::RevertCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::CheckoutBranch { repo_id, name } => {
+                self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::StagePath { repo_id, path } => {
+                self.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: DiffArea::Unstaged,
+                    },
+                });
+                self.store.dispatch(Msg::StagePath { repo_id, path });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::UnstagePath { repo_id, path } => {
+                self.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: DiffArea::Staged,
+                    },
+                });
+                self.store.dispatch(Msg::UnstagePath { repo_id, path });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::FetchAll { repo_id } => {
+                self.store.dispatch(Msg::FetchAll { repo_id });
+            }
+            ContextMenuAction::OpenPopover { kind } => {
+                self.popover = Some(kind);
+                self.context_menu_selected_ix = None;
+                cx.notify();
+                return;
+            }
+            ContextMenuAction::CopyText { text } => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+            }
+        }
+        self.close_popover(cx);
+    }
+
+    fn context_menu_view(
+        &mut self,
+        kind: PopoverKind,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let theme = self.theme;
+        let model = self.context_menu_model(&kind).unwrap_or_else(|| ContextMenuModel::new(vec![]));
+        let model_for_keys = model.clone();
+
+        let focus = self.context_menu_focus_handle.clone();
+        let current_selected = self.context_menu_selected_ix;
+        let selected_for_render = current_selected
+            .filter(|&ix| model.is_selectable(ix))
+            .or_else(|| model.first_selectable());
+
+        zed::context_menu(
+            theme,
+            div()
+                .track_focus(&focus)
+                .key_context("ContextMenu")
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
+                    window.focus(&this.context_menu_focus_handle);
+                }))
+                .on_key_down(cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
+                    let key = e.keystroke.key.as_str();
+                    let mods = e.keystroke.modifiers;
+                    if mods.control || mods.platform || mods.alt || mods.function {
+                        return;
+                    }
+
+                    match key {
+                        "escape" => {
+                            this.close_popover(cx);
+                        }
+                        "up" => {
+                            let next = model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
+                            this.context_menu_selected_ix = next;
+                            cx.notify();
+                        }
+                        "down" => {
+                            let next = model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
+                            this.context_menu_selected_ix = next;
+                            cx.notify();
+                        }
+                        "home" => {
+                            this.context_menu_selected_ix = model_for_keys.first_selectable();
+                            cx.notify();
+                        }
+                        "end" => {
+                            this.context_menu_selected_ix = model_for_keys.last_selectable();
+                            cx.notify();
+                        }
+                        "enter" => {
+                            let Some(ix) = this
+                                .context_menu_selected_ix
+                                .filter(|&ix| model_for_keys.is_selectable(ix))
+                                .or_else(|| model_for_keys.first_selectable())
+                            else {
+                                return;
+                            };
+                            if let Some(ContextMenuItem::Entry { action, .. }) =
+                                model_for_keys.items.get(ix).cloned()
+                            {
+                                this.context_menu_activate_action(action, window, cx);
+                            }
+                        }
+                        _ => {
+                            if key.chars().count() == 1 {
+                                let needle = key.to_ascii_uppercase();
+                                let hit = model_for_keys.items.iter().enumerate().find_map(|(ix, item)| {
+                                    let ContextMenuItem::Entry { shortcut, disabled, .. } = item else {
+                                        return None;
+                                    };
+                                    if *disabled {
+                                        return None;
+                                    }
+                                    let shortcut = shortcut.as_ref()?.as_ref().to_ascii_uppercase();
+                                    (shortcut == needle).then_some(ix)
+                                });
+
+                                if let Some(ix) = hit
+                                    && let Some(ContextMenuItem::Entry { action, .. }) =
+                                        model_for_keys.items.get(ix).cloned()
+                                {
+                                    this.context_menu_activate_action(action, window, cx);
+                                }
+                            }
+                        }
+                    }
+                }))
+                .children(model.items.into_iter().enumerate().map(|(ix, item)| {
+                    match item {
+                        ContextMenuItem::Separator => zed::context_menu_separator(theme)
+                            .id(("context_menu_sep", ix))
+                            .into_any_element(),
+                        ContextMenuItem::Header(title) => zed::context_menu_header(theme, title)
+                            .id(("context_menu_header", ix))
+                            .into_any_element(),
+                        ContextMenuItem::Label(text) => zed::context_menu_label(theme, text)
+                            .id(("context_menu_label", ix))
+                            .into_any_element(),
+                        ContextMenuItem::Entry {
+                            label,
+                            icon,
+                            shortcut,
+                            disabled,
+                            action,
+                        } => {
+                            let selected = selected_for_render == Some(ix);
+                            zed::context_menu_entry(
+                                ("context_menu_entry", ix),
+                                theme,
+                                selected,
+                                disabled,
+                                icon,
+                                label,
+                                shortcut,
+                                false,
+                            )
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                if *hovering {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    cx.notify();
+                                }
+                            }))
+                            .when(!disabled, |row| {
+                                row.on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                    this.context_menu_activate_action(action.clone(), window, cx);
+                                }))
+                            })
+                            .into_any_element()
+                        }
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
+
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let (show_date, show_sha) = self.history_visible_columns();
@@ -444,11 +998,7 @@ impl GitGpuiView {
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
 
-        let close = cx.listener(|this, _e: &ClickEvent, _w, cx| {
-            this.popover = None;
-            this.popover_anchor = None;
-            cx.notify();
-        });
+        let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
         let panel = match kind {
             PopoverKind::RepoPicker => {
@@ -1000,135 +1550,35 @@ impl GitGpuiView {
                     )
             }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
-                let sha = commit_id.as_ref().to_string();
-                let short = sha.get(0..8).unwrap_or(&sha).to_string();
-                let commit_id_open_diff = commit_id.clone();
-                let commit_id_checkout = commit_id.clone();
-                let commit_id_cherry_pick = commit_id.clone();
-                let commit_id_revert = commit_id.clone();
-
-                let commit_summary = self
-                    .active_repo()
-                    .and_then(|r| match &r.log {
-                        Loadable::Ready(page) => page
-                            .commits
-                            .iter()
-                            .find(|c| c.id == commit_id)
-                            .map(|c| format!("{} — {}", c.author, c.summary)),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(240.0))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(format!("Commit {short}")),
-                    )
-                    .when(!commit_summary.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .text_sm()
-                                .line_clamp(2)
-                                .child(commit_summary),
-                        )
-                    })
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .id("commit_menu_open_diff")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Open diff  (Enter)")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::Commit {
-                                        commit_id: commit_id_open_diff.clone(),
-                                        path: None,
-                                    },
-                                });
-                                this.rebuild_diff_cache();
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("commit_menu_checkout")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Checkout (detached)  (D)")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::CheckoutCommit {
-                                    repo_id,
-                                    commit_id: commit_id_checkout.clone(),
-                                });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("commit_menu_cherry_pick")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Cherry-pick  (P)")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::CherryPickCommit {
-                                    repo_id,
-                                    commit_id: commit_id_cherry_pick.clone(),
-                                });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("commit_menu_revert")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Revert  (R)")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::RevertCommit {
-                                    repo_id,
-                                    commit_id: commit_id_revert.clone(),
-                                });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("commit_menu_close")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                            .child("Close")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
+                self.context_menu_view(
+                    PopoverKind::CommitMenu { repo_id, commit_id },
+                    cx,
+                )
             }
+            PopoverKind::StatusFileMenu { repo_id, area, path } => self.context_menu_view(
+                PopoverKind::StatusFileMenu { repo_id, area, path },
+                cx,
+            ),
+            PopoverKind::BranchMenu { repo_id, section, name } => self.context_menu_view(
+                PopoverKind::BranchMenu { repo_id, section, name },
+                cx,
+            ),
+            PopoverKind::BranchSectionMenu { repo_id, section } => self.context_menu_view(
+                PopoverKind::BranchSectionMenu { repo_id, section },
+                cx,
+            ),
+            PopoverKind::CommitFileMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::CommitFileMenu {
+                    repo_id,
+                    commit_id,
+                    path,
+                },
+                cx,
+            ),
             PopoverKind::AppMenu => div()
                 .flex()
                 .flex_col()

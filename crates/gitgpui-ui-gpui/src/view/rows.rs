@@ -34,12 +34,13 @@ impl GitGpuiView {
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
         let theme = this.theme;
+        let repo_id = repo.id;
         let rows = Self::branch_sidebar_rows(repo);
 
         fn indent_px(depth: usize) -> Pixels {
@@ -74,6 +75,21 @@ impl GitGpuiView {
                                 .text_color(theme.colors.text)
                                 .child(label),
                         )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.open_popover_at(
+                                    PopoverKind::BranchSectionMenu {
+                                        repo_id,
+                                        section,
+                                    },
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
                         .into_any_element()
                 }
                 BranchSidebarRow::Placeholder { section: _, message } => div()
@@ -105,6 +121,8 @@ impl GitGpuiView {
                     .into_any_element(),
                 BranchSidebarRow::Branch {
                     label,
+                    name,
+                    section,
                     depth,
                     muted,
                 } => div()
@@ -118,6 +136,22 @@ impl GitGpuiView {
                     .text_sm()
                     .when(muted, |d| d.text_color(theme.colors.text_muted))
                     .child(label)
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_popover_at(
+                                PopoverKind::BranchMenu {
+                                    repo_id,
+                                    section,
+                                    name: name.to_string(),
+                                },
+                                e.position,
+                                window,
+                                cx,
+                            );
+                        }),
+                    )
                     .into_any_element(),
             })
             .collect()
@@ -168,6 +202,8 @@ impl GitGpuiView {
                 });
                 let commit_id_for_click = commit_id.clone();
                 let path_for_click = path.clone();
+                let commit_id_for_menu = commit_id.clone();
+                let path_for_menu = path.clone();
 
                 let mut row = div()
                     .id(("commit_file", ix))
@@ -176,6 +212,7 @@ impl GitGpuiView {
                     .gap_2()
                     .px_2()
                     .py_1()
+                    .w_full()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
@@ -195,7 +232,15 @@ impl GitGpuiView {
                                 )
                             }),
                     )
-                    .child(div().text_sm().line_clamp(1).child(path.display().to_string()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(path.display().to_string()),
+                    )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.store.dispatch(Msg::SelectDiff {
                             repo_id,
@@ -204,8 +249,25 @@ impl GitGpuiView {
                                 path: Some(path_for_click.clone()),
                             },
                         });
+                        this.rebuild_diff_cache();
                         cx.notify();
                     }));
+                row = row.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.open_popover_at(
+                            PopoverKind::CommitFileMenu {
+                                repo_id,
+                                commit_id: commit_id_for_menu.clone(),
+                                path: path_for_menu.clone(),
+                            },
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    }),
+                );
 
                 if selected {
                     row = row.bg(with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 }));
@@ -1610,13 +1672,17 @@ fn history_table_row(
         }))
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
-                this.popover = Some(PopoverKind::CommitMenu {
-                    repo_id,
-                    commit_id: commit_id_for_menu.clone(),
-                });
-                this.popover_anchor = Some(e.position);
-                cx.notify();
+            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_popover_at(
+                    PopoverKind::CommitMenu {
+                        repo_id,
+                        commit_id: commit_id_for_menu.clone(),
+                    },
+                    e.position,
+                    window,
+                    cx,
+                );
             }),
         );
 
@@ -2036,6 +2102,7 @@ fn status_row(
     let path_for_stage = path.clone();
     let path_for_row = path.clone();
     let path_for_hover = path.clone();
+    let path_for_menu = path.clone();
     let stage_label = match area {
         DiffArea::Unstaged => "Stage",
         DiffArea::Staged => "Unstage",
@@ -2064,6 +2131,22 @@ fn status_row(
             }
             cx.notify();
         }))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_popover_at(
+                    PopoverKind::StatusFileMenu {
+                        repo_id,
+                        area,
+                        path: path_for_menu.clone(),
+                    },
+                    e.position,
+                    window,
+                    cx,
+                );
+            }),
+        )
         .child(
             div()
                 .flex()
@@ -4354,7 +4437,7 @@ fn selectable_cached_diff_text(
             window.focus(&this.diff_panel_focus_handle);
             if e.click_count >= 2 {
                 cx.stop_propagation();
-                this.double_click_select_diff_text(visible_ix, double_click_kind);
+                this.double_click_select_diff_text(visible_ix, region, double_click_kind);
                 cx.notify();
                 return;
             }

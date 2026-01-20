@@ -5,6 +5,7 @@
 
 mod button;
 mod components;
+mod context_menu;
 mod diff_stat;
 mod picker_prompt;
 mod split_button;
@@ -15,6 +16,10 @@ mod tokens;
 
 pub use button::{Button, ButtonStyle};
 pub use components::{empty_state, key_value, panel, pill, split_columns_header};
+pub use context_menu::{
+    context_menu, context_menu_entry, context_menu_header, context_menu_label,
+    context_menu_separator,
+};
 pub use diff_stat::diff_stat;
 pub use picker_prompt::PickerPrompt;
 pub use split_button::{SplitButton, SplitButtonStyle};

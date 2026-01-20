@@ -186,6 +186,25 @@ enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    StatusFileMenu {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
+    BranchMenu {
+        repo_id: RepoId,
+        section: BranchSection,
+        name: String,
+    },
+    BranchSectionMenu {
+        repo_id: RepoId,
+        section: BranchSection,
+    },
+    CommitFileMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: std::path::PathBuf,
+    },
     HistoryBranchFilter {
         repo_id: RepoId,
     },
@@ -210,7 +229,13 @@ enum BranchSidebarRow {
     Placeholder { section: BranchSection, message: SharedString },
     RemoteHeader { name: SharedString },
     GroupHeader { label: SharedString, depth: usize },
-    Branch { label: SharedString, depth: usize, muted: bool },
+    Branch {
+        label: SharedString,
+        name: SharedString,
+        section: BranchSection,
+        depth: usize,
+        muted: bool,
+    },
 }
 
 #[derive(Default)]
@@ -333,6 +358,8 @@ pub struct GitGpuiView {
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<Point<Pixels>>,
+    context_menu_focus_handle: FocusHandle,
+    context_menu_selected_ix: Option<usize>,
 
     title_should_move: bool,
     hover_resize_edge: Option<ResizeEdge>,
@@ -557,6 +584,7 @@ impl GitGpuiView {
         });
 
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let mut view = Self {
             state: store.snapshot(),
@@ -639,6 +667,8 @@ impl GitGpuiView {
             create_branch_input,
             popover: None,
             popover_anchor: None,
+            context_menu_focus_handle,
+            context_menu_selected_ix: None,
             title_should_move: false,
             hover_resize_edge: None,
             branches_scroll: UniformListScrollHandle::default(),
@@ -789,7 +819,17 @@ impl GitGpuiView {
             return None;
         }
 
+        let restrict_region = self
+            .diff_text_selecting
+            .then(|| self.diff_text_anchor)
+            .flatten()
+            .map(|p| p.region)
+            .filter(|r| matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight));
+
         for ((visible_ix, region), hitbox) in &self.diff_text_hitboxes {
+            if restrict_region.is_some_and(|restrict| restrict != *region) {
+                continue;
+            }
             if hitbox.bounds.contains(&position) {
                 return self.diff_text_pos_from_hitbox(*visible_ix, *region, position);
             }
@@ -797,6 +837,9 @@ impl GitGpuiView {
 
         let mut best: Option<((usize, DiffTextRegion), Pixels)> = None;
         for (key, hitbox) in &self.diff_text_hitboxes {
+            if restrict_region.is_some_and(|restrict| restrict != key.1) {
+                continue;
+            }
             let dy = if position.y < hitbox.bounds.top() {
                 hitbox.bounds.top() - position.y
             } else if position.y > hitbox.bounds.bottom() {
@@ -873,6 +916,14 @@ impl GitGpuiView {
             return None;
         }
         if visible_ix < start.visible_ix || visible_ix > end.visible_ix {
+            return None;
+        }
+
+        let split_region = (self.diff_view == DiffViewMode::Split
+            && start.region == end.region
+            && matches!(start.region, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight))
+        .then_some(start.region);
+        if split_region.is_some_and(|r| r != region) {
             return None;
         }
 
@@ -1079,28 +1130,53 @@ impl GitGpuiView {
                 continue;
             }
 
-            let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
-            let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
-            let combined = format!("{}\t{}", left.as_ref(), right.as_ref());
-            let left_len = left.len();
-            let combined_len = combined.len();
+            let split_region = (start.region == end.region
+                && matches!(start.region, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight))
+            .then_some(start.region);
 
-            let a = if visible_ix == start.visible_ix {
-                self.diff_text_combined_offset(start, left_len).min(combined_len)
+            if let Some(region) = split_region {
+                let text = self.diff_text_line_for_region(visible_ix, region);
+                let line_len = text.len();
+                let a = if visible_ix == start.visible_ix {
+                    start.offset.min(line_len)
+                } else {
+                    0
+                };
+                let b = if visible_ix == end.visible_ix {
+                    end.offset.min(line_len)
+                } else {
+                    line_len
+                };
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                if a < b {
+                    out.push_str(&text[a..b]);
+                }
             } else {
-                0
-            };
-            let b = if visible_ix == end.visible_ix {
-                self.diff_text_combined_offset(end, left_len).min(combined_len)
-            } else {
-                combined_len
-            };
+                let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                let combined = format!("{}\t{}", left.as_ref(), right.as_ref());
+                let left_len = left.len();
+                let combined_len = combined.len();
 
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            if a < b {
-                out.push_str(&combined[a..b]);
+                let a = if visible_ix == start.visible_ix {
+                    self.diff_text_combined_offset(start, left_len).min(combined_len)
+                } else {
+                    0
+                };
+                let b = if visible_ix == end.visible_ix {
+                    self.diff_text_combined_offset(end, left_len).min(combined_len)
+                } else {
+                    combined_len
+                };
+
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                if a < b {
+                    out.push_str(&combined[a..b]);
+                }
             }
         }
 
@@ -1138,14 +1214,16 @@ impl GitGpuiView {
 
         let start_region = match self.diff_view {
             DiffViewMode::Inline => DiffTextRegion::Inline,
-            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+            DiffViewMode::Split => self
+                .diff_text_head
+                .or(self.diff_text_anchor)
+                .map(|p| p.region)
+                .filter(|r| matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight))
+                .unwrap_or(DiffTextRegion::SplitLeft),
         };
 
         let end_visible_ix = self.diff_visible_indices.len() - 1;
-        let end_region = match self.diff_view {
-            DiffViewMode::Inline => DiffTextRegion::Inline,
-            DiffViewMode::Split => DiffTextRegion::SplitRight,
-        };
+        let end_region = start_region;
         let end_text = self.diff_text_line_for_region(end_visible_ix, end_region);
 
         self.diff_text_selecting = false;
@@ -1161,7 +1239,12 @@ impl GitGpuiView {
         });
     }
 
-    fn select_diff_text_rows_range(&mut self, start_visible_ix: usize, end_visible_ix: usize) {
+    fn select_diff_text_rows_range(
+        &mut self,
+        start_visible_ix: usize,
+        end_visible_ix: usize,
+        region: DiffTextRegion,
+    ) {
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
             return;
@@ -1171,14 +1254,15 @@ impl GitGpuiView {
         let b = end_visible_ix.min(list_len - 1);
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
 
-        let start_region = match self.diff_view {
+        let region = match self.diff_view {
             DiffViewMode::Inline => DiffTextRegion::Inline,
-            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+            DiffViewMode::Split => match region {
+                DiffTextRegion::SplitRight => DiffTextRegion::SplitRight,
+                _ => DiffTextRegion::SplitLeft,
+            },
         };
-        let end_region = match self.diff_view {
-            DiffViewMode::Inline => DiffTextRegion::Inline,
-            DiffViewMode::Split => DiffTextRegion::SplitRight,
-        };
+        let start_region = region;
+        let end_region = region;
 
         let end_text = self.diff_text_line_for_region(b, end_region);
 
@@ -1198,7 +1282,12 @@ impl GitGpuiView {
         self.diff_suppress_clicks_remaining = 2;
     }
 
-    fn double_click_select_diff_text(&mut self, visible_ix: usize, kind: DiffClickKind) {
+    fn double_click_select_diff_text(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        kind: DiffClickKind,
+    ) {
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
             return;
@@ -1207,7 +1296,7 @@ impl GitGpuiView {
 
         // File-diff view doesn't have file/hunk header blocks; treat as row selection.
         if self.is_file_diff_view_active() {
-            self.select_diff_text_rows_range(visible_ix, visible_ix);
+            self.select_diff_text_rows_range(visible_ix, visible_ix, region);
             return;
         }
 
@@ -1257,7 +1346,7 @@ impl GitGpuiView {
             },
         };
 
-        self.select_diff_text_rows_range(visible_ix, end);
+        self.select_diff_text_rows_range(visible_ix, end, region);
     }
 
     fn history_visible_columns(&self) -> (bool, bool) {
@@ -1457,7 +1546,7 @@ impl GitGpuiView {
                 for branch in branches {
                     tree.insert(&branch.name);
                 }
-                push_slash_tree_rows(&tree, &mut rows, 0, false);
+                push_slash_tree_rows(&tree, &mut rows, 0, false, BranchSection::Local, "");
             }
             Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Local,
@@ -1533,7 +1622,15 @@ impl GitGpuiView {
             for branch in branches {
                 tree.insert(&branch);
             }
-            push_slash_tree_rows(&tree, &mut rows, 1, true);
+            let name_prefix = format!("{remote}/");
+            push_slash_tree_rows(
+                &tree,
+                &mut rows,
+                1,
+                true,
+                BranchSection::Remote,
+                &name_prefix,
+            );
         }
 
         rows
@@ -3019,12 +3116,16 @@ fn push_slash_tree_rows(
     out: &mut Vec<BranchSidebarRow>,
     depth: usize,
     muted: bool,
+    section: BranchSection,
+    name_prefix: &str,
 ) {
     for (label, node) in &tree.children {
         if node.children.is_empty() {
             if node.is_leaf {
                 out.push(BranchSidebarRow::Branch {
                     label: label.clone().into(),
+                    name: format!("{name_prefix}{label}").into(),
+                    section,
                     depth,
                     muted,
                 });
@@ -3040,12 +3141,15 @@ fn push_slash_tree_rows(
         if node.is_leaf {
             out.push(BranchSidebarRow::Branch {
                 label: label.clone().into(),
+                name: format!("{name_prefix}{label}").into(),
+                section,
                 depth: depth + 1,
                 muted,
             });
         }
 
-        push_slash_tree_rows(node, out, depth + 1, muted);
+        let next_prefix = format!("{name_prefix}{label}/");
+        push_slash_tree_rows(node, out, depth + 1, muted, section, &next_prefix);
     }
 }
 
@@ -3709,11 +3813,7 @@ fn build_new_file_preview_from_diff(
 
 impl GitGpuiView {
     fn popover_layer(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
-            this.popover = None;
-            this.popover_anchor = None;
-            cx.notify();
-        });
+        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| this.close_popover(cx));
 
         let scrim = div()
             .id("popover_scrim")
