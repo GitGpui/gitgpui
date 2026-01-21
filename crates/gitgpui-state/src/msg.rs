@@ -11,6 +11,8 @@ use std::sync::Arc;
 pub enum RepoCommandKind {
     FetchAll,
     Pull { mode: PullMode },
+    PullBranch { remote: String, branch: String },
+    MergeRef { reference: String },
     Push,
     CheckoutConflict { path: PathBuf, side: ConflictSide },
 }
@@ -100,6 +102,15 @@ pub enum Msg {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
+    },
+    PullBranch {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    MergeRef {
+        repo_id: RepoId,
+        reference: String,
     },
     Push {
         repo_id: RepoId,
@@ -194,6 +205,10 @@ pub enum Msg {
     },
 
     RepoActionFinished {
+        repo_id: RepoId,
+        result: Result<(), Error>,
+    },
+    CommitFinished {
         repo_id: RepoId,
         result: Result<(), Error>,
     },
@@ -319,6 +334,21 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("Pull")
                 .field("repo_id", repo_id)
                 .field("mode", mode)
+                .finish(),
+            Msg::PullBranch {
+                repo_id,
+                remote,
+                branch,
+            } => f
+                .debug_struct("PullBranch")
+                .field("repo_id", repo_id)
+                .field("remote", remote)
+                .field("branch", branch)
+                .finish(),
+            Msg::MergeRef { repo_id, reference } => f
+                .debug_struct("MergeRef")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
                 .finish(),
             Msg::Push { repo_id } => f.debug_struct("Push").field("repo_id", repo_id).finish(),
             Msg::CheckoutConflictSide {
@@ -457,6 +487,11 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::CommitFinished { repo_id, result } => f
+                .debug_struct("CommitFinished")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             Msg::RepoCommandFinished {
                 repo_id,
                 command,
@@ -571,6 +606,15 @@ pub enum Effect {
     Pull {
         repo_id: RepoId,
         mode: PullMode,
+    },
+    PullBranch {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    MergeRef {
+        repo_id: RepoId,
+        reference: String,
     },
     Push {
         repo_id: RepoId,

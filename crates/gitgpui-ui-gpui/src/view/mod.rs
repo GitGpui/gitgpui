@@ -2,6 +2,7 @@ use crate::{theme::AppTheme, zed_port as zed};
 use gitgpui_core::diff::{AnnotatedDiffLine, annotate_unified};
 use gitgpui_core::domain::{
     Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
+    UpstreamDivergence,
 };
 use gitgpui_core::file_diff::FileDiffRow;
 use gitgpui_core::services::PullMode;
@@ -260,6 +261,8 @@ enum BranchSidebarRow {
         section: BranchSection,
         depth: usize,
         muted: bool,
+        divergence: Option<UpstreamDivergence>,
+        is_head: bool,
     },
     StashHeader { top_border: bool },
     StashPlaceholder { message: SharedString },
@@ -418,6 +421,7 @@ pub struct GitGpuiView {
 
     toasts: Vec<ToastState>,
 
+    hovered_repo_tab: Option<RepoId>,
     hovered_status_row: Option<(RepoId, DiffArea, std::path::PathBuf)>,
     hovered_stash_row: Option<usize>,
 
@@ -759,6 +763,7 @@ impl GitGpuiView {
             tooltip_visible_pos: None,
             tooltip_delay_seq: 0,
             toasts: Vec::new(),
+            hovered_repo_tab: None,
             hovered_status_row: None,
             hovered_stash_row: None,
             commit_details_message_input,
@@ -1688,11 +1693,32 @@ impl GitGpuiView {
                 });
             }
             Loadable::Ready(branches) => {
+                let head = match &repo.head_branch {
+                    Loadable::Ready(h) => Some(h.as_str()),
+                    _ => None,
+                };
+                let mut local_meta: std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)> =
+                    std::collections::HashMap::new();
+                for b in branches {
+                    local_meta.insert(
+                        b.name.clone(),
+                        (b.divergence, head.is_some_and(|h| h == b.name)),
+                    );
+                }
+
                 let mut tree = SlashTree::default();
                 for branch in branches {
                     tree.insert(&branch.name);
                 }
-                push_slash_tree_rows(&tree, &mut rows, 0, false, BranchSection::Local, "");
+                push_slash_tree_rows(
+                    &tree,
+                    &mut rows,
+                    Some(&local_meta),
+                    0,
+                    false,
+                    BranchSection::Local,
+                    "",
+                );
             }
             Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Local,
@@ -1772,6 +1798,7 @@ impl GitGpuiView {
             push_slash_tree_rows(
                 &tree,
                 &mut rows,
+                None,
                 1,
                 true,
                 BranchSection::Remote,
@@ -3380,6 +3407,7 @@ impl GitGpuiView {
 fn push_slash_tree_rows(
     tree: &SlashTree,
     out: &mut Vec<BranchSidebarRow>,
+    local_meta: Option<&std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)>>,
     depth: usize,
     muted: bool,
     section: BranchSection,
@@ -3388,12 +3416,19 @@ fn push_slash_tree_rows(
     for (label, node) in &tree.children {
         if node.children.is_empty() {
             if node.is_leaf {
+                let full = format!("{name_prefix}{label}");
+                let (divergence, is_head) = local_meta
+                    .and_then(|m| m.get(&full))
+                    .copied()
+                    .unwrap_or((None, false));
                 out.push(BranchSidebarRow::Branch {
                     label: label.clone().into(),
-                    name: format!("{name_prefix}{label}").into(),
+                    name: full.into(),
                     section,
                     depth,
                     muted,
+                    divergence,
+                    is_head,
                 });
             }
             continue;
@@ -3405,17 +3440,32 @@ fn push_slash_tree_rows(
         });
 
         if node.is_leaf {
+            let full = format!("{name_prefix}{label}");
+            let (divergence, is_head) = local_meta
+                .and_then(|m| m.get(&full))
+                .copied()
+                .unwrap_or((None, false));
             out.push(BranchSidebarRow::Branch {
                 label: label.clone().into(),
-                name: format!("{name_prefix}{label}").into(),
+                name: full.into(),
                 section,
                 depth: depth + 1,
                 muted,
+                divergence,
+                is_head,
             });
         }
 
         let next_prefix = format!("{name_prefix}{label}/");
-        push_slash_tree_rows(node, out, depth + 1, muted, section, &next_prefix);
+        push_slash_tree_rows(
+            node,
+            out,
+            local_meta,
+            depth + 1,
+            muted,
+            section,
+            &next_prefix,
+        );
     }
 }
 

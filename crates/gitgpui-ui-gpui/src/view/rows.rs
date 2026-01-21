@@ -159,12 +159,9 @@ impl GitGpuiView {
                 BranchSidebarRow::StashItem {
                     index,
                     message,
-                    created_at,
+                    created_at: _,
                 } => {
                     let repo_id = repo_id;
-                    let when = created_at
-                        .map(format_relative_time)
-                        .unwrap_or_else(|| "—".to_string());
                     let show_actions = this.hovered_stash_row == Some(index);
                     let tooltip: SharedString = if message.is_empty() {
                         "Stash".into()
@@ -203,15 +200,6 @@ impl GitGpuiView {
                                 .items_center()
                                 .gap_2()
                                 .ml_auto()
-                                .when(!show_actions, |right| {
-                                    right.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .whitespace_nowrap()
-                                            .child(when),
-                                    )
-                                })
                                 .when(show_actions, |right| {
                                     right
                                         .child(
@@ -302,7 +290,10 @@ impl GitGpuiView {
                     .text_sm()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text)
-                    .child(svg_icon("icons/folder.svg", theme.colors.text_muted, 12.0))
+                    .child(
+                        svg_icon("icons/folder.svg", theme.colors.text_muted, 14.0)
+                            .flex_shrink_0(),
+                    )
                     .child(name)
                     .into_any_element(),
                 BranchSidebarRow::GroupHeader { label, depth } => div()
@@ -329,6 +320,8 @@ impl GitGpuiView {
                     section,
                     depth,
                     muted,
+                    divergence,
+                    is_head,
                 } => {
                     let name_for_tooltip: SharedString = name.clone();
                     let branch_icon_color = if muted {
@@ -336,7 +329,7 @@ impl GitGpuiView {
                     } else {
                         theme.colors.text
                     };
-                    div()
+                    let mut row = div()
                     .id(("branch_item", ix))
                     .h(if section == BranchSection::Local {
                         px(24.0)
@@ -350,6 +343,14 @@ impl GitGpuiView {
                     .pl(indent_px(depth))
                     .pr_2()
                     .rounded(px(theme.radii.row))
+                    .when(is_head, |d| {
+                        d.bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.18 } else { 0.12 },
+                        ))
+                        .border_1()
+                        .border_color(with_alpha(theme.colors.accent, 0.90))
+                    })
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
                     .when(muted, |d| d.text_color(theme.colors.text_muted))
@@ -363,6 +364,43 @@ impl GitGpuiView {
                             .whitespace_nowrap()
                             .child(label),
                     )
+                    .when_some(divergence, |d, divg| {
+                        if divg.ahead == 0 && divg.behind == 0 {
+                            return d;
+                        }
+                        let mut badges = div().flex().items_center().gap_2().ml_auto();
+                        if divg.behind > 0 {
+                            let color = branch_icon_color;
+                            badges = badges.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(color)
+                                    .child(svg_icon("icons/arrow_down.svg", color, 11.0))
+                                    .child(divg.behind.to_string()),
+                            );
+                        }
+                        if divg.ahead > 0 {
+                            let color = branch_icon_color;
+                            badges = badges.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(color)
+                                    .child(svg_icon("icons/arrow_up.svg", color, 11.0))
+                                    .child(divg.ahead.to_string()),
+                            );
+                        }
+                        d.child(badges)
+                    });
+
+                    row = row
                     .on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -388,7 +426,9 @@ impl GitGpuiView {
                         }
                         cx.notify();
                     }))
-                    .into_any_element()
+                    ;
+
+                    row.into_any_element()
                 }
             })
             .collect()

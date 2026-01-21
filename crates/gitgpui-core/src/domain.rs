@@ -50,6 +50,7 @@ pub struct Branch {
     pub name: String,
     pub target: CommitId,
     pub upstream: Option<Upstream>,
+    pub divergence: Option<UpstreamDivergence>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

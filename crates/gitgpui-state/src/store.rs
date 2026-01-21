@@ -310,6 +310,16 @@ fn reduce(
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
         Msg::Pull { repo_id, mode } => vec![Effect::Pull { repo_id, mode }],
+        Msg::PullBranch {
+            repo_id,
+            remote,
+            branch,
+        } => vec![Effect::PullBranch {
+            repo_id,
+            remote,
+            branch,
+        }],
+        Msg::MergeRef { repo_id, reference } => vec![Effect::MergeRef { repo_id, reference }],
         Msg::Push { repo_id } => vec![Effect::Push { repo_id }],
         Msg::CheckoutConflictSide {
             repo_id,
@@ -623,6 +633,39 @@ fn reduce(
             effects
         }
 
+        Msg::CommitFinished { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                match result {
+                    Ok(()) => {
+                        repo_state.last_error = None;
+                        repo_state.diff_target = None;
+                        repo_state.diff = Loadable::NotLoaded;
+                        repo_state.diff_file = Loadable::NotLoaded;
+                        push_action_log(repo_state, true, "Commit".to_string(), "Commit: Completed".to_string(), None);
+                    }
+                    Err(e) => {
+                        repo_state.last_error = Some(e.to_string());
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        push_action_log(
+                            repo_state,
+                            false,
+                            "Commit".to_string(),
+                            format!("Commit failed: {e}"),
+                            Some(&e),
+                        );
+                    }
+                }
+            }
+
+            let scope = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.history_scope)
+                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
+            refresh_effects(repo_id, scope)
+        }
+
         Msg::RepoCommandFinished {
             repo_id,
             command,
@@ -724,6 +767,29 @@ fn push_command_log(
     }
 }
 
+fn push_action_log(
+    repo_state: &mut RepoState,
+    ok: bool,
+    command: String,
+    summary: String,
+    error: Option<&Error>,
+) {
+    const MAX_COMMAND_LOG: usize = 200;
+
+    repo_state.command_log.push(CommandLogEntry {
+        time: SystemTime::now(),
+        ok,
+        command,
+        summary,
+        stdout: String::new(),
+        stderr: error.map(|e| e.to_string()).unwrap_or_default(),
+    });
+    if repo_state.command_log.len() > MAX_COMMAND_LOG {
+        let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
+        repo_state.command_log.drain(0..extra);
+    }
+}
+
 fn summarize_command(
     command: &crate::msg::RepoCommandKind,
     output: &CommandOutput,
@@ -737,6 +803,8 @@ fn summarize_command(
         let label = match command {
             RepoCommandKind::FetchAll => "Fetch",
             RepoCommandKind::Pull { .. } => "Pull",
+            RepoCommandKind::PullBranch { .. } => "Pull",
+            RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::Push => "Push",
             RepoCommandKind::CheckoutConflict { side, .. } => match side {
                 ConflictSide::Ours => "Checkout ours",
@@ -771,6 +839,30 @@ fn summarize_command(
             } else {
                 "Pull: Completed".to_string()
             }
+        }
+        RepoCommandKind::PullBranch { remote, branch } => {
+            let base = if output.stdout.contains("Already up to date") {
+                "Already up to date"
+            } else if output.stdout.starts_with("Updating") {
+                "Fast-forwarded"
+            } else if output.stdout.starts_with("Merge") {
+                "Merged"
+            } else {
+                "Completed"
+            };
+            format!("Pull {remote}/{branch}: {base}")
+        }
+        RepoCommandKind::MergeRef { reference } => {
+            let base = if output.stdout.contains("Already up to date") {
+                "Already up to date"
+            } else if output.stdout.contains("Fast-forward") || output.stdout.starts_with("Updating") {
+                "Fast-forwarded"
+            } else if output.stdout.contains("Merge made by") {
+                "Merged"
+            } else {
+                "Completed"
+            };
+            format!("Merge {reference}: {base}")
         }
         RepoCommandKind::Push => {
             if output.stderr.contains("Everything up-to-date") {
@@ -1833,7 +1925,7 @@ fn schedule_effect(
         Effect::Commit { repo_id, message } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                    let _ = msg_tx.send(Msg::CommitFinished {
                         repo_id,
                         result: repo.commit(&message),
                     });
@@ -1860,6 +1952,39 @@ fn schedule_effect(
                         repo_id,
                         command: crate::msg::RepoCommandKind::Pull { mode },
                         result: repo.pull_with_output(mode),
+                    });
+                });
+            }
+        }
+
+        Effect::PullBranch {
+            repo_id,
+            remote,
+            branch,
+        } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::PullBranch {
+                            remote: remote.clone(),
+                            branch: branch.clone(),
+                        },
+                        result: repo.pull_branch_with_output(&remote, &branch),
+                    });
+                });
+            }
+        }
+
+        Effect::MergeRef { repo_id, reference } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::MergeRef {
+                            reference: reference.clone(),
+                        },
+                        result: repo.merge_ref_with_output(&reference),
                     });
                 });
             }

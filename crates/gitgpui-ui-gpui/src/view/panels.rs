@@ -15,6 +15,15 @@ enum ContextMenuAction {
     UnstagePath { repo_id: RepoId, path: std::path::PathBuf },
     FetchAll { repo_id: RepoId },
     Pull { repo_id: RepoId, mode: PullMode },
+    PullBranch {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    MergeRef {
+        repo_id: RepoId,
+        reference: String,
+    },
     OpenPopover { kind: PopoverKind },
     CopyText { text: String },
 }
@@ -347,6 +356,30 @@ impl GitGpuiView {
 
                 if *section == BranchSection::Remote {
                     items.push(ContextMenuItem::Separator);
+                    if let Some((remote, branch)) = name.split_once('/') {
+                        items.push(ContextMenuItem::Entry {
+                            label: "Pull into current".into(),
+                            icon: Some("↓".into()),
+                            shortcut: Some("P".into()),
+                            disabled: false,
+                            action: ContextMenuAction::PullBranch {
+                                repo_id: *repo_id,
+                                remote: remote.to_string(),
+                                branch: branch.to_string(),
+                            },
+                        });
+                        items.push(ContextMenuItem::Entry {
+                            label: "Merge into current".into(),
+                            icon: Some("⇄".into()),
+                            shortcut: Some("M".into()),
+                            disabled: false,
+                            action: ContextMenuAction::MergeRef {
+                                repo_id: *repo_id,
+                                reference: name.clone(),
+                            },
+                        });
+                        items.push(ContextMenuItem::Separator);
+                    }
                     items.push(ContextMenuItem::Entry {
                         label: "Fetch all".into(),
                         icon: Some("↓".into()),
@@ -506,6 +539,20 @@ impl GitGpuiView {
             }
             ContextMenuAction::Pull { repo_id, mode } => {
                 self.store.dispatch(Msg::Pull { repo_id, mode });
+            }
+            ContextMenuAction::PullBranch {
+                repo_id,
+                remote,
+                branch,
+            } => {
+                self.store.dispatch(Msg::PullBranch {
+                    repo_id,
+                    remote,
+                    branch,
+                });
+            }
+            ContextMenuAction::MergeRef { repo_id, reference } => {
+                self.store.dispatch(Msg::MergeRef { repo_id, reference });
             }
             ContextMenuAction::OpenPopover { kind } => {
                 self.popover = Some(kind);
@@ -887,6 +934,7 @@ impl GitGpuiView {
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
             let is_active = Some(repo_id) == active;
+            let show_close = self.hovered_repo_tab == Some(repo_id);
             let label: SharedString = repo
                 .spec
                 .workdir
@@ -909,19 +957,68 @@ impl GitGpuiView {
                 zed::TabPosition::Middle(ordering)
             };
 
-            let tab = zed::Tab::new(("repo_tab", repo_id.0))
+            let tooltip: SharedString = repo.spec.workdir.display().to_string().into();
+            let close_tooltip: SharedString = "Close repository".into();
+            let close_button = div()
+                .id(("repo_tab_close", repo_id.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(14.0))
+                .rounded(px(theme.radii.row))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .cursor_pointer()
+                .hover(move |s| s.bg(theme.colors.hover).text_color(theme.colors.text))
+                .active(move |s| s.bg(theme.colors.active).text_color(theme.colors.text))
+                .child("✕")
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    cx.stop_propagation();
+                    this.hovered_repo_tab = None;
+                    this.store.dispatch(Msg::CloseRepo { repo_id });
+                    cx.notify();
+                }))
+                .on_hover(cx.listener({
+                    let tooltip = tooltip.clone();
+                    let close_tooltip = close_tooltip.clone();
+                    move |this, hovering: &bool, _w, cx| {
+                        if *hovering {
+                            this.tooltip_text = Some(close_tooltip.clone());
+                        } else if this.tooltip_text.as_ref() == Some(&close_tooltip) {
+                            if this.hovered_repo_tab == Some(repo_id) {
+                                this.tooltip_text = Some(tooltip.clone());
+                            } else {
+                                this.tooltip_text = None;
+                            }
+                        }
+                        cx.notify();
+                    }
+                }));
+
+            let mut tab = zed::Tab::new(("repo_tab", repo_id.0))
                 .selected(is_active)
-                .position(position)
+                .position(position);
+            if show_close {
+                tab = tab.end_slot(close_button);
+            }
+
+            let tab = tab
                 .child(div().text_sm().line_clamp(1).child(label))
                 .render(theme)
                 .on_hover(cx.listener({
-                    let tooltip: SharedString =
-                        repo.spec.workdir.display().to_string().into();
                     move |this, hovering: &bool, _w, cx| {
                         if *hovering {
+                            this.hovered_repo_tab = Some(repo_id);
                             this.tooltip_text = Some(tooltip.clone());
-                        } else if this.tooltip_text.as_ref() == Some(&tooltip) {
-                            this.tooltip_text = None;
+                        } else {
+                            if this.hovered_repo_tab == Some(repo_id) {
+                                this.hovered_repo_tab = None;
+                            }
+                            if this.tooltip_text.as_ref() == Some(&tooltip)
+                                || this.tooltip_text.as_ref() == Some(&close_tooltip)
+                            {
+                                this.tooltip_text = None;
+                            }
                         }
                         cx.notify();
                     }
@@ -1792,7 +1889,10 @@ impl GitGpuiView {
             && let Some(selected_id) = repo.selected_commit.as_ref()
         {
             let max_scroll = self.commit_scroll.max_offset().height.max(px(0.0));
-            if max_scroll <= px(2.0) {
+            let commit_details_is_scrollable = max_scroll > px(2.0);
+            if !commit_details_is_scrollable
+                && self.commit_scroll.offset().y != px(0.0)
+            {
                 self.commit_scroll
                     .set_offset(point(px(0.0), px(0.0)));
             }
@@ -2297,21 +2397,24 @@ impl GitGpuiView {
                 .flex_1()
                 .min_h(px(0.0))
                 .child(header)
-                .child(
-                    div()
+                .child({
+                    let mut body_container = div()
                         .id("commit_details_body_container")
                         .relative()
                         .flex_1()
                         .min_h(px(0.0))
-                        .child(scroll_content)
-                        .child(
+                        .child(scroll_content);
+                    if commit_details_is_scrollable {
+                        body_container = body_container.child(
                             zed::Scrollbar::new(
                                 "commit_details_scrollbar",
                                 self.commit_scroll.clone(),
                             )
                             .render(theme),
-                        ),
-                )
+                        );
+                    }
+                    body_container
+                })
                 .into_any_element();
         }
 

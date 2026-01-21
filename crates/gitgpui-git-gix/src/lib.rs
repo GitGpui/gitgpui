@@ -1,7 +1,7 @@
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
     FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
-    RepoStatus, Tag, UpstreamDivergence,
+    RepoStatus, Tag, Upstream, UpstreamDivergence,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -369,29 +369,88 @@ impl GitRepository for GixRepo {
     }
 
     fn list_branches(&self) -> Result<Vec<Branch>> {
-        let repo = self._repo.to_thread_local();
+        fn parse_upstream_short(s: &str) -> Option<Upstream> {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            let (remote, branch) = s.split_once('/')?;
+            Some(Upstream {
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+            })
+        }
 
-        let refs = repo
-            .references()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
+        fn parse_upstream_track(s: &str) -> Option<UpstreamDivergence> {
+            let s = s.trim();
+            if s.is_empty() {
+                return None;
+            }
+            let s = s.trim_start_matches('[').trim_end_matches(']');
+            if s.trim().is_empty() || s.contains("gone") {
+                return None;
+            }
 
-        let iter = refs
-            .local_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?
-            .peeled()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+            let mut ahead: Option<usize> = None;
+            let mut behind: Option<usize> = None;
 
+            for part in s.split(',') {
+                let mut it = part.trim().split_whitespace();
+                let Some(kind) = it.next() else { continue };
+                let Some(n) = it.next().and_then(|x| x.parse::<usize>().ok()) else {
+                    continue;
+                };
+                match kind {
+                    "ahead" => ahead = Some(n),
+                    "behind" => behind = Some(n),
+                    _ => {}
+                }
+            }
+
+            let ahead = ahead.unwrap_or(0);
+            let behind = behind.unwrap_or(0);
+            Some(UpstreamDivergence { ahead, behind })
+        }
+
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("for-each-ref")
+            .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)")
+            .arg("refs/heads")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !output.status.success() {
+            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git for-each-ref failed: {stderr}"
+            ))));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let mut branches = Vec::new();
-        for reference in iter {
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
-            let name = reference.name().shorten().to_str_lossy().into_owned();
-            let target = CommitId(reference.id().detach().to_string());
+        for line in stdout.lines() {
+            let mut parts = line.split('\t');
+            let Some(name) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let Some(sha) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let upstream_short = parts.next().unwrap_or("").trim();
+            let track = parts.next().unwrap_or("").trim();
+
+            let upstream = parse_upstream_short(upstream_short);
+            let divergence = upstream
+                .as_ref()
+                .and_then(|_| parse_upstream_track(track));
 
             branches.push(Branch {
-                name,
-                target,
-                upstream: None,
+                name: name.to_string(),
+                target: CommitId(sha.to_string()),
+                upstream,
+                divergence,
             });
         }
 
@@ -583,6 +642,74 @@ impl GitRepository for GixRepo {
         Ok(match (ahead, behind) {
             (Some(ahead), Some(behind)) => Some(UpstreamDivergence { ahead, behind }),
             _ => None,
+        })
+    }
+
+    fn pull_branch_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        let command_str = format!("git pull --no-rebase {remote} {branch}");
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("pull")
+            .arg("--no-rebase")
+            .arg(remote)
+            .arg(branch)
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let exit_code = output.status.code();
+        if !output.status.success() {
+            let msg = stderr.trim().to_string();
+            return Err(Error::new(ErrorKind::Backend(if msg.is_empty() {
+                "git pull failed".to_string()
+            } else {
+                format!("git pull failed: {msg}")
+            })));
+        }
+
+        Ok(CommandOutput {
+            command: command_str,
+            stdout,
+            stderr,
+            exit_code,
+        })
+    }
+
+    fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
+        let command_str = format!("git merge {reference}");
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("color.ui=false")
+            .arg("--no-pager")
+            .arg("merge")
+            .arg(reference)
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let exit_code = output.status.code();
+        if !output.status.success() {
+            let msg = stderr.trim().to_string();
+            return Err(Error::new(ErrorKind::Backend(if msg.is_empty() {
+                "git merge failed".to_string()
+            } else {
+                format!("git merge failed: {msg}")
+            })));
+        }
+
+        Ok(CommandOutput {
+            command: command_str,
+            stdout,
+            stderr,
+            exit_code,
         })
     }
 

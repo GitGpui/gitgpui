@@ -117,6 +117,18 @@ pub trait GitRepository: Send + Sync {
         Ok(CommandOutput::empty_success("git push"))
     }
 
+    fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pulling a specific remote branch is not implemented for this backend",
+        )))
+    }
+
+    fn merge_ref_with_output(&self, _reference: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "merging a specific ref is not implemented for this backend",
+        )))
+    }
+
     fn blame_file(&self, _path: &Path, _rev: Option<&str>) -> Result<Vec<BlameLine>> {
         Err(Error::new(ErrorKind::Unsupported(
             "git blame is not implemented for this backend",

@@ -18,6 +18,15 @@ impl GitGpuiAssets {
             "icons/chevron_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/chevron_down.svg"
             ))),
+            "icons/cloud.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/cloud.svg"
+            ))),
+            "icons/computer.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/computer.svg"
+            ))),
+            "icons/folder.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/folder.svg"
+            ))),
             "icons/generic_minimize.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/generic_minimize.svg"
             ))),
@@ -45,6 +54,9 @@ impl GitGpuiAssets {
                 "icons/arrow_up.svg".into(),
                 "icons/box.svg".into(),
                 "icons/chevron_down.svg".into(),
+                "icons/cloud.svg".into(),
+                "icons/computer.svg".into(),
+                "icons/folder.svg".into(),
                 "icons/generic_minimize.svg".into(),
                 "icons/generic_maximize.svg".into(),
                 "icons/generic_restore.svg".into(),
