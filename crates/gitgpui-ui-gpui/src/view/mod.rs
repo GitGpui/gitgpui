@@ -207,9 +207,6 @@ enum PopoverKind {
     PullPicker,
     AppMenu,
     DiffHunks,
-    CommitModal {
-        repo_id: RepoId,
-    },
     CommitMenu {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -389,7 +386,6 @@ pub struct GitGpuiView {
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
     commit_message_input: Entity<zed::TextInput>,
-    commit_modal_input: Option<Entity<zed::TextInput>>,
     create_branch_input: Entity<zed::TextInput>,
 
     popover: Option<PopoverKind>,
@@ -732,7 +728,6 @@ impl GitGpuiView {
             open_repo_panel: false,
             open_repo_input,
             commit_message_input,
-            commit_modal_input: None,
             create_branch_input,
             popover: None,
             popover_anchor: None,
@@ -787,9 +782,6 @@ impl GitGpuiView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        if let Some(input) = &self.commit_modal_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
         self.create_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.history_search_input
@@ -1580,31 +1572,6 @@ impl GitGpuiView {
         });
         let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
         window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_commit_modal_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.commit_modal_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Commit message…".into(),
-                        multiline: true,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| input.set_theme(theme, cx));
         input.clone()
     }
 

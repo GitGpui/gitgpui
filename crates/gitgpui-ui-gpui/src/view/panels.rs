@@ -1651,154 +1651,6 @@ impl GitGpuiView {
                     )
                 }
             }
-            PopoverKind::CommitModal { repo_id } => {
-                let staged = self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .and_then(|r| match &r.status {
-                        Loadable::Ready(s) => Some(s.staged.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-
-                let staged_summary = format!("Staged files: {}", staged.len());
-                let staged_list = if staged.is_empty() {
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .text_color(theme.colors.text_muted)
-                        .child("No staged changes.")
-                        .into_any_element()
-                } else {
-                    let rows = staged
-                        .into_iter()
-                        .take(8)
-                        .map(|f| {
-                            let (label, color) = match f.kind {
-                                FileStatusKind::Added => ("Added", theme.colors.success),
-                                FileStatusKind::Modified => ("Modified", theme.colors.accent),
-                                FileStatusKind::Deleted => ("Deleted", theme.colors.danger),
-                                FileStatusKind::Renamed => ("Renamed", theme.colors.accent),
-                                FileStatusKind::Untracked => ("Untracked", theme.colors.warning),
-                                FileStatusKind::Conflicted => ("Conflicted", theme.colors.danger),
-                            };
-
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_2()
-                                .py_1()
-                                .child(zed::pill(theme, label, color))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .line_clamp(1)
-                                        .child(f.path.display().to_string()),
-                                )
-                        })
-                        .collect::<Vec<_>>();
-                    div().flex().flex_col().children(rows).into_any_element()
-                };
-
-                let input = self
-                    .commit_modal_input
-                    .clone()
-                    .map(|i| i.into_any_element())
-                    .unwrap_or_else(|| {
-                        zed::empty_state(theme, "Commit", "Input not initialized.")
-                            .into_any_element()
-                    });
-
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(520.0))
-                    .max_w(px(760.0))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::BOLD)
-                                    .child("Commit"),
-                            )
-                            .child(
-                                div()
-                                    .id("commit_modal_close")
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(px(theme.radii.row))
-                                    .hover(move |s| s.bg(theme.colors.hover))
-                                    .child("✕")
-                                    .on_click(close),
-                            ),
-                    )
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(staged_summary),
-                    )
-                    .child(staged_list)
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(div().px_2().py_1().h(px(140.0)).child(input))
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                zed::Button::new("commit_modal_cancel", "Cancel")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            )
-                            .child(
-                                zed::Button::new("commit_modal_commit", "Commit")
-                                    .style(zed::ButtonStyle::Filled)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                                        let message = this
-                                            .commit_modal_input
-                                            .as_ref()
-                                            .map(|i| {
-                                                i.read_with(cx, |i, _| i.text().trim().to_string())
-                                            })
-                                            .unwrap_or_default();
-                                        if !message.is_empty() {
-                                            this.store.dispatch(Msg::Commit { repo_id, message });
-                                            this.commit_message_input
-                                                .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                            if let Some(input) = &this.commit_modal_input {
-                                                input.update(cx, |i, cx| {
-                                                    i.set_text(String::new(), cx)
-                                                });
-                                            }
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                        }
-                                        cx.notify();
-                                    }),
-                            ),
-                    )
-            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(
                     PopoverKind::CommitMenu { repo_id, commit_id },
@@ -2695,16 +2547,19 @@ impl GitGpuiView {
                     .child(
                         zed::Button::new("commit", "Commit")
                             .style(zed::ButtonStyle::Filled)
-                            .on_click(theme, cx, |this, e, window, cx| {
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                let Some(repo_id) = this.active_repo_id() else {
+                                    return;
+                                };
                                 let message = this
                                     .commit_message_input
-                                    .read_with(cx, |i, _| i.text().to_string());
-                                let input = this.ensure_commit_modal_input(window, cx);
-                                input.update(cx, |i, cx| i.set_text(message, cx));
-                                if let Some(repo_id) = this.active_repo_id() {
-                                    this.popover = Some(PopoverKind::CommitModal { repo_id });
-                                    this.popover_anchor = Some(e.position());
+                                    .read_with(cx, |i, _| i.text().trim().to_string());
+                                if message.is_empty() {
+                                    return;
                                 }
+                                this.store.dispatch(Msg::Commit { repo_id, message });
+                                this.commit_message_input
+                                    .update(cx, |i, cx| i.set_text(String::new(), cx));
                                 cx.notify();
                             })
                             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
