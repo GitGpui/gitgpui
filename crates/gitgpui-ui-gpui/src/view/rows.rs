@@ -119,6 +119,11 @@ impl GitGpuiView {
                         )
                         .into_any_element()
                 }
+                BranchSidebarRow::SectionSpacer => div()
+                    .id(("branch_section_spacer", ix))
+                    .h(px(10.0))
+                    .w_full()
+                    .into_any_element(),
                 BranchSidebarRow::StashHeader { top_border } => div()
                     .id(("stash_section", ix))
                     .h(px(22.0))
@@ -322,6 +327,7 @@ impl GitGpuiView {
                     muted,
                     divergence,
                     is_head,
+                    is_upstream,
                 } => {
                     let name_for_tooltip: SharedString = name.clone();
                     let branch_icon_color = if muted {
@@ -364,14 +370,40 @@ impl GitGpuiView {
                             .whitespace_nowrap()
                             .child(label),
                     )
-                    .when_some(divergence, |d, divg| {
-                        if divg.ahead == 0 && divg.behind == 0 {
-                            return d;
-                        }
-                        let mut badges = div().flex().items_center().gap_2().ml_auto();
+                    ;
+
+                    let mut right = div().flex().items_center().gap_2().ml_auto();
+                    let mut has_right = false;
+
+                    if is_upstream && section == BranchSection::Remote {
+                        has_right = true;
+                        right = right.child(
+                            div()
+                                .px_1()
+                                .py(px(1.0))
+                                .rounded(px(999.0))
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .bg(with_alpha(
+                                    theme.colors.accent,
+                                    if theme.is_dark { 0.16 } else { 0.10 },
+                                ))
+                                .border_1()
+                                .border_color(with_alpha(
+                                    theme.colors.accent,
+                                    if theme.is_dark { 0.32 } else { 0.22 },
+                                ))
+                                .child("Upstream"),
+                        );
+                    }
+
+                    if let Some(divg) = divergence
+                        && (divg.ahead > 0 || divg.behind > 0)
+                    {
+                        has_right = true;
                         if divg.behind > 0 {
-                            let color = branch_icon_color;
-                            badges = badges.child(
+                            let color = theme.colors.warning;
+                            right = right.child(
                                 div()
                                     .flex()
                                     .items_center()
@@ -384,8 +416,8 @@ impl GitGpuiView {
                             );
                         }
                         if divg.ahead > 0 {
-                            let color = branch_icon_color;
-                            badges = badges.child(
+                            let color = theme.colors.success;
+                            right = right.child(
                                 div()
                                     .flex()
                                     .items_center()
@@ -397,8 +429,11 @@ impl GitGpuiView {
                                     .child(divg.ahead.to_string()),
                             );
                         }
-                        d.child(badges)
-                    });
+                    }
+
+                    if has_right {
+                        row = row.child(right);
+                    }
 
                     row = row
                     .on_mouse_down(
@@ -418,7 +453,13 @@ impl GitGpuiView {
                         }),
                     )
                     .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let text: SharedString = format!("Branch: {name_for_tooltip}").into();
+                        let upstream_note = if is_upstream && section == BranchSection::Remote {
+                            " (upstream for current branch)"
+                        } else {
+                            ""
+                        };
+                        let text: SharedString =
+                            format!("Branch: {name_for_tooltip}{upstream_note}").into();
                         if *hovering {
                             this.tooltip_text = Some(text);
                         } else if this.tooltip_text.as_ref() == Some(&text) {
@@ -734,6 +775,8 @@ impl GitGpuiView {
                 let refs = commit_refs(repo, commit);
                 let when = format_relative_time(commit.time);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
+                let show_graph_color_marker =
+                    repo.history_scope == gitgpui_core::domain::LogScope::AllBranches;
 
                 Some(history_table_row(
                     theme,
@@ -743,6 +786,7 @@ impl GitGpuiView {
                     col_sha,
                     show_date,
                     show_sha,
+                    show_graph_color_marker,
                     list_ix,
                     repo.id,
                     commit,
@@ -1811,6 +1855,7 @@ fn history_table_row(
     col_sha: Pixels,
     show_date: bool,
     show_sha: bool,
+    show_graph_color_marker: bool,
     ix: usize,
     repo_id: RepoId,
     commit: &Commit,
@@ -1925,6 +1970,7 @@ fn history_table_row(
                 .h_full()
                 .flex()
                 .justify_center()
+                .overflow_hidden()
                 .child(graph),
         )
         .child(
@@ -1934,13 +1980,29 @@ fn history_table_row(
                 .flex()
                 .items_center()
                 .child(
-                    div()
+                    {
+                        let mut summary = div()
                         .flex_1()
                         .min_w(px(0.0))
+                        .flex()
+                        .items_center()
+                        .gap_2()
                         .text_sm()
                         .line_clamp(1)
                         .whitespace_nowrap()
-                        .child(commit.summary.clone()),
+                        ;
+                        if show_graph_color_marker {
+                            summary = summary.child(
+                                div()
+                                    .w(px(2.0))
+                                    .h(px(12.0))
+                                    .rounded(px(999.0))
+                                    .bg(node_color)
+                                    .flex_none(),
+                            );
+                        }
+                        summary.child(commit.summary.clone())
+                    },
                 ),
         )
         .when(show_date, |row| {
@@ -1968,6 +2030,13 @@ fn history_table_row(
             )
         })
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            let selection_changed = this
+                .active_repo()
+                .and_then(|r| r.selected_commit.as_ref())
+                != Some(&commit_id);
+            if selection_changed {
+                this.commit_scroll.set_offset(point(px(0.0), px(0.0)));
+            }
             this.store.dispatch(Msg::SelectCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
@@ -2176,154 +2245,156 @@ fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl In
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
-            if row.lanes_now.is_empty() {
-                return;
-            }
-
-            let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
-            let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
-            let node_radius = if row.is_merge { px(3.5) } else { px(3.0) };
-
-            let y_top = bounds.top();
-            let y_center = bounds.top() + bounds.size.height / 2.0;
-            let y_bottom = bounds.bottom();
-
-            let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
-            let node_x = x_for_col(row.node_col);
-
-            let mut col_now: std::collections::HashMap<history_graph::LaneId, usize> =
-                std::collections::HashMap::new();
-            for (ix, lane) in row.lanes_now.iter().enumerate() {
-                col_now.insert(lane.id, ix);
-            }
-
-            let mut col_next: std::collections::HashMap<history_graph::LaneId, usize> =
-                std::collections::HashMap::new();
-            for (ix, lane) in row.lanes_next.iter().enumerate() {
-                col_next.insert(lane.id, ix);
-            }
-
-            // Incoming vertical segments.
-            for lane in row.lanes_now.iter() {
-                let Some(col) = col_now.get(&lane.id).copied() else {
-                    continue;
-                };
-                if !row.incoming_ids.contains(&lane.id) {
-                    continue;
+            window.paint_layer(bounds, |window| {
+                if row.lanes_now.is_empty() {
+                    return;
                 }
-                let x = x_for_col(col);
-                let mut path = PathBuilder::stroke(stroke_width);
-                path.move_to(point(bounds.left() + x, y_top));
-                path.line_to(point(bounds.left() + x, y_center));
-                if let Ok(p) = path.build() {
-                    window.paint_path(p, lane.color);
-                }
-            }
 
-            // Incoming join edges into the node (used both for merge commits and fork points).
-            for edge in row.joins_in.iter() {
-                if edge.from_col == edge.to_col {
-                    continue;
-                }
-                let x_from = x_for_col(edge.from_col);
-                let x_to = x_for_col(edge.to_col);
-                let mut path = PathBuilder::stroke(stroke_width);
-                path.move_to(point(bounds.left() + x_from, y_center));
-                if (x_from - x_to).abs() < px(0.5) {
-                    path.line_to(point(bounds.left() + x_to, y_center));
-                } else {
-                    let ctrl = px(8.0);
-                    path.cubic_bezier_to(
-                        point(bounds.left() + x_to, y_center),
-                        point(bounds.left() + x_from + ctrl, y_center),
-                        point(bounds.left() + x_to - ctrl, y_center),
-                    );
-                }
-                if let Ok(p) = path.build() {
-                    window.paint_path(p, edge.color);
-                }
-            }
+                let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+                let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
+                let node_radius = if row.is_merge { px(3.5) } else { px(3.0) };
 
-            // Continuations from current row to next row.
-            for lane in row.lanes_next.iter() {
-                let Some(out_col) = col_next.get(&lane.id).copied() else {
-                    continue;
-                };
-                let x_out = x_for_col(out_col);
+                let y_top = bounds.top();
+                let y_center = bounds.top() + bounds.size.height / 2.0;
+                let y_bottom = bounds.bottom();
 
-                let x_from = match col_now.get(&lane.id).copied() {
-                    Some(now_col) => x_for_col(now_col),
-                    None => node_x,
-                };
+                let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
+                let node_x = x_for_col(row.node_col);
 
-                let mut path = PathBuilder::stroke(stroke_width);
-                path.move_to(point(bounds.left() + x_from, y_center));
-                if (x_from - x_out).abs() < px(0.5) {
-                    path.line_to(point(bounds.left() + x_out, y_bottom));
-                } else {
-                    let y_mid = y_center + (y_bottom - y_center) * 0.5;
-                    path.cubic_bezier_to(
-                        point(bounds.left() + x_out, y_bottom),
-                        point(bounds.left() + x_from, y_mid),
-                        point(bounds.left() + x_out, y_mid),
-                    );
+                let mut col_now: std::collections::HashMap<history_graph::LaneId, usize> =
+                    std::collections::HashMap::new();
+                for (ix, lane) in row.lanes_now.iter().enumerate() {
+                    col_now.insert(lane.id, ix);
                 }
-                if let Ok(p) = path.build() {
-                    window.paint_path(p, lane.color);
-                }
-            }
 
-            // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
-            for edge in row.edges_out.iter() {
-                if edge.from_col == edge.to_col {
-                    continue;
+                let mut col_next: std::collections::HashMap<history_graph::LaneId, usize> =
+                    std::collections::HashMap::new();
+                for (ix, lane) in row.lanes_next.iter().enumerate() {
+                    col_next.insert(lane.id, ix);
                 }
-                let x_to = x_for_col(edge.to_col);
-                let mut path = PathBuilder::stroke(stroke_width);
-                path.move_to(point(bounds.left() + node_x, y_center));
-                if (node_x - x_to).abs() < px(0.5) {
-                    path.line_to(point(bounds.left() + x_to, y_bottom));
-                } else {
-                    let y_mid = y_center + (y_bottom - y_center) * 0.5;
-                    path.cubic_bezier_to(
-                        point(bounds.left() + x_to, y_bottom),
-                        point(bounds.left() + node_x, y_mid),
-                        point(bounds.left() + x_to, y_mid),
-                    );
-                }
-                if let Ok(p) = path.build() {
-                    window.paint_path(p, edge.color);
-                }
-            }
 
-            let node_color = row
-                .lanes_now
-                .get(row.node_col)
-                .map(|l| l.color)
-                .unwrap_or(theme.colors.text_muted);
-            let node_border = px(1.0);
-            let outer_r = node_radius + node_border;
-            let black = gpui::rgba(0x000000ff);
-            window.paint_quad(
-                fill(
-                    gpui::Bounds::new(
-                        point(bounds.left() + node_x - outer_r, y_center - outer_r),
-                        size(outer_r * 2.0, outer_r * 2.0),
-                    ),
-                    black,
-                )
-                .corner_radii(outer_r),
-            );
-            window.paint_quad(
-                fill(
-                    gpui::Bounds::new(
-                        point(bounds.left() + node_x - node_radius, y_center - node_radius),
-                        size(node_radius * 2.0, node_radius * 2.0),
-                    ),
-                    node_color,
-                )
-                .corner_radii(node_radius),
-            );
+                // Incoming vertical segments.
+                for lane in row.lanes_now.iter() {
+                    let Some(col) = col_now.get(&lane.id).copied() else {
+                        continue;
+                    };
+                    if !row.incoming_ids.contains(&lane.id) {
+                        continue;
+                    }
+                    let x = x_for_col(col);
+                    let mut path = PathBuilder::stroke(stroke_width);
+                    path.move_to(point(bounds.left() + x, y_top));
+                    path.line_to(point(bounds.left() + x, y_center));
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, lane.color);
+                    }
+                }
+
+                // Incoming join edges into the node (used both for merge commits and fork points).
+                for edge in row.joins_in.iter() {
+                    if edge.from_col == edge.to_col {
+                        continue;
+                    }
+                    let x_from = x_for_col(edge.from_col);
+                    let x_to = x_for_col(edge.to_col);
+                    let mut path = PathBuilder::stroke(stroke_width);
+                    path.move_to(point(bounds.left() + x_from, y_center));
+                    if (x_from - x_to).abs() < px(0.5) {
+                        path.line_to(point(bounds.left() + x_to, y_center));
+                    } else {
+                        let ctrl = px(8.0);
+                        path.cubic_bezier_to(
+                            point(bounds.left() + x_to, y_center),
+                            point(bounds.left() + x_from + ctrl, y_center),
+                            point(bounds.left() + x_to - ctrl, y_center),
+                        );
+                    }
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, edge.color);
+                    }
+                }
+
+                // Continuations from current row to next row.
+                for lane in row.lanes_next.iter() {
+                    let Some(out_col) = col_next.get(&lane.id).copied() else {
+                        continue;
+                    };
+                    let x_out = x_for_col(out_col);
+
+                    let x_from = match col_now.get(&lane.id).copied() {
+                        Some(now_col) => x_for_col(now_col),
+                        None => node_x,
+                    };
+
+                    let mut path = PathBuilder::stroke(stroke_width);
+                    path.move_to(point(bounds.left() + x_from, y_center));
+                    if (x_from - x_out).abs() < px(0.5) {
+                        path.line_to(point(bounds.left() + x_out, y_bottom));
+                    } else {
+                        let y_mid = y_center + (y_bottom - y_center) * 0.5;
+                        path.cubic_bezier_to(
+                            point(bounds.left() + x_out, y_bottom),
+                            point(bounds.left() + x_from, y_mid),
+                            point(bounds.left() + x_out, y_mid),
+                        );
+                    }
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, lane.color);
+                    }
+                }
+
+                // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
+                for edge in row.edges_out.iter() {
+                    if edge.from_col == edge.to_col {
+                        continue;
+                    }
+                    let x_to = x_for_col(edge.to_col);
+                    let mut path = PathBuilder::stroke(stroke_width);
+                    path.move_to(point(bounds.left() + node_x, y_center));
+                    if (node_x - x_to).abs() < px(0.5) {
+                        path.line_to(point(bounds.left() + x_to, y_bottom));
+                    } else {
+                        let y_mid = y_center + (y_bottom - y_center) * 0.5;
+                        path.cubic_bezier_to(
+                            point(bounds.left() + x_to, y_bottom),
+                            point(bounds.left() + node_x, y_mid),
+                            point(bounds.left() + x_to, y_mid),
+                        );
+                    }
+                    if let Ok(p) = path.build() {
+                        window.paint_path(p, edge.color);
+                    }
+                }
+
+                let node_color = row
+                    .lanes_now
+                    .get(row.node_col)
+                    .map(|l| l.color)
+                    .unwrap_or(theme.colors.text_muted);
+                let node_border = px(1.0);
+                let outer_r = node_radius + node_border;
+                let black = gpui::rgba(0x000000ff);
+                window.paint_quad(
+                    fill(
+                        gpui::Bounds::new(
+                            point(bounds.left() + node_x - outer_r, y_center - outer_r),
+                            size(outer_r * 2.0, outer_r * 2.0),
+                        ),
+                        black,
+                    )
+                    .corner_radii(outer_r),
+                );
+                window.paint_quad(
+                    fill(
+                        gpui::Bounds::new(
+                            point(bounds.left() + node_x - node_radius, y_center - node_radius),
+                            size(node_radius * 2.0, node_radius * 2.0),
+                        ),
+                        node_color,
+                    )
+                    .corner_radii(node_radius),
+                );
+            });
         },
     )
     .w_full()

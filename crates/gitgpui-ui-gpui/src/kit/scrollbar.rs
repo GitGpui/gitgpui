@@ -32,12 +32,26 @@ pub struct Scrollbar {
     debug_selector: Option<&'static str>,
 }
 
-#[derive(Default)]
 struct ScrollbarInteractionState {
     drag_offset_y: Option<Pixels>,
     showing: bool,
     hide_task: Option<gpui::Task<()>>,
     last_scroll_y: Pixels,
+    /// Some GPUI scroll surfaces report positive offsets while others report negative offsets.
+    /// Track the observed sign so the thumb moves/drag-scrolls in the correct direction.
+    offset_sign_y: i8,
+}
+
+impl Default for ScrollbarInteractionState {
+    fn default() -> Self {
+        Self {
+            drag_offset_y: None,
+            showing: false,
+            hide_task: None,
+            last_scroll_y: px(0.0),
+            offset_sign_y: -1,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -78,11 +92,21 @@ impl Scrollbar {
         let paint = canvas(
             move |bounds, window, _cx| {
                 let viewport_h = {
-                    let h = prepaint_handle.bounds().size.height;
-                    if h > px(0.0) { h } else { bounds.size.height }
+                    let h_handle = prepaint_handle.bounds().size.height;
+                    let h_bounds = bounds.size.height;
+                    if h_handle > px(0.0) {
+                        h_handle.min(h_bounds)
+                    } else {
+                        h_bounds
+                    }
                 };
                 let max_offset = prepaint_handle.max_offset().height.max(px(0.0));
-                let scroll_y = (-prepaint_handle.offset().y).max(px(0.0)).min(max_offset);
+                let raw_offset_y = prepaint_handle.offset().y;
+                let scroll_y = if raw_offset_y < px(0.0) {
+                    (-raw_offset_y).max(px(0.0)).min(max_offset)
+                } else {
+                    raw_offset_y.max(px(0.0)).min(max_offset)
+                };
 
                 let metrics = vertical_thumb_metrics(viewport_h, max_offset, scroll_y)?;
 
@@ -166,7 +190,22 @@ impl Scrollbar {
                 let is_dragging = interaction.read(cx).drag_offset_y.is_some();
 
                 let max_offset = handle.max_offset().height.max(px(0.0));
-                let scroll_y = (-handle.offset().y).max(px(0.0)).min(max_offset);
+                let raw_offset_y = handle.offset().y;
+                let observed_sign = if raw_offset_y < px(0.0) {
+                    -1
+                } else if raw_offset_y > px(0.0) {
+                    1
+                } else {
+                    interaction.read(cx).offset_sign_y
+                };
+                if observed_sign != interaction.read(cx).offset_sign_y && raw_offset_y != px(0.0) {
+                    interaction.update(cx, |state, _cx| state.offset_sign_y = observed_sign);
+                }
+                let scroll_y = if observed_sign < 0 {
+                    (-raw_offset_y).max(px(0.0)).min(max_offset)
+                } else {
+                    raw_offset_y.max(px(0.0)).min(max_offset)
+                };
                 let scrolled = interaction.read(cx).last_scroll_y != scroll_y;
                 if scrolled {
                     interaction.update(cx, |state, _cx| {
@@ -258,12 +297,14 @@ impl Scrollbar {
                                 state.showing = true;
                                 state.hide_task.take();
                             });
+                            let sign = interaction.read(cx).offset_sign_y;
                             let offset_y = compute_vertical_click_offset(
                                 event.position.y,
                                 track_bounds,
                                 thumb_h,
                                 thumb_h / 2.0,
                                 max_offset,
+                                sign,
                             );
                             let x = handle.offset().x;
                             handle.set_offset(point(x, offset_y));
@@ -291,12 +332,14 @@ impl Scrollbar {
                             return;
                         }
 
+                        let sign = interaction.read(cx).offset_sign_y;
                         let offset_y = compute_vertical_click_offset(
                             event.position.y,
                             track_bounds,
                             thumb_h,
                             grab,
                             max_offset,
+                            sign,
                         );
                         let x = handle.offset().x;
                         handle.set_offset(point(x, offset_y));
@@ -351,10 +394,19 @@ impl Scrollbar {
     pub fn thumb_visible_for_test(handle: &ScrollHandle, viewport_h_fallback: Pixels) -> bool {
         let viewport_h = {
             let h = handle.bounds().size.height;
-            if h > px(0.0) { h } else { viewport_h_fallback }
+            if h > px(0.0) {
+                h.min(viewport_h_fallback)
+            } else {
+                viewport_h_fallback
+            }
         };
         let max_offset = handle.max_offset().height.max(px(0.0));
-        let scroll_y = (-handle.offset().y).max(px(0.0)).min(max_offset);
+        let raw_offset_y = handle.offset().y;
+        let scroll_y = if raw_offset_y < px(0.0) {
+            (-raw_offset_y).max(px(0.0)).min(max_offset)
+        } else {
+            raw_offset_y.max(px(0.0)).min(max_offset)
+        };
         vertical_thumb_metrics(viewport_h, max_offset, scroll_y).is_some()
     }
 }
@@ -389,6 +441,7 @@ fn compute_vertical_click_offset(
     thumb_size: Pixels,
     thumb_offset: Pixels,
     max_offset: Pixels,
+    sign_y: i8,
 ) -> Pixels {
     let viewport_size = track_bounds.size.height.max(px(0.0));
     if viewport_size <= px(0.0) || max_offset <= px(0.0) {
@@ -406,7 +459,9 @@ fn compute_vertical_click_offset(
         0.0
     };
 
-    (-max_offset * pct).max(-max_offset).min(px(0.0))
+    let scroll_y = (max_offset * pct).max(px(0.0)).min(max_offset);
+    let sign = if sign_y < 0 { -1.0 } else { 1.0 };
+    scroll_y * sign
 }
 
 fn vertical_thumb_metrics(

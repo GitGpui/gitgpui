@@ -1,5 +1,7 @@
 use super::*;
 
+const COMMIT_DETAILS_FILES_RENDER_LIMIT: usize = 500;
+
 #[derive(Clone)]
 enum ContextMenuAction {
     SelectDiff { repo_id: RepoId, target: DiffTarget },
@@ -902,7 +904,7 @@ impl GitGpuiView {
                     .flex()
                     .justify_end()
                     .whitespace_nowrap()
-                    .child("COMMIT DATE / TIME"),
+                    .child("Commit date"),
             );
         }
 
@@ -1111,24 +1113,18 @@ impl GitGpuiView {
         let theme = self.theme;
         let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
         let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
-        let icon = |path: &'static str| {
+        let icon = |path: &'static str, color: gpui::Rgba| {
             gpui::svg()
                 .path(path)
                 .w(px(14.0))
                 .h(px(14.0))
-                .text_color(theme.colors.text)
+                .text_color(color)
         };
-        let count_badge = |count: usize| {
+        let count_badge = |count: usize, color: gpui::Rgba| {
             div()
-                .px(px(6.0))
-                .py(px(1.0))
-                .rounded(px(theme.radii.pill))
-                .bg(with_alpha(
-                    theme.colors.text_muted,
-                    if theme.is_dark { 0.22 } else { 0.18 },
-                ))
                 .text_xs()
                 .font_weight(FontWeight::BOLD)
+                .text_color(color)
                 .child(count.to_string())
                 .into_any_element()
         };
@@ -1155,6 +1151,14 @@ impl GitGpuiView {
                 _ => None,
             })
             .unwrap_or((0, 0));
+
+        let can_stash = self
+            .active_repo()
+            .and_then(|r| match &r.status {
+                Loadable::Ready(s) => Some(!s.staged.is_empty() || !s.unstaged.is_empty()),
+                _ => None,
+            })
+            .unwrap_or(false);
 
         let repo_picker = div()
             .id("repo_picker")
@@ -1234,14 +1238,19 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
+        let pull_color = if pull_count > 0 {
+            theme.colors.warning
+        } else {
+            theme.colors.text
+        };
         let mut pull_main = zed::Button::new("pull_main", "Pull")
-            .start_slot(icon("icons/arrow_down.svg"))
+            .start_slot(icon("icons/arrow_down.svg", pull_color))
             .style(zed::ButtonStyle::Subtle);
         if pull_count > 0 {
-            pull_main = pull_main.end_slot(count_badge(pull_count));
+            pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
         }
         let pull_menu = zed::Button::new("pull_menu", "")
-            .start_slot(icon("icons/chevron_down.svg"))
+            .start_slot(icon("icons/chevron_down.svg", theme.colors.text))
             .style(zed::ButtonStyle::Subtle);
 
         let pull = div()
@@ -1274,11 +1283,16 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
+        let push_color = if push_count > 0 {
+            theme.colors.success
+        } else {
+            theme.colors.text
+        };
         let mut push = zed::Button::new("push", "Push")
-            .start_slot(icon("icons/arrow_up.svg"))
+            .start_slot(icon("icons/arrow_up.svg", push_color))
             .style(zed::ButtonStyle::Outlined);
         if push_count > 0 {
-            push = push.end_slot(count_badge(push_count));
+            push = push.end_slot(count_badge(push_count, push_color));
         }
         let push = push.on_click(theme, cx, |this, _e, _w, cx| {
             if let Some(repo_id) = this.active_repo_id() {
@@ -1297,20 +1311,24 @@ impl GitGpuiView {
         }));
 
         let stash = zed::Button::new("stash", "Stash")
-            .start_slot(icon("icons/box.svg"))
+            .start_slot(icon("icons/box.svg", theme.colors.text))
             .style(zed::ButtonStyle::Outlined)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::Stash {
-                        repo_id,
-                        message: "WIP".to_string(),
-                        include_untracked: true,
-                    });
-                }
-                cx.notify();
+            .disabled(!can_stash)
+            .on_click(theme, cx, |this, e, window, cx| {
+                this.stash_message_input
+                    .update(cx, |i, cx| i.set_text(String::new(), cx));
+                let focus = this
+                    .stash_message_input
+                    .read_with(cx, |i, _| i.focus_handle());
+                window.focus(&focus);
+                this.open_popover_at(PopoverKind::StashPrompt, e.position(), window, cx);
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Create stash (WIP)".into();
+            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                let text: SharedString = if can_stash {
+                    "Create stash…".into()
+                } else {
+                    "No changes to stash".into()
+                };
                 if *hovering {
                     this.tooltip_text = Some(text);
                 } else if this.tooltip_text.as_ref() == Some(&text) {
@@ -1320,7 +1338,7 @@ impl GitGpuiView {
             }));
 
         let create_branch = zed::Button::new("create_branch", "Branch")
-            .start_slot(icon("icons/git_branch.svg"))
+            .start_slot(icon("icons/git_branch.svg", theme.colors.text))
             .style(zed::ButtonStyle::Outlined)
             .on_click(theme, cx, |this, e, window, cx| {
                 this.create_branch_input
@@ -1385,6 +1403,7 @@ impl GitGpuiView {
         let anchor_corner = match &kind {
             PopoverKind::PullPicker
             | PopoverKind::CreateBranch
+            | PopoverKind::StashPrompt
             | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
             _ => Corner::TopLeft,
         };
@@ -1609,6 +1628,68 @@ impl GitGpuiView {
                                         && !name.is_empty()
                                     {
                                         this.store.dispatch(Msg::CreateBranch { repo_id, name });
+                                    }
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        ),
+                ),
+            PopoverKind::StashPrompt => div()
+                .flex()
+                .flex_col()
+                .min_w(px(260.0))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .child("Create stash"),
+                )
+                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .child(self.stash_message_input.clone()),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            zed::Button::new("stash_cancel", "Cancel")
+                                .style(zed::ButtonStyle::Outlined)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        )
+                        .child(
+                            zed::Button::new("stash_go", "Stash")
+                                .style(zed::ButtonStyle::Filled)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    let message = this
+                                        .stash_message_input
+                                        .read_with(cx, |i, _| i.text().trim().to_string());
+                                    let message = if message.is_empty() {
+                                        "WIP".to_string()
+                                    } else {
+                                        message
+                                    };
+                                    if let Some(repo_id) = this.active_repo_id() {
+                                        this.store.dispatch(Msg::Stash {
+                                            repo_id,
+                                            message,
+                                            include_untracked: true,
+                                        });
                                     }
                                     this.popover = None;
                                     this.popover_anchor = None;
@@ -1888,15 +1969,6 @@ impl GitGpuiView {
         if let Some(repo) = repo
             && let Some(selected_id) = repo.selected_commit.as_ref()
         {
-            let max_scroll = self.commit_scroll.max_offset().height.max(px(0.0));
-            let commit_details_is_scrollable = max_scroll > px(2.0);
-            if !commit_details_is_scrollable
-                && self.commit_scroll.offset().y != px(0.0)
-            {
-                self.commit_scroll
-                    .set_offset(point(px(0.0), px(0.0)));
-            }
-
             let show_delayed_loading = self
                 .commit_details_delay
                 .as_ref()
@@ -1985,12 +2057,33 @@ impl GitGpuiView {
                                     details.id.as_ref().hash(&mut hasher);
                                     let commit_key = hasher.finish();
 
-                                    div()
+                                    let total_files = details.files.len();
+                                    let shown_files =
+                                        total_files.min(COMMIT_DETAILS_FILES_RENDER_LIMIT);
+
+                                    let mut list = div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
                                         .min_h(px(0.0))
-                                        .children(details.files.iter().enumerate().map(|(ix, f)| {
+                                        .when(total_files > shown_files, |d| {
+                                            d.child(
+                                                div()
+                                                    .px_2()
+                                                    .text_xs()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child(format!(
+                                                        "Showing {shown_files} of {total_files} files",
+                                                    )),
+                                            )
+                                        })
+                                        .children(
+                                            details
+                                                .files
+                                                .iter()
+                                                .take(shown_files)
+                                                .enumerate()
+                                                .map(|(ix, f)| {
                                             let commit_id = details.id.clone();
                                             let row_id = commit_key.wrapping_add(ix as u64);
                                             let (icon, color) = match f.kind {
@@ -2098,8 +2191,23 @@ impl GitGpuiView {
                                             }
 
                                             row.into_any_element()
-                                        }))
-                                        .into_any_element()
+                                        }),
+                                        );
+                                    if total_files > shown_files {
+                                        let omitted = total_files - shown_files;
+                                        list = list.child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child(format!(
+                                                    "… and {omitted} more files (not shown)",
+                                                )),
+                                        );
+                                    }
+
+                                    list.into_any_element()
                                 };
 
 	                            let needs_update = self
@@ -2183,12 +2291,33 @@ impl GitGpuiView {
                                     details.id.as_ref().hash(&mut hasher);
                                     let commit_key = hasher.finish();
 
-                                    div()
+                                    let total_files = details.files.len();
+                                    let shown_files =
+                                        total_files.min(COMMIT_DETAILS_FILES_RENDER_LIMIT);
+
+                                    let mut list = div()
                                         .flex()
                                         .flex_col()
                                         .gap_1()
                                         .min_h(px(0.0))
-                                        .children(details.files.iter().enumerate().map(|(ix, f)| {
+                                        .when(total_files > shown_files, |d| {
+                                            d.child(
+                                                div()
+                                                    .px_2()
+                                                    .text_xs()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child(format!(
+                                                        "Showing {shown_files} of {total_files} files",
+                                                    )),
+                                            )
+                                        })
+                                        .children(
+                                            details
+                                                .files
+                                                .iter()
+                                                .take(shown_files)
+                                                .enumerate()
+                                                .map(|(ix, f)| {
                                             let commit_id = details.id.clone();
                                             let row_id = commit_key.wrapping_add(ix as u64);
                                             let (icon, color) = match f.kind {
@@ -2296,8 +2425,23 @@ impl GitGpuiView {
                                             }
 
                                             row.into_any_element()
-                                        }))
-                                        .into_any_element()
+                                        }),
+                                        );
+                                    if total_files > shown_files {
+                                        let omitted = total_files - shown_files;
+                                        list = list.child(
+                                            div()
+                                                .px_2()
+                                                .py_1()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child(format!(
+                                                    "… and {omitted} more files (not shown)",
+                                                )),
+                                        );
+                                    }
+
+                                    list.into_any_element()
                                 };
 
 	                            let needs_update = self
@@ -2365,54 +2509,40 @@ impl GitGpuiView {
                     }
                 };
 
-            let scroll_content = div()
-                .id("commit_details_body_scroll")
-                .h_full()
-                .min_h(px(0.0))
-                .overflow_y_scroll()
-                .track_scroll(&self.commit_scroll)
-                .on_scroll_wheel(cx.listener(|this, _e: &gpui::ScrollWheelEvent, _w, cx| {
-                    let max_scroll = this.commit_scroll.max_offset().height.max(px(0.0));
-                    if max_scroll <= px(2.0) {
-                        this.commit_scroll
-                            .set_offset(point(px(0.0), px(0.0)));
-                        cx.notify();
-                    }
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .p_2()
-                        .w_full()
-                        .child(body),
-                );
-
             return div()
                 .id("commit_details_container")
                 .relative()
                 .flex()
                 .flex_col()
                 .flex_1()
+                .h_full()
                 .min_h(px(0.0))
                 .child(header)
                 .child({
-                    let mut body_container = div()
+                    let body_container = div()
                         .id("commit_details_body_container")
                         .relative()
                         .flex_1()
+                        .h_full()
                         .min_h(px(0.0))
-                        .child(scroll_content);
-                    if commit_details_is_scrollable {
-                        body_container = body_container.child(
+                        .overflow_y_scroll()
+                        .track_scroll(&self.commit_scroll)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .p_2()
+                                .w_full()
+                                .child(body),
+                        )
+                        .child(
                             zed::Scrollbar::new(
                                 "commit_details_scrollbar",
                                 self.commit_scroll.clone(),
                             )
                             .render(theme),
                         );
-                    }
                     body_container
                 })
                 .into_any_element();
@@ -2695,7 +2825,7 @@ impl GitGpuiView {
             .unwrap_or(false);
         let count = commits_count + usize::from(show_working_tree_summary_row);
 
-        let black = gpui::rgba(0x000000ff);
+        let bg = theme.colors.window_bg;
 
         let body: AnyElement = if count == 0 {
             match repo.map(|r| &r.log) {
@@ -2733,8 +2863,8 @@ impl GitGpuiView {
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .bg(black)
-            .child(self.history_column_headers(cx).bg(black).border_b_1().border_color(theme.colors.border))
+            .bg(bg)
+            .child(self.history_column_headers(cx).bg(bg).border_b_1().border_color(theme.colors.border))
             .child(div().flex_1().min_h(px(0.0)).child(body))
     }
 
@@ -3589,5 +3719,20 @@ impl GitGpuiView {
                     .child(body),
             )
             .child(DiffTextSelectionTracker { view: cx.entity() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commit_details_large_file_list_is_truncated() {
+        let total_files = 12 + 15762;
+        let shown = total_files.min(COMMIT_DETAILS_FILES_RENDER_LIMIT);
+        let omitted = total_files.saturating_sub(shown);
+
+        assert_eq!(shown, COMMIT_DETAILS_FILES_RENDER_LIMIT);
+        assert_eq!(omitted, total_files - COMMIT_DETAILS_FILES_RENDER_LIMIT);
     }
 }

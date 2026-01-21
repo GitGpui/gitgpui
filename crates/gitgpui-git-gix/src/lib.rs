@@ -167,7 +167,9 @@ impl GitRepository for GixRepo {
 
         let mut walk = repo
             .rev_walk(tips)
-            .sorting(gix::revision::walk::Sorting::BreadthFirst)
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(
+                CommitTimeOrder::NewestFirst,
+            ))
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
 

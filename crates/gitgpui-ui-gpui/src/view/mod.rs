@@ -205,6 +205,7 @@ enum PopoverKind {
     RepoPicker,
     BranchPicker,
     CreateBranch,
+    StashPrompt,
     PullPicker,
     AppMenu,
     DiffHunks,
@@ -252,6 +253,7 @@ enum BranchSection {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum BranchSidebarRow {
     SectionHeader { section: BranchSection, top_border: bool },
+    SectionSpacer,
     Placeholder { section: BranchSection, message: SharedString },
     RemoteHeader { name: SharedString },
     GroupHeader { label: SharedString, depth: usize },
@@ -263,6 +265,7 @@ enum BranchSidebarRow {
         muted: bool,
         divergence: Option<UpstreamDivergence>,
         is_head: bool,
+        is_upstream: bool,
     },
     StashHeader { top_border: bool },
     StashPlaceholder { message: SharedString },
@@ -390,6 +393,7 @@ pub struct GitGpuiView {
     open_repo_input: Entity<zed::TextInput>,
     commit_message_input: Entity<zed::TextInput>,
     create_branch_input: Entity<zed::TextInput>,
+    stash_message_input: Entity<zed::TextInput>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<Point<Pixels>>,
@@ -581,6 +585,20 @@ impl GitGpuiView {
             )
         });
 
+        let stash_message_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Stash message…".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let history_search_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
@@ -733,6 +751,7 @@ impl GitGpuiView {
             open_repo_input,
             commit_message_input,
             create_branch_input,
+            stash_message_input,
             popover: None,
             popover_anchor: None,
             context_menu_focus_handle,
@@ -788,6 +807,8 @@ impl GitGpuiView {
         self.commit_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.stash_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.history_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1679,6 +1700,14 @@ impl GitGpuiView {
 
     fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
         let mut rows = Vec::new();
+        let head_upstream_full = match (&repo.branches, &repo.head_branch) {
+            (Loadable::Ready(branches), Loadable::Ready(head)) => branches
+                .iter()
+                .find(|b| b.name == *head)
+                .and_then(|b| b.upstream.as_ref())
+                .map(|u| format!("{}/{}", u.remote, u.branch)),
+            _ => None,
+        };
 
         rows.push(BranchSidebarRow::SectionHeader {
             section: BranchSection::Local,
@@ -1714,6 +1743,7 @@ impl GitGpuiView {
                     &tree,
                     &mut rows,
                     Some(&local_meta),
+                    head_upstream_full.as_deref(),
                     0,
                     false,
                     BranchSection::Local,
@@ -1734,6 +1764,7 @@ impl GitGpuiView {
             }),
         }
 
+        rows.push(BranchSidebarRow::SectionSpacer);
         rows.push(BranchSidebarRow::SectionHeader {
             section: BranchSection::Remote,
             top_border: true,
@@ -1799,6 +1830,7 @@ impl GitGpuiView {
                 &tree,
                 &mut rows,
                 None,
+                head_upstream_full.as_deref(),
                 1,
                 true,
                 BranchSection::Remote,
@@ -1806,6 +1838,7 @@ impl GitGpuiView {
             );
         }
 
+        rows.push(BranchSidebarRow::SectionSpacer);
         rows.push(BranchSidebarRow::StashHeader { top_border: true });
         match &repo.stashes {
             Loadable::Ready(stashes) if stashes.is_empty() => {
@@ -3408,6 +3441,7 @@ fn push_slash_tree_rows(
     tree: &SlashTree,
     out: &mut Vec<BranchSidebarRow>,
     local_meta: Option<&std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)>>,
+    upstream_full: Option<&str>,
     depth: usize,
     muted: bool,
     section: BranchSection,
@@ -3417,6 +3451,7 @@ fn push_slash_tree_rows(
         if node.children.is_empty() {
             if node.is_leaf {
                 let full = format!("{name_prefix}{label}");
+                let is_upstream = upstream_full.is_some_and(|u| u == full.as_str());
                 let (divergence, is_head) = local_meta
                     .and_then(|m| m.get(&full))
                     .copied()
@@ -3429,6 +3464,7 @@ fn push_slash_tree_rows(
                     muted,
                     divergence,
                     is_head,
+                    is_upstream,
                 });
             }
             continue;
@@ -3441,6 +3477,7 @@ fn push_slash_tree_rows(
 
         if node.is_leaf {
             let full = format!("{name_prefix}{label}");
+            let is_upstream = upstream_full.is_some_and(|u| u == full.as_str());
             let (divergence, is_head) = local_meta
                 .and_then(|m| m.get(&full))
                 .copied()
@@ -3453,6 +3490,7 @@ fn push_slash_tree_rows(
                 muted,
                 divergence,
                 is_head,
+                is_upstream,
             });
         }
 
@@ -3461,6 +3499,7 @@ fn push_slash_tree_rows(
             node,
             out,
             local_meta,
+            upstream_full,
             depth + 1,
             muted,
             section,
@@ -4633,7 +4672,7 @@ impl Element for DiffTextSelectionOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitgpui_core::domain::{RemoteBranch, RepoSpec};
+    use gitgpui_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
     use std::path::PathBuf;
 
     #[test]
@@ -4693,6 +4732,43 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn remote_upstream_branch_is_marked() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(vec![Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".to_string()),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]);
+        repo.remote_branches = Loadable::Ready(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+        }]);
+
+        let rows = GitGpuiView::branch_sidebar_rows(&repo);
+        let upstream_row = rows.iter().find(|r| matches!(
+            r,
+            BranchSidebarRow::Branch {
+                section: BranchSection::Remote,
+                name,
+                is_upstream: true,
+                ..
+            } if name.as_ref() == "origin/main"
+        ));
+        assert!(upstream_row.is_some(), "expected origin/main to be marked as upstream");
     }
 
     #[test]
