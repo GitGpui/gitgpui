@@ -206,8 +206,22 @@ fn reduce(
                 return Vec::new();
             };
 
+            if repo_state.selected_commit.as_ref() == Some(&commit_id) {
+                return Vec::new();
+            }
+
             repo_state.selected_commit = Some(commit_id.clone());
-            repo_state.commit_details = Loadable::Loading;
+            let already_loaded = matches!(
+                &repo_state.commit_details,
+                Loadable::Ready(details) if details.id == commit_id
+            );
+            if already_loaded {
+                return Vec::new();
+            }
+
+            if matches!(repo_state.commit_details, Loadable::Error(_) | Loadable::NotLoaded) {
+                repo_state.commit_details = Loadable::NotLoaded;
+            }
             vec![Effect::LoadCommitDetails { repo_id, commit_id }]
         }
 
@@ -586,7 +600,27 @@ fn reduce(
                 .find(|r| r.id == repo_id)
                 .map(|r| r.history_scope)
                 .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            refresh_effects(repo_id, scope)
+            let diff_target = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .and_then(|r| r.diff_target.clone());
+
+            let mut effects = refresh_effects(repo_id, scope);
+            if let Some(target) = diff_target {
+                let supports_file = matches!(
+                    &target,
+                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                );
+                effects.push(Effect::LoadDiff {
+                    repo_id,
+                    target: target.clone(),
+                });
+                if supports_file {
+                    effects.push(Effect::LoadDiffFile { repo_id, target });
+                }
+            }
+            effects
         }
 
         Msg::RepoCommandFinished {
@@ -1043,10 +1077,12 @@ mod tests {
         assert!(repo_state.log.is_loading());
         assert!(repo_state.stashes.is_loading());
         assert!(repo_state.reflog.is_loading());
+        assert!(repo_state.upstream_divergence.is_loading());
         assert!(matches!(
             effects.as_slice(),
             [
                 Effect::LoadHeadBranch { .. },
+                Effect::LoadUpstreamDivergence { .. },
                 Effect::LoadBranches { .. },
                 Effect::LoadTags { .. },
                 Effect::LoadRemotes { .. },

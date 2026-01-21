@@ -15,7 +15,7 @@ mod toast;
 mod tokens;
 
 pub use button::{Button, ButtonStyle};
-pub use components::{empty_state, key_value, panel, pill, split_columns_header};
+pub use components::{empty_state, key_value, pill, split_columns_header};
 pub use context_menu::{
     context_menu, context_menu_entry, context_menu_header, context_menu_label,
     context_menu_separator,

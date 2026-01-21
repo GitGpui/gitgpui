@@ -47,6 +47,11 @@ impl SplitButton {
             theme.colors.text_muted,
             if theme.is_dark { 0.34 } else { 0.26 },
         );
+        let hover_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.55 } else { 0.40 },
+        );
+        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.05 } else { 0.04 });
 
         let inner = div()
             .flex()
@@ -71,6 +76,7 @@ impl SplitButton {
             .items_center()
             .h(px(CONTROL_HEIGHT_PX))
             .rounded(px(theme.radii.row))
+            .bg(gpui::rgba(0x00000000))
             .when(bordered, |this| {
                 this.border_1()
                     .border_color(border_color)
@@ -78,6 +84,7 @@ impl SplitButton {
             .when(self.style == SplitButtonStyle::Filled, |this| {
                 this.shadow_sm()
             })
+            .hover(move |s| s.bg(hover_bg).border_color(hover_border))
             .child(inner)
     }
 }

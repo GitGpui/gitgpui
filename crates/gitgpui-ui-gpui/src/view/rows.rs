@@ -43,6 +43,14 @@ impl GitGpuiView {
         let repo_id = repo.id;
         let rows = Self::branch_sidebar_rows(repo);
 
+        let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
+            gpui::svg()
+                .path(path)
+                .w(px(size_px))
+                .h(px(size_px))
+                .text_color(color)
+        };
+
         fn indent_px(depth: usize) -> Pixels {
             px(6.0 + depth as f32 * 10.0)
         }
@@ -51,9 +59,13 @@ impl GitGpuiView {
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
                 BranchSidebarRow::SectionHeader { section, top_border } => {
-                    let (icon, label) = match section {
-                        BranchSection::Local => ("🖥", "Local"),
-                        BranchSection::Remote => ("☁︎", "Remote"),
+                    let (icon_path, label) = match section {
+                        BranchSection::Local => ("icons/computer.svg", "Local"),
+                        BranchSection::Remote => ("icons/cloud.svg", "Remote"),
+                    };
+                    let tooltip: SharedString = match section {
+                        BranchSection::Local => "Local branches".into(),
+                        BranchSection::Remote => "Remote branches".into(),
                     };
 
                     div()
@@ -70,9 +82,11 @@ impl GitGpuiView {
                         .gap_1()
                         .bg(theme.colors.surface_bg_elevated)
                         .when(top_border, |d| d.border_t_1().border_color(theme.colors.border))
-                        .border_b_1()
-                        .border_color(theme.colors.border)
-                        .child(div().text_sm().text_color(theme.colors.text_muted).child(icon))
+                        .child(svg_icon(
+                            icon_path,
+                            theme.colors.text_muted,
+                            14.0,
+                        ))
                         .child(
                             div()
                                 .text_sm()
@@ -80,6 +94,14 @@ impl GitGpuiView {
                                 .text_color(theme.colors.text)
                                 .child(label),
                         )
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            if *hovering {
+                                this.tooltip_text = Some(tooltip.clone());
+                            } else if this.tooltip_text.as_ref() == Some(&tooltip) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        }))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -95,6 +117,169 @@ impl GitGpuiView {
                                 );
                             }),
                         )
+                        .into_any_element()
+                }
+                BranchSidebarRow::StashHeader { top_border } => div()
+                    .id(("stash_section", ix))
+                    .h(px(22.0))
+                    .w_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .bg(theme.colors.surface_bg_elevated)
+                    .when(top_border, |d| d.border_t_1().border_color(theme.colors.border))
+                    .child(svg_icon("icons/box.svg", theme.colors.text_muted, 14.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.colors.text)
+                            .child("Stash"),
+                    )
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Stashes (Apply / Drop)".into();
+                        if *hovering {
+                            this.tooltip_text = Some(text);
+                        } else if this.tooltip_text.as_ref() == Some(&text) {
+                            this.tooltip_text = None;
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+                BranchSidebarRow::StashPlaceholder { message } => div()
+                    .id(("stash_placeholder", ix))
+                    .h(px(22.0))
+                    .w_full()
+                    .px_2()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child(message)
+                    .into_any_element(),
+                BranchSidebarRow::StashItem {
+                    index,
+                    message,
+                    created_at,
+                } => {
+                    let repo_id = repo_id;
+                    let when = created_at
+                        .map(format_relative_time)
+                        .unwrap_or_else(|| "—".to_string());
+                    let show_actions = this.hovered_stash_row == Some(index);
+                    let tooltip: SharedString = if message.is_empty() {
+                        "Stash".into()
+                    } else {
+                        message.clone()
+                    };
+
+                    div()
+                        .id(("stash_sidebar_row", index))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py(px(2.0))
+                        .w_full()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .min_w(px(0.0))
+                                .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .min_w(px(0.0))
+                                        .line_clamp(1)
+                                        .child(message.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .ml_auto()
+                                .when(!show_actions, |right| {
+                                    right.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(when),
+                                    )
+                                })
+                                .when(show_actions, |right| {
+                                    right
+                                        .child(
+                                            zed::Button::new(
+                                                format!("stash_sidebar_apply_{index}"),
+                                                "Apply",
+                                            )
+                                            .style(zed::ButtonStyle::Outlined)
+                                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                                this.store
+                                                    .dispatch(Msg::ApplyStash { repo_id, index });
+                                                cx.notify();
+                                            })
+                                            .on_hover(cx.listener(
+                                                move |this, hovering: &bool, _w, cx| {
+                                                    let text: SharedString = "Apply stash".into();
+                                                    if *hovering {
+                                                        this.tooltip_text = Some(text);
+                                                    } else if this.tooltip_text.as_ref()
+                                                        == Some(&text)
+                                                    {
+                                                        this.tooltip_text = None;
+                                                    }
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        )
+                                        .child(
+                                            zed::Button::new(
+                                                format!("stash_sidebar_drop_{index}"),
+                                                "Drop",
+                                            )
+                                            .style(zed::ButtonStyle::Danger)
+                                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                                this.store
+                                                    .dispatch(Msg::DropStash { repo_id, index });
+                                                cx.notify();
+                                            })
+                                            .on_hover(cx.listener(
+                                                move |this, hovering: &bool, _w, cx| {
+                                                    let text: SharedString = "Drop stash".into();
+                                                    if *hovering {
+                                                        this.tooltip_text = Some(text);
+                                                    } else if this.tooltip_text.as_ref()
+                                                        == Some(&text)
+                                                    {
+                                                        this.tooltip_text = None;
+                                                    }
+                                                    cx.notify();
+                                                },
+                                            )),
+                                        )
+                                })
+                        )
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            if *hovering {
+                                this.hovered_stash_row = Some(index);
+                                this.tooltip_text = Some(tooltip.clone());
+                            } else {
+                                if this.hovered_stash_row == Some(index) {
+                                    this.hovered_stash_row = None;
+                                }
+                                if this.tooltip_text.as_ref() == Some(&tooltip) {
+                                    this.tooltip_text = None;
+                                }
+                            }
+                            cx.notify();
+                        }))
                         .into_any_element()
                 }
                 BranchSidebarRow::Placeholder { section: _, message } => div()
@@ -113,9 +298,11 @@ impl GitGpuiView {
                     .px_2()
                     .flex()
                     .items_center()
+                    .gap_2()
                     .text_sm()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text)
+                    .child(svg_icon("icons/folder.svg", theme.colors.text_muted, 12.0))
                     .child(name)
                     .into_any_element(),
                 BranchSidebarRow::GroupHeader { label, depth } => div()
@@ -126,9 +313,14 @@ impl GitGpuiView {
                     .pr_2()
                     .flex()
                     .items_center()
+                    .gap_2()
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text_muted)
+                    .child(
+                        svg_icon("icons/folder.svg", theme.colors.text_muted, 14.0)
+                            .flex_shrink_0(),
+                    )
                     .child(label)
                     .into_any_element(),
                 BranchSidebarRow::Branch {
@@ -137,7 +329,14 @@ impl GitGpuiView {
                     section,
                     depth,
                     muted,
-                } => div()
+                } => {
+                    let name_for_tooltip: SharedString = name.clone();
+                    let branch_icon_color = if muted {
+                        theme.colors.text_muted
+                    } else {
+                        theme.colors.text
+                    };
+                    div()
                     .id(("branch_item", ix))
                     .h(if section == BranchSection::Local {
                         px(24.0)
@@ -147,12 +346,14 @@ impl GitGpuiView {
                     .w_full()
                     .flex()
                     .items_center()
+                    .gap_2()
                     .pl(indent_px(depth))
                     .pr_2()
                     .rounded(px(theme.radii.row))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
                     .when(muted, |d| d.text_color(theme.colors.text_muted))
+                    .child(svg_icon("icons/git_branch.svg", branch_icon_color, 12.0))
                     .child(
                         div()
                             .flex_1()
@@ -178,7 +379,17 @@ impl GitGpuiView {
                             );
                         }),
                     )
-                    .into_any_element(),
+                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                        let text: SharedString = format!("Branch: {name_for_tooltip}").into();
+                        if *hovering {
+                            this.tooltip_text = Some(text);
+                        } else if this.tooltip_text.as_ref() == Some(&text) {
+                            this.tooltip_text = None;
+                        }
+                        cx.notify();
+                    }))
+                    .into_any_element()
+                }
             })
             .collect()
     }
@@ -230,6 +441,7 @@ impl GitGpuiView {
                 let path_for_click = path.clone();
                 let commit_id_for_menu = commit_id.clone();
                 let path_for_menu = path.clone();
+                let tooltip: SharedString = path.display().to_string().into();
 
                 let mut row = div()
                     .id(("commit_file", ix))
@@ -276,6 +488,14 @@ impl GitGpuiView {
                             },
                         });
                         this.rebuild_diff_cache();
+                        cx.notify();
+                    }))
+                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                        if *hovering {
+                            this.tooltip_text = Some(tooltip.clone());
+                        } else if this.tooltip_text.as_ref() == Some(&tooltip) {
+                            this.tooltip_text = None;
+                        }
                         cx.notify();
                     }));
                 row = row.on_mouse_down(
@@ -438,6 +658,10 @@ impl GitGpuiView {
             .history_cache
             .as_ref()
             .filter(|c| c.repo_id == repo.id);
+        let worktree_node_color = cache
+            .and_then(|c| c.graph_rows.first())
+            .and_then(|row| row.lanes_now.get(row.node_col).map(|l| l.color))
+            .unwrap_or(theme.colors.accent);
 
         range
             .filter_map(|list_ix| {
@@ -450,6 +674,7 @@ impl GitGpuiView {
                         col_sha,
                         show_date,
                         show_sha,
+                        worktree_node_color,
                         repo.id,
                         unstaged_counts,
                         staged_counts,
@@ -668,12 +893,19 @@ impl GitGpuiView {
         let Loadable::Ready(RepoStatus { unstaged, .. }) = &repo.status else {
             return Vec::new();
         };
+        let selected = repo.diff_target.as_ref();
         let theme = this.theme;
         range
             .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let show_stage_button = this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
                     *r == repo.id && *a == DiffArea::Unstaged && p == &entry.path
+                });
+                let is_selected = selected.is_some_and(|t| match t {
+                    DiffTarget::WorkingTree { path, area } => {
+                        *area == DiffArea::Unstaged && path == &entry.path
+                    }
+                    _ => false,
                 });
                 status_row(
                     theme,
@@ -682,6 +914,7 @@ impl GitGpuiView {
                     DiffArea::Unstaged,
                     repo.id,
                     show_stage_button,
+                    is_selected,
                     cx,
                 )
             })
@@ -700,12 +933,19 @@ impl GitGpuiView {
         let Loadable::Ready(RepoStatus { staged, .. }) = &repo.status else {
             return Vec::new();
         };
+        let selected = repo.diff_target.as_ref();
         let theme = this.theme;
         range
             .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let show_stage_button = this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
                     *r == repo.id && *a == DiffArea::Staged && p == &entry.path
+                });
+                let is_selected = selected.is_some_and(|t| match t {
+                    DiffTarget::WorkingTree { path, area } => {
+                        *area == DiffArea::Staged && path == &entry.path
+                    }
+                    _ => false,
                 });
                 status_row(
                     theme,
@@ -714,6 +954,7 @@ impl GitGpuiView {
                     DiffArea::Staged,
                     repo.id,
                     show_stage_button,
+                    is_selected,
                     cx,
                 )
             })
@@ -1619,15 +1860,14 @@ fn history_table_row(
 
     let commit_id = commit.id.clone();
     let commit_id_for_menu = commit.id.clone();
+    let summary_for_tooltip: SharedString = commit.summary.clone().into();
     let mut row = div()
         .id(ix)
         .h(px(24.0))
         .flex()
         .w_full()
         .items_center()
-        .gap_2()
         .px_2()
-        .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(
@@ -1653,8 +1893,6 @@ fn history_table_row(
                 .min_w(px(0.0))
                 .flex()
                 .items_center()
-                .gap_2()
-                .child(div().w(px(3.0)).h_full().bg(node_color))
                 .child(
                     div()
                         .flex_1()
@@ -1711,6 +1949,14 @@ fn history_table_row(
                 );
             }),
         );
+    row = row.on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+        if *hovering {
+            this.tooltip_text = Some(summary_for_tooltip.clone());
+        } else if this.tooltip_text.as_ref() == Some(&summary_for_tooltip) {
+            this.tooltip_text = None;
+        }
+        cx.notify();
+    }));
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));
@@ -1727,6 +1973,7 @@ fn working_tree_summary_history_row(
     col_sha: Pixels,
     show_date: bool,
     show_sha: bool,
+    node_color: gpui::Rgba,
     repo_id: RepoId,
     unstaged: (usize, usize, usize),
     staged: (usize, usize, usize),
@@ -1775,6 +2022,42 @@ fn working_tree_summary_history_row(
             .into_any_element()
     };
 
+    let black = gpui::rgba(0x000000ff);
+    let circle = gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _cx| {
+            let r = px(3.0);
+            let border = px(1.0);
+            let outer = r + border;
+            let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
+            let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+            let node_x = margin_x + col_gap * 0.0;
+            let center = point(bounds.left() + node_x, bounds.top() + bounds.size.height / 2.0);
+            window.paint_quad(
+                fill(
+                    gpui::Bounds::new(
+                        point(center.x - outer, center.y - outer),
+                        size(outer * 2.0, outer * 2.0),
+                    ),
+                    node_color,
+                )
+                .corner_radii(outer),
+            );
+            window.paint_quad(
+                fill(
+                    gpui::Bounds::new(
+                        point(center.x - r, center.y - r),
+                        size(r * 2.0, r * 2.0),
+                    ),
+                    black,
+                )
+                .corner_radii(r),
+            );
+        },
+    )
+    .w_full()
+    .h_full();
+
     div()
         .id(("history_worktree_summary", repo_id.0))
         .h(px(28.0))
@@ -1783,10 +2066,6 @@ fn working_tree_summary_history_row(
         .items_center()
         .gap_2()
         .px_2()
-        .bg(theme.colors.surface_bg_elevated)
-        .border_1()
-        .border_color(theme.colors.border)
-        .rounded(px(theme.radii.row))
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(
@@ -1797,7 +2076,12 @@ fn working_tree_summary_history_row(
                 .whitespace_nowrap()
                 .child("Working tree"),
         )
-        .child(div().w(col_graph).h_full())
+        .child(
+            div()
+                .w(col_graph)
+                .h_full()
+                .child(circle),
+        )
         .child(
             div()
                 .flex_1()
@@ -1877,20 +2161,6 @@ fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl In
                 std::collections::HashMap::new();
             for (ix, lane) in row.lanes_next.iter().enumerate() {
                 col_next.insert(lane.id, ix);
-            }
-
-            // Lane background bands (per-row, but forms continuous columns across rows).
-            let lane_width = col_gap * 0.9;
-            let lane_alpha = if theme.is_dark { 0.10 } else { 0.07 };
-            for (ix, lane) in row.lanes_now.iter().enumerate() {
-                let x = x_for_col(ix);
-                window.paint_quad(fill(
-                    gpui::Bounds::new(
-                        point(bounds.left() + x - lane_width / 2.0, y_top),
-                        size(lane_width, bounds.size.height),
-                    ),
-                    with_alpha(lane.color, lane_alpha),
-                ));
             }
 
             // Incoming vertical segments.
@@ -1993,13 +2263,14 @@ fn history_graph_cell(theme: AppTheme, row: &history_graph::GraphRow) -> impl In
                 .unwrap_or(theme.colors.text_muted);
             let node_border = px(1.0);
             let outer_r = node_radius + node_border;
+            let black = gpui::rgba(0x000000ff);
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(
                         point(bounds.left() + node_x - outer_r, y_center - outer_r),
                         size(outer_r * 2.0, outer_r * 2.0),
                     ),
-                    theme.colors.surface_bg,
+                    black,
                 )
                 .corner_radii(outer_r),
             );
@@ -2110,6 +2381,7 @@ fn status_row(
     area: DiffArea,
     repo_id: RepoId,
     show_stage_button: bool,
+    selected: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
     let (icon, color) = match entry.kind {
@@ -2133,27 +2405,67 @@ fn status_row(
         DiffArea::Unstaged => "Stage",
         DiffArea::Staged => "Unstage",
     };
+    let row_tooltip: SharedString = path.display().to_string().into();
 
     let hover_area = area;
+    let stage_button = zed::Button::new(format!("stage_btn_{ix}"), stage_label)
+        .style(zed::ButtonStyle::Outlined)
+        .on_click(theme, cx, move |this, _e, window, cx| {
+            cx.stop_propagation();
+            window.focus(&this.diff_panel_focus_handle);
+            this.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: path_for_stage.clone(),
+                    area,
+                },
+            });
+            match area {
+                DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
+                    repo_id,
+                    path: path_for_stage.clone(),
+                }),
+                DiffArea::Staged => this.store.dispatch(Msg::UnstagePath {
+                    repo_id,
+                    path: path_for_stage.clone(),
+                }),
+            }
+            cx.notify();
+        })
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let text: SharedString = format!("{stage_label} file").into();
+            if *hovering {
+                this.tooltip_text = Some(text);
+            } else if this.tooltip_text.as_ref() == Some(&text) {
+                this.tooltip_text = None;
+            }
+            cx.notify();
+        }));
+
     div()
         .id(ix)
+        .relative()
         .flex()
         .items_center()
-        .justify_between()
         .gap_2()
         .px_2()
         .py_1()
         .w_full()
         .rounded(px(theme.radii.row))
+        .when(selected, |s| s.bg(theme.colors.hover))
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
             if *hovering {
                 this.hovered_status_row = Some((repo_id, hover_area, path_for_hover.clone()));
+                this.tooltip_text = Some(row_tooltip.clone());
             } else if this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
                 *r == repo_id && *a == hover_area && p == &path_for_hover
             }) {
                 this.hovered_status_row = None;
+                if this.tooltip_text.as_ref() == Some(&row_tooltip) {
+                    this.tooltip_text = None;
+                }
             }
             cx.notify();
         }))
@@ -2180,6 +2492,7 @@ fn status_row(
                 .gap_2()
                 .flex_1()
                 .min_w(px(0.0))
+                .pr(if show_stage_button { px(92.0) } else { px(0.0) })
                 .child(
                     div()
                         .w(px(16.0))
@@ -2197,44 +2510,26 @@ fn status_row(
                 .child(
                     div()
                         .text_sm()
+                        .flex_1()
+                        .min_w(px(0.0))
                         .line_clamp(1)
                         .child(path.display().to_string()),
                 ),
         )
-        .child(
-            div()
-                .flex_none()
-                .w(px(78.0))
-                .flex()
-                .justify_end()
-                .when(show_stage_button, |this| {
-                    this.child(
-                        zed::Button::new(format!("stage_btn_{ix}"), stage_label)
-                            .style(zed::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::WorkingTree {
-                                        path: path_for_stage.clone(),
-                                        area,
-                                    },
-                                });
-                                match area {
-                                    DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
-                                        repo_id,
-                                        path: path_for_stage.clone(),
-                                    }),
-                                    DiffArea::Staged => this.store.dispatch(Msg::UnstagePath {
-                                        repo_id,
-                                        path: path_for_stage.clone(),
-                                    }),
-                                }
-                                cx.notify();
-                            }),
-                    )
-                }),
-        )
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+        .when(show_stage_button, |row| {
+            row.child(
+                div()
+                    .absolute()
+                    .right(px(6.0))
+                    .top_0()
+                    .bottom_0()
+                    .flex()
+                    .items_center()
+                    .child(stage_button),
+            )
+        })
+        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+            window.focus(&this.diff_panel_focus_handle);
             this.store.dispatch(Msg::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {

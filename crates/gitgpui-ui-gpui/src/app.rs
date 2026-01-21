@@ -1,6 +1,7 @@
 use crate::view::GitGpuiView;
 use crate::assets::GitGpuiAssets;
 use gitgpui_core::services::GitBackend;
+use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::{
     App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds,
@@ -44,12 +45,28 @@ pub fn run(backend: Arc<dyn GitBackend>) {
             ),
         ]);
 
-        let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
+        const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
+        const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
+
+        let ui_session = session::load();
+        let restored_w = ui_session
+            .window_width
+            .map(|w| px(w as f32))
+            .unwrap_or(px(1100.0))
+            .max(px(WINDOW_MIN_WIDTH_PX));
+        let restored_h = ui_session
+            .window_height
+            .map(|h| px(h as f32))
+            .unwrap_or(px(720.0))
+            .max(px(WINDOW_MIN_HEIGHT_PX));
+
+        let bounds = Bounds::centered(None, size(restored_w, restored_h), cx);
         let backend = Arc::clone(&backend);
 
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_min_size: Some(size(px(WINDOW_MIN_WIDTH_PX), px(WINDOW_MIN_HEIGHT_PX))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("GitGpui".into()),
                     appears_transparent: true,

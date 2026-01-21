@@ -49,6 +49,11 @@ const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
 const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
 
+const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
+const SIDEBAR_MIN_PX: f32 = 200.0;
+const DETAILS_MIN_PX: f32 = 280.0;
+const MAIN_MIN_PX: f32 = 280.0;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HistoryColResizeHandle {
     Branch,
@@ -81,10 +86,25 @@ enum DiffViewMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HistoryTab {
-    Log,
-    Stash,
-    Reflog,
+enum PaneResizeHandle {
+    Sidebar,
+    Details,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PaneResizeState {
+    handle: PaneResizeHandle,
+    start_x: Pixels,
+    start_sidebar: Pixels,
+    start_details: Pixels,
+}
+
+struct PaneResizeDragGhost;
+
+impl Render for PaneResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -126,6 +146,13 @@ struct ToastState {
     id: u64,
     kind: zed::ToastKind,
     input: Entity<zed::TextInput>,
+}
+
+#[derive(Clone, Debug)]
+struct CommitDetailsDelayState {
+    repo_id: RepoId,
+    commit_id: CommitId,
+    show_loading: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -237,6 +264,13 @@ enum BranchSidebarRow {
         depth: usize,
         muted: bool,
     },
+    StashHeader { top_border: bool },
+    StashPlaceholder { message: SharedString },
+    StashItem {
+        index: usize,
+        message: SharedString,
+        created_at: Option<std::time::SystemTime>,
+    },
 }
 
 #[derive(Default)]
@@ -333,7 +367,6 @@ pub struct GitGpuiView {
     diff_preview_is_new_file: bool,
     diff_preview_new_file_lines: Arc<Vec<String>>,
 
-    history_tab: HistoryTab,
     history_search_input: Entity<zed::TextInput>,
     history_search_raw: String,
     history_search_debounced: String,
@@ -341,6 +374,8 @@ pub struct GitGpuiView {
     history_cache_seq: u64,
     history_cache_inflight: Option<HistoryCacheRequest>,
     last_window_size: Size<Pixels>,
+    ui_window_size_last_seen: Size<Pixels>,
+    ui_settings_persist_seq: u64,
     history_col_branch: Pixels,
     history_col_graph: Pixels,
     history_col_date: Pixels,
@@ -364,25 +399,37 @@ pub struct GitGpuiView {
 
     title_should_move: bool,
     hover_resize_edge: Option<ResizeEdge>,
-    add_repo_button_hovered: bool,
 
     branches_scroll: UniformListScrollHandle,
     history_scroll: UniformListScrollHandle,
-    stashes_scroll: UniformListScrollHandle,
-    reflog_scroll: UniformListScrollHandle,
     unstaged_scroll: UniformListScrollHandle,
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     commit_files_scroll: UniformListScrollHandle,
-    sidebar_scroll: ScrollHandle,
     commit_scroll: ScrollHandle,
+
+    sidebar_width: Pixels,
+    details_width: Pixels,
+    pane_resize: Option<PaneResizeState>,
+
+    last_mouse_pos: Point<Pixels>,
+    tooltip_text: Option<SharedString>,
+    tooltip_visible_text: Option<SharedString>,
+    tooltip_candidate_last: Option<SharedString>,
+    tooltip_pending_pos: Option<Point<Pixels>>,
+    tooltip_visible_pos: Option<Point<Pixels>>,
+    tooltip_delay_seq: u64,
 
     toasts: Vec<ToastState>,
 
     hovered_status_row: Option<(RepoId, DiffArea, std::path::PathBuf)>,
+    hovered_stash_row: Option<usize>,
 
     commit_details_message_input: Entity<zed::TextInput>,
     error_banner_input: Entity<zed::TextInput>,
+
+    commit_details_delay: Option<CommitDetailsDelayState>,
+    commit_details_delay_seq: u64,
 }
 
 impl GitGpuiView {
@@ -461,6 +508,9 @@ impl GitGpuiView {
             ui_session.active_repo = Some(path);
         }
 
+        let restored_sidebar_width = ui_session.sidebar_width;
+        let restored_details_width = ui_session.details_width;
+
         if !ui_session.open_repos.is_empty() {
             store.dispatch(Msg::RestoreSession {
                 open_repos: ui_session.open_repos,
@@ -496,6 +546,7 @@ impl GitGpuiView {
                     multiline: false,
                     read_only: false,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -509,6 +560,7 @@ impl GitGpuiView {
                     multiline: false,
                     read_only: false,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -522,6 +574,7 @@ impl GitGpuiView {
                     multiline: false,
                     read_only: false,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -535,6 +588,7 @@ impl GitGpuiView {
                     multiline: false,
                     read_only: false,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -548,6 +602,7 @@ impl GitGpuiView {
                     multiline: false,
                     read_only: false,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -561,6 +616,7 @@ impl GitGpuiView {
                     multiline: true,
                     read_only: true,
                     chromeless: false,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -574,6 +630,7 @@ impl GitGpuiView {
                     multiline: true,
                     read_only: true,
                     chromeless: true,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -586,7 +643,8 @@ impl GitGpuiView {
                     placeholder: "".into(),
                     multiline: true,
                     read_only: true,
-                    chromeless: false,
+                    chromeless: true,
+                    soft_wrap: true,
                 },
                 window,
                 cx,
@@ -653,7 +711,6 @@ impl GitGpuiView {
             worktree_preview_segments_cache: HashMap::new(),
             diff_preview_is_new_file: false,
             diff_preview_new_file_lines: Arc::new(Vec::new()),
-            history_tab: HistoryTab::Log,
             history_search_input,
             history_search_raw: String::new(),
             history_search_debounced: String::new(),
@@ -661,6 +718,8 @@ impl GitGpuiView {
             history_cache_seq: 0,
             history_cache_inflight: None,
             last_window_size: size(px(0.0), px(0.0)),
+            ui_window_size_last_seen: size(px(0.0), px(0.0)),
+            ui_settings_persist_seq: 0,
             history_col_branch: px(HISTORY_COL_BRANCH_PX),
             history_col_graph: px(HISTORY_COL_GRAPH_PX),
             history_col_date: px(HISTORY_COL_DATE_PX),
@@ -681,21 +740,36 @@ impl GitGpuiView {
             context_menu_selected_ix: None,
             title_should_move: false,
             hover_resize_edge: None,
-            add_repo_button_hovered: false,
             branches_scroll: UniformListScrollHandle::default(),
             history_scroll: UniformListScrollHandle::default(),
-            stashes_scroll: UniformListScrollHandle::default(),
-            reflog_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
-            sidebar_scroll: ScrollHandle::new(),
             commit_scroll: ScrollHandle::new(),
+            sidebar_width: restored_sidebar_width
+                .map(|w| px(w as f32))
+                .unwrap_or(px(280.0))
+                .max(px(SIDEBAR_MIN_PX)),
+            details_width: restored_details_width
+                .map(|w| px(w as f32))
+                .unwrap_or(px(420.0))
+                .max(px(DETAILS_MIN_PX)),
+            pane_resize: None,
+            last_mouse_pos: point(px(0.0), px(0.0)),
+            tooltip_text: None,
+            tooltip_visible_text: None,
+            tooltip_candidate_last: None,
+            tooltip_pending_pos: None,
+            tooltip_visible_pos: None,
+            tooltip_delay_seq: 0,
             toasts: Vec::new(),
             hovered_status_row: None,
+            hovered_stash_row: None,
             commit_details_message_input,
             error_banner_input,
+            commit_details_delay: None,
+            commit_details_delay_seq: 0,
         };
 
         view.set_theme(initial_theme, cx);
@@ -737,6 +811,92 @@ impl GitGpuiView {
         if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
+    }
+
+    fn pane_resize_handle(
+        &self,
+        theme: AppTheme,
+        id: &'static str,
+        handle: PaneResizeHandle,
+        cx: &gpui::Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .w(px(PANE_RESIZE_HANDLE_PX))
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
+            .active(move |s| s.bg(theme.colors.active))
+            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+            .on_drag(handle, |_handle, _offset, _window, cx| {
+                cx.new(|_cx| PaneResizeDragGhost)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    this.pane_resize = Some(PaneResizeState {
+                        handle,
+                        start_x: e.position.x,
+                        start_sidebar: this.sidebar_width,
+                        start_details: this.details_width,
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &gpui::DragMoveEvent<PaneResizeHandle>, _w, cx| {
+                    let Some(state) = this.pane_resize else {
+                        return;
+                    };
+                    if state.handle != *e.drag(cx) {
+                        return;
+                    }
+
+                    let total_w = this.last_window_size.width;
+                    let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
+                    let main_min = px(MAIN_MIN_PX);
+                    let sidebar_min = px(SIDEBAR_MIN_PX);
+                    let details_min = px(DETAILS_MIN_PX);
+
+                    let dx = e.event.position.x - state.start_x;
+                    match state.handle {
+                        PaneResizeHandle::Sidebar => {
+                            let max_sidebar =
+                                (total_w - state.start_details - main_min - handles_w)
+                                    .max(sidebar_min);
+                            this.sidebar_width =
+                                (state.start_sidebar + dx).max(sidebar_min).min(max_sidebar);
+                        }
+                        PaneResizeHandle::Details => {
+                            let max_details = (total_w - state.start_sidebar - main_min - handles_w)
+                                .max(details_min);
+                            this.details_width =
+                                (state.start_details - dx).max(details_min).min(max_details);
+                        }
+                    }
+                    cx.notify();
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.pane_resize = None;
+                    this.schedule_ui_settings_persist(cx);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.pane_resize = None;
+                    this.schedule_ui_settings_persist(cx);
+                    cx.notify();
+                }),
+            )
     }
 
     fn active_repo_id(&self) -> Option<RepoId> {
@@ -1407,6 +1567,7 @@ impl GitGpuiView {
                         multiline: false,
                         read_only: false,
                         chromeless: false,
+                        soft_wrap: false,
                     },
                     window,
                     cx,
@@ -1436,6 +1597,7 @@ impl GitGpuiView {
                         multiline: true,
                         read_only: false,
                         chromeless: false,
+                        soft_wrap: false,
                     },
                     window,
                     cx,
@@ -1460,6 +1622,7 @@ impl GitGpuiView {
                         multiline: false,
                         read_only: false,
                         chromeless: false,
+                        soft_wrap: false,
                     },
                     window,
                     cx,
@@ -1489,6 +1652,7 @@ impl GitGpuiView {
                         multiline: false,
                         read_only: false,
                         chromeless: false,
+                        soft_wrap: false,
                     },
                     window,
                     cx,
@@ -1646,6 +1810,33 @@ impl GitGpuiView {
                 BranchSection::Remote,
                 &name_prefix,
             );
+        }
+
+        rows.push(BranchSidebarRow::StashHeader { top_border: true });
+        match &repo.stashes {
+            Loadable::Ready(stashes) if stashes.is_empty() => {
+                rows.push(BranchSidebarRow::StashPlaceholder {
+                    message: "No stashes".into(),
+                });
+            }
+            Loadable::Ready(stashes) => {
+                for stash in stashes {
+                    rows.push(BranchSidebarRow::StashItem {
+                        index: stash.index,
+                        message: stash.message.clone().into(),
+                        created_at: stash.created_at,
+                    });
+                }
+            }
+            Loadable::Loading => rows.push(BranchSidebarRow::StashPlaceholder {
+                message: "Loading…".into(),
+            }),
+            Loadable::NotLoaded => rows.push(BranchSidebarRow::StashPlaceholder {
+                message: "Not loaded".into(),
+            }),
+            Loadable::Error(e) => rows.push(BranchSidebarRow::StashPlaceholder {
+                message: e.clone().into(),
+            }),
         }
 
         rows
@@ -2353,6 +2544,7 @@ impl GitGpuiView {
         }
 
         self.state = next;
+        self.update_commit_details_delay(cx);
 
         let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
             || self.diff_cache_rev != next_diff_rev
@@ -2360,6 +2552,79 @@ impl GitGpuiView {
         if should_rebuild_diff_cache {
             self.rebuild_diff_cache();
         }
+    }
+
+    fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some((repo_id, selected_id, ready_for_selected, is_error)) = (|| {
+            let repo = self.active_repo()?;
+            let selected_id = repo.selected_commit.clone()?;
+            let ready_for_selected = matches!(
+                &repo.commit_details,
+                Loadable::Ready(details) if details.id == selected_id
+            );
+            let is_error = matches!(&repo.commit_details, Loadable::Error(_));
+            Some((repo.id, selected_id, ready_for_selected, is_error))
+        })() else {
+            self.commit_details_delay = None;
+            return;
+        };
+
+        if ready_for_selected || is_error {
+            self.commit_details_delay = None;
+            return;
+        }
+
+        let same_selection = self
+            .commit_details_delay
+            .as_ref()
+            .is_some_and(|s| s.repo_id == repo_id && s.commit_id == selected_id);
+        if same_selection {
+            return;
+        }
+
+        self.commit_details_delay_seq = self.commit_details_delay_seq.wrapping_add(1);
+        let seq = self.commit_details_delay_seq;
+        self.commit_details_delay = Some(CommitDetailsDelayState {
+            repo_id,
+            commit_id: selected_id.clone(),
+            show_loading: false,
+        });
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            Timer::after(Duration::from_millis(100)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.commit_details_delay_seq != seq {
+                    return;
+                }
+                let Some(repo) = this.active_repo() else {
+                    return;
+                };
+                let Some(selected_id) = repo.selected_commit.clone() else {
+                    return;
+                };
+                if repo.id != repo_id {
+                    return;
+                }
+
+                let ready_for_selected = matches!(
+                    &repo.commit_details,
+                    Loadable::Ready(details) if details.id == selected_id
+                );
+                if ready_for_selected || matches!(&repo.commit_details, Loadable::Error(_)) {
+                    return;
+                }
+
+                if let Some(state) = this.commit_details_delay.as_mut()
+                    && state.repo_id == repo_id
+                    && state.commit_id == selected_id
+                    && !state.show_loading
+                {
+                    state.show_loading = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
@@ -2376,6 +2641,7 @@ impl GitGpuiView {
                     multiline: true,
                     read_only: true,
                     chromeless: true,
+                    soft_wrap: false,
                 },
                 cx,
             )
@@ -3030,7 +3296,7 @@ impl GitGpuiView {
             if let Loadable::Ready(page) = &repo.log {
                 let request = HistoryCacheRequest {
                     repo_id: repo.id,
-                    query: self.history_search_debounced.trim().to_string(),
+                    query: String::new(),
                     log_fingerprint: Self::log_fingerprint(&page.commits),
                 };
 
@@ -3311,6 +3577,12 @@ impl Render for GitGpuiView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         self.last_window_size = window.window_bounds().get_bounds().size;
+        self.sync_tooltip_state(cx);
+        self.clamp_pane_widths_to_window();
+        if self.last_window_size != self.ui_window_size_last_seen {
+            self.ui_window_size_last_seen = self.last_window_size;
+            self.schedule_ui_settings_persist(cx);
+        }
 
         let decorations = window.window_decorations();
         let (tiling, client_inset) = match decorations {
@@ -3353,40 +3625,39 @@ impl Render for GitGpuiView {
                         div()
                             .flex()
                             .flex_row()
-                            .gap_2()
                             .flex_1()
                             .min_h(px(0.0))
-                            .px_2()
-                            .pb_2()
                             .child(
                                 div()
-                                    .id("sidebar_scroll")
-                                    .w(px(280.0))
+                                    .id("sidebar_pane")
+                                    .w(self.sidebar_width)
                                     .min_h(px(0.0))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.sidebar_scroll)
-                                    .child(self.sidebar(cx))
-                                    .child(
-                                        zed::Scrollbar::new(
-                                            "sidebar_scrollbar",
-                                            self.sidebar_scroll.clone(),
-                                        )
-                                        .render(theme),
-                                    ),
+                                    .bg(theme.colors.surface_bg)
+                                    .child(self.sidebar(cx)),
                             )
+                            .child(self.pane_resize_handle(
+                                theme,
+                                "pane_resize_sidebar",
+                                PaneResizeHandle::Sidebar,
+                                cx,
+                            ))
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_col()
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .min_h(px(0.0))
                                     .child(main_view),
                             )
+                            .child(self.pane_resize_handle(
+                                theme,
+                                "pane_resize_details",
+                                PaneResizeHandle::Details,
+                                cx,
+                            ))
                             .child(
                                 div()
-                                    .id("commit_scroll")
-                                    .w(px(420.0))
+                                    .id("details_pane")
+                                    .w(self.details_width)
                                     .min_h(px(0.0))
                                     .flex()
                                     .flex_col()
@@ -3423,42 +3694,43 @@ impl Render for GitGpuiView {
         let mut root = div().size_full().cursor(cursor).text_color(theme.colors.text);
         root = root.relative();
 
+        root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+            this.last_mouse_pos = e.position;
+            this.maybe_restart_tooltip_delay(cx);
+
+            let Decorations::Client { tiling } = window.window_decorations() else {
+                if this.hover_resize_edge.is_some() {
+                    this.hover_resize_edge = None;
+                    cx.notify();
+                }
+                return;
+            };
+
+            let size = window.window_bounds().get_bounds().size;
+            let next = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+            if next != this.hover_resize_edge {
+                this.hover_resize_edge = next;
+                cx.notify();
+            }
+        }));
         if tiling.is_some() {
-            root = root
-                .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+            root = root.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
                     let Decorations::Client { tiling } = window.window_decorations() else {
-                        if this.hover_resize_edge.is_some() {
-                            this.hover_resize_edge = None;
-                            cx.notify();
-                        }
                         return;
                     };
 
                     let size = window.window_bounds().get_bounds().size;
-                    let next = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
-                    if next != this.hover_resize_edge {
-                        this.hover_resize_edge = next;
-                        cx.notify();
-                    }
-                }))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|_this, e: &MouseDownEvent, window, cx| {
-                        let Decorations::Client { tiling } = window.window_decorations() else {
-                            return;
-                        };
+                    let edge = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+                    let Some(edge) = edge else {
+                        return;
+                    };
 
-                        let size = window.window_bounds().get_bounds().size;
-                        let edge =
-                            resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
-                        let Some(edge) = edge else {
-                            return;
-                        };
-
-                        cx.stop_propagation();
-                        window.start_window_resize(edge);
-                    }),
-                );
+                    cx.stop_propagation();
+                    window.start_window_resize(edge);
+                }),
+            );
         } else if self.hover_resize_edge.is_some() {
             self.hover_resize_edge = None;
         }
@@ -3473,7 +3745,192 @@ impl Render for GitGpuiView {
             root = root.child(self.popover_layer(cx));
         }
 
+        if let Some(text) = self.tooltip_visible_text.clone() {
+            let tooltip_bg = gpui::rgba(0x000000ff);
+            let tooltip_text_color = gpui::rgba(0xffffffff);
+            let anchor = self.tooltip_visible_pos.unwrap_or(self.last_mouse_pos);
+            let pos = point(anchor.x + px(12.0), anchor.y + px(18.0));
+            root = root.child(
+                anchored()
+                    .position(pos)
+                    .anchor(Corner::TopLeft)
+                    .offset(point(px(0.0), px(0.0)))
+                    .child(
+                        div()
+                            .occlude()
+                            .px_2()
+                            .py_1()
+                            .bg(tooltip_bg)
+                            .rounded(px(theme.radii.row))
+                            .shadow_sm()
+                            .text_xs()
+                            .text_color(tooltip_text_color)
+                            .child(text),
+                    ),
+            );
+        }
+
         root
+    }
+}
+
+impl GitGpuiView {
+    fn sync_tooltip_state(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.tooltip_text == self.tooltip_candidate_last {
+            return;
+        }
+
+        self.tooltip_candidate_last = self.tooltip_text.clone();
+        self.tooltip_visible_text = None;
+        self.tooltip_visible_pos = None;
+        self.tooltip_pending_pos = None;
+        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+
+        let Some(text) = self.tooltip_text.clone() else {
+            return;
+        };
+
+        let anchor = self.last_mouse_pos;
+        self.tooltip_pending_pos = Some(anchor);
+        let seq = self.tooltip_delay_seq;
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            Timer::after(Duration::from_millis(500)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.tooltip_delay_seq != seq {
+                    return;
+                }
+                if this.tooltip_text.as_ref() != Some(&text) {
+                    return;
+                }
+                let Some(pending_pos) = this.tooltip_pending_pos else {
+                    return;
+                };
+                let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
+                let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
+                if dx > px(2.0) || dy > px(2.0) {
+                    return;
+                }
+                this.tooltip_visible_text = Some(text.clone());
+                this.tooltip_visible_pos = Some(pending_pos);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn maybe_restart_tooltip_delay(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(candidate) = self.tooltip_text.clone() else {
+            if self.tooltip_visible_text.is_some() {
+                self.tooltip_visible_text = None;
+                self.tooltip_visible_pos = None;
+                cx.notify();
+            }
+            return;
+        };
+
+        if let Some(visible_anchor) = self.tooltip_visible_pos {
+            let dx = (self.last_mouse_pos.x - visible_anchor.x).abs();
+            let dy = (self.last_mouse_pos.y - visible_anchor.y).abs();
+            if dx <= px(6.0) && dy <= px(6.0) {
+                return;
+            }
+        }
+
+        let should_restart = match self.tooltip_pending_pos {
+            None => true,
+            Some(pending_anchor) => {
+                let dx = (self.last_mouse_pos.x - pending_anchor.x).abs();
+                let dy = (self.last_mouse_pos.y - pending_anchor.y).abs();
+                dx > px(2.0) || dy > px(2.0)
+            }
+        };
+
+        if !should_restart {
+            return;
+        }
+
+        self.tooltip_visible_text = None;
+        self.tooltip_visible_pos = None;
+        self.tooltip_pending_pos = Some(self.last_mouse_pos);
+        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+        let seq = self.tooltip_delay_seq;
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            Timer::after(Duration::from_millis(500)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.tooltip_delay_seq != seq {
+                    return;
+                }
+                if this.tooltip_text.as_ref() != Some(&candidate) {
+                    return;
+                }
+                let Some(pending_pos) = this.tooltip_pending_pos else {
+                    return;
+                };
+                let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
+                let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
+                if dx > px(2.0) || dy > px(2.0) {
+                    return;
+                }
+                this.tooltip_visible_text = Some(candidate.clone());
+                this.tooltip_visible_pos = Some(pending_pos);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
+        let seq = self.ui_settings_persist_seq;
+
+        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            Timer::after(Duration::from_millis(250)).await;
+            let _ = view.update(cx, |this, _cx| {
+                if this.ui_settings_persist_seq != seq {
+                    return;
+                }
+
+                let ww: f32 = this.last_window_size.width.round().into();
+                let wh: f32 = this.last_window_size.height.round().into();
+                let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
+                let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
+
+                let sidebar_width: f32 = this.sidebar_width.round().into();
+                let details_width: f32 = this.details_width.round().into();
+
+                let settings = session::UiSettings {
+                    window_width,
+                    window_height,
+                    sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
+                        .then_some(sidebar_width as u32),
+                    details_width: (details_width.is_finite() && details_width >= 1.0)
+                        .then_some(details_width as u32),
+                };
+
+                let _ = session::persist_ui_settings(settings);
+            });
+        })
+        .detach();
+    }
+
+    fn clamp_pane_widths_to_window(&mut self) {
+        let total_w = self.last_window_size.width;
+        if total_w.is_zero() {
+            return;
+        }
+
+        let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
+        let main_min = px(MAIN_MIN_PX);
+        let sidebar_min = px(SIDEBAR_MIN_PX);
+        let details_min = px(DETAILS_MIN_PX);
+
+        let max_sidebar = (total_w - self.details_width - main_min - handles_w).max(sidebar_min);
+        self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
+
+        let max_details = (total_w - self.sidebar_width - main_min - handles_w).max(details_min);
+        self.details_width = self.details_width.max(details_min).min(max_details);
     }
 }
 

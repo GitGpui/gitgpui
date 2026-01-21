@@ -10,7 +10,6 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()
-        .min_w(px(220.0))
         .text_color(theme.colors.text)
         .child(content)
 }

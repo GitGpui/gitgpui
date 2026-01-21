@@ -7,6 +7,10 @@ enum ContextMenuAction {
     CherryPickCommit { repo_id: RepoId, commit_id: CommitId },
     RevertCommit { repo_id: RepoId, commit_id: CommitId },
     CheckoutBranch { repo_id: RepoId, name: String },
+    SetHistoryScope {
+        repo_id: RepoId,
+        scope: gitgpui_core::domain::LogScope,
+    },
     StagePath { repo_id: RepoId, path: std::path::PathBuf },
     UnstagePath { repo_id: RepoId, path: std::path::PathBuf },
     FetchAll { repo_id: RepoId },
@@ -103,6 +107,7 @@ impl GitGpuiView {
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
+                | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -419,6 +424,30 @@ impl GitGpuiView {
                 });
                 Some(ContextMenuModel::new(items))
             }
+            PopoverKind::HistoryBranchFilter { repo_id } => Some(ContextMenuModel::new(vec![
+                ContextMenuItem::Header("History scope".into()),
+                ContextMenuItem::Separator,
+                ContextMenuItem::Entry {
+                    label: "Current branch".into(),
+                    icon: Some("⎇".into()),
+                    shortcut: Some("C".into()),
+                    disabled: false,
+                    action: ContextMenuAction::SetHistoryScope {
+                        repo_id: *repo_id,
+                        scope: gitgpui_core::domain::LogScope::CurrentBranch,
+                    },
+                },
+                ContextMenuItem::Entry {
+                    label: "All branches".into(),
+                    icon: Some("∞".into()),
+                    shortcut: Some("A".into()),
+                    disabled: false,
+                    action: ContextMenuAction::SetHistoryScope {
+                        repo_id: *repo_id,
+                        scope: gitgpui_core::domain::LogScope::AllBranches,
+                    },
+                },
+            ])),
             _ => None,
         }
     }
@@ -446,6 +475,9 @@ impl GitGpuiView {
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                 self.rebuild_diff_cache();
+            }
+            ContextMenuAction::SetHistoryScope { repo_id, scope } => {
+                self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
             ContextMenuAction::StagePath { repo_id, path } => {
                 self.store.dispatch(Msg::SelectDiff {
@@ -631,6 +663,16 @@ impl GitGpuiView {
         let (show_date, show_sha) = self.history_visible_columns();
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
+        let scope_label: SharedString = self
+            .active_repo()
+            .map(|r| match r.history_scope {
+                gitgpui_core::domain::LogScope::CurrentBranch => "Current branch".to_string(),
+                gitgpui_core::domain::LogScope::AllBranches => "All branches".to_string(),
+            })
+            .unwrap_or_else(|| "Current branch".to_string())
+            .into();
+        let scope_repo_id = self.active_repo_id();
+
         let resize_handle =
             |id: &'static str, handle: HistoryColResizeHandle| {
                 div()
@@ -728,8 +770,61 @@ impl GitGpuiView {
             .child(
                 div()
                     .w(self.history_col_branch)
-                    .whitespace_nowrap()
-                    .child("Branch / Tag"),
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w(px(0.0))
+                    .child(
+                        div()
+                            .id("history_scope_header")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_1()
+                            .py(px(1.0))
+                            .rounded(px(theme.radii.row))
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                            .cursor(CursorStyle::PointingHand)
+                            .child(
+                                div()
+                                    .min_w(px(0.0))
+                                    .line_clamp(1)
+                                    .whitespace_nowrap()
+                                    .child(scope_label.clone()),
+                            )
+                            .child(
+                                gpui::svg()
+                                    .path("icons/chevron_down.svg")
+                                    .w(px(12.0))
+                                    .h(px(12.0))
+                                    .text_color(theme.colors.text_muted),
+                            )
+                            .when_some(scope_repo_id, |this, repo_id| {
+                                this.on_click(cx.listener(
+                                    move |this, e: &ClickEvent, window, cx| {
+                                        this.open_popover_at(
+                                            PopoverKind::HistoryBranchFilter { repo_id },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            })
+                            .when(scope_repo_id.is_none(), |this| {
+                                this.opacity(0.6).cursor(CursorStyle::Arrow)
+                            })
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                let text: SharedString =
+                                    "History scope (Current branch / All branches)".into();
+                                if *hovering {
+                                    this.tooltip_text = Some(text);
+                                } else if this.tooltip_text.as_ref() == Some(&text) {
+                                    this.tooltip_text = None;
+                                }
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch))
             .child(
@@ -819,6 +914,18 @@ impl GitGpuiView {
                 .position(position)
                 .child(div().text_sm().line_clamp(1).child(label))
                 .render(theme)
+                .on_hover(cx.listener({
+                    let tooltip: SharedString =
+                        repo.spec.workdir.display().to_string().into();
+                    move |this, hovering: &bool, _w, cx| {
+                        if *hovering {
+                            this.tooltip_text = Some(tooltip.clone());
+                        } else if this.tooltip_text.as_ref() == Some(&tooltip) {
+                            this.tooltip_text = None;
+                        }
+                        cx.notify();
+                    }
+                }))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     this.store.dispatch(Msg::SetActiveRepo { repo_id });
                     this.rebuild_diff_cache();
@@ -828,7 +935,6 @@ impl GitGpuiView {
             bar = bar.tab(tab);
         }
 
-        let show_add_repo_tooltip = self.add_repo_button_hovered;
         bar.end_child(
             div()
                 .id("add_repo_container")
@@ -837,34 +943,14 @@ impl GitGpuiView {
                 .flex()
                 .items_center()
                 .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                    this.add_repo_button_hovered = *hovering;
+                    let text: SharedString = "Add repository".into();
+                    if *hovering {
+                        this.tooltip_text = Some(text);
+                    } else if this.tooltip_text.as_ref() == Some(&text) {
+                        this.tooltip_text = None;
+                    }
                     cx.notify();
                 }))
-                .when(show_add_repo_tooltip, |this| {
-                    this.child(
-                        div()
-                            .id("add_repo_tooltip")
-                            .absolute()
-                            .right(px(34.0))
-                            .top_0()
-                            .bottom_0()
-                            .flex()
-                            .items_center()
-                            .child(
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .bg(theme.colors.surface_bg_elevated)
-                                    .border_1()
-                                    .border_color(theme.colors.border)
-                                    .rounded(px(theme.radii.row))
-                                    .shadow_sm()
-                                    .text_xs()
-                                    .text_color(theme.colors.text)
-                                    .child("Add repository"),
-                            ),
-                    )
-                })
                 .child(
                     zed::Button::new("add_repo", "⨁")
                         .style(zed::ButtonStyle::Subtle)
@@ -926,6 +1012,8 @@ impl GitGpuiView {
 
     pub(super) fn action_bar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
+        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
         let icon = |path: &'static str| {
             gpui::svg()
                 .path(path)
@@ -980,8 +1068,8 @@ impl GitGpuiView {
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(hover_bg))
+            .active(move |s| s.bg(active_bg))
             .child(
                 div()
                     .text_sm()
@@ -1000,6 +1088,15 @@ impl GitGpuiView {
                 this.popover = Some(PopoverKind::RepoPicker);
                 this.popover_anchor = Some(e.position());
                 cx.notify();
+            }))
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Select repository".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
             }));
 
         let branch_picker = div()
@@ -1010,8 +1107,8 @@ impl GitGpuiView {
             .px_2()
             .py_1()
             .rounded(px(theme.radii.row))
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(hover_bg))
+            .active(move |s| s.bg(active_bg))
             .child(
                 div()
                     .text_sm()
@@ -1029,6 +1126,15 @@ impl GitGpuiView {
                 this.popover = Some(PopoverKind::BranchPicker);
                 this.popover_anchor = Some(e.position());
                 cx.notify();
+            }))
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Select branch".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
             }));
 
         let mut pull_main = zed::Button::new("pull_main", "Pull")
@@ -1041,22 +1147,35 @@ impl GitGpuiView {
             .start_slot(icon("icons/chevron_down.svg"))
             .style(zed::ButtonStyle::Subtle);
 
-        let pull = zed::SplitButton::new(
-            pull_main.on_click(theme, cx, |this, _e, _w, cx| {
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::Pull {
-                        repo_id,
-                        mode: PullMode::Default,
-                    });
+        let pull = div()
+            .id("pull")
+            .child(
+                zed::SplitButton::new(
+                    pull_main.on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Some(repo_id) = this.active_repo_id() {
+                            this.store.dispatch(Msg::Pull {
+                                repo_id,
+                                mode: PullMode::Default,
+                            });
+                        }
+                        cx.notify();
+                    }),
+                    pull_menu.on_click(theme, cx, |this, e, window, cx| {
+                        this.open_popover_at(PopoverKind::PullPicker, e.position(), window, cx);
+                    }),
+                )
+                .style(zed::SplitButtonStyle::Outlined)
+                .render(theme),
+            )
+            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                let text: SharedString = format!("Pull ({pull_count} behind)").into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
                 }
                 cx.notify();
-            }),
-            pull_menu.on_click(theme, cx, |this, e, window, cx| {
-                this.open_popover_at(PopoverKind::PullPicker, e.position(), window, cx);
-            }),
-        )
-        .style(zed::SplitButtonStyle::Outlined)
-        .render(theme);
+            }));
 
         let mut push = zed::Button::new("push", "Push")
             .start_slot(icon("icons/arrow_up.svg"))
@@ -1069,7 +1188,16 @@ impl GitGpuiView {
                 this.store.dispatch(Msg::Push { repo_id });
             }
             cx.notify();
-        });
+        })
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let text: SharedString = format!("Push ({push_count} ahead)").into();
+            if *hovering {
+                this.tooltip_text = Some(text);
+            } else if this.tooltip_text.as_ref() == Some(&text) {
+                this.tooltip_text = None;
+            }
+            cx.notify();
+        }));
 
         let stash = zed::Button::new("stash", "Stash")
             .start_slot(icon("icons/box.svg"))
@@ -1083,7 +1211,16 @@ impl GitGpuiView {
                     });
                 }
                 cx.notify();
-            });
+            })
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Create stash (WIP)".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
+            }));
 
         let create_branch = zed::Button::new("create_branch", "Branch")
             .start_slot(icon("icons/git_branch.svg"))
@@ -1096,7 +1233,16 @@ impl GitGpuiView {
                     .read_with(cx, |i, _| i.focus_handle());
                 window.focus(&focus);
                 this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);
-            });
+            })
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Create branch…".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
+            }));
 
         div()
             .flex()
@@ -1140,7 +1286,9 @@ impl GitGpuiView {
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let anchor_corner = match &kind {
-            PopoverKind::PullPicker | PopoverKind::CreateBranch => Corner::TopRight,
+            PopoverKind::PullPicker
+            | PopoverKind::CreateBranch
+            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
             _ => Corner::TopLeft,
         };
 
@@ -1173,9 +1321,14 @@ impl GitGpuiView {
                                 cx.notify();
                             }),
                     )
-                    .min_w(px(320.0))
+                    .min_w(px(260.0))
+                    .max_w(px(420.0))
                 } else {
-                    let mut menu = div().flex().flex_col().min_w(px(320.0));
+                    let mut menu = div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(260.0))
+                        .max_w(px(420.0));
                     for repo in self.state.repos.iter() {
                         let id = repo.id;
                         let label: SharedString = repo.spec.workdir.display().to_string().into();
@@ -1203,7 +1356,11 @@ impl GitGpuiView {
                 }
             }
             PopoverKind::BranchPicker => {
-                let mut menu = div().flex().flex_col().min_w(px(260.0));
+                let mut menu = div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(240.0))
+                    .max_w(px(420.0));
 
                 if let Some(repo) = self.active_repo() {
                     match &repo.branches {
@@ -1304,7 +1461,8 @@ impl GitGpuiView {
                                 }),
                         )),
                 )
-                .min_w(px(260.0))
+                .min_w(px(240.0))
+                .max_w(px(420.0))
             }
             PopoverKind::CreateBranch => div()
                 .flex()
@@ -1362,54 +1520,9 @@ impl GitGpuiView {
                         ),
                 ),
             PopoverKind::HistoryBranchFilter { repo_id } => {
-                let mut menu = div().flex().flex_col().min_w(px(260.0));
-
-                menu = menu
-                    .child(
-                        div()
-                            .id("history_scope_current_branch")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Current branch")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::SetHistoryScope {
-                                    repo_id,
-                                    scope: gitgpui_core::domain::LogScope::CurrentBranch,
-                                });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("history_scope_all_branches")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("All branches")
-                            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                this.store.dispatch(Msg::SetHistoryScope {
-                                    repo_id,
-                                    scope: gitgpui_core::domain::LogScope::AllBranches,
-                                });
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("history_scope_close")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Close")
-                            .on_click(close),
-                    );
-
-                menu
+                self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
+                    .min_w(px(160.0))
+                    .max_w(px(220.0))
             }
             PopoverKind::PullPicker => {
                 self.context_menu_view(PopoverKind::PullPicker, cx)
@@ -1783,12 +1896,10 @@ impl GitGpuiView {
                 .flex_col()
                 .h_full()
                 .min_h(px(0.0))
-                .gap_2()
-                .child(zed::panel(
+                .child(zed::empty_state(
                     theme,
                     "Branches",
-                    None,
-                    zed::empty_state(theme, "Branches", "No repository selected."),
+                    "No repository selected.",
                 ));
         };
 
@@ -1818,8 +1929,7 @@ impl GitGpuiView {
             .flex_col()
             .h_full()
             .min_h(px(0.0))
-            .gap_2()
-            .child(zed::panel(theme, "Branches", None, panel_body).flex_1().min_h(px(0.0)))
+            .child(panel_body)
     }
 
     pub(super) fn commit_details_view(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
@@ -1829,81 +1939,216 @@ impl GitGpuiView {
         if let Some(repo) = repo
             && let Some(selected_id) = repo.selected_commit.as_ref()
         {
+            let max_scroll = self.commit_scroll.max_offset().height.max(px(0.0));
+            if max_scroll <= px(2.0) {
+                self.commit_scroll
+                    .set_offset(point(px(0.0), px(0.0)));
+            }
+
+            let show_delayed_loading = self
+                .commit_details_delay
+                .as_ref()
+                .is_some_and(|s| s.repo_id == repo.id && &s.commit_id == selected_id && s.show_loading);
+            let repo_id = repo.id;
+
+            let header_title: SharedString = "Commit details".into();
+
             let header = div()
                 .flex()
                 .items_center()
-                .justify_end()
+                .justify_between()
+                .h(px(zed::CONTROL_HEIGHT_MD_PX))
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .line_clamp(1)
+                        .child(header_title),
+                )
                 .child(
                     zed::Button::new("commit_details_close", "✕")
                         .style(zed::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             if let Some(repo_id) = this.active_repo_id() {
                                 this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                             }
                             cx.notify();
-                        }),
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Close commit details".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
                 );
 
             let body: AnyElement = match &repo.commit_details {
                     Loadable::Loading => {
-                        zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        if show_delayed_loading {
+                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }
                     }
                     Loadable::Error(e) => {
                         zed::empty_state(theme, "Commit", e.clone()).into_any_element()
                     }
                     Loadable::NotLoaded => {
-                        zed::empty_state(theme, "Commit", "Select a commit in History.")
-                            .into_any_element()
+                        if show_delayed_loading {
+                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        } else {
+                            div().into_any_element()
+                        }
                     }
 	                    Loadable::Ready(details) => {
 	                        if &details.id != selected_id {
-	                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
-	                        } else {
-                            let parent = details
-                                .parent_ids
-                                .first()
-                                .map(|p| p.as_ref().to_string())
-                                .unwrap_or_else(|| "—".to_string());
+	                            if show_delayed_loading {
+	                                zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+	                            } else {
+                                let parent = details
+                                    .parent_ids
+                                    .first()
+                                    .map(|p| p.as_ref().to_string())
+                                    .unwrap_or_else(|| "—".to_string());
 
-                            let files = if details.files.is_empty() {
-                                div()
-                                    .text_sm()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("No files.")
-                                    .into_any_element()
-                            } else {
-                                use std::hash::{Hash, Hasher};
-                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                details.id.as_ref().hash(&mut hasher);
-                                let commit_key = hasher.finish();
+                                let files = if details.files.is_empty() {
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("No files.")
+                                        .into_any_element()
+                                } else {
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                    details.id.as_ref().hash(&mut hasher);
+                                    let commit_key = hasher.finish();
 
-                                let list = uniform_list(
-                                    ("commit_files", commit_key),
-                                    details.files.len(),
-                                    cx.processor(Self::render_commit_file_rows),
-                                )
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(self.commit_files_scroll.clone());
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .min_h(px(0.0))
+                                        .children(details.files.iter().enumerate().map(|(ix, f)| {
+                                            let commit_id = details.id.clone();
+                                            let row_id = commit_key.wrapping_add(ix as u64);
+                                            let (icon, color) = match f.kind {
+                                                FileStatusKind::Added => (Some("+"), theme.colors.success),
+                                                FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
+                                                FileStatusKind::Deleted => (None, theme.colors.text_muted),
+                                                FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
+                                                FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
+                                                FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),
+                                            };
 
-                                let scroll_handle =
-                                    self.commit_files_scroll.0.borrow().base_handle.clone();
+                                            let path = f.path.clone();
+                                            let selected = repo.diff_target.as_ref().is_some_and(|t| match t {
+                                                DiffTarget::Commit { commit_id: t_commit_id, path: Some(t_path) } => {
+                                                    t_commit_id == &commit_id && t_path == &path
+                                                }
+                                                _ => false,
+                                            });
 
-                                div()
-                                    .id(("commit_files_scroll_container", commit_key))
-                                    .relative()
-                                    .h(px(240.0))
-                                    .min_h(px(0.0))
-                                    .child(list)
-                                    .child(
-                                        zed::Scrollbar::new(
-                                            ("commit_files_scrollbar", commit_key),
-                                            scroll_handle,
-                                        )
-                                        .render(theme),
-                                    )
-                                    .into_any_element()
-                            };
+                                            let commit_id_for_click = commit_id.clone();
+                                            let path_for_click = path.clone();
+                                            let commit_id_for_menu = commit_id.clone();
+                                            let path_for_menu = path.clone();
+                                            let tooltip: SharedString = path.display().to_string().into();
+
+                                            let mut row = div()
+                                                .id(("commit_file", row_id))
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .px_2()
+                                                .py_1()
+                                                .w_full()
+                                                .rounded(px(theme.radii.row))
+                                                .hover(move |s| s.bg(theme.colors.hover))
+                                                .active(move |s| s.bg(theme.colors.active))
+                                                .child(
+                                                    div()
+                                                        .w(px(16.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .when_some(icon, |this, icon| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .font_weight(FontWeight::BOLD)
+                                                                    .text_color(color)
+                                                                    .child(icon),
+                                                            )
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w(px(0.0))
+                                                        .text_sm()
+                                                        .line_clamp(1)
+                                                        .whitespace_nowrap()
+                                                        .child(path.display().to_string()),
+                                                )
+                                                .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                                    window.focus(&this.diff_panel_focus_handle);
+                                                    this.store.dispatch(Msg::SelectDiff {
+                                                        repo_id,
+                                                        target: DiffTarget::Commit {
+                                                            commit_id: commit_id_for_click.clone(),
+                                                            path: Some(path_for_click.clone()),
+                                                        },
+                                                    });
+                                                    this.rebuild_diff_cache();
+                                                    cx.notify();
+                                                }))
+                                                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                                    if *hovering {
+                                                        this.tooltip_text = Some(tooltip.clone());
+                                                    } else if this.tooltip_text.as_ref() == Some(&tooltip) {
+                                                        this.tooltip_text = None;
+                                                    }
+                                                    cx.notify();
+                                                }));
+
+                                            row = row.on_mouse_down(
+                                                MouseButton::Right,
+                                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.open_popover_at(
+                                                        PopoverKind::CommitFileMenu {
+                                                            repo_id,
+                                                            commit_id: commit_id_for_menu.clone(),
+                                                            path: path_for_menu.clone(),
+                                                        },
+                                                        e.position,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            );
+
+                                            if selected {
+                                                row = row.bg(with_alpha(
+                                                    theme.colors.accent,
+                                                    if theme.is_dark { 0.16 } else { 0.10 },
+                                                ));
+                                            }
+
+                                            row.into_any_element()
+                                        }))
+                                        .into_any_element()
+                                };
 
 	                            let needs_update = self
 	                                .commit_details_message_input
@@ -1920,23 +2165,207 @@ impl GitGpuiView {
 	                                .flex()
 	                                .flex_col()
 	                                .gap_2()
-	                                .child(
-	                                    div()
-	                                        .flex()
-	                                        .flex_col()
-	                                        .gap_1()
-	                                        .child(
-	                                            div()
-	                                                .text_sm()
-	                                                .text_color(theme.colors.text_muted)
-	                                                .child("Commit message"),
-	                                        )
-	                                        .child(
-	                                            div()
-	                                                .min_w(px(0.0))
-	                                                .child(self.commit_details_message_input.clone()),
-	                                        ),
-	                                )
+	                                .child(div().w_full().min_w(px(0.0)).child(
+	                                    self.commit_details_message_input.clone(),
+	                                ))
+                                .child(zed::key_value(
+                                    theme,
+                                    "Commit SHA",
+                                    details.id.as_ref().to_string(),
+                                ))
+                                .child(zed::key_value(
+                                    theme,
+                                    "Commit date",
+                                    details.committed_at.clone(),
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Parent commit SHA"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .whitespace_nowrap()
+                                                .line_clamp(1)
+                                                .child(parent),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Committed files"),
+                                        )
+                                        .child(files),
+                                )
+                                .into_any_element()
+	                            }
+	                        } else {
+                            let parent = details
+                                .parent_ids
+                                .first()
+                                .map(|p| p.as_ref().to_string())
+                                .unwrap_or_else(|| "—".to_string());
+
+                                let files = if details.files.is_empty() {
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("No files.")
+                                        .into_any_element()
+                                } else {
+                                    use std::hash::{Hash, Hasher};
+                                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                                    details.id.as_ref().hash(&mut hasher);
+                                    let commit_key = hasher.finish();
+
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .min_h(px(0.0))
+                                        .children(details.files.iter().enumerate().map(|(ix, f)| {
+                                            let commit_id = details.id.clone();
+                                            let row_id = commit_key.wrapping_add(ix as u64);
+                                            let (icon, color) = match f.kind {
+                                                FileStatusKind::Added => (Some("+"), theme.colors.success),
+                                                FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
+                                                FileStatusKind::Deleted => (None, theme.colors.text_muted),
+                                                FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
+                                                FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
+                                                FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),
+                                            };
+
+                                            let path = f.path.clone();
+                                            let selected = repo.diff_target.as_ref().is_some_and(|t| match t {
+                                                DiffTarget::Commit { commit_id: t_commit_id, path: Some(t_path) } => {
+                                                    t_commit_id == &commit_id && t_path == &path
+                                                }
+                                                _ => false,
+                                            });
+
+                                            let commit_id_for_click = commit_id.clone();
+                                            let path_for_click = path.clone();
+                                            let commit_id_for_menu = commit_id.clone();
+                                            let path_for_menu = path.clone();
+                                            let tooltip: SharedString = path.display().to_string().into();
+
+                                            let mut row = div()
+                                                .id(("commit_file", row_id))
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
+                                                .px_2()
+                                                .py_1()
+                                                .w_full()
+                                                .rounded(px(theme.radii.row))
+                                                .hover(move |s| s.bg(theme.colors.hover))
+                                                .active(move |s| s.bg(theme.colors.active))
+                                                .child(
+                                                    div()
+                                                        .w(px(16.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_center()
+                                                        .when_some(icon, |this, icon| {
+                                                            this.child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .font_weight(FontWeight::BOLD)
+                                                                    .text_color(color)
+                                                                    .child(icon),
+                                                            )
+                                                        }),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_w(px(0.0))
+                                                        .text_sm()
+                                                        .line_clamp(1)
+                                                        .whitespace_nowrap()
+                                                        .child(path.display().to_string()),
+                                                )
+                                                .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                                                    window.focus(&this.diff_panel_focus_handle);
+                                                    this.store.dispatch(Msg::SelectDiff {
+                                                        repo_id,
+                                                        target: DiffTarget::Commit {
+                                                            commit_id: commit_id_for_click.clone(),
+                                                            path: Some(path_for_click.clone()),
+                                                        },
+                                                    });
+                                                    this.rebuild_diff_cache();
+                                                    cx.notify();
+                                                }))
+                                                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                                    if *hovering {
+                                                        this.tooltip_text = Some(tooltip.clone());
+                                                    } else if this.tooltip_text.as_ref() == Some(&tooltip) {
+                                                        this.tooltip_text = None;
+                                                    }
+                                                    cx.notify();
+                                                }));
+
+                                            row = row.on_mouse_down(
+                                                MouseButton::Right,
+                                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.open_popover_at(
+                                                        PopoverKind::CommitFileMenu {
+                                                            repo_id,
+                                                            commit_id: commit_id_for_menu.clone(),
+                                                            path: path_for_menu.clone(),
+                                                        },
+                                                        e.position,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            );
+
+                                            if selected {
+                                                row = row.bg(with_alpha(
+                                                    theme.colors.accent,
+                                                    if theme.is_dark { 0.16 } else { 0.10 },
+                                                ));
+                                            }
+
+                                            row.into_any_element()
+                                        }))
+                                        .into_any_element()
+                                };
+
+	                            let needs_update = self
+	                                .commit_details_message_input
+	                                .read(cx)
+	                                .text()
+	                                != details.message.as_str();
+	                            if needs_update {
+	                                self.commit_details_message_input.update(cx, |input, cx| {
+	                                    input.set_text(details.message.clone(), cx);
+	                                });
+	                            }
+
+	                            div()
+	                                .flex()
+	                                .flex_col()
+	                                .gap_2()
+	                                .child(div().w_full().min_w(px(0.0)).child(
+	                                    self.commit_details_message_input.clone(),
+	                                ))
                                 .child(zed::key_value(
                                     theme,
                                     "Commit SHA",
@@ -1984,30 +2413,52 @@ impl GitGpuiView {
                     }
                 };
 
-            let content = div()
-                .flex()
-                .flex_col()
-                .gap_2()
-	                .child(zed::panel(
-	                    theme,
-	                    "",
-	                    None,
-	                    div().flex().flex_col().gap_2().child(header).child(body),
-	                ));
+            let scroll_content = div()
+                .id("commit_details_body_scroll")
+                .h_full()
+                .min_h(px(0.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.commit_scroll)
+                .on_scroll_wheel(cx.listener(|this, _e: &gpui::ScrollWheelEvent, _w, cx| {
+                    let max_scroll = this.commit_scroll.max_offset().height.max(px(0.0));
+                    if max_scroll <= px(2.0) {
+                        this.commit_scroll
+                            .set_offset(point(px(0.0), px(0.0)));
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .p_2()
+                        .w_full()
+                        .child(body),
+                );
 
             return div()
-                .id("commit_details_scroll")
+                .id("commit_details_container")
                 .relative()
                 .flex()
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .overflow_y_scroll()
-                .track_scroll(&self.commit_scroll)
-                .child(content)
+                .child(header)
                 .child(
-                    zed::Scrollbar::new("commit_details_scrollbar", self.commit_scroll.clone())
-                        .render(theme),
+                    div()
+                        .id("commit_details_body_container")
+                        .relative()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .child(scroll_content)
+                        .child(
+                            zed::Scrollbar::new(
+                                "commit_details_scrollbar",
+                                self.commit_scroll.clone(),
+                            )
+                            .render(theme),
+                        ),
                 )
                 .into_any_element();
         }
@@ -2032,7 +2483,16 @@ impl GitGpuiView {
                     paths: Vec::new(),
                 });
                 cx.notify();
-            });
+            })
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Stage all changes".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
+            }));
 
         let unstage_all = zed::Button::new("unstage_all", "Unstage all changes")
             .style(zed::ButtonStyle::Subtle)
@@ -2045,7 +2505,16 @@ impl GitGpuiView {
                     paths: Vec::new(),
                 });
                 cx.notify();
-            });
+            })
+            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                let text: SharedString = "Unstage all changes".into();
+                if *hovering {
+                    this.tooltip_text = Some(text);
+                } else if this.tooltip_text.as_ref() == Some(&text) {
+                    this.tooltip_text = None;
+                }
+                cx.notify();
+            }));
 
         let section_header = |id: &'static str,
                               label: &'static str,
@@ -2084,27 +2553,11 @@ impl GitGpuiView {
             self.status_list(cx, DiffArea::Staged, staged_count)
         };
 
-        let staged_body = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .min_h(px(0.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(staged_list),
-            )
-            .child(self.commit_box(cx).flex_none())
-            .into_any_element();
-
         let unstaged_section = div()
             .flex()
             .flex_col()
-            .flex_none()
+            .flex_1()
+            .min_h(px(0.0))
             .child(section_header(
                 "unstaged_header",
                 "Unstaged",
@@ -2115,9 +2568,8 @@ impl GitGpuiView {
                 div()
                     .flex()
                     .flex_col()
-                    .when(unstaged_count > 0, |d| d.h(px(180.0)))
+                    .flex_1()
                     .min_h(px(0.0))
-                    .p_2()
                     .child(unstaged_body),
             );
 
@@ -2138,8 +2590,7 @@ impl GitGpuiView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .p_2()
-                    .child(staged_body),
+                    .child(staged_list),
             );
 
         div()
@@ -2148,30 +2599,28 @@ impl GitGpuiView {
             .flex_1()
             .min_h(px(0.0))
             .h_full()
-	            .child(if repo_id.is_some() {
-	                zed::panel(
-	                    theme,
-	                    "",
-	                    None,
-	                    div()
-	                        .flex()
-	                        .flex_col()
-	                        .flex_1()
-	                        .min_h(px(0.0))
-	                        .child(unstaged_section)
-	                        .child(div().border_t_1().border_color(theme.colors.border))
-	                        .child(staged_section),
-	                )
-	                .flex_1()
-	                .min_h(px(0.0))
-	            } else {
-	                zed::panel(
-	                    theme,
-	                    "",
-	                    None,
-	                    zed::empty_state(theme, "Changes", "No repository selected."),
-	                )
-	            })
+            .child(if repo_id.is_some() {
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(unstaged_section)
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(staged_section)
+                    .child(
+                        div()
+                            .border_t_1()
+                            .border_color(theme.colors.border)
+                            .bg(theme.colors.surface_bg)
+                            .px_2()
+                            .py_2()
+                            .child(self.commit_box(cx)),
+                    )
+                    .into_any_element()
+            } else {
+                zed::empty_state(theme, "Changes", "No repository selected.").into_any_element()
+            })
             .into_any_element()
     }
 
@@ -2257,278 +2706,78 @@ impl GitGpuiView {
                                     this.popover_anchor = Some(e.position());
                                 }
                                 cx.notify();
-                            }),
+                            })
+                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                let text: SharedString = "Commit staged changes".into();
+                                if *hovering {
+                                    this.tooltip_text = Some(text);
+                                } else if this.tooltip_text.as_ref() == Some(&text) {
+                                    this.tooltip_text = None;
+                                }
+                                cx.notify();
+                            })),
                     ),
             )
     }
 
     pub(super) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
+        self.ensure_history_cache(cx);
+        let repo = self.active_repo();
+        let commits_count = self
+            .history_cache
+            .as_ref()
+            .map(|c| c.visible_indices.len())
+            .unwrap_or(0);
+        let show_working_tree_summary_row = repo
+            .and_then(|r| match &r.status {
+                Loadable::Ready(s) => Some(!s.unstaged.is_empty()),
+                _ => None,
+            })
+            .unwrap_or(false);
+        let count = commits_count + usize::from(show_working_tree_summary_row);
 
-        let tabs = {
-            let tab = self.history_tab;
-            let mut bar = zed::TabBar::new("history_tab_bar");
-            for (ix, (label, value)) in [
-                ("History", HistoryTab::Log),
-                ("Stash", HistoryTab::Stash),
-                ("Reflog", HistoryTab::Reflog),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let selected = tab == value;
-                let position = if ix == 0 {
-                    zed::TabPosition::First
-                } else if ix == 2 {
-                    zed::TabPosition::Last
-                } else {
-                    zed::TabPosition::Middle(std::cmp::Ordering::Equal)
-                };
-                let value_for_click = value;
-                let t = zed::Tab::new(("history_tab", ix))
-                    .selected(selected)
-                    .position(position)
-                    .child(div().text_sm().child(label))
-                    .render(theme)
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.history_tab = value_for_click;
-                        cx.notify();
-                    }));
-                bar = bar.tab(t);
+        let black = gpui::rgba(0x000000ff);
+
+        let body: AnyElement = if count == 0 {
+            match repo.map(|r| &r.log) {
+                None => zed::empty_state(theme, "History", "No repository.").into_any_element(),
+                Some(Loadable::Loading) => {
+                    zed::empty_state(theme, "History", "Loading…").into_any_element()
+                }
+                Some(Loadable::Error(e)) => zed::empty_state(theme, "History", e.clone()).into_any_element(),
+                Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                    zed::empty_state(theme, "History", "No commits.").into_any_element()
+                }
             }
-            bar.render(theme)
-        };
-
-        let (_title, body): (SharedString, AnyElement) = match self.history_tab {
-            HistoryTab::Log => {
-                self.update_history_search_debounce(cx);
-                self.ensure_history_cache(cx);
-                let repo = self.active_repo();
-                let commits_count = self
-                    .history_cache
-                    .as_ref()
-                    .map(|c| c.visible_indices.len())
-                    .unwrap_or(0);
-                let show_working_tree_summary_row = repo
-                    .and_then(|r| match &r.status {
-                        Loadable::Ready(s) => Some(!s.unstaged.is_empty()),
-                        _ => None,
-                    })
-                    .unwrap_or(false);
-                let count = commits_count + usize::from(show_working_tree_summary_row);
-
-                let filter = div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(self.history_search_input.clone()),
-                    )
-                    .child({
-                        let current: SharedString = repo
-                            .map(|r| match r.history_scope {
-                                gitgpui_core::domain::LogScope::CurrentBranch => {
-                                    "Current branch".to_string()
-                                }
-                                gitgpui_core::domain::LogScope::AllBranches => {
-                                    "All branches".to_string()
-                                }
-                            })
-                            .unwrap_or_else(|| "Current branch".to_string())
-                            .into();
-                        div()
-                            .id("history_branch_filter")
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .bg(theme.colors.surface_bg)
-                            .border_1()
-                            .border_color(theme.colors.border)
-                            .rounded(px(theme.radii.row))
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("Branch"),
-                            )
-                            .child(div().text_sm().child(current))
-                            .on_click(cx.listener(|this, e: &ClickEvent, _window, cx| {
-                                if let Some(repo_id) = this.active_repo_id() {
-                                    this.popover =
-                                        Some(PopoverKind::HistoryBranchFilter { repo_id });
-                                    this.popover_anchor = Some(e.position());
-                                    cx.notify();
-                                }
-                            }))
-                    });
-
-                let body: AnyElement = if count == 0 {
-                    match repo.map(|r| &r.log) {
-                        None => {
-                            zed::empty_state(theme, "History", "No repository.").into_any_element()
-                        }
-                        Some(Loadable::Loading) => {
-                            zed::empty_state(theme, "History", "Loading…").into_any_element()
-                        }
-                        Some(Loadable::Error(e)) => {
-                            zed::empty_state(theme, "History", e.clone()).into_any_element()
-                        }
-                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            zed::empty_state(theme, "History", "No commits.").into_any_element()
-                        }
-                    }
-                } else {
-                    let list = uniform_list(
-                        "history_main",
-                        count,
-                        cx.processor(Self::render_history_table_rows),
-                    )
-                    .h_full()
-                    .track_scroll(self.history_scroll.clone());
-                    let scroll_handle = self.history_scroll.0.borrow().base_handle.clone();
-                    div()
-                        .id("history_main_scroll_container")
-                        .relative()
-                        .h_full()
-                        .child(list)
-                        .child(
-                            zed::Scrollbar::new("history_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
-                        .into_any_element()
-                };
-
-                let table = div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .h_full()
-                    .child(filter)
-                    .child(self.history_column_headers(cx))
-                    .child(div().flex_1().child(body));
-
-                ("History".into(), table.into_any_element())
-            }
-            HistoryTab::Stash => {
-                let repo = self.active_repo();
-                let count = repo
-                    .and_then(|r| match &r.stashes {
-                        Loadable::Ready(v) => Some(v.len()),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-
-                let body: AnyElement = if count == 0 {
-                    match repo.map(|r| &r.stashes) {
-                        None => {
-                            zed::empty_state(theme, "Stash", "No repository.").into_any_element()
-                        }
-                        Some(Loadable::Loading) => {
-                            zed::empty_state(theme, "Stash", "Loading…").into_any_element()
-                        }
-                        Some(Loadable::Error(e)) => {
-                            zed::empty_state(theme, "Stash", e.clone()).into_any_element()
-                        }
-                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            zed::empty_state(theme, "Stash", "No stashes.").into_any_element()
-                        }
-                    }
-                } else {
-                    let list =
-                        uniform_list("stash_main", count, cx.processor(Self::render_stash_rows))
-                            .h_full()
-                            .track_scroll(self.stashes_scroll.clone());
-                    let scroll_handle = self.stashes_scroll.0.borrow().base_handle.clone();
-                    div()
-                        .id("stash_main_scroll_container")
-                        .relative()
-                        .h_full()
-                        .child(list)
-                        .child(
-                            zed::Scrollbar::new("stash_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
-                        .into_any_element()
-                };
-
-                ("Stash".into(), body)
-            }
-            HistoryTab::Reflog => {
-                let repo = self.active_repo();
-                let count = repo
-                    .and_then(|r| match &r.reflog {
-                        Loadable::Ready(v) => Some(v.len()),
-                        _ => None,
-                    })
-                    .unwrap_or(0);
-
-                let body: AnyElement = if count == 0 {
-                    match repo.map(|r| &r.reflog) {
-                        None => {
-                            zed::empty_state(theme, "Reflog", "No repository.").into_any_element()
-                        }
-                        Some(Loadable::Loading) => {
-                            zed::empty_state(theme, "Reflog", "Loading…").into_any_element()
-                        }
-                        Some(Loadable::Error(e)) => {
-                            zed::empty_state(theme, "Reflog", e.clone()).into_any_element()
-                        }
-                        Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
-                            zed::empty_state(theme, "Reflog", "No reflog.").into_any_element()
-                        }
-                    }
-                } else {
-                    let list =
-                        uniform_list("reflog_main", count, cx.processor(Self::render_reflog_rows))
-                            .h_full()
-                            .track_scroll(self.reflog_scroll.clone());
-                    let scroll_handle = self.reflog_scroll.0.borrow().base_handle.clone();
-                    div()
-                        .id("reflog_main_scroll_container")
-                        .relative()
-                        .h_full()
-                        .child(list)
-                        .child(
-                            zed::Scrollbar::new("reflog_main_scrollbar", scroll_handle)
-                                .render(theme),
-                        )
-                        .into_any_element()
-                };
-
-                ("Reflog".into(), body)
-            }
+        } else {
+            let list = uniform_list(
+                "history_main",
+                count,
+                cx.processor(Self::render_history_table_rows),
+            )
+            .h_full()
+            .track_scroll(self.history_scroll.clone());
+            let scroll_handle = self.history_scroll.0.borrow().base_handle.clone();
+            div()
+                .id("history_main_scroll_container")
+                .relative()
+                .h_full()
+                .child(list)
+                .child(zed::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
+                .into_any_element()
         };
 
         div()
             .flex()
             .flex_col()
-            .gap_2()
             .flex_1()
             .w_full()
             .h_full()
             .min_h(px(0.0))
-	            .child(
-	                zed::panel(
-	                    theme,
-	                    "",
-	                    None,
-	                    div()
-	                        .flex()
-	                        .flex_col()
-	                        .gap_2()
-	                        .h_full()
-	                        .child(tabs)
-	                        .child(div().flex_1().child(body)),
-	                )
-	                .flex_1(),
-	            )
+            .bg(black)
+            .child(self.history_column_headers(cx).bg(black).border_b_1().border_color(theme.colors.border))
+            .child(div().flex_1().min_h(px(0.0)).child(body))
     }
 
     pub(super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -2537,29 +2786,98 @@ impl GitGpuiView {
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
-        let title = self
+        // Diff search is intentionally hidden in the UI; keep it inactive to avoid "invisible filters".
+        self.diff_raw_mode = false;
+        if !self.diff_search_debounced.is_empty() || !self.diff_search_raw.is_empty() {
+            self.diff_search_debounced.clear();
+            self.diff_search_raw.clear();
+            self.diff_visible_indices.clear();
+            self.diff_visible_cache_len = 0;
+            self.diff_scrollbar_markers_cache.clear();
+        }
+        let search_text = self.diff_search_input.read_with(cx, |i, _| i.text().to_string());
+        if !search_text.is_empty() {
+            self.diff_search_input
+                .update(cx, |i, cx| i.set_text(String::new(), cx));
+        }
+
+        let title: AnyElement = self
             .active_repo()
             .and_then(|r| r.diff_target.as_ref())
-            .map(|t| match t {
-                DiffTarget::WorkingTree { path, area } => format!(
-                    "{}: {}",
-                    if *area == DiffArea::Staged {
-                        "staged"
-                    } else {
-                        "unstaged"
-                    },
-                    path.display()
-                ),
-                DiffTarget::Commit { commit_id, path } => {
-                    let sha = commit_id.as_ref();
-                    let short = sha.get(0..8).unwrap_or(sha);
-                    match path {
-                        Some(path) => format!("{short}: {}", path.display()),
-                        None => format!("{short}: full diff"),
+            .map(|t| {
+                let (icon, color, text) = match t {
+                    DiffTarget::WorkingTree { path, area } => {
+                        let kind = self.active_repo().and_then(|repo| match &repo.status {
+                            Loadable::Ready(status) => {
+                                let list = match area {
+                                    DiffArea::Unstaged => &status.unstaged,
+                                    DiffArea::Staged => &status.staged,
+                                };
+                                list.iter()
+                                    .find(|e| e.path == *path)
+                                    .map(|e| e.kind)
+                            }
+                            _ => None,
+                        });
+
+                        let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
+                            FileStatusKind::Untracked | FileStatusKind::Added => {
+                                ("+", theme.colors.success)
+                            }
+                            FileStatusKind::Modified => ("✎", theme.colors.warning),
+                            FileStatusKind::Deleted => ("−", theme.colors.danger),
+                            FileStatusKind::Renamed => ("→", theme.colors.accent),
+                            FileStatusKind::Conflicted => ("!", theme.colors.danger),
+                        };
+                        (Some(icon), color, path.display().to_string())
                     }
-                }
+                    DiffTarget::Commit { commit_id: _, path } => match path {
+                        Some(path) => (Some("✎"), theme.colors.text_muted, path.display().to_string()),
+                        None => (Some("✎"), theme.colors.text_muted, "Full diff".to_string()),
+                    },
+                };
+
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .w(px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon, |this, icon| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(color)
+                                        .child(icon),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(text),
+                    )
+                    .into_any_element()
             })
-            .unwrap_or_else(|| "Select a file to view diff".to_string());
+            .unwrap_or_else(|| {
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Select a file to view diff")
+                    .into_any_element()
+            });
 
         let untracked_preview_path = self.untracked_worktree_preview_path();
         let added_preview_path = self.added_file_preview_abs_path();
@@ -2600,7 +2918,16 @@ impl GitGpuiView {
                             this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             cx.notify();
-                        }),
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Inline diff view (Alt+I)".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
                 )
                 .child(
                     zed::Button::new("diff_split", "Split")
@@ -2614,19 +2941,16 @@ impl GitGpuiView {
                             this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             cx.notify();
-                        }),
-                )
-                .child(
-                    zed::Button::new("diff_raw", "Raw")
-                        .style(if self.diff_raw_mode {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
                         })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_raw_mode = !this.diff_raw_mode;
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Split diff view (Alt+S)".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
                             cx.notify();
-                        }),
+                        })),
                 )
                 .child(
                     zed::Button::new("diff_prev_hunk", "Prev")
@@ -2635,7 +2959,16 @@ impl GitGpuiView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_jump_prev();
                             cx.notify();
-                        }),
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Previous change (Shift+F7 / Alt+Up)".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
                 )
                 .child(
                     zed::Button::new("diff_next_hunk", "Next")
@@ -2644,7 +2977,16 @@ impl GitGpuiView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_jump_next();
                             cx.notify();
-                        }),
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Next change (F7 / Alt+Down)".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
                 )
                 .when(!wants_file_diff, |controls| {
                     controls.child(
@@ -2655,7 +2997,16 @@ impl GitGpuiView {
                                 this.popover = Some(PopoverKind::DiffHunks);
                                 this.popover_anchor = Some(e.position());
                                 cx.notify();
-                            }),
+                            })
+                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                let text: SharedString = "Jump to hunk… (Alt+H)".into();
+                                if *hovering {
+                                    this.tooltip_text = Some(text);
+                                } else if this.tooltip_text.as_ref() == Some(&text) {
+                                    this.tooltip_text = None;
+                                }
+                                cx.notify();
+                            })),
                     )
                 })
                 ;
@@ -2668,7 +3019,16 @@ impl GitGpuiView {
                     .on_click(theme, cx, move |this, _e, _w, cx| {
                         this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                         cx.notify();
-                    }),
+                    })
+                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                        let text: SharedString = "Close diff".into();
+                        if *hovering {
+                            this.tooltip_text = Some(text);
+                        } else if this.tooltip_text.as_ref() == Some(&text) {
+                            this.tooltip_text = None;
+                        }
+                        cx.notify();
+                    })),
             );
         }
 
@@ -2676,17 +3036,14 @@ impl GitGpuiView {
             .flex()
             .items_center()
             .justify_between()
-            .gap_2()
             .child(
                 div()
+                    .flex_1()
                     .flex()
                     .items_center()
-                    .gap_2()
                     .min_w(px(0.0))
-                    .child(div().text_sm().font_weight(FontWeight::BOLD).child(title))
-                    .when(!is_file_preview, |this| {
-                        this.child(div().w(px(220.0)).child(self.diff_search_input.clone()))
-                    }),
+                    .overflow_hidden()
+                    .child(title),
             )
             .child(controls);
 
@@ -2768,35 +3125,13 @@ impl GitGpuiView {
                         .into_any_element()
                 }
 	                Loadable::Ready(diff) => {
-	                    if self.diff_raw_mode {
-	                        let text = diff
-	                            .lines
-	                            .iter()
-	                            .map(|l| l.text.as_str())
-	                            .collect::<Vec<_>>()
-	                            .join("\n");
-	                        self.diff_raw_input.update(cx, |input, cx| {
-	                            input.set_theme(theme, cx);
-	                            input.set_text(text, cx);
-	                            input.set_read_only(true, cx);
-	                        });
-	                        div()
-	                            .id("diff_raw_scroll")
-	                            .font_family("monospace")
-	                            .flex()
-	                            .flex_col()
-	                            .flex_1()
-	                            .min_h(px(0.0))
-	                            .overflow_y_scroll()
-	                            .child(self.diff_raw_input.clone())
-	                            .into_any_element()
-	                    } else if wants_file_diff {
-	                        enum DiffFileState {
-	                            NotLoaded,
-	                            Loading,
-	                            Error(String),
-	                            Ready { has_file: bool },
-	                        }
+	                    if wants_file_diff {
+                        enum DiffFileState {
+                            NotLoaded,
+                            Loading,
+                            Error(String),
+                            Ready { has_file: bool },
+                        }
 
                         let diff_file_state = match &repo.diff_file {
                             Loadable::NotLoaded => DiffFileState::NotLoaded,
@@ -2837,7 +3172,8 @@ impl GitGpuiView {
                                     zed::empty_state(theme, "Diff", "No file contents available.")
                                         .into_any_element()
                                 } else {
-                                    self.update_diff_search_debounce(cx);
+                                    // Diff search is intentionally hidden; keep it disabled.
+                                    self.diff_search_debounced.clear();
                                     self.ensure_diff_visible_indices();
                                     self.maybe_autoscroll_diff_to_first_change();
 
@@ -2967,9 +3303,10 @@ impl GitGpuiView {
                             self.rebuild_diff_cache();
                         }
 
-                        self.update_diff_search_debounce(cx);
-                        self.ensure_diff_visible_indices();
-                        self.maybe_autoscroll_diff_to_first_change();
+	                        // Diff search is intentionally hidden; keep it disabled.
+	                        self.diff_search_debounced.clear();
+	                        self.ensure_diff_visible_indices();
+	                        self.maybe_autoscroll_diff_to_first_change();
                         if self.diff_cache.is_empty() {
                             zed::empty_state(theme, "Diff", "No differences.").into_any_element()
                         } else if !self.diff_visible_query.is_empty()
@@ -3078,38 +3415,85 @@ impl GitGpuiView {
         div()
             .flex()
             .flex_col()
-            .gap_2()
             .flex_1()
             .w_full()
             .h_full()
             .min_h(px(0.0))
-	            .child(
-	                zed::panel(
-	                    theme,
-	                    "",
-	                    None,
-	                    div()
-	                        .flex()
-	                        .flex_col()
-	                        .gap_2()
-	                        .track_focus(&self.diff_panel_focus_handle)
-	                        .on_mouse_down(
-	                            MouseButton::Left,
-	                            cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
-	                                window.focus(&this.diff_panel_focus_handle);
-	                            }),
-	                        )
-	                        .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
-	                            let is_file_preview = this.untracked_worktree_preview_path().is_some()
-	                                || this.added_file_preview_abs_path().is_some();
-	                            if is_file_preview {
-	                                return;
-	                            }
-
+            .bg(theme.colors.surface_bg)
+            .track_focus(&self.diff_panel_focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
+                    window.focus(&this.diff_panel_focus_handle);
+                }),
+            )
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
                             let key = e.keystroke.key.as_str();
                             let mods = e.keystroke.modifiers;
 
                             let mut handled = false;
+
+                            if key == "escape"
+                                && !mods.control
+                                && !mods.alt
+                                && !mods.platform
+                                && !mods.function
+                            {
+                                if let Some(repo_id) = this.active_repo_id() {
+                                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                                    handled = true;
+                                }
+                            }
+
+                            if !handled
+                                && key == "space"
+                                && !mods.control
+                                && !mods.alt
+                                && !mods.platform
+                                && !mods.function
+                                && !this
+                                    .diff_search_input
+                                    .read(cx)
+                                    .focus_handle()
+                                    .is_focused(window)
+                                && !this.diff_raw_input.read(cx).focus_handle().is_focused(window)
+                                && let Some(repo_id) = this.active_repo_id()
+                                && let Some(repo) = this.active_repo()
+                                && let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.clone()
+                            {
+                                let next_area = match area {
+                                    DiffArea::Unstaged => {
+                                        this.store.dispatch(Msg::StagePath {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                        DiffArea::Staged
+                                    }
+                                    DiffArea::Staged => {
+                                        this.store.dispatch(Msg::UnstagePath {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                        DiffArea::Unstaged
+                                    }
+                                };
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: DiffTarget::WorkingTree { path, area: next_area },
+                                });
+                                this.rebuild_diff_cache();
+                                handled = true;
+                            }
+
+                            let is_file_preview = this.untracked_worktree_preview_path().is_some()
+                                || this.added_file_preview_abs_path().is_some();
+                            if is_file_preview {
+                                if handled {
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }
+                                return;
+                            }
 
                             let copy_target_is_focused = this
                                 .diff_search_input
@@ -3124,6 +3508,35 @@ impl GitGpuiView {
 
                             if mods.alt && !mods.control && !mods.platform && !mods.function {
                                 match key {
+                                    "i" => {
+                                        this.diff_view = DiffViewMode::Inline;
+                                        this.diff_text_segments_cache_query.clear();
+                                        this.diff_text_segments_cache.clear();
+                                        handled = true;
+                                    }
+                                    "s" => {
+                                        this.diff_view = DiffViewMode::Split;
+                                        this.diff_text_segments_cache_query.clear();
+                                        this.diff_text_segments_cache.clear();
+                                        handled = true;
+                                    }
+                                    "h" => {
+                                        let is_file_preview =
+                                            this.untracked_worktree_preview_path().is_some()
+                                                || this.added_file_preview_abs_path().is_some();
+                                        if !is_file_preview
+                                            && !this.active_repo().is_some_and(|r| {
+                                                Self::is_file_diff_target(r.diff_target.as_ref())
+                                            })
+                                        {
+                                            let _ = this.ensure_diff_hunk_picker_search_input(
+                                                window, cx,
+                                            );
+                                            this.popover = Some(PopoverKind::DiffHunks);
+                                            this.popover_anchor = Some(this.last_mouse_pos);
+                                            handled = true;
+                                        }
+                                    }
                                     "up" => {
                                         this.diff_jump_prev();
                                         handled = true;
@@ -3148,6 +3561,28 @@ impl GitGpuiView {
                                 } else {
                                     this.diff_jump_next();
                                 }
+                                handled = true;
+                            }
+
+                            if !handled
+                                && key == "f2"
+                                && !mods.control
+                                && !mods.alt
+                                && !mods.platform
+                                && !mods.function
+                            {
+                                this.diff_jump_prev();
+                                handled = true;
+                            }
+
+                            if !handled
+                                && key == "f3"
+                                && !mods.control
+                                && !mods.alt
+                                && !mods.platform
+                                && !mods.function
+                            {
+                                this.diff_jump_next();
                                 handled = true;
                             }
 
@@ -3179,19 +3614,22 @@ impl GitGpuiView {
                                 cx.notify();
                             }
 	                        }))
-	                        .h_full()
-	                        .child(header)
-	                        .child(
-	                            div()
-	                                .flex_1()
-	                                .min_h(px(120.0))
-	                                .w_full()
-	                                .h_full()
-	                                .child(body),
-	                        )
-                            .child(DiffTextSelectionTracker { view: cx.entity() }),
-	                )
-	                .flex_1(),
-	            )
+            .child(
+                header
+                    .h(px(zed::CONTROL_HEIGHT_MD_PX))
+                    .px_2()
+                    .bg(theme.colors.surface_bg_elevated)
+                    .border_b_1()
+                    .border_color(theme.colors.border),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .child(body),
+            )
+            .child(DiffTextSelectionTracker { view: cx.entity() })
     }
 }

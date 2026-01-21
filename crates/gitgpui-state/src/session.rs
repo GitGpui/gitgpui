@@ -7,6 +7,10 @@ use std::{env, fs, io};
 pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
+    pub sidebar_width: Option<u32>,
+    pub details_width: Option<u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -16,7 +20,20 @@ struct UiSessionFileV1 {
     active_repo: Option<String>,
 }
 
-const SESSION_FILE_VERSION: u32 = 1;
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct UiSessionFileV2 {
+    version: u32,
+    open_repos: Vec<String>,
+    active_repo: Option<String>,
+    window_width: Option<u32>,
+    window_height: Option<u32>,
+    sidebar_width: Option<u32>,
+    details_width: Option<u32>,
+}
+
+const SESSION_FILE_VERSION_V1: u32 = 1;
+const SESSION_FILE_VERSION_V2: u32 = 2;
+const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V2;
 
 pub fn load() -> UiSession {
     let Some(path) = default_session_file_path() else {
@@ -31,43 +48,42 @@ pub fn load_from_path(path: &Path) -> UiSession {
         return UiSession::default();
     };
 
-    let Ok(file) = serde_json::from_str::<UiSessionFileV1>(&contents) else {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
         return UiSession::default();
     };
 
-    if file.version != SESSION_FILE_VERSION {
-        return UiSession::default();
-    }
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
 
-    let mut open_repos: Vec<PathBuf> = Vec::new();
-    for repo in file.open_repos {
-        let repo = repo.trim();
-        if repo.is_empty() {
-            continue;
-        }
-        let repo = PathBuf::from(repo);
-        if open_repos.iter().any(|p| p == &repo) {
-            continue;
-        }
-        open_repos.push(repo);
-    }
-
-    let active_repo = file
-        .active_repo
-        .as_deref()
-        .and_then(|p| {
-            let p = p.trim();
-            if p.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(p))
+    match version {
+        SESSION_FILE_VERSION_V1 => {
+            let Ok(file) = serde_json::from_value::<UiSessionFileV1>(value) else {
+                return UiSession::default();
+            };
+            let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
+            UiSession {
+                open_repos,
+                active_repo,
+                ..UiSession::default()
             }
-        })
-        .filter(|active| open_repos.iter().any(|p| p == active));
-
-    UiSession {
-        open_repos,
-        active_repo,
+        }
+        SESSION_FILE_VERSION_V2 => {
+            let Ok(file) = serde_json::from_value::<UiSessionFileV2>(value) else {
+                return UiSession::default();
+            };
+            let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
+            UiSession {
+                open_repos,
+                active_repo,
+                window_width: file.window_width,
+                window_height: file.window_height,
+                sidebar_width: file.sidebar_width,
+                details_width: file.details_width,
+            }
+        }
+        _ => UiSession::default(),
     }
 }
 
@@ -93,13 +109,99 @@ pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<(
         .map(|p| p.to_string_lossy().to_string())
         .filter(|active| open_repos.iter().any(|p| p == active));
 
-    let file = UiSessionFileV1 {
-        version: SESSION_FILE_VERSION,
-        open_repos,
-        active_repo,
-    };
+    let mut file = load_file_v2(path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    file.open_repos = open_repos;
+    file.active_repo = active_repo;
 
     persist_to_path(path, &file)
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct UiSettings {
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
+    pub sidebar_width: Option<u32>,
+    pub details_width: Option<u32>,
+}
+
+pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_ui_settings_to_path(settings, &path)
+}
+
+pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
+    let mut file = load_file_v2(path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    if settings.window_width.is_some() && settings.window_height.is_some() {
+        file.window_width = settings.window_width;
+        file.window_height = settings.window_height;
+    }
+    if let Some(w) = settings.sidebar_width {
+        file.sidebar_width = Some(w);
+    }
+    if let Some(w) = settings.details_width {
+        file.details_width = Some(w);
+    }
+
+    persist_to_path(path, &file)
+}
+
+fn parse_repos(open_repos_raw: Vec<String>, active_repo_raw: Option<String>) -> (Vec<PathBuf>, Option<PathBuf>) {
+    let mut open_repos: Vec<PathBuf> = Vec::new();
+    for repo in open_repos_raw {
+        let repo = repo.trim();
+        if repo.is_empty() {
+            continue;
+        }
+        let repo = PathBuf::from(repo);
+        if open_repos.iter().any(|p| p == &repo) {
+            continue;
+        }
+        open_repos.push(repo);
+    }
+
+    let active_repo = active_repo_raw
+        .as_deref()
+        .and_then(|p| {
+            let p = p.trim();
+            if p.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(p))
+            }
+        })
+        .filter(|active| open_repos.iter().any(|p| p == active));
+
+    (open_repos, active_repo)
+}
+
+fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return None;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return None;
+    };
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
+    match version {
+        SESSION_FILE_VERSION_V1 => {
+            let file: UiSessionFileV1 = serde_json::from_value(value).ok()?;
+            Some(UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: file.open_repos,
+                active_repo: file.active_repo,
+                ..UiSessionFileV2::default()
+            })
+        }
+        SESSION_FILE_VERSION_V2 => serde_json::from_value::<UiSessionFileV2>(value).ok(),
+        _ => None,
+    }
 }
 
 fn active_repo_path<'a>(state: &'a AppState, active_repo_id: Option<RepoId>) -> Option<&'a Path> {
@@ -111,13 +213,13 @@ fn active_repo_path<'a>(state: &'a AppState, active_repo_id: Option<RepoId>) -> 
         .map(|r| r.spec.workdir.as_path())
 }
 
-fn persist_to_path(path: &Path, session: &UiSessionFileV1) -> io::Result<()> {
+fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
     let tmp_path = path.with_extension("json.tmp");
-    let contents = serde_json::to_vec(session).expect("serializing UiSessionFileV1 should succeed");
+    let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
     fs::write(&tmp_path, contents)?;
 
     match fs::rename(&tmp_path, path) {
@@ -188,7 +290,7 @@ mod tests {
         let path = dir.join("session.json");
 
         let file = UiSessionFileV1 {
-            version: SESSION_FILE_VERSION,
+            version: SESSION_FILE_VERSION_V1,
             open_repos: vec!["/a".into(), "/b".into()],
             active_repo: Some("/b".into()),
         };
@@ -196,7 +298,7 @@ mod tests {
 
         let contents = fs::read_to_string(&path).expect("read succeeds");
         let loaded: UiSessionFileV1 = serde_json::from_str(&contents).expect("json parses");
-        assert_eq!(loaded.version, SESSION_FILE_VERSION);
+        assert_eq!(loaded.version, SESSION_FILE_VERSION_V1);
         assert_eq!(loaded.open_repos, vec!["/a".to_string(), "/b".to_string()]);
         assert_eq!(loaded.active_repo.as_deref(), Some("/b"));
     }
