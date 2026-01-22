@@ -2,10 +2,10 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
-    IsZero, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ShapedLine,
-    SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine, actions, div, fill, hsla,
-    point, px, relative, size,
+    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
+    ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
+    actions, div, fill, hsla, point, px, relative, size,
 };
 use std::ops::Range;
 use std::time::Duration;
@@ -390,9 +390,11 @@ impl TextInput {
             return 0;
         }
 
-        let (Some(bounds), Some(layout), Some(starts)) =
-            (self.last_bounds.as_ref(), self.last_layout.as_ref(), self.last_line_starts.as_ref())
-        else {
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.last_bounds.as_ref(),
+            self.last_layout.as_ref(),
+            self.last_line_starts.as_ref(),
+        ) else {
             return 0;
         };
 
@@ -411,8 +413,7 @@ impl TextInput {
 
         match layout {
             TextInputLayout::Plain(lines) => {
-                let ratio =
-                    f32::from(position.y - bounds.top()) / f32::from(line_height);
+                let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
                 let mut line_ix = ratio.floor() as isize;
                 line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
@@ -437,7 +438,8 @@ impl TextInput {
                 }
                 let line_ix = line_ix.min(lines.len().saturating_sub(1));
                 let local_x = position.x - bounds.left();
-                let local_y_in_line = local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
+                let local_y_in_line =
+                    local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
                 let line = &lines[line_ix];
                 let local = line
                     .closest_index_for_position(point(local_x, local_y_in_line), line_height)
@@ -807,9 +809,10 @@ impl Element for TextElement {
                     underline: None,
                     strikethrough: None,
                 };
-                let shaped = window
-                    .text_system()
-                    .shape_line(line_text.clone(), font_size, &[run], None);
+                let shaped =
+                    window
+                        .text_system()
+                        .shape_line(line_text.clone(), font_size, &[run], None);
                 lines.push(shaped);
             }
 
@@ -827,7 +830,10 @@ impl Element for TextElement {
             } else {
                 for ix in 0..lines.len() {
                     let start = line_starts[ix];
-                    let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_text.len());
+                    let next_start = line_starts
+                        .get(ix + 1)
+                        .copied()
+                        .unwrap_or(display_text.len());
                     let line_len = lines[ix].len();
                     let line_end = start + line_len;
 
@@ -921,7 +927,10 @@ impl Element for TextElement {
         } else {
             for ix in 0..lines.len() {
                 let start = line_starts[ix];
-                let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_text.len());
+                let next_start = line_starts
+                    .get(ix + 1)
+                    .copied()
+                    .unwrap_or(display_text.len());
                 let line_len = lines[ix].len();
                 let line_end = start + line_len;
 
@@ -1082,33 +1091,35 @@ impl Render for TextInput {
         }
 
         if is_focused && self.cursor_blink_task.is_none() {
-            let task = cx.spawn(async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
-                loop {
-                    gpui::Timer::after(Duration::from_millis(800)).await;
-                    let should_continue = input
-                        .update(cx, |input, cx| {
-                            if !input.has_focus {
-                                input.cursor_blink_visible = true;
-                                input.cursor_blink_task = None;
+            let task = cx.spawn(
+                async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| {
+                    loop {
+                        gpui::Timer::after(Duration::from_millis(800)).await;
+                        let should_continue = input
+                            .update(cx, |input, cx| {
+                                if !input.has_focus {
+                                    input.cursor_blink_visible = true;
+                                    input.cursor_blink_task = None;
+                                    cx.notify();
+                                    return false;
+                                }
+
+                                if input.selected_range.is_empty() {
+                                    input.cursor_blink_visible = !input.cursor_blink_visible;
+                                } else {
+                                    input.cursor_blink_visible = true;
+                                }
                                 cx.notify();
-                                return false;
-                            }
+                                true
+                            })
+                            .unwrap_or(false);
 
-                            if input.selected_range.is_empty() {
-                                input.cursor_blink_visible = !input.cursor_blink_visible;
-                            } else {
-                                input.cursor_blink_visible = true;
-                            }
-                            cx.notify();
-                            true
-                        })
-                        .unwrap_or(false);
-
-                    if !should_continue {
-                        break;
+                        if !should_continue {
+                            break;
+                        }
                     }
-                }
-            });
+                },
+            );
             self.cursor_blink_task = Some(task);
         }
 
@@ -1136,14 +1147,17 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_mouse_down(MouseButton::Right, cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
-                cx.stop_propagation();
-                if !this.selected_range.is_empty() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        this.content[this.selected_range.clone()].to_string(),
-                    ));
-                }
-            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    if !this.selected_range.is_empty() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(
+                            this.content[this.selected_range.clone()].to_string(),
+                        ));
+                    }
+                }),
+            )
             .line_height(window.line_height())
             .text_size(px(13.0))
             .when(self.multiline, |d| d.items_start())
@@ -1156,7 +1170,10 @@ impl Render for TextInput {
             );
 
         if !chromeless {
-            outer = outer.bg(style.background).border_1().rounded(px(style.radius));
+            outer = outer
+                .bg(style.background)
+                .border_1()
+                .rounded(px(style.radius));
 
             if is_focused {
                 outer = outer.border_color(style.focus_border);

@@ -1,6 +1,8 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{AnyElement, ClickEvent, CursorStyle, Div, IntoElement, SharedString, Stateful, Window, div, px};
+use gpui::{
+    AnyElement, ClickEvent, CursorStyle, Div, IntoElement, SharedString, Stateful, Window, div, px,
+};
 
 use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX};
 
@@ -78,7 +80,8 @@ impl Button {
             with_alpha(theme.colors.text, if theme.is_dark { 0.05 } else { 0.04 });
         let active_overlay_muted =
             with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.06 });
-        let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match self.style {
+        let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match self.style
+        {
             ButtonStyle::Filled => (
                 theme.colors.accent,
                 with_alpha(theme.colors.accent, 0.85),
@@ -93,8 +96,14 @@ impl Button {
                 hover_overlay,
                 active_overlay,
                 outlined_border,
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.55 } else { 0.40 }),
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.62 } else { 0.46 }),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.55 } else { 0.40 },
+                ),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.62 } else { 0.46 },
+                ),
                 theme.colors.text,
             ),
             ButtonStyle::Subtle => (
@@ -102,8 +111,14 @@ impl Button {
                 hover_overlay,
                 active_overlay,
                 transparent,
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.45 } else { 0.32 }),
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.52 } else { 0.38 }),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.45 } else { 0.32 },
+                ),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.52 } else { 0.38 },
+                ),
                 theme.colors.text,
             ),
             ButtonStyle::Transparent => (
@@ -111,8 +126,14 @@ impl Button {
                 hover_overlay_muted,
                 active_overlay_muted,
                 transparent,
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.40 } else { 0.30 }),
-                with_alpha(theme.colors.text_muted, if theme.is_dark { 0.46 } else { 0.34 }),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.40 } else { 0.30 },
+                ),
+                with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.46 } else { 0.34 },
+                ),
                 theme.colors.text_muted,
             ),
             ButtonStyle::Danger => (

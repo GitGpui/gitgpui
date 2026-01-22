@@ -450,8 +450,8 @@ impl WaylandClient {
 
         let conn = Connection::connect_to_env().context("Failed to connect to Wayland")?;
 
-        let (globals, mut event_queue) =
-            registry_queue_init::<WaylandClientStatePtr>(&conn).context("Failed to init registry")?;
+        let (globals, mut event_queue) = registry_queue_init::<WaylandClientStatePtr>(&conn)
+            .context("Failed to init registry")?;
         let qh = event_queue.handle();
 
         let mut seat: Option<wl_seat::WlSeat> = None;

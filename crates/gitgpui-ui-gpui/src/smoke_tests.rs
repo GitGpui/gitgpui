@@ -528,3 +528,92 @@ fn scrollbar_allows_dragging_thumb_to_scroll(cx: &mut gpui::TestAppContext) {
         );
     });
 }
+
+struct ScrollbarMismatchedBoundsView {
+    theme: AppTheme,
+    handle: ScrollHandle,
+    rows: usize,
+}
+
+impl ScrollbarMismatchedBoundsView {
+    fn new(rows: usize) -> Self {
+        Self {
+            theme: AppTheme::zed_ayu_dark(),
+            handle: ScrollHandle::new(),
+            rows,
+        }
+    }
+}
+
+impl gpui::Render for ScrollbarMismatchedBoundsView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let rows = (0..self.rows)
+            .map(|ix| {
+                div()
+                    .id(ix)
+                    .h(px(20.0))
+                    .px_2()
+                    .child(format!("Row {ix}"))
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
+        // Render the scrollbar in a *larger* container than the scroll surface to ensure the
+        // scrollbar uses its own bounds (not the scroll handle's bounds) for hit-testing/metrics.
+        div().size_full().bg(theme.colors.window_bg).child(
+            div()
+                .id("outer_scrollbar_container")
+                .relative()
+                .w(px(200.0))
+                .h(px(200.0))
+                .child(
+                    div()
+                        .id("inner_scroll_surface")
+                        .relative()
+                        .w_full()
+                        .h(px(120.0))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.handle)
+                        .child(div().flex().flex_col().children(rows)),
+                )
+                .child(
+                    zed::Scrollbar::new("outer_scrollbar", self.handle.clone())
+                        .debug_selector("outer_scrollbar")
+                        .render(theme),
+                ),
+        )
+    }
+}
+
+#[gpui::test]
+fn scrollbar_track_uses_own_bounds_when_larger_than_surface(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|_window, _cx| ScrollbarMismatchedBoundsView::new(100));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("outer_scrollbar")
+        .expect("expected outer_scrollbar in debug bounds");
+
+    // Scrollbar track uses a 4px margin at top/bottom.
+    let click = gpui::point(bounds.right() - px(2.0), bounds.bottom() - px(6.0));
+    cx.simulate_mouse_move(click, None, Modifiers::default());
+    cx.simulate_mouse_down(click, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(click, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let offset_y = view.read(app).handle.offset().y;
+        assert!(
+            offset_y != px(0.0),
+            "expected track click near bottom to scroll even when scrollbar is taller than the scroll surface"
+        );
+    });
+}

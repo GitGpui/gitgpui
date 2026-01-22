@@ -62,13 +62,15 @@ impl SplitButton {
             .bg(bg)
             .overflow_hidden()
             .when(bordered, |this| this.p(px(1.0)))
-            .child(div().flex_1().h_full().flex().items_center().child(self.left))
             .child(
                 div()
+                    .flex_1()
                     .h_full()
-                    .w(px(1.0))
-                    .bg(with_alpha(border_color, 0.9)),
+                    .flex()
+                    .items_center()
+                    .child(self.left),
             )
+            .child(div().h_full().w(px(1.0)).bg(with_alpha(border_color, 0.9)))
             .child(div().h_full().flex().items_center().child(self.right));
 
         div()
@@ -77,10 +79,7 @@ impl SplitButton {
             .h(px(CONTROL_HEIGHT_PX))
             .rounded(px(theme.radii.row))
             .bg(gpui::rgba(0x00000000))
-            .when(bordered, |this| {
-                this.border_1()
-                    .border_color(border_color)
-            })
+            .when(bordered, |this| this.border_1().border_color(border_color))
             .when(self.style == SplitButtonStyle::Filled, |this| {
                 this.shadow_sm()
             })

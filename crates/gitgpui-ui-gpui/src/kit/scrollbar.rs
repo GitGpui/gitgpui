@@ -91,15 +91,7 @@ impl Scrollbar {
         let prepaint_handle = handle.clone();
         let paint = canvas(
             move |bounds, window, _cx| {
-                let viewport_h = {
-                    let h_handle = prepaint_handle.bounds().size.height;
-                    let h_bounds = bounds.size.height;
-                    if h_handle > px(0.0) {
-                        h_handle.min(h_bounds)
-                    } else {
-                        h_bounds
-                    }
-                };
+                let viewport_h = bounds.size.height;
                 let max_offset = prepaint_handle.max_offset().height.max(px(0.0));
                 let raw_offset_y = prepaint_handle.offset().y;
                 let scroll_y = if raw_offset_y < px(0.0) {
@@ -392,14 +384,7 @@ impl Scrollbar {
 #[cfg(test)]
 impl Scrollbar {
     pub fn thumb_visible_for_test(handle: &ScrollHandle, viewport_h_fallback: Pixels) -> bool {
-        let viewport_h = {
-            let h = handle.bounds().size.height;
-            if h > px(0.0) {
-                h.min(viewport_h_fallback)
-            } else {
-                viewport_h_fallback
-            }
-        };
+        let viewport_h = viewport_h_fallback;
         let max_offset = handle.max_offset().height.max(px(0.0));
         let raw_offset_y = handle.offset().y;
         let scroll_y = if raw_offset_y < px(0.0) {

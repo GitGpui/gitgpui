@@ -63,7 +63,13 @@ impl PickerPrompt {
             .flex()
             .flex_col()
             .w_full()
-            .child(div().flex().w_full().min_w(px(0.0)).child(self.query_input.clone()))
+            .child(
+                div()
+                    .flex()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(self.query_input.clone()),
+            )
             .child(div().border_t_1().border_color(theme.colors.border));
 
         let mut list = div()

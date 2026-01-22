@@ -212,10 +212,10 @@ impl GitGpuiView {
         )
         .id("win_min")
         .window_control_area(WindowControlArea::Min)
-            .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                window.minimize_window();
-            }));
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            window.minimize_window();
+        }));
 
         let max_icon = if window.is_maximized() {
             "icons/generic_restore.svg"
@@ -233,10 +233,10 @@ impl GitGpuiView {
         )
         .id("win_max")
         .window_control_area(WindowControlArea::Max)
-            .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
-                cx.stop_propagation();
-                window.zoom_window();
-            }));
+        .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            window.zoom_window();
+        }));
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
@@ -249,10 +249,10 @@ impl GitGpuiView {
         )
         .id("win_close")
         .window_control_area(WindowControlArea::Close)
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.quit();
-            }));
+        .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+            cx.stop_propagation();
+            cx.quit();
+        }));
 
         div()
             .id("title_bar")

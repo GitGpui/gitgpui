@@ -36,6 +36,9 @@ pub enum Msg {
         repo_id: RepoId,
         scope: LogScope,
     },
+    LoadMoreHistory {
+        repo_id: RepoId,
+    },
     SelectCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -218,7 +221,6 @@ pub enum Msg {
         command: RepoCommandKind,
         result: Result<CommandOutput, Error>,
     },
-
 }
 
 impl std::fmt::Debug for Msg {
@@ -249,6 +251,10 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("SetHistoryScope")
                 .field("repo_id", repo_id)
                 .field("scope", scope)
+                .finish(),
+            Msg::LoadMoreHistory { repo_id } => f
+                .debug_struct("LoadMoreHistory")
+                .field("repo_id", repo_id)
                 .finish(),
             Msg::SelectCommit { repo_id, commit_id } => f
                 .debug_struct("SelectCommit")

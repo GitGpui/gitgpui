@@ -13,13 +13,11 @@ use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Element, ElementId,
-    Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId, IsZero, LayoutId, Style,
+    Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId, IsZero, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge,
-    ScrollHandle,
-    ShapedLine, SharedString, Size, TextRun, Tiling, Timer, UniformListScrollHandle, WeakEntity,
-    Window,
-    WindowControlArea, anchored, div, point, px, size, uniform_list,
-    fill, relative,
+    ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling, Timer,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
+    relative, size, uniform_list,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -28,11 +26,22 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 mod chrome;
+mod diff_text_model;
+mod diff_text_selection;
+mod diff_utils;
 mod history_graph;
 mod panels;
 mod rows;
 
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
+
+use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
+use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
+use diff_utils::{
+    compute_diff_file_for_src_ix, compute_diff_file_stats, diff_content_text,
+    parse_diff_git_header_path, parse_unified_hunk_header_for_display,
+    scrollbar_markers_from_flags,
+};
 
 pub(crate) use chrome::window_frame;
 
@@ -78,6 +87,21 @@ fn should_hide_unified_diff_header_line(line: &AnnotatedDiffLine) -> bool {
         && (line.text.starts_with("index ")
             || line.text.starts_with("--- ")
             || line.text.starts_with("+++ "))
+}
+
+fn absolute_scroll_y(handle: &ScrollHandle) -> Pixels {
+    let raw = handle.offset().y;
+    if raw < px(0.0) { -raw } else { raw }
+}
+
+fn scroll_is_near_bottom(handle: &ScrollHandle, threshold: Pixels) -> bool {
+    let max_offset = handle.max_offset().height.max(px(0.0));
+    if max_offset <= px(0.0) {
+        return true;
+    }
+
+    let scroll_y = absolute_scroll_y(handle).max(px(0.0)).min(max_offset);
+    (max_offset - scroll_y) <= threshold
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,34 +181,6 @@ struct CommitDetailsDelayState {
 }
 
 #[derive(Clone, Debug)]
-struct CachedDiffTextSegment {
-    text: SharedString,
-    in_word: bool,
-    in_query: bool,
-    syntax: SyntaxTokenKind,
-}
-
-#[derive(Clone, Debug)]
-struct CachedDiffStyledText {
-    text: SharedString,
-    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SyntaxTokenKind {
-    None,
-    Comment,
-    String,
-    Keyword,
-    Number,
-    Function,
-    Type,
-    Property,
-    Constant,
-    Punctuation,
-}
-
-#[derive(Clone, Debug)]
 struct HistoryCache {
     repo_id: RepoId,
     query: String,
@@ -252,11 +248,22 @@ enum BranchSection {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum BranchSidebarRow {
-    SectionHeader { section: BranchSection, top_border: bool },
+    SectionHeader {
+        section: BranchSection,
+        top_border: bool,
+    },
     SectionSpacer,
-    Placeholder { section: BranchSection, message: SharedString },
-    RemoteHeader { name: SharedString },
-    GroupHeader { label: SharedString, depth: usize },
+    Placeholder {
+        section: BranchSection,
+        message: SharedString,
+    },
+    RemoteHeader {
+        name: SharedString,
+    },
+    GroupHeader {
+        label: SharedString,
+        depth: usize,
+    },
     Branch {
         label: SharedString,
         name: SharedString,
@@ -267,8 +274,12 @@ enum BranchSidebarRow {
         is_head: bool,
         is_upstream: bool,
     },
-    StashHeader { top_border: bool },
-    StashPlaceholder { message: SharedString },
+    StashHeader {
+        top_border: bool,
+    },
+    StashPlaceholder {
+        message: SharedString,
+    },
     StashItem {
         index: usize,
         message: SharedString,
@@ -301,7 +312,10 @@ enum DiffClickKind {
 
 #[derive(Clone, Debug)]
 enum PatchSplitRow {
-    Raw { src_ix: usize, click_kind: DiffClickKind },
+    Raw {
+        src_ix: usize,
+        click_kind: DiffClickKind,
+    },
     Aligned {
         row: FileDiffRow,
         old_src_ix: Option<usize>,
@@ -432,13 +446,18 @@ pub struct GitGpuiView {
     commit_details_message_input: Entity<zed::TextInput>,
     error_banner_input: Entity<zed::TextInput>,
 
+    commit_details_files_commit: Option<CommitId>,
+    commit_details_files_limit: usize,
+    commit_details_scroll_last_y: Pixels,
     commit_details_delay: Option<CommitDetailsDelayState>,
     commit_details_delay_seq: u64,
 }
 
 impl GitGpuiView {
     fn diff_text_segments_cache_get(&self, key: usize) -> Option<&CachedDiffStyledText> {
-        self.diff_text_segments_cache.get(key).and_then(Option::as_ref)
+        self.diff_text_segments_cache
+            .get(key)
+            .and_then(Option::as_ref)
     }
 
     fn diff_text_segments_cache_set(
@@ -787,6 +806,9 @@ impl GitGpuiView {
             hovered_stash_row: None,
             commit_details_message_input,
             error_banner_input,
+            commit_details_files_commit: None,
+            commit_details_files_limit: 0,
+            commit_details_scroll_last_y: px(0.0),
             commit_details_delay: None,
             commit_details_delay_seq: 0,
         };
@@ -890,8 +912,9 @@ impl GitGpuiView {
                                 (state.start_sidebar + dx).max(sidebar_min).min(max_sidebar);
                         }
                         PaneResizeHandle::Details => {
-                            let max_details = (total_w - state.start_sidebar - main_min - handles_w)
-                                .max(details_min);
+                            let max_details =
+                                (total_w - state.start_sidebar - main_min - handles_w)
+                                    .max(details_min);
                             this.details_width =
                                 (state.start_details - dx).max(details_min).min(max_details);
                         }
@@ -958,7 +981,8 @@ impl GitGpuiView {
 
     fn consume_suppress_click_after_drag(&mut self) -> bool {
         if self.diff_suppress_clicks_remaining > 0 {
-            self.diff_suppress_clicks_remaining = self.diff_suppress_clicks_remaining.saturating_sub(1);
+            self.diff_suppress_clicks_remaining =
+                self.diff_suppress_clicks_remaining.saturating_sub(1);
             return true;
         }
         false
@@ -967,7 +991,11 @@ impl GitGpuiView {
     fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
         let a = self.diff_text_anchor?;
         let b = self.diff_text_head?;
-        Some(if a.cmp_key() <= b.cmp_key() { (a, b) } else { (b, a) })
+        Some(if a.cmp_key() <= b.cmp_key() {
+            (a, b)
+        } else {
+            (b, a)
+        })
     }
 
     fn diff_text_selection_color(&self) -> gpui::Rgba {
@@ -995,7 +1023,10 @@ impl GitGpuiView {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
         let local = hitbox.bounds.localize(&position)?;
         let x = local.x.max(px(0.0));
-        let offset = hitbox.layout.closest_index_for_x(x).min(hitbox.layout.len());
+        let offset = hitbox
+            .layout
+            .closest_index_for_x(x)
+            .min(hitbox.layout.len());
         Some(DiffTextPos {
             visible_ix,
             region,
@@ -1110,7 +1141,10 @@ impl GitGpuiView {
 
         let split_region = (self.diff_view == DiffViewMode::Split
             && start.region == end.region
-            && matches!(start.region, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight))
+            && matches!(
+                start.region,
+                DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+            ))
         .then_some(start.region);
         if split_region.is_some_and(|r| r != region) {
             return None;
@@ -1251,16 +1285,18 @@ impl GitGpuiView {
                     return fallback;
                 };
                 let display = match click_kind {
-                    DiffClickKind::HunkHeader => parse_unified_hunk_header_for_display(line.text.as_ref())
-                        .map(|p| {
-                            let heading = p.heading.unwrap_or_default();
-                            if heading.is_empty() {
-                                format!("{} {}", p.old, p.new)
-                            } else {
-                                format!("{} {}  {heading}", p.old, p.new)
-                            }
-                        })
-                        .unwrap_or_else(|| line.text.clone()),
+                    DiffClickKind::HunkHeader => {
+                        parse_unified_hunk_header_for_display(line.text.as_ref())
+                            .map(|p| {
+                                let heading = p.heading.unwrap_or_default();
+                                if heading.is_empty() {
+                                    format!("{} {}", p.old, p.new)
+                                } else {
+                                    format!("{} {}  {heading}", p.old, p.new)
+                                }
+                            })
+                            .unwrap_or_else(|| line.text.clone())
+                    }
                     DiffClickKind::FileHeader => parse_diff_git_header_path(line.text.as_ref())
                         .unwrap_or_else(|| line.text.clone()),
                     DiffClickKind::Line => line.text.clone(),
@@ -1320,7 +1356,10 @@ impl GitGpuiView {
             }
 
             let split_region = (start.region == end.region
-                && matches!(start.region, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight))
+                && matches!(
+                    start.region,
+                    DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight
+                ))
             .then_some(start.region);
 
             if let Some(region) = split_region {
@@ -1350,12 +1389,14 @@ impl GitGpuiView {
                 let combined_len = combined.len();
 
                 let a = if visible_ix == start.visible_ix {
-                    self.diff_text_combined_offset(start, left_len).min(combined_len)
+                    self.diff_text_combined_offset(start, left_len)
+                        .min(combined_len)
                 } else {
                     0
                 };
                 let b = if visible_ix == end.visible_ix {
-                    self.diff_text_combined_offset(end, left_len).min(combined_len)
+                    self.diff_text_combined_offset(end, left_len)
+                        .min(combined_len)
                 } else {
                     combined_len
                 };
@@ -1557,7 +1598,8 @@ impl GitGpuiView {
         // Show both by default.
         let mut show_date = true;
         let mut show_sha = true;
-        let mut fixed = fixed_base + handle_w + self.history_col_date + handle_w + self.history_col_sha;
+        let mut fixed =
+            fixed_base + handle_w + self.history_col_date + handle_w + self.history_col_sha;
 
         if available - fixed < min_message {
             show_sha = false;
@@ -1726,8 +1768,10 @@ impl GitGpuiView {
                     Loadable::Ready(h) => Some(h.as_str()),
                     _ => None,
                 };
-                let mut local_meta: std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)> =
-                    std::collections::HashMap::new();
+                let mut local_meta: std::collections::HashMap<
+                    String,
+                    (Option<UpstreamDivergence>, bool),
+                > = std::collections::HashMap::new();
                 for b in branches {
                     local_meta.insert(
                         b.name.clone(),
@@ -2005,7 +2049,10 @@ impl GitGpuiView {
             self.worktree_preview = Loadable::Loading;
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_segments_cache.clear();
-        } else if matches!(self.worktree_preview, Loadable::NotLoaded | Loadable::Error(_)) {
+        } else if matches!(
+            self.worktree_preview,
+            Loadable::NotLoaded | Loadable::Error(_)
+        ) {
             self.worktree_preview = Loadable::Loading;
         }
     }
@@ -2018,7 +2065,10 @@ impl GitGpuiView {
         let should_reload = match self.worktree_preview_path.as_ref() {
             Some(p) => p != &path,
             None => true,
-        } || matches!(self.worktree_preview, Loadable::Error(_) | Loadable::NotLoaded);
+        } || matches!(
+            self.worktree_preview,
+            Loadable::Error(_) | Loadable::NotLoaded
+        );
         if !should_reload {
             return;
         }
@@ -2143,7 +2193,10 @@ impl GitGpuiView {
             }
             Err(e) => {
                 if self.worktree_preview_path.as_ref() != Some(&abs_path)
-                    || matches!(self.worktree_preview, Loadable::NotLoaded | Loadable::Loading)
+                    || matches!(
+                        self.worktree_preview,
+                        Loadable::NotLoaded | Loadable::Loading
+                    )
                 {
                     self.worktree_preview_path = Some(abs_path);
                     self.worktree_preview = Loadable::Error(e);
@@ -2397,7 +2450,13 @@ impl GitGpuiView {
                 Loadable::Ready(diff) => Some(annotate_unified(diff)),
                 _ => None,
             };
-            (repo.id, repo.diff_rev, repo.diff_target.clone(), workdir, annotated)
+            (
+                repo.id,
+                repo.diff_rev,
+                repo.diff_target.clone(),
+                workdir,
+                annotated,
+            )
         };
 
         self.diff_cache_repo_id = Some(repo_id);
@@ -2413,7 +2472,11 @@ impl GitGpuiView {
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
         self.rebuild_diff_word_highlights();
 
-        if let Some((abs_path, lines)) = build_new_file_preview_from_diff(&self.diff_cache, &workdir, self.diff_cache_target.as_ref()) {
+        if let Some((abs_path, lines)) = build_new_file_preview_from_diff(
+            &self.diff_cache,
+            &workdir,
+            self.diff_cache_target.as_ref(),
+        ) {
             self.diff_preview_is_new_file = true;
             self.diff_preview_new_file_lines = Arc::new(lines);
             self.worktree_preview_path = Some(abs_path);
@@ -2433,9 +2496,8 @@ impl GitGpuiView {
 
     fn diff_scrollbar_markers_patch(&self) -> Vec<zed::ScrollbarMarker> {
         match self.diff_view {
-            DiffViewMode::Inline => scrollbar_markers_from_flags(
-                self.diff_visible_indices.len(),
-                |visible_ix| {
+            DiffViewMode::Inline => {
+                scrollbar_markers_from_flags(self.diff_visible_indices.len(), |visible_ix| {
                     let Some(&src_ix) = self.diff_visible_indices.get(visible_ix) else {
                         return 0;
                     };
@@ -2447,11 +2509,10 @@ impl GitGpuiView {
                         gitgpui_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
                     }
-                },
-            ),
-            DiffViewMode::Split => scrollbar_markers_from_flags(
-                self.diff_visible_indices.len(),
-                |visible_ix| {
+                })
+            }
+            DiffViewMode::Split => {
+                scrollbar_markers_from_flags(self.diff_visible_indices.len(), |visible_ix| {
                     let Some(&row_ix) = self.diff_visible_indices.get(visible_ix) else {
                         return 0;
                     };
@@ -2467,8 +2528,8 @@ impl GitGpuiView {
                         },
                         PatchSplitRow::Raw { .. } => 0,
                     }
-                },
-            ),
+                })
+            }
         }
     }
 
@@ -2478,9 +2539,8 @@ impl GitGpuiView {
         }
 
         match self.diff_view {
-            DiffViewMode::Inline => scrollbar_markers_from_flags(
-                self.diff_visible_indices.len(),
-                |visible_ix| {
+            DiffViewMode::Inline => {
+                scrollbar_markers_from_flags(self.diff_visible_indices.len(), |visible_ix| {
                     let Some(&inline_ix) = self.diff_visible_indices.get(visible_ix) else {
                         return 0;
                     };
@@ -2492,11 +2552,10 @@ impl GitGpuiView {
                         gitgpui_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
                     }
-                },
-            ),
-            DiffViewMode::Split => scrollbar_markers_from_flags(
-                self.diff_visible_indices.len(),
-                |visible_ix| {
+                })
+            }
+            DiffViewMode::Split => {
+                scrollbar_markers_from_flags(self.diff_visible_indices.len(), |visible_ix| {
                     let Some(&row_ix) = self.diff_visible_indices.get(visible_ix) else {
                         return 0;
                     };
@@ -2509,16 +2568,26 @@ impl GitGpuiView {
                         gitgpui_core::file_diff::FileDiffRowKind::Modify => 3,
                         gitgpui_core::file_diff::FileDiffRowKind::Context => 0,
                     }
-                },
-            ),
+                })
+            }
         }
     }
 
     fn apply_state_snapshot(&mut self, next: AppState, cx: &mut gpui::Context<Self>) {
+        let prev_active_repo_id = self.state.active_repo;
+        let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
+            self.state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .and_then(|r| r.selected_commit.clone())
+        });
+
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_diff_target = next_repo.and_then(|r| r.diff_target.as_ref()).cloned();
         let next_diff_rev = next_repo.map(|r| r.diff_rev).unwrap_or(0);
+        let next_selected_commit = next_repo.and_then(|r| r.selected_commit.clone());
 
         let prev_diff_target = self
             .active_repo()
@@ -2571,6 +2640,19 @@ impl GitGpuiView {
         }
 
         self.state = next;
+
+        if prev_active_repo_id != next_repo_id {
+            self.history_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
+            self.commit_details_files_commit = None;
+            self.commit_details_files_limit = 0;
+        } else if prev_selected_commit != next_selected_commit {
+            self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
+            self.commit_details_files_commit = None;
+            self.commit_details_files_limit = 0;
+        }
+
         self.update_commit_details_delay(cx);
 
         let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
@@ -2617,40 +2699,42 @@ impl GitGpuiView {
             show_loading: false,
         });
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(100)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.commit_details_delay_seq != seq {
-                    return;
-                }
-                let Some(repo) = this.active_repo() else {
-                    return;
-                };
-                let Some(selected_id) = repo.selected_commit.clone() else {
-                    return;
-                };
-                if repo.id != repo_id {
-                    return;
-                }
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(100)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.commit_details_delay_seq != seq {
+                        return;
+                    }
+                    let Some(repo) = this.active_repo() else {
+                        return;
+                    };
+                    let Some(selected_id) = repo.selected_commit.clone() else {
+                        return;
+                    };
+                    if repo.id != repo_id {
+                        return;
+                    }
 
-                let ready_for_selected = matches!(
-                    &repo.commit_details,
-                    Loadable::Ready(details) if details.id == selected_id
-                );
-                if ready_for_selected || matches!(&repo.commit_details, Loadable::Error(_)) {
-                    return;
-                }
+                    let ready_for_selected = matches!(
+                        &repo.commit_details,
+                        Loadable::Ready(details) if details.id == selected_id
+                    );
+                    if ready_for_selected || matches!(&repo.commit_details, Loadable::Error(_)) {
+                        return;
+                    }
 
-                if let Some(state) = this.commit_details_delay.as_mut()
-                    && state.repo_id == repo_id
-                    && state.commit_id == selected_id
-                    && !state.show_loading
-                {
-                    state.show_loading = true;
-                    cx.notify();
-                }
-            });
-        })
+                    if let Some(state) = this.commit_details_delay.as_mut()
+                        && state.repo_id == repo_id
+                        && state.commit_id == selected_id
+                        && !state.show_loading
+                    {
+                        state.show_loading = true;
+                        cx.notify();
+                    }
+                });
+            },
+        )
         .detach();
     }
 
@@ -2768,7 +2852,9 @@ impl GitGpuiView {
                 raw = Some(i.text().to_string());
             }
         });
-        let Some(raw) = raw else { return; };
+        let Some(raw) = raw else {
+            return;
+        };
 
         self.diff_search_raw = raw.clone();
         self.diff_search_seq = self.diff_search_seq.wrapping_add(1);
@@ -2949,8 +3035,10 @@ impl GitGpuiView {
                 for (ix, row) in self.diff_split_cache.iter().enumerate() {
                     match row {
                         PatchSplitRow::Raw { src_ix, click_kind } => {
-                            if matches!(click_kind, DiffClickKind::HunkHeader | DiffClickKind::FileHeader)
-                            {
+                            if matches!(
+                                click_kind,
+                                DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+                            ) {
                                 indices.push(ix);
                                 continue;
                             }
@@ -3006,7 +3094,12 @@ impl GitGpuiView {
         }
     }
 
-    fn handle_split_row_click(&mut self, clicked_visible_ix: usize, kind: DiffClickKind, shift: bool) {
+    fn handle_split_row_click(
+        &mut self,
+        clicked_visible_ix: usize,
+        kind: DiffClickKind,
+        shift: bool,
+    ) {
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
             self.diff_selection_anchor = None;
@@ -3172,16 +3265,13 @@ impl GitGpuiView {
                     let Some(&inline_ix) = self.diff_visible_indices.get(visible_ix) else {
                         continue;
                     };
-                    let changed = self
-                        .file_diff_inline_cache
-                        .get(inline_ix)
-                        .is_some_and(|l| {
-                            matches!(
-                                l.kind,
-                                gitgpui_core::domain::DiffLineKind::Add
-                                    | gitgpui_core::domain::DiffLineKind::Remove
-                            )
-                        });
+                    let changed = self.file_diff_inline_cache.get(inline_ix).is_some_and(|l| {
+                        matches!(
+                            l.kind,
+                            gitgpui_core::domain::DiffLineKind::Add
+                                | gitgpui_core::domain::DiffLineKind::Remove
+                        )
+                    });
                     if changed && !prev_changed {
                         out.push(visible_ix);
                     }
@@ -3371,63 +3461,64 @@ impl GitGpuiView {
 
         let theme = self.theme;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            let query_lc = request_for_task.query.to_lowercase();
-            let visible_indices = if query_lc.is_empty() {
-                (0..commits.len()).collect::<Vec<_>>()
-            } else {
-                commits
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                let query_lc = request_for_task.query.to_lowercase();
+                let visible_indices = if query_lc.is_empty() {
+                    (0..commits.len()).collect::<Vec<_>>()
+                } else {
+                    commits
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, c)| {
+                            let haystack = format!("{} {} {}", c.summary, c.author, c.id.as_ref())
+                                .to_lowercase();
+                            haystack.contains(&query_lc).then_some(ix)
+                        })
+                        .collect::<Vec<_>>()
+                };
+
+                let visible_commits = visible_indices
                     .iter()
-                    .enumerate()
-                    .filter_map(|(ix, c)| {
-                        let haystack =
-                            format!("{} {} {}", c.summary, c.author, c.id.as_ref()).to_lowercase();
-                        haystack.contains(&query_lc).then_some(ix)
-                    })
-                    .collect::<Vec<_>>()
-            };
+                    .filter_map(|ix| commits.get(*ix))
+                    .collect::<Vec<_>>();
 
-            let visible_commits = visible_indices
-                .iter()
-                .filter_map(|ix| commits.get(*ix))
-                .collect::<Vec<_>>();
+                let graph_rows = history_graph::compute_graph(&visible_commits, theme);
+                let max_lanes = graph_rows
+                    .iter()
+                    .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
+                    .max()
+                    .unwrap_or(1);
 
-            let graph_rows = history_graph::compute_graph(&visible_commits, theme);
-            let max_lanes = graph_rows
-                .iter()
-                .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
-                .max()
-                .unwrap_or(1);
+                let _ = view.update(cx, |this, cx| {
+                    if this.history_cache_seq != seq {
+                        return;
+                    }
+                    if this.history_cache_inflight.as_ref() != Some(&request_for_task) {
+                        return;
+                    }
+                    if this.active_repo_id() != Some(request_for_task.repo_id) {
+                        return;
+                    }
 
-            let _ = view.update(cx, |this, cx| {
-                if this.history_cache_seq != seq {
-                    return;
-                }
-                if this.history_cache_inflight.as_ref() != Some(&request_for_task) {
-                    return;
-                }
-                if this.active_repo_id() != Some(request_for_task.repo_id) {
-                    return;
-                }
+                    if this.history_col_graph_auto && this.history_col_resize.is_none() {
+                        let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
+                            + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32));
+                        this.history_col_graph = required.max(px(HISTORY_COL_GRAPH_MIN_PX));
+                    }
 
-                if this.history_col_graph_auto && this.history_col_resize.is_none() {
-                    let required = px(
-                        HISTORY_GRAPH_MARGIN_X_PX * 2.0 + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32),
-                    );
-                    this.history_col_graph = required.max(px(HISTORY_COL_GRAPH_MIN_PX));
-                }
-
-                this.history_cache_inflight = None;
-                this.history_cache = Some(HistoryCache {
-                    repo_id: request_for_task.repo_id,
-                    query: request_for_task.query.clone(),
-                    log_fingerprint: request_for_task.log_fingerprint,
-                    visible_indices,
-                    graph_rows,
+                    this.history_cache_inflight = None;
+                    this.history_cache = Some(HistoryCache {
+                        repo_id: request_for_task.repo_id,
+                        query: request_for_task.query.clone(),
+                        log_fingerprint: request_for_task.log_fingerprint,
+                        visible_indices,
+                        graph_rows,
+                    });
+                    cx.notify();
                 });
-                cx.notify();
-            });
-        })
+            },
+        )
         .detach();
     }
 
@@ -3509,8 +3600,8 @@ fn push_slash_tree_rows(
 }
 
 fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
-    use gitgpui_core::file_diff::FileDiffRowKind as K;
     use gitgpui_core::domain::DiffLineKind as DK;
+    use gitgpui_core::file_diff::FileDiffRowKind as K;
 
     let mut out: Vec<PatchSplitRow> = Vec::with_capacity(diff.len());
     let mut ix = 0usize;
@@ -3556,7 +3647,8 @@ fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
 
     while ix < diff.len() {
         let line = &diff[ix];
-        let is_file_header = matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
+        let is_file_header =
+            matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
 
         if is_file_header {
             flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
@@ -3747,7 +3839,10 @@ impl Render for GitGpuiView {
             );
         }
 
-        let mut root = div().size_full().cursor(cursor).text_color(theme.colors.text);
+        let mut root = div()
+            .size_full()
+            .cursor(cursor)
+            .text_color(theme.colors.text);
         root = root.relative();
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
@@ -3850,28 +3945,30 @@ impl GitGpuiView {
         self.tooltip_pending_pos = Some(anchor);
         let seq = self.tooltip_delay_seq;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(500)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.tooltip_delay_seq != seq {
-                    return;
-                }
-                if this.tooltip_text.as_ref() != Some(&text) {
-                    return;
-                }
-                let Some(pending_pos) = this.tooltip_pending_pos else {
-                    return;
-                };
-                let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
-                let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
-                if dx > px(2.0) || dy > px(2.0) {
-                    return;
-                }
-                this.tooltip_visible_text = Some(text.clone());
-                this.tooltip_visible_pos = Some(pending_pos);
-                cx.notify();
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(500)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.tooltip_delay_seq != seq {
+                        return;
+                    }
+                    if this.tooltip_text.as_ref() != Some(&text) {
+                        return;
+                    }
+                    let Some(pending_pos) = this.tooltip_pending_pos else {
+                        return;
+                    };
+                    let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
+                    let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
+                    if dx > px(2.0) || dy > px(2.0) {
+                        return;
+                    }
+                    this.tooltip_visible_text = Some(text.clone());
+                    this.tooltip_visible_pos = Some(pending_pos);
+                    cx.notify();
+                });
+            },
+        )
         .detach();
     }
 
@@ -3912,28 +4009,30 @@ impl GitGpuiView {
         self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
         let seq = self.tooltip_delay_seq;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(500)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.tooltip_delay_seq != seq {
-                    return;
-                }
-                if this.tooltip_text.as_ref() != Some(&candidate) {
-                    return;
-                }
-                let Some(pending_pos) = this.tooltip_pending_pos else {
-                    return;
-                };
-                let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
-                let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
-                if dx > px(2.0) || dy > px(2.0) {
-                    return;
-                }
-                this.tooltip_visible_text = Some(candidate.clone());
-                this.tooltip_visible_pos = Some(pending_pos);
-                cx.notify();
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(500)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.tooltip_delay_seq != seq {
+                        return;
+                    }
+                    if this.tooltip_text.as_ref() != Some(&candidate) {
+                        return;
+                    }
+                    let Some(pending_pos) = this.tooltip_pending_pos else {
+                        return;
+                    };
+                    let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
+                    let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
+                    if dx > px(2.0) || dy > px(2.0) {
+                        return;
+                    }
+                    this.tooltip_visible_text = Some(candidate.clone());
+                    this.tooltip_visible_pos = Some(pending_pos);
+                    cx.notify();
+                });
+            },
+        )
         .detach();
     }
 
@@ -3941,33 +4040,35 @@ impl GitGpuiView {
         self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
         let seq = self.ui_settings_persist_seq;
 
-        cx.spawn(async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-            Timer::after(Duration::from_millis(250)).await;
-            let _ = view.update(cx, |this, _cx| {
-                if this.ui_settings_persist_seq != seq {
-                    return;
-                }
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(250)).await;
+                let _ = view.update(cx, |this, _cx| {
+                    if this.ui_settings_persist_seq != seq {
+                        return;
+                    }
 
-                let ww: f32 = this.last_window_size.width.round().into();
-                let wh: f32 = this.last_window_size.height.round().into();
-                let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
-                let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
+                    let ww: f32 = this.last_window_size.width.round().into();
+                    let wh: f32 = this.last_window_size.height.round().into();
+                    let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
+                    let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
 
-                let sidebar_width: f32 = this.sidebar_width.round().into();
-                let details_width: f32 = this.details_width.round().into();
+                    let sidebar_width: f32 = this.sidebar_width.round().into();
+                    let details_width: f32 = this.details_width.round().into();
 
-                let settings = session::UiSettings {
-                    window_width,
-                    window_height,
-                    sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
-                        .then_some(sidebar_width as u32),
-                    details_width: (details_width.is_finite() && details_width >= 1.0)
-                        .then_some(details_width as u32),
-                };
+                    let settings = session::UiSettings {
+                        window_width,
+                        window_height,
+                        sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
+                            .then_some(sidebar_width as u32),
+                        details_width: (details_width.is_finite() && details_width >= 1.0)
+                            .then_some(details_width as u32),
+                    };
 
-                let _ = session::persist_ui_settings(settings);
-            });
-        })
+                    let _ = session::persist_ui_settings(settings);
+                });
+            },
+        )
         .detach();
     }
 
@@ -3993,160 +4094,6 @@ impl GitGpuiView {
 pub(super) fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
     color
-}
-
-fn scrollbar_markers_from_flags(
-    len: usize,
-    mut flag_at_index: impl FnMut(usize) -> u8,
-) -> Vec<zed::ScrollbarMarker> {
-    if len == 0 {
-        return Vec::new();
-    }
-
-    let bucket_count = 240usize.min(len).max(1);
-    let mut buckets = vec![0u8; bucket_count];
-    for ix in 0..len {
-        let flag = flag_at_index(ix);
-        if flag == 0 {
-            continue;
-        }
-        let b = (ix * bucket_count) / len;
-        if let Some(cell) = buckets.get_mut(b) {
-            *cell |= flag;
-        }
-    }
-
-    let mut out = Vec::new();
-    let mut ix = 0usize;
-    while ix < bucket_count {
-        let flag = buckets[ix];
-        if flag == 0 {
-            ix += 1;
-            continue;
-        }
-
-        let start = ix;
-        ix += 1;
-        while ix < bucket_count && buckets[ix] == flag {
-            ix += 1;
-        }
-        let end = ix; // exclusive
-
-        let kind = match flag {
-            1 => zed::ScrollbarMarkerKind::Add,
-            2 => zed::ScrollbarMarkerKind::Remove,
-            _ => zed::ScrollbarMarkerKind::Modify,
-        };
-
-        out.push(zed::ScrollbarMarker {
-            start: start as f32 / bucket_count as f32,
-            end: end as f32 / bucket_count as f32,
-            kind,
-        });
-    }
-
-    out
-}
-
-fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
-    match line.kind {
-        gitgpui_core::domain::DiffLineKind::Add => {
-            line.text.strip_prefix('+').unwrap_or(&line.text)
-        }
-        gitgpui_core::domain::DiffLineKind::Remove => {
-            line.text.strip_prefix('-').unwrap_or(&line.text)
-        }
-        gitgpui_core::domain::DiffLineKind::Context => {
-            line.text.strip_prefix(' ').unwrap_or(&line.text)
-        }
-        gitgpui_core::domain::DiffLineKind::Header | gitgpui_core::domain::DiffLineKind::Hunk => {
-            &line.text
-        }
-    }
-}
-
-fn parse_diff_git_header_path(text: &str) -> Option<String> {
-    let text = text.strip_prefix("diff --git ")?;
-    let mut parts = text.split_whitespace();
-    let a = parts.next()?;
-    let b = parts.next().unwrap_or(a);
-    let b = b.strip_prefix("b/").unwrap_or(b);
-    Some(b.to_string())
-}
-
-#[derive(Clone, Debug)]
-struct ParsedHunkHeader {
-    old: String,
-    new: String,
-    heading: Option<String>,
-}
-
-fn parse_unified_hunk_header_for_display(text: &str) -> Option<ParsedHunkHeader> {
-    let text = text.strip_prefix("@@")?.trim_start();
-    let (ranges, rest) = text.split_once("@@")?;
-    let ranges = ranges.trim();
-    let heading = rest.trim();
-
-    let mut it = ranges.split_whitespace();
-    let old = it.next()?.trim().to_string();
-    let new = it.next()?.trim().to_string();
-
-    Some(ParsedHunkHeader {
-        old,
-        new,
-        heading: (!heading.is_empty()).then_some(heading.to_string()),
-    })
-}
-
-fn compute_diff_file_stats(diff: &[AnnotatedDiffLine]) -> Vec<Option<(usize, usize)>> {
-    let mut stats: Vec<Option<(usize, usize)>> = vec![None; diff.len()];
-
-    let mut current_file_header_ix: Option<usize> = None;
-    let mut adds = 0usize;
-    let mut removes = 0usize;
-
-    for (ix, line) in diff.iter().enumerate() {
-        let is_file_header = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && line.text.starts_with("diff --git ");
-
-        if is_file_header {
-            if let Some(header_ix) = current_file_header_ix.take() {
-                stats[header_ix] = Some((adds, removes));
-            }
-            current_file_header_ix = Some(ix);
-            adds = 0;
-            removes = 0;
-            continue;
-        }
-
-        match line.kind {
-            gitgpui_core::domain::DiffLineKind::Add => adds += 1,
-            gitgpui_core::domain::DiffLineKind::Remove => removes += 1,
-            _ => {}
-        }
-    }
-
-    if let Some(header_ix) = current_file_header_ix {
-        stats[header_ix] = Some((adds, removes));
-    }
-
-    stats
-}
-
-fn compute_diff_file_for_src_ix(diff: &[AnnotatedDiffLine]) -> Vec<Option<Arc<str>>> {
-    let mut out: Vec<Option<Arc<str>>> = Vec::with_capacity(diff.len());
-    let mut current_file: Option<Arc<str>> = None;
-
-    for line in diff {
-        let is_file_header = matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && line.text.starts_with("diff --git ");
-        if is_file_header {
-            current_file = parse_diff_git_header_path(&line.text).map(Arc::<str>::from);
-        }
-        out.push(current_file.clone());
-    }
-
-    out
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4220,39 +4167,101 @@ fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize
         return fallback_affix_diff_ranges(old, new);
     }
 
-    let n = old_tokens.len();
-    let m = new_tokens.len();
+    let old_slices: Vec<&str> = old_tokens
+        .iter()
+        .map(|t| &old[t.range.clone()])
+        .collect::<Vec<_>>();
+    let new_slices: Vec<&str> = new_tokens
+        .iter()
+        .map(|t| &new[t.range.clone()])
+        .collect::<Vec<_>>();
 
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
-    for i in 0..n {
-        for j in 0..m {
-            let a = &old[old_tokens[i].range.clone()];
-            let b = &new[new_tokens[j].range.clone()];
-            dp[i + 1][j + 1] = if a == b {
-                dp[i][j] + 1
+    // Compute the longest common subsequence via Myers' diff algorithm, marking matching tokens
+    // as "kept". This is substantially faster than O(n*m) DP for typical lines.
+    let n = old_slices.len() as isize;
+    let m = new_slices.len() as isize;
+    let max = (n + m) as usize;
+    let offset = max as isize;
+
+    let mut v: Vec<isize> = vec![0; 2 * max + 1];
+    let mut trace: Vec<Vec<isize>> = Vec::new();
+
+    let mut done = false;
+    for d in 0..=max {
+        for k in (-(d as isize)..=(d as isize)).step_by(2) {
+            let k_ix = (k + offset) as usize;
+            let x = if k == -(d as isize)
+                || (k != d as isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
+            {
+                v[(k + 1 + offset) as usize]
             } else {
-                dp[i + 1][j].max(dp[i][j + 1])
+                v[(k - 1 + offset) as usize] + 1
             };
+
+            let mut x = x;
+            let mut y = x - k;
+            while x < n && y < m && old_slices[x as usize] == new_slices[y as usize] {
+                x += 1;
+                y += 1;
+            }
+
+            v[k_ix] = x;
+            if x >= n && y >= m {
+                done = true;
+                break;
+            }
+        }
+
+        trace.push(v.clone());
+        if done {
+            break;
         }
     }
 
-    let mut keep_old = vec![false; n];
-    let mut keep_new = vec![false; m];
-    let mut i = n;
-    let mut j = m;
-    while i > 0 && j > 0 {
-        let a = &old[old_tokens[i - 1].range.clone()];
-        let b = &new[new_tokens[j - 1].range.clone()];
-        if a == b {
-            keep_old[i - 1] = true;
-            keep_new[j - 1] = true;
-            i -= 1;
-            j -= 1;
-        } else if dp[i - 1][j] >= dp[i][j - 1] {
-            i -= 1;
+    let mut keep_old = vec![false; old_tokens.len()];
+    let mut keep_new = vec![false; new_tokens.len()];
+
+    let mut x = n;
+    let mut y = m;
+
+    for d in (1..trace.len()).rev() {
+        let d_isize = d as isize;
+        let v = &trace[d - 1];
+        let k = x - y;
+        let prev_k = if k == -d_isize
+            || (k != d_isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
+        {
+            k + 1
         } else {
-            j -= 1;
+            k - 1
+        };
+
+        let prev_x = v[(prev_k + offset) as usize];
+        let prev_y = prev_x - prev_k;
+
+        while x > prev_x && y > prev_y {
+            keep_old[(x - 1) as usize] = true;
+            keep_new[(y - 1) as usize] = true;
+            x -= 1;
+            y -= 1;
         }
+
+        // Step to the previous edit.
+        if x == prev_x {
+            y -= 1;
+        } else {
+            x -= 1;
+        }
+    }
+
+    while x > 0 && y > 0 {
+        if old_slices[(x - 1) as usize] != new_slices[(y - 1) as usize] {
+            break;
+        }
+        keep_old[(x - 1) as usize] = true;
+        keep_new[(y - 1) as usize] = true;
+        x -= 1;
+        y -= 1;
     }
 
     let old_ranges = old_tokens
@@ -4337,7 +4346,9 @@ fn build_new_file_preview_from_diff(
 
     let rel_path = match target? {
         DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit { path: Some(path), .. } => path.clone(),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => path.clone(),
         _ => return None,
     };
 
@@ -4362,6 +4373,7 @@ impl GitGpuiView {
 
         let scrim = div()
             .id("popover_scrim")
+            .debug_selector(|| "repo_popover_close".to_string())
             .absolute()
             .top_0()
             .left_0()
@@ -4419,7 +4431,9 @@ impl GitGpuiView {
     }
 }
 
-struct Poller;
+struct Poller {
+    _task: gpui::Task<()>,
+}
 
 impl Poller {
     fn start(
@@ -4429,243 +4443,33 @@ impl Poller {
         window: &mut Window,
         cx: &mut gpui::Context<GitGpuiView>,
     ) -> Poller {
-        window
-            .spawn(cx, async move |cx| {
-                let mut events = events;
-                loop {
-                    let (snapshot, next_events) = cx
-                        .background_spawn({
-                            let store = Arc::clone(&store);
-                            async move {
-                                let events = events;
-                                if events.recv().is_err() {
-                                    return (None, events);
-                                }
-                                while events.try_recv().is_ok() {}
-                                (Some(store.snapshot()), events)
-                            }
-                        })
-                        .await;
-                    events = next_events;
-
-                    let Some(snapshot) = snapshot else {
-                        break;
-                    };
-
-                    let _ = view.update(cx, |view, cx| {
-                        view.apply_state_snapshot(snapshot, cx);
-                        cx.notify();
-                    });
+        let task = window.spawn(cx, async move |cx| {
+            let events = events;
+            loop {
+                match events.try_recv() {
+                    Ok(_) => while events.try_recv().is_ok() {},
+                    Err(mpsc::TryRecvError::Empty) => {
+                        Timer::after(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => break,
                 }
-            })
-            .detach();
 
-        Poller
-    }
-}
+                let snapshot = cx
+                    .background_spawn({
+                        let store = Arc::clone(&store);
+                        async move { store.snapshot() }
+                    })
+                    .await;
 
-struct DiffTextSelectionTracker {
-    view: Entity<GitGpuiView>,
-}
-
-impl IntoElement for DiffTextSelectionTracker {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-impl Element for DiffTextSelectionTracker {
-    type RequestLayoutState = ();
-    type PrepaintState = ();
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.size.width = px(0.0).into();
-        style.size.height = px(0.0).into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> Self::PrepaintState {
-        ()
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        _prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        if !self.view.read(cx).diff_text_selecting {
-            return;
-        }
-
-        let view_for_move = self.view.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-            let _ = view_for_move.update(cx, |this, cx| {
-                if !this.diff_text_selecting {
-                    return;
-                }
-                this.update_diff_text_selection_from_mouse(event.position);
-                cx.notify();
-            });
-        });
-
-        let view_for_up = self.view.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
-            if event.button != MouseButton::Left {
-                return;
-            }
-            let _ = view_for_up.update(cx, |this, cx| {
-                if this.diff_text_selecting {
-                    this.end_diff_text_selection();
+                let _ = view.update(cx, |view, cx| {
+                    view.apply_state_snapshot(snapshot, cx);
                     cx.notify();
-                }
-            });
-        });
-    }
-}
-
-struct DiffTextSelectionOverlay {
-    view: Entity<GitGpuiView>,
-    visible_ix: usize,
-    region: DiffTextRegion,
-    text: SharedString,
-}
-
-impl IntoElement for DiffTextSelectionOverlay {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
-struct DiffTextSelectionOverlayPrepaint {
-    layout: Option<ShapedLine>,
-}
-
-impl Element for DiffTextSelectionOverlay {
-    type RequestLayoutState = ();
-    type PrepaintState = DiffTextSelectionOverlayPrepaint;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = relative(1.).into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        _bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        _cx: &mut App,
-    ) -> Self::PrepaintState {
-        let style = window.text_style();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let run = TextRun {
-            len: self.text.len(),
-            font: style.font(),
-            color: style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let layout = window
-            .text_system()
-            .shape_line(self.text.clone(), font_size, &[run], None);
-        DiffTextSelectionOverlayPrepaint { layout: Some(layout) }
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let selection = self
-            .view
-            .read(cx)
-            .diff_text_local_selection_range(self.visible_ix, self.region, self.text.len());
-        let Some(layout) = prepaint.layout.take() else {
-            return;
-        };
-
-        if let Some(range) = selection {
-            let x0 = layout.x_for_index(range.start.min(self.text.len()));
-            let x1 = layout.x_for_index(range.end.min(self.text.len()));
-            if x1 > x0 {
-                let color = self.view.read(cx).diff_text_selection_color();
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(bounds.left() + x0, bounds.top()),
-                        point(bounds.left() + x1, bounds.bottom()),
-                    ),
-                    color,
-                ));
+                });
             }
-        }
-
-        let hitbox = DiffTextHitbox {
-            bounds,
-            layout,
-        };
-
-        let visible_ix = self.visible_ix;
-        let region = self.region;
-        let view = self.view.clone();
-        let _ = view.update(cx, |this, _cx| {
-            this.set_diff_text_hitbox(visible_ix, region, hitbox);
         });
+
+        Poller { _task: task }
     }
 }
 
@@ -4674,6 +4478,7 @@ mod tests {
     use super::*;
     use gitgpui_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
     use std::path::PathBuf;
+    use std::time::Instant;
 
     #[test]
     fn diff_nav_prev_next_targets_do_not_wrap() {
@@ -4759,16 +4564,21 @@ mod tests {
         }]);
 
         let rows = GitGpuiView::branch_sidebar_rows(&repo);
-        let upstream_row = rows.iter().find(|r| matches!(
-            r,
-            BranchSidebarRow::Branch {
-                section: BranchSection::Remote,
-                name,
-                is_upstream: true,
-                ..
-            } if name.as_ref() == "origin/main"
-        ));
-        assert!(upstream_row.is_some(), "expected origin/main to be marked as upstream");
+        let upstream_row = rows.iter().find(|r| {
+            matches!(
+                r,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    name,
+                    is_upstream: true,
+                    ..
+                } if name.as_ref() == "origin/main"
+            )
+        });
+        assert!(
+            upstream_row.is_some(),
+            "expected origin/main to be marked as upstream"
+        );
     }
 
     #[test]
@@ -4860,5 +4670,92 @@ mod tests {
             cursor_style_for_resize_edge(ResizeEdge::TopRight),
             CursorStyle::ResizeUpRightDownLeft
         );
+    }
+
+    #[test]
+    fn word_diff_ranges_highlights_changed_tokens() {
+        let (old, new) = ("let x = 1;", "let x = 2;");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+        assert_eq!(
+            old_ranges
+                .iter()
+                .map(|r| &old[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["1"]
+        );
+        assert_eq!(
+            new_ranges
+                .iter()
+                .map(|r| &new[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
+    fn word_diff_ranges_handles_unicode_safely() {
+        let (old, new) = ("aé", "aê");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+        assert_eq!(
+            old_ranges
+                .iter()
+                .map(|r| &old[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["aé"]
+        );
+        assert_eq!(
+            new_ranges
+                .iter()
+                .map(|r| &new[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["aê"]
+        );
+    }
+
+    #[test]
+    fn word_diff_ranges_falls_back_for_large_inputs() {
+        let old = "a".repeat(2048);
+        let new = format!("{old}x");
+        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
+        assert!(old_ranges.len() <= 1);
+        assert!(new_ranges.len() <= 1);
+    }
+
+    #[test]
+    fn word_diff_ranges_outputs_are_ordered_and_utf8_safe() {
+        let (old, new) = ("aé b", "aê  b");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+
+        for r in &old_ranges {
+            assert!(r.start <= r.end);
+            assert!(r.end <= old.len());
+            assert!(old.is_char_boundary(r.start));
+            assert!(old.is_char_boundary(r.end));
+        }
+        for w in old_ranges.windows(2) {
+            assert!(w[0].end <= w[1].start);
+        }
+
+        for r in &new_ranges {
+            assert!(r.start <= r.end);
+            assert!(r.end <= new.len());
+            assert!(new.is_char_boundary(r.start));
+            assert!(new.is_char_boundary(r.end));
+        }
+        for w in new_ranges.windows(2) {
+            assert!(w[0].end <= w[1].start);
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn perf_word_diff_ranges_smoke() {
+        let old = "fn foo(a: i32, b: i32) -> i32 { a + b }";
+        let new = "fn foo(a: i32, b: i32) -> i32 { a - b }";
+        let start = Instant::now();
+        for _ in 0..200_000 {
+            let _ = word_diff_ranges(old, new);
+        }
+        eprintln!("word_diff_ranges: {:?}", start.elapsed());
     }
 }

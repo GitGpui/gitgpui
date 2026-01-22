@@ -444,9 +444,7 @@ impl GitRepository for GixRepo {
             let track = parts.next().unwrap_or("").trim();
 
             let upstream = parse_upstream_short(upstream_short);
-            let divergence = upstream
-                .as_ref()
-                .and_then(|_| parse_upstream_track(track));
+            let divergence = upstream.as_ref().and_then(|_| parse_upstream_track(track));
 
             branches.push(Branch {
                 name: name.to_string(),
@@ -956,10 +954,7 @@ impl GitRepository for GixRepo {
 
     fn stage(&self, paths: &[&Path]) -> Result<()> {
         let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("add")
-            .arg("-A");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("add").arg("-A");
         if !paths.is_empty() {
             cmd.arg("--");
             for path in paths {

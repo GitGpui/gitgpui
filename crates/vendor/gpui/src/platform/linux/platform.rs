@@ -394,7 +394,8 @@ impl<P: LinuxClient + 'static> Platform for P {
                                     .expect("pathbuf should not be nul terminated");
 
                             if let Some(suggested_name) = suggested_name {
-                                request_builder = request_builder.current_name(suggested_name.as_str());
+                                request_builder =
+                                    request_builder.current_name(suggested_name.as_str());
                             }
 
                             let request = match request_builder.send().await {

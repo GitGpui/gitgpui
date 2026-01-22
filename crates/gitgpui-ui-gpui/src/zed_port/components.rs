@@ -27,12 +27,7 @@ pub fn panel(
         .border_b_1()
         .border_color(theme.colors.border)
         .bg(theme.colors.surface_bg_elevated)
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        );
+        .child(div().text_sm().font_weight(FontWeight::BOLD).child(title));
 
     if let Some(subtitle) = subtitle {
         header = header.child(
@@ -53,20 +48,14 @@ pub fn panel(
         .overflow_hidden()
         .when(show_header, |this| this.child(header))
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .p_2()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(content),
-                ),
+            div().flex().flex_col().flex_1().min_h(px(0.0)).p_2().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(content),
+            ),
         )
 }
 

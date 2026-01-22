@@ -40,16 +40,20 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
 
     let _ = writeln!(file, "=== GitGpui crash (panic) ===");
     let _ = writeln!(file, "timestamp_unix_ms={}", unix_time_ms());
-    let _ = writeln!(file, "crate={} version={}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(file, "thread={}", std::thread::current().name().unwrap_or("<unnamed>"));
+    let _ = writeln!(
+        file,
+        "crate={} version={}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    );
+    let _ = writeln!(
+        file,
+        "thread={}",
+        std::thread::current().name().unwrap_or("<unnamed>")
+    );
 
     if let Some(location) = info.location() {
-        let _ = writeln!(
-            file,
-            "location={}#L{}",
-            location.file(),
-            location.line()
-        );
+        let _ = writeln!(file, "location={}#L{}", location.file(), location.line());
     }
 
     let payload = info

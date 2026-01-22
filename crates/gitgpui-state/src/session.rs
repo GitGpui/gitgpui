@@ -149,7 +149,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     persist_to_path(path, &file)
 }
 
-fn parse_repos(open_repos_raw: Vec<String>, active_repo_raw: Option<String>) -> (Vec<PathBuf>, Option<PathBuf>) {
+fn parse_repos(
+    open_repos_raw: Vec<String>,
+    active_repo_raw: Option<String>,
+) -> (Vec<PathBuf>, Option<PathBuf>) {
     let mut open_repos: Vec<PathBuf> = Vec::new();
     for repo in open_repos_raw {
         let repo = repo.trim();
