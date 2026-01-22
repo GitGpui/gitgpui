@@ -6,7 +6,7 @@ impl GitGpuiView {
         this: &mut Self,
         range: Range<usize>,
         _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
@@ -29,6 +29,10 @@ impl GitGpuiView {
             .then(|| diff_syntax_language_for_path(path.to_string_lossy().as_ref()))
             .flatten();
 
+        let highlight_new_file = this.untracked_worktree_preview_path().is_some()
+            || this.added_file_preview_abs_path().is_some()
+            || this.diff_preview_is_new_file;
+
         range
             .map(|ix| {
                 let line = lines.get(ix).map(String::as_str).unwrap_or("");
@@ -50,7 +54,7 @@ impl GitGpuiView {
 
                 let line_no = format!("{}", ix + 1);
 
-                div()
+                let row = div()
                     .id(("worktree_preview_row", ix))
                     .h(px(20.0))
                     .flex()
@@ -58,6 +62,9 @@ impl GitGpuiView {
                     .font_family("monospace")
                     .text_xs()
                     .bg(theme.colors.surface_bg)
+                    .when(highlight_new_file, |row| {
+                        row.child(div().w(px(3.0)).h_full().bg(theme.colors.success))
+                    })
                     .child(
                         div()
                             .w(px(44.0))
@@ -74,12 +81,18 @@ impl GitGpuiView {
                             .text_color(theme.colors.text)
                             .overflow_hidden()
                             .whitespace_nowrap()
-                            .child(render_cached_diff_styled_text(
+                            .child(selectable_cached_diff_text(
+                                ix,
+                                DiffTextRegion::Inline,
+                                DiffClickKind::Line,
                                 theme.colors.text,
                                 Some(styled),
+                                SharedString::default(),
+                                cx,
                             )),
-                    )
-                    .into_any_element()
+                    );
+
+                row.into_any_element()
             })
             .collect()
     }

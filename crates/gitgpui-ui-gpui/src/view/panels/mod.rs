@@ -1,7 +1,6 @@
 use super::*;
 
-const COMMIT_DETAILS_FILES_INITIAL_RENDER_LIMIT: usize = 50;
-const COMMIT_DETAILS_FILES_RENDER_CHUNK: usize = 50;
+const COMMIT_DETAILS_FILES_MAX_HEIGHT_PX: f32 = 240.0;
 
 #[derive(Clone)]
 enum ContextMenuAction {

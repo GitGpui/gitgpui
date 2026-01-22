@@ -123,13 +123,30 @@ fn status_row(
         .on_click(theme, cx, move |this, _e, window, cx| {
             cx.stop_propagation();
             window.focus(&this.diff_panel_focus_handle);
-            this.store.dispatch(Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path_for_stage.clone(),
-                    area,
-                },
-            });
+
+            let next_path_in_area = (|| {
+                let repo = this.active_repo()?;
+                let Loadable::Ready(status) = &repo.status else {
+                    return None;
+                };
+                let entries = match area {
+                    DiffArea::Unstaged => status.unstaged.as_slice(),
+                    DiffArea::Staged => status.staged.as_slice(),
+                };
+                let Some(current_ix) = entries.iter().position(|e| e.path == path_for_stage) else {
+                    return None;
+                };
+                if entries.len() <= 1 {
+                    return None;
+                }
+                let next_ix = if current_ix + 1 < entries.len() {
+                    current_ix + 1
+                } else {
+                    current_ix.saturating_sub(1)
+                };
+                entries.get(next_ix).map(|e| e.path.clone())
+            })();
+
             match area {
                 DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
                     repo_id,
@@ -140,6 +157,20 @@ fn status_row(
                     path: path_for_stage.clone(),
                 }),
             }
+
+            if let Some(next_path) = next_path_in_area {
+                this.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: next_path,
+                        area,
+                    },
+                });
+            } else {
+                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            }
+
+            this.rebuild_diff_cache();
             cx.notify();
         })
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {

@@ -386,26 +386,23 @@ impl GitGpuiView {
                     if lines.is_empty() {
                         zed::empty_state(theme, "File", "Empty file.").into_any_element()
                     } else {
-                        let text = lines.join("\n");
-                        self.diff_raw_input.update(cx, |input, cx| {
-                            input.set_theme(theme, cx);
-                            input.set_text(text, cx);
-                            input.set_read_only(true, cx);
-                        });
-                        let scroll_handle =
-                            self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                        let list = uniform_list(
+                            "worktree_preview_list",
+                            lines.len(),
+                            cx.processor(Self::render_worktree_preview_rows),
+                        )
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(self.worktree_preview_scroll.clone());
+
+                        let scroll_handle = self.worktree_preview_scroll.0.borrow().base_handle.clone();
                         div()
                             .id("worktree_preview_scroll_container")
+                            .debug_selector(|| "worktree_preview_scroll_container".to_string())
                             .relative()
                             .h_full()
                             .min_h(px(0.0))
-                            .overflow_y_scroll()
-                            .track_scroll(&scroll_handle)
-                            .child(
-                                div()
-                                    .font_family("monospace")
-                                    .child(self.diff_raw_input.clone()),
-                            )
+                            .child(list)
                             .child(
                                 zed::Scrollbar::new("worktree_preview_scrollbar", scroll_handle)
                                     .render(theme),
@@ -753,6 +750,7 @@ impl GitGpuiView {
             }
         };
 
+        self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_hitboxes.clear();
 
         div()
@@ -804,29 +802,69 @@ impl GitGpuiView {
                     && let Some(repo) = this.active_repo()
                     && let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.clone()
                 {
-                    let next_area = match area {
-                        DiffArea::Unstaged => {
+                    let next_path_in_area = |entries: &[gitgpui_core::domain::FileStatus]| {
+                        let Some(current_ix) = entries.iter().position(|e| e.path == path) else {
+                            return None;
+                        };
+                        if entries.len() <= 1 {
+                            return None;
+                        }
+                        let next_ix = if current_ix + 1 < entries.len() {
+                            current_ix + 1
+                        } else {
+                            current_ix.saturating_sub(1)
+                        };
+                        entries.get(next_ix).map(|e| e.path.clone())
+                    };
+
+                    match (&repo.status, area) {
+                        (Loadable::Ready(status), DiffArea::Unstaged) => {
                             this.store.dispatch(Msg::StagePath {
                                 repo_id,
                                 path: path.clone(),
                             });
-                            DiffArea::Staged
+                            if let Some(next_path) = next_path_in_area(&status.unstaged) {
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: DiffTarget::WorkingTree {
+                                        path: next_path,
+                                        area: DiffArea::Unstaged,
+                                    },
+                                });
+                            } else {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            }
                         }
-                        DiffArea::Staged => {
+                        (Loadable::Ready(status), DiffArea::Staged) => {
                             this.store.dispatch(Msg::UnstagePath {
                                 repo_id,
                                 path: path.clone(),
                             });
-                            DiffArea::Unstaged
+                            if let Some(next_path) = next_path_in_area(&status.staged) {
+                                this.store.dispatch(Msg::SelectDiff {
+                                    repo_id,
+                                    target: DiffTarget::WorkingTree {
+                                        path: next_path,
+                                        area: DiffArea::Staged,
+                                    },
+                                });
+                            } else {
+                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                            }
                         }
-                    };
-                    this.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path,
-                            area: next_area,
-                        },
-                    });
+                        (_, DiffArea::Unstaged) => {
+                            this.store.dispatch(Msg::StagePath {
+                                repo_id,
+                                path: path.clone(),
+                            });
+                        }
+                        (_, DiffArea::Staged) => {
+                            this.store.dispatch(Msg::UnstagePath {
+                                repo_id,
+                                path: path.clone(),
+                            });
+                        }
+                    }
                     this.rebuild_diff_cache();
                     handled = true;
                 }

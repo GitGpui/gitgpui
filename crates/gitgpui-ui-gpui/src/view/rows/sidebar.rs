@@ -446,15 +446,9 @@ impl GitGpuiView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let Some(selected_id) = repo.selected_commit.as_ref() else {
-            return Vec::new();
-        };
         let Loadable::Ready(details) = &repo.commit_details else {
             return Vec::new();
         };
-        if &details.id != selected_id {
-            return Vec::new();
-        }
 
         let theme = this.theme;
         let repo_id = repo.id;
@@ -488,6 +482,7 @@ impl GitGpuiView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
+                    .h(px(24.0))
                     .flex()
                     .items_center()
                     .gap_2()

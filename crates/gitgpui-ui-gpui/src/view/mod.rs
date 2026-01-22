@@ -31,7 +31,7 @@ mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
 mod panels;
-mod rows;
+pub(crate) mod rows;
 
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
 
@@ -63,6 +63,8 @@ const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const SIDEBAR_MIN_PX: f32 = 200.0;
 const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
+
+const DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HistoryColResizeHandle {
@@ -163,7 +165,8 @@ impl DiffTextPos {
 
 struct DiffTextHitbox {
     bounds: Bounds<Pixels>,
-    layout: ShapedLine,
+    layout_key: u64,
+    text_len: usize,
 }
 
 #[derive(Clone)]
@@ -327,6 +330,7 @@ pub struct GitGpuiView {
     store: Arc<AppStore>,
     state: AppState,
     _poller: Poller,
+    _activation_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
     theme: AppTheme,
 
@@ -364,6 +368,8 @@ pub struct GitGpuiView {
     diff_text_head: Option<DiffTextPos>,
     diff_suppress_clicks_remaining: u8,
     diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
+    diff_text_layout_cache_epoch: u64,
+    diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
     diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
 
     file_diff_cache_repo_id: Option<RepoId>,
@@ -446,14 +452,74 @@ pub struct GitGpuiView {
     commit_details_message_input: Entity<zed::TextInput>,
     error_banner_input: Entity<zed::TextInput>,
 
-    commit_details_files_commit: Option<CommitId>,
-    commit_details_files_limit: usize,
-    commit_details_scroll_last_y: Pixels,
     commit_details_delay: Option<CommitDetailsDelayState>,
     commit_details_delay_seq: u64,
 }
 
+struct DiffTextLayoutCacheEntry {
+    layout: ShapedLine,
+    last_used_epoch: u64,
+}
+
 impl GitGpuiView {
+    fn is_file_preview_active(&self) -> bool {
+        self.untracked_worktree_preview_path().is_some() || self.added_file_preview_abs_path().is_some()
+    }
+
+    fn worktree_preview_line_count(&self) -> Option<usize> {
+        match &self.worktree_preview {
+            Loadable::Ready(lines) => Some(lines.len()),
+            _ => None,
+        }
+    }
+
+    fn touch_diff_text_layout_cache(&mut self, key: u64, layout: Option<ShapedLine>) {
+        let epoch = self.diff_text_layout_cache_epoch;
+        match layout {
+            Some(layout) => {
+                self.diff_text_layout_cache.insert(
+                    key,
+                    DiffTextLayoutCacheEntry {
+                        layout,
+                        last_used_epoch: epoch,
+                    },
+                );
+            }
+            None => {
+                if let Some(entry) = self.diff_text_layout_cache.get_mut(&key) {
+                    entry.last_used_epoch = epoch;
+                }
+            }
+        }
+
+        self.prune_diff_text_layout_cache();
+    }
+
+    fn prune_diff_text_layout_cache(&mut self) {
+        if self.diff_text_layout_cache.len() <= DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            return;
+        }
+
+        let over_by = self
+            .diff_text_layout_cache
+            .len()
+            .saturating_sub(DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES);
+        if over_by == 0 {
+            return;
+        }
+
+        let mut by_age: Vec<(u64, u64)> = self
+            .diff_text_layout_cache
+            .iter()
+            .map(|(k, v)| (*k, v.last_used_epoch))
+            .collect();
+        by_age.sort_by_key(|(_, last_used)| *last_used);
+
+        for (key, _) in by_age.into_iter().take(over_by) {
+            self.diff_text_layout_cache.remove(&key);
+        }
+    }
+
     fn diff_text_segments_cache_get(&self, key: usize) -> Option<&CachedDiffStyledText> {
         self.diff_text_segments_cache
             .get(key)
@@ -477,7 +543,11 @@ impl GitGpuiView {
     fn log_fingerprint(commits: &[Commit]) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         commits.len().hash(&mut hasher);
-        for id in commits.iter().map(|c| c.id.as_ref()) {
+        // This runs in the render path; keep it O(1) even for huge histories.
+        for id in commits.iter().take(3).map(|c| c.id.as_ref()) {
+            id.hash(&mut hasher);
+        }
+        for id in commits.iter().rev().take(3).map(|c| c.id.as_ref()) {
             id.hash(&mut hasher);
         }
         hasher.finish()
@@ -545,6 +615,15 @@ impl GitGpuiView {
 
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, weak_view, window, cx);
+
+        let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
+            if !window.is_window_active() {
+                return;
+            }
+            if let Some(repo_id) = this.active_repo_id() {
+                this.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+        });
 
         let appearance_subscription = {
             let view = cx.weak_entity();
@@ -695,6 +774,7 @@ impl GitGpuiView {
             state: store.snapshot(),
             store,
             _poller: poller,
+            _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
             diff_view: DiffViewMode::Split,
@@ -731,6 +811,8 @@ impl GitGpuiView {
             diff_text_head: None,
             diff_suppress_clicks_remaining: 0,
             diff_text_hitboxes: HashMap::new(),
+            diff_text_layout_cache_epoch: 0,
+            diff_text_layout_cache: HashMap::new(),
             diff_hunk_picker_search_input: None,
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
@@ -806,9 +888,6 @@ impl GitGpuiView {
             hovered_stash_row: None,
             commit_details_message_input,
             error_banner_input,
-            commit_details_files_commit: None,
-            commit_details_files_limit: 0,
-            commit_details_scroll_last_y: px(0.0),
             commit_details_delay: None,
             commit_details_delay_seq: 0,
         };
@@ -1021,12 +1100,13 @@ impl GitGpuiView {
         position: Point<Pixels>,
     ) -> Option<DiffTextPos> {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
         let local = hitbox.bounds.localize(&position)?;
         let x = local.x.max(px(0.0));
-        let offset = hitbox
-            .layout
+        let offset = layout
             .closest_index_for_x(x)
-            .min(hitbox.layout.len());
+            .min(layout.len())
+            .min(hitbox.text_len);
         Some(DiffTextPos {
             visible_ix,
             region,
@@ -1191,10 +1271,6 @@ impl GitGpuiView {
 
     fn diff_text_line_for_region(&self, visible_ix: usize, region: DiffTextRegion) -> SharedString {
         let fallback = SharedString::default();
-        let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
-            return fallback;
-        };
-
         let expand_tabs = |s: &str| -> SharedString {
             if !s.contains('\t') {
                 return s.to_string().into();
@@ -1207,6 +1283,20 @@ impl GitGpuiView {
                 }
             }
             out.into()
+        };
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return fallback;
+            }
+            let Loadable::Ready(lines) = &self.worktree_preview else {
+                return fallback;
+            };
+            return lines.get(visible_ix).map(|l| expand_tabs(l)).unwrap_or(fallback);
+        }
+
+        let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
+            return fallback;
         };
 
         if self.diff_view == DiffViewMode::Inline {
@@ -1331,9 +1421,11 @@ impl GitGpuiView {
             return None;
         }
 
+        let force_inline = self.is_file_preview_active();
+
         let mut out = String::new();
         for visible_ix in start.visible_ix..=end.visible_ix {
-            if self.diff_view == DiffViewMode::Inline {
+            if force_inline || self.diff_view == DiffViewMode::Inline {
                 let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
                 let line_len = text.len();
                 let a = if visible_ix == start.visible_ix {
@@ -1438,6 +1530,30 @@ impl GitGpuiView {
     }
 
     fn select_all_diff_text(&mut self) {
+        if self.is_file_preview_active() {
+            let Some(count) = self.worktree_preview_line_count() else {
+                return;
+            };
+            if count == 0 {
+                return;
+            }
+            let end_visible_ix = count - 1;
+            let end_text = self.diff_text_line_for_region(end_visible_ix, DiffTextRegion::Inline);
+
+            self.diff_text_selecting = false;
+            self.diff_text_anchor = Some(DiffTextPos {
+                visible_ix: 0,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            });
+            self.diff_text_head = Some(DiffTextPos {
+                visible_ix: end_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: end_text.len(),
+            });
+            return;
+        }
+
         if self.diff_visible_indices.is_empty() {
             return;
         }
@@ -1518,6 +1634,32 @@ impl GitGpuiView {
         region: DiffTextRegion,
         kind: DiffClickKind,
     ) {
+        if self.is_file_preview_active() {
+            let Some(count) = self.worktree_preview_line_count() else {
+                return;
+            };
+            if count == 0 {
+                return;
+            }
+            let visible_ix = visible_ix.min(count - 1);
+            let end_text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+            self.diff_text_selecting = false;
+            self.diff_text_anchor = Some(DiffTextPos {
+                visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            });
+            self.diff_text_head = Some(DiffTextPos {
+                visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: end_text.len(),
+            });
+
+            // Double-click produces two click events; suppress both.
+            self.diff_suppress_clicks_remaining = 2;
+            return;
+        }
+
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
             return;
@@ -2045,6 +2187,8 @@ impl GitGpuiView {
             None => true,
         };
         if should_reset {
+            self.worktree_preview_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.worktree_preview_path = Some(path);
             self.worktree_preview = Loadable::Loading;
             self.worktree_preview_segments_cache_path = None;
@@ -2077,6 +2221,8 @@ impl GitGpuiView {
         self.worktree_preview = Loadable::Loading;
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
+        self.worktree_preview_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
         cx.spawn(async move |view, cx| {
             const MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -2104,6 +2250,8 @@ impl GitGpuiView {
                 if this.worktree_preview_path.as_ref() != Some(&path) {
                     return;
                 }
+                this.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 this.worktree_preview = match result {
                     Ok(lines) => Loadable::Ready(lines),
                     Err(e) => Loadable::Error(e),
@@ -2186,6 +2334,8 @@ impl GitGpuiView {
 
         match preview_result {
             Ok(lines) => {
+                self.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 self.worktree_preview_path = Some(abs_path);
                 self.worktree_preview = Loadable::Ready(lines);
                 self.worktree_preview_segments_cache_path = None;
@@ -2198,6 +2348,8 @@ impl GitGpuiView {
                         Loadable::NotLoaded | Loadable::Loading
                     )
                 {
+                    self.worktree_preview_scroll
+                        .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                     self.worktree_preview_path = Some(abs_path);
                     self.worktree_preview = Loadable::Error(e);
                     self.worktree_preview_segments_cache_path = None;
@@ -2483,6 +2635,8 @@ impl GitGpuiView {
             self.worktree_preview = Loadable::Ready(self.diff_preview_new_file_lines.clone());
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_segments_cache.clear();
+            self.worktree_preview_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         }
     }
 
@@ -2645,12 +2799,12 @@ impl GitGpuiView {
             self.history_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
-            self.commit_details_files_commit = None;
-            self.commit_details_files_limit = 0;
+            self.commit_files_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         } else if prev_selected_commit != next_selected_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
-            self.commit_details_files_commit = None;
-            self.commit_details_files_limit = 0;
+            self.commit_files_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         }
 
         self.update_commit_details_delay(cx);
@@ -4166,6 +4320,9 @@ fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize
     if old_tokens.len() > MAX_TOKENS || new_tokens.len() > MAX_TOKENS {
         return fallback_affix_diff_ranges(old, new);
     }
+    if old_tokens.is_empty() || new_tokens.is_empty() {
+        return fallback_affix_diff_ranges(old, new);
+    }
 
     let old_slices: Vec<&str> = old_tokens
         .iter()
@@ -4745,6 +4902,13 @@ mod tests {
         for w in new_ranges.windows(2) {
             assert!(w[0].end <= w[1].start);
         }
+    }
+
+    #[test]
+    fn word_diff_ranges_empty_inputs_do_not_panic() {
+        let (old_ranges, new_ranges) = word_diff_ranges("", "");
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
     }
 
     #[test]

@@ -32,3 +32,6 @@ mod diff_text;
 mod history;
 mod sidebar;
 mod status;
+
+#[cfg(feature = "bench")]
+pub(crate) mod benchmarks;

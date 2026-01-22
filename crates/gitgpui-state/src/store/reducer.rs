@@ -95,11 +95,36 @@ pub(super) fn reduce(
         }
 
         Msg::SetActiveRepo { repo_id } => {
-            if state.repos.iter().any(|r| r.id == repo_id) {
-                state.active_repo = Some(repo_id);
+            let Some((scope, diff_target)) = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| (r.history_scope, r.diff_target.clone()))
+            else {
+                return Vec::new();
+            };
+
+            let changed = state.active_repo != Some(repo_id);
+            state.active_repo = Some(repo_id);
+            if changed {
                 let _ = session::persist_from_state(state);
             }
-            Vec::new()
+
+            let mut effects = refresh_effects(repo_id, scope);
+            if let Some(target) = diff_target {
+                let supports_file = matches!(
+                    &target,
+                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                );
+                effects.push(Effect::LoadDiff {
+                    repo_id,
+                    target: target.clone(),
+                });
+                if supports_file {
+                    effects.push(Effect::LoadDiffFile { repo_id, target });
+                }
+            }
+            effects
         }
 
         Msg::ReloadRepo { repo_id } => {

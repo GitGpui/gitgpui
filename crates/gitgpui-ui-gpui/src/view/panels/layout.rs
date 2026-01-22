@@ -64,49 +64,6 @@ impl GitGpuiView {
             let show_delayed_loading = self.commit_details_delay.as_ref().is_some_and(|s| {
                 s.repo_id == repo_id && s.commit_id == selected_id && s.show_loading
             });
-            let diff_target = self
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.diff_target.clone());
-
-            let details_snapshot = self
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| match &r.commit_details {
-                    Loadable::Ready(details) => Some((details.id.clone(), details.files.len())),
-                    _ => None,
-                });
-
-            if let Some((details_id, total_files)) = details_snapshot {
-                if self.commit_details_files_commit.as_ref() != Some(&details_id)
-                    || self.commit_details_files_limit == 0
-                {
-                    self.commit_details_files_commit = Some(details_id);
-                    self.commit_details_files_limit = COMMIT_DETAILS_FILES_INITIAL_RENDER_LIMIT;
-                }
-
-                let scroll_y_now = absolute_scroll_y(&self.commit_scroll);
-                let scrolled = scroll_y_now != self.commit_details_scroll_last_y;
-                if scrolled {
-                    self.commit_details_scroll_last_y = scroll_y_now;
-                }
-
-                if scrolled
-                    && self.commit_details_files_limit < total_files
-                    && scroll_is_near_bottom(&self.commit_scroll, px(200.0))
-                {
-                    self.commit_details_files_limit = (self.commit_details_files_limit
-                        + COMMIT_DETAILS_FILES_RENDER_CHUNK)
-                        .min(total_files);
-                    cx.notify();
-                }
-            }
-
-            let files_limit = self.commit_details_files_limit;
 
             let header_title: SharedString = "Commit details".into();
 
@@ -192,162 +149,32 @@ impl GitGpuiView {
                                     .child("No files.")
                                     .into_any_element()
                             } else {
-                                use std::hash::{Hash, Hasher};
-                                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                                details.id.as_ref().hash(&mut hasher);
-                                let commit_key = hasher.finish();
-                                let commit_id = details.id.clone();
-
                                 let total_files = details.files.len();
-                                let shown_files = total_files.min(files_limit);
+                                let list = uniform_list(
+                                    ("commit_details_files_list", repo_id.0),
+                                    total_files,
+                                    cx.processor(Self::render_commit_file_rows),
+                                )
+                                .w_full()
+                                .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                .track_scroll(self.commit_files_scroll.clone());
+                                let scroll_handle =
+                                    self.commit_files_scroll.0.borrow().base_handle.clone();
 
-                                let mut list = div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap_1()
-                                        .min_h(px(0.0))
-                                        .when(total_files > shown_files, |d| {
-                                            d.child(
-                                                div()
-                                                    .px_2()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.text_muted)
-                                                    .child(format!(
-                                                        "Showing {shown_files} of {total_files} files (scroll to load more)",
-                                                    )),
-                                            )
-                                        })
-                                        .children(
-                                            details
-                                                .files
-                                                .iter()
-                                                .take(shown_files)
-                                                .enumerate()
-                                                .map(|(ix, f)| {
-                                            let commit_id = commit_id.clone();
-                                            let row_id = commit_key.wrapping_add(ix as u64);
-                                            let (icon, color) = match f.kind {
-                                                FileStatusKind::Added => (Some("+"), theme.colors.success),
-                                                FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
-                                                FileStatusKind::Deleted => (None, theme.colors.text_muted),
-                                                FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
-                                                FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
-                                                FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),
-                                            };
-
-                                            let path = f.path.clone();
-                                            let selected = diff_target.as_ref().is_some_and(|t| match t {
-                                                DiffTarget::Commit { commit_id: t_commit_id, path: Some(t_path) } => {
-                                                    t_commit_id == &commit_id && t_path == &path
-                                                }
-                                                _ => false,
-                                            });
-
-                                            let commit_id_for_click = commit_id.clone();
-                                            let path_for_click = path.clone();
-                                            let commit_id_for_menu = commit_id.clone();
-                                            let path_for_menu = path.clone();
-                                            let tooltip: SharedString = path.display().to_string().into();
-
-                                            let mut row = div()
-                                                .id(("commit_file", row_id))
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .px_2()
-                                                .py_1()
-                                                .w_full()
-                                                .rounded(px(theme.radii.row))
-                                                .hover(move |s| s.bg(theme.colors.hover))
-                                                .active(move |s| s.bg(theme.colors.active))
-                                                .child(
-                                                    div()
-                                                        .w(px(16.0))
-                                                        .flex()
-                                                        .items_center()
-                                                        .justify_center()
-                                                        .when_some(icon, |this, icon| {
-                                                            this.child(
-                                                                div()
-                                                                    .text_sm()
-                                                                    .font_weight(FontWeight::BOLD)
-                                                                    .text_color(color)
-                                                                    .child(icon),
-                                                            )
-                                                        }),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex_1()
-                                                        .min_w(px(0.0))
-                                                        .text_sm()
-                                                        .line_clamp(1)
-                                                        .whitespace_nowrap()
-                                                        .child(path.display().to_string()),
-                                                )
-                                                .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                                                    window.focus(&this.diff_panel_focus_handle);
-                                                    this.store.dispatch(Msg::SelectDiff {
-                                                        repo_id,
-                                                        target: DiffTarget::Commit {
-                                                            commit_id: commit_id_for_click.clone(),
-                                                            path: Some(path_for_click.clone()),
-                                                        },
-                                                    });
-                                                    this.rebuild_diff_cache();
-                                                    cx.notify();
-                                                }))
-                                                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                                    if *hovering {
-                                                        this.tooltip_text = Some(tooltip.clone());
-                                                    } else if this.tooltip_text.as_ref() == Some(&tooltip) {
-                                                        this.tooltip_text = None;
-                                                    }
-                                                    cx.notify();
-                                                }));
-
-                                            row = row.on_mouse_down(
-                                                MouseButton::Right,
-                                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.open_popover_at(
-                                                        PopoverKind::CommitFileMenu {
-                                                            repo_id,
-                                                            commit_id: commit_id_for_menu.clone(),
-                                                            path: path_for_menu.clone(),
-                                                        },
-                                                        e.position,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                            );
-
-                                            if selected {
-                                                row = row.bg(with_alpha(
-                                                    theme.colors.accent,
-                                                    if theme.is_dark { 0.16 } else { 0.10 },
-                                                ));
-                                            }
-
-                                            row.into_any_element()
-                                        }),
-                                        );
-                                if total_files > shown_files {
-                                    let omitted = total_files - shown_files;
-                                    list = list.child(
-                                        div()
-                                            .px_2()
-                                            .py_1()
-                                            .text_sm()
-                                            .text_color(theme.colors.text_muted)
-                                            .child(format!(
-                                                "… and {omitted} more files (not shown)",
-                                            )),
-                                    );
-                                }
-
-                                list.into_any_element()
+                                div()
+                                    .id(("commit_details_files_container", repo_id.0))
+                                    .relative()
+                                    .w_full()
+                                    .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new(
+                                            ("commit_details_files_scrollbar", repo_id.0),
+                                            scroll_handle,
+                                        )
+                                        .render(theme),
+                                    )
+                                    .into_any_element()
                             };
 
                             let needs_update = self.commit_details_message_input.read(cx).text()
@@ -426,178 +253,31 @@ impl GitGpuiView {
                                 .child("No files.")
                                 .into_any_element()
                         } else {
-                            use std::hash::{Hash, Hasher};
-                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                            details.id.as_ref().hash(&mut hasher);
-                            let commit_key = hasher.finish();
-
                             let total_files = details.files.len();
-                            let shown_files = total_files.min(files_limit);
-                            let commit_id = details.id.clone();
+                            let list = uniform_list(
+                                ("commit_details_files_list", repo_id.0),
+                                total_files,
+                                cx.processor(Self::render_commit_file_rows),
+                            )
+                            .w_full()
+                            .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                            .track_scroll(self.commit_files_scroll.clone());
+                            let scroll_handle = self.commit_files_scroll.0.borrow().base_handle.clone();
 
-                            let mut list = div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .min_h(px(0.0))
-                                .when(total_files > shown_files, |d| {
-                                    d.child(
-                                        div()
-                                            .px_2()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .child(format!(
-                                                "Showing {shown_files} of {total_files} files (scroll to load more)",
-                                            )),
+                            div()
+                                .id(("commit_details_files_container", repo_id.0))
+                                .relative()
+                                .w_full()
+                                .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                .child(list)
+                                .child(
+                                    zed::Scrollbar::new(
+                                        ("commit_details_files_scrollbar", repo_id.0),
+                                        scroll_handle,
                                     )
-                                })
-                                .children(details.files.iter().take(shown_files).enumerate().map(
-                                    |(ix, f)| {
-                                        let commit_id = commit_id.clone();
-                                        let row_id = commit_key.wrapping_add(ix as u64);
-                                        let (icon, color) = match f.kind {
-                                            FileStatusKind::Added => {
-                                                (Some("+"), theme.colors.success)
-                                            }
-                                            FileStatusKind::Modified => {
-                                                (Some("✎"), theme.colors.warning)
-                                            }
-                                            FileStatusKind::Deleted => {
-                                                (None, theme.colors.text_muted)
-                                            }
-                                            FileStatusKind::Renamed => {
-                                                (Some("→"), theme.colors.accent)
-                                            }
-                                            FileStatusKind::Untracked => {
-                                                (Some("?"), theme.colors.warning)
-                                            }
-                                            FileStatusKind::Conflicted => {
-                                                (Some("!"), theme.colors.danger)
-                                            }
-                                        };
-
-                                        let path = f.path.clone();
-                                        let selected =
-                                            diff_target.as_ref().is_some_and(|t| match t {
-                                                DiffTarget::Commit {
-                                                    commit_id: t_commit_id,
-                                                    path: Some(t_path),
-                                                } => t_commit_id == &commit_id && t_path == &path,
-                                                _ => false,
-                                            });
-
-                                        let commit_id_for_click = commit_id.clone();
-                                        let path_for_click = path.clone();
-                                        let commit_id_for_menu = commit_id.clone();
-                                        let path_for_menu = path.clone();
-                                        let tooltip: SharedString =
-                                            path.display().to_string().into();
-
-                                        let mut row = div()
-                                            .id(("commit_file", row_id))
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .px_2()
-                                            .py_1()
-                                            .w_full()
-                                            .rounded(px(theme.radii.row))
-                                            .hover(move |s| s.bg(theme.colors.hover))
-                                            .active(move |s| s.bg(theme.colors.active))
-                                            .child(
-                                                div()
-                                                    .w(px(16.0))
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .when_some(icon, |this, icon| {
-                                                        this.child(
-                                                            div()
-                                                                .text_sm()
-                                                                .font_weight(FontWeight::BOLD)
-                                                                .text_color(color)
-                                                                .child(icon),
-                                                        )
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w(px(0.0))
-                                                    .text_sm()
-                                                    .line_clamp(1)
-                                                    .whitespace_nowrap()
-                                                    .child(path.display().to_string()),
-                                            )
-                                            .on_click(cx.listener(
-                                                move |this, _e: &ClickEvent, window, cx| {
-                                                    window.focus(&this.diff_panel_focus_handle);
-                                                    this.store.dispatch(Msg::SelectDiff {
-                                                        repo_id,
-                                                        target: DiffTarget::Commit {
-                                                            commit_id: commit_id_for_click.clone(),
-                                                            path: Some(path_for_click.clone()),
-                                                        },
-                                                    });
-                                                    this.rebuild_diff_cache();
-                                                    cx.notify();
-                                                },
-                                            ))
-                                            .on_hover(cx.listener(
-                                                move |this, hovering: &bool, _w, cx| {
-                                                    if *hovering {
-                                                        this.tooltip_text = Some(tooltip.clone());
-                                                    } else if this.tooltip_text.as_ref()
-                                                        == Some(&tooltip)
-                                                    {
-                                                        this.tooltip_text = None;
-                                                    }
-                                                    cx.notify();
-                                                },
-                                            ));
-
-                                        row = row.on_mouse_down(
-                                            MouseButton::Right,
-                                            cx.listener(
-                                                move |this, e: &MouseDownEvent, window, cx| {
-                                                    cx.stop_propagation();
-                                                    this.open_popover_at(
-                                                        PopoverKind::CommitFileMenu {
-                                                            repo_id,
-                                                            commit_id: commit_id_for_menu.clone(),
-                                                            path: path_for_menu.clone(),
-                                                        },
-                                                        e.position,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                },
-                                            ),
-                                        );
-
-                                        if selected {
-                                            row = row.bg(with_alpha(
-                                                theme.colors.accent,
-                                                if theme.is_dark { 0.16 } else { 0.10 },
-                                            ));
-                                        }
-
-                                        row.into_any_element()
-                                    },
-                                ));
-                            if total_files > shown_files {
-                                let omitted = total_files - shown_files;
-                                list = list.child(
-                                    div()
-                                        .px_2()
-                                        .py_1()
-                                        .text_sm()
-                                        .text_color(theme.colors.text_muted)
-                                        .child(format!("… and {omitted} more files (not shown)",)),
-                                );
-                            }
-
-                            list.into_any_element()
+                                    .render(theme),
+                                )
+                                .into_any_element()
                         };
 
                         let needs_update = self.commit_details_message_input.read(cx).text()

@@ -190,6 +190,22 @@ mod tests {
         assert_eq!(highlights.len(), 1);
         assert!(highlights[0].1.background_color.is_some());
     }
+
+    #[test]
+    fn syntax_colors_are_softened_for_keywords() {
+        let theme = AppTheme::zed_one_light();
+        let segments = vec![CachedDiffTextSegment {
+            text: "fn".into(),
+            in_word: false,
+            in_query: false,
+            syntax: SyntaxTokenKind::Keyword,
+        }];
+
+        let (_text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 0..2);
+        assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
+    }
 }
 
 pub(super) fn render_cached_diff_styled_text(
@@ -369,6 +385,22 @@ fn styled_text_for_diff_segments(
     segments: &[CachedDiffTextSegment],
     word_color: Option<gpui::Rgba>,
 ) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    fn mix_colors(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+        let t = t.clamp(0.0, 1.0);
+        gpui::Rgba {
+            r: a.r + (b.r - a.r) * t,
+            g: a.g + (b.g - a.g) * t,
+            b: a.b + (b.b - a.b) * t,
+            a: 1.0,
+        }
+    }
+
+    fn calm_syntax_color(theme: AppTheme, token: gpui::Rgba) -> gpui::Rgba {
+        // Pull token colors towards the base foreground for a less-saturated "calm" look.
+        let blend_to_text = if theme.is_dark { 0.42 } else { 0.58 };
+        mix_colors(token, theme.colors.text, blend_to_text)
+    }
+
     let combined_len: usize = segments.iter().map(|s| s.text.len()).sum();
     let mut combined = String::with_capacity(combined_len);
     let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> =
@@ -394,13 +426,13 @@ fn styled_text_for_diff_segments(
         } else {
             let syntax_fg = match seg.syntax {
                 SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
-                SyntaxTokenKind::String => Some(theme.colors.warning),
-                SyntaxTokenKind::Keyword => Some(theme.colors.accent),
-                SyntaxTokenKind::Number => Some(theme.colors.success),
-                SyntaxTokenKind::Function => Some(theme.colors.accent),
-                SyntaxTokenKind::Type => Some(theme.colors.warning),
-                SyntaxTokenKind::Property => Some(theme.colors.accent),
-                SyntaxTokenKind::Constant => Some(theme.colors.success),
+                SyntaxTokenKind::String => Some(calm_syntax_color(theme, theme.colors.warning)),
+                SyntaxTokenKind::Keyword => Some(calm_syntax_color(theme, theme.colors.accent)),
+                SyntaxTokenKind::Number => Some(calm_syntax_color(theme, theme.colors.success)),
+                SyntaxTokenKind::Function => Some(calm_syntax_color(theme, theme.colors.accent)),
+                SyntaxTokenKind::Type => Some(calm_syntax_color(theme, theme.colors.warning)),
+                SyntaxTokenKind::Property => Some(calm_syntax_color(theme, theme.colors.accent)),
+                SyntaxTokenKind::Constant => Some(calm_syntax_color(theme, theme.colors.success)),
                 SyntaxTokenKind::Punctuation => Some(theme.colors.text_muted),
                 SyntaxTokenKind::None => None,
             };

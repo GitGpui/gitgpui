@@ -104,13 +104,9 @@ impl IntoElement for DiffTextSelectionOverlay {
     }
 }
 
-pub(super) struct DiffTextSelectionOverlayPrepaint {
-    layout: Option<ShapedLine>,
-}
-
 impl Element for DiffTextSelectionOverlay {
     type RequestLayoutState = ();
-    type PrepaintState = DiffTextSelectionOverlayPrepaint;
+    type PrepaintState = ();
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -139,25 +135,10 @@ impl Element for DiffTextSelectionOverlay {
         _inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
+        _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        let style = window.text_style();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let run = TextRun {
-            len: self.text.len(),
-            font: style.font(),
-            color: style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let layout = window
-            .text_system()
-            .shape_line(self.text.clone(), font_size, &[run], None);
-        DiffTextSelectionOverlayPrepaint {
-            layout: Some(layout),
-        }
+        ()
     }
 
     fn paint(
@@ -166,22 +147,62 @@ impl Element for DiffTextSelectionOverlay {
         _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
+        _prepaint: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
         let selection = self.view.read(cx).diff_text_local_selection_range(
             self.visible_ix,
             self.region,
             self.text.len(),
         );
-        let Some(layout) = prepaint.layout.take() else {
-            return;
+
+        let style = window.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+
+        let mut hasher = DefaultHasher::new();
+        self.text.as_ref().hash(&mut hasher);
+        font_size.hash(&mut hasher);
+        let layout_key = hasher.finish();
+
+        let (x0, x1, shaped) = match self.view.read(cx).diff_text_layout_cache.get(&layout_key) {
+            Some(entry) => {
+                let layout = &entry.layout;
+                let x0 = selection
+                    .as_ref()
+                    .map(|r| layout.x_for_index(r.start.min(self.text.len())));
+                let x1 = selection
+                    .as_ref()
+                    .map(|r| layout.x_for_index(r.end.min(self.text.len())));
+                (x0, x1, None)
+            }
+            None => {
+                let run = TextRun {
+                    len: self.text.len(),
+                    font: style.font(),
+                    color: style.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let layout = window
+                    .text_system()
+                    .shape_line(self.text.clone(), font_size, &[run], None);
+                let x0 = selection
+                    .as_ref()
+                    .map(|r| layout.x_for_index(r.start.min(self.text.len())));
+                let x1 =
+                    selection
+                        .as_ref()
+                        .map(|r| layout.x_for_index(r.end.min(self.text.len())));
+                (x0, x1, Some(layout))
+            }
         };
 
-        if let Some(range) = selection {
-            let x0 = layout.x_for_index(range.start.min(self.text.len()));
-            let x1 = layout.x_for_index(range.end.min(self.text.len()));
+        if let (Some(x0), Some(x1)) = (x0, x1) {
             if x1 > x0 {
                 let color = self.view.read(cx).diff_text_selection_color();
                 window.paint_quad(fill(
@@ -194,13 +215,18 @@ impl Element for DiffTextSelectionOverlay {
             }
         }
 
-        let hitbox = DiffTextHitbox { bounds, layout };
+        let hitbox = DiffTextHitbox {
+            bounds,
+            layout_key,
+            text_len: self.text.len(),
+        };
 
         let visible_ix = self.visible_ix;
         let region = self.region;
         let view = self.view.clone();
         let _ = view.update(cx, |this, _cx| {
             this.set_diff_text_hitbox(visible_ix, region, hitbox);
+            this.touch_diff_text_layout_cache(layout_key, shaped);
         });
     }
 }

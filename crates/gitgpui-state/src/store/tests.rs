@@ -221,6 +221,67 @@ fn restore_session_opens_all_and_selects_active_repo() {
 }
 
 #[test]
+fn set_active_repo_refreshes_repo_state_and_selected_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitgpui_core::domain::DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+
+    let has_status = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == repo1));
+    let has_log = effects.iter().any(|e| {
+        matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
+    });
+    let has_diff = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadDiff { repo_id, target: _ } if *repo_id == repo1));
+    let has_diff_file = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, target: _ } if *repo_id == repo1));
+
+    assert!(has_status, "expected status refresh on activation");
+    assert!(has_log, "expected log refresh on activation");
+    assert!(has_diff, "expected diff refresh on activation");
+    assert!(has_diff_file, "expected diff-file refresh on activation");
+}
+
+#[test]
 fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(1);

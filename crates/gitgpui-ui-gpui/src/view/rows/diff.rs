@@ -67,11 +67,11 @@ impl GitGpuiView {
                             _ => None,
                         };
 
-                        // Avoid per-line syntax work on context/header lines; changed lines get syntax.
                         let language = matches!(
                             line.kind,
                             gitgpui_core::domain::DiffLineKind::Add
                                 | gitgpui_core::domain::DiffLineKind::Remove
+                                | gitgpui_core::domain::DiffLineKind::Context
                         )
                         .then_some(language)
                         .flatten();
@@ -204,12 +204,11 @@ impl GitGpuiView {
                         _ => None,
                     };
 
-                    // Only syntax-highlight changed lines; for context lines this avoids extra work
-                    // while scrolling (word-level highlights still apply).
                     let language = matches!(
                         line.kind,
                         gitgpui_core::domain::DiffLineKind::Add
                             | gitgpui_core::domain::DiffLineKind::Remove
+                            | gitgpui_core::domain::DiffLineKind::Context
                     )
                     .then_some(language)
                     .flatten();
@@ -318,13 +317,6 @@ impl GitGpuiView {
                                     | gitgpui_core::file_diff::FileDiffRowKind::Modify
                             )
                             .then_some(theme.colors.danger);
-
-                            let language = (!matches!(
-                                row.kind,
-                                gitgpui_core::file_diff::FileDiffRowKind::Context
-                            ))
-                            .then_some(language)
-                            .flatten();
 
                             let word_ranges: &[Range<usize>] = this
                                 .file_diff_split_word_highlights_old
@@ -448,6 +440,7 @@ impl GitGpuiView {
                                         l.kind,
                                         gitgpui_core::domain::DiffLineKind::Add
                                             | gitgpui_core::domain::DiffLineKind::Remove
+                                            | gitgpui_core::domain::DiffLineKind::Context
                                     )
                                 })
                                 .then_some(language)
@@ -600,13 +593,6 @@ impl GitGpuiView {
                             )
                             .then_some(theme.colors.success);
 
-                            let language = (!matches!(
-                                row.kind,
-                                gitgpui_core::file_diff::FileDiffRowKind::Context
-                            ))
-                            .then_some(language)
-                            .flatten();
-
                             let word_ranges: &[Range<usize>] = this
                                 .file_diff_split_word_highlights_new
                                 .get(row_ix)
@@ -729,6 +715,7 @@ impl GitGpuiView {
                                         l.kind,
                                         gitgpui_core::domain::DiffLineKind::Add
                                             | gitgpui_core::domain::DiffLineKind::Remove
+                                            | gitgpui_core::domain::DiffLineKind::Context
                                     )
                                 })
                                 .then_some(language)
