@@ -44,6 +44,14 @@ Run (opens the repo passed as the first arg, or falls back to the current direct
 cargo run -p gitgpui-app --features ui-gpui,gix -- /path/to/repo
 ```
 
+### Profiling (Callgrind)
+
+To profile the app with Valgrind Callgrind (interactive on/off instrumentation):
+
+```bash
+bash scripts/profile-callgrind.sh --open -- /path/to/repo
+```
+
 ### Crash logs
 
 If the app crashes due to a Rust panic, GitGpui writes a crash log to:

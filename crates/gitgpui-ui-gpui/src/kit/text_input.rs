@@ -32,29 +32,63 @@ actions!(
 
 #[derive(Clone, Copy, Debug)]
 struct TextInputStyle {
-    is_dark: bool,
     background: Rgba,
     border: Rgba,
     hover_border: Rgba,
     focus_border: Rgba,
     radius: f32,
+    text: gpui::Hsla,
+    placeholder: gpui::Hsla,
     cursor: Rgba,
     selection: Rgba,
 }
 
 impl TextInputStyle {
     fn from_theme(theme: AppTheme) -> Self {
+        fn mix(mut a: Rgba, b: Rgba, t: f32) -> Rgba {
+            let t = t.clamp(0.0, 1.0);
+            a.r = a.r + (b.r - a.r) * t;
+            a.g = a.g + (b.g - a.g) * t;
+            a.b = a.b + (b.b - a.b) * t;
+            a.a = a.a + (b.a - a.a) * t;
+            a
+        }
+
+        // Ensure inputs look like inputs even in themes where `surface_bg` and `surface_bg_elevated`
+        // are equal (Ayu/One).
+        let background = if theme.is_dark {
+            mix(
+                theme.colors.surface_bg_elevated,
+                gpui::rgba(0xFFFFFFFF),
+                0.03,
+            )
+        } else {
+            mix(
+                theme.colors.surface_bg_elevated,
+                gpui::rgba(0x000000FF),
+                0.03,
+            )
+        };
+
+        let base_border = theme.colors.border;
         let hover_border = with_alpha(
             theme.colors.text_muted,
             if theme.is_dark { 0.55 } else { 0.40 },
         );
+        let focus_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.98 } else { 0.92 });
+        let placeholder = if theme.is_dark {
+            hsla(0., 0., 1., 0.35)
+        } else {
+            hsla(0., 0., 0., 0.2)
+        };
         Self {
-            is_dark: theme.is_dark,
-            background: theme.colors.surface_bg_elevated,
-            border: theme.colors.border,
+            background,
+            border: base_border,
             hover_border,
-            focus_border: theme.colors.focus_ring,
+            focus_border,
             radius: theme.radii.row,
+            text: theme.colors.text.into(),
+            placeholder,
             cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),
             selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
         }
@@ -780,16 +814,10 @@ impl Element for TextElement {
         let soft_wrap = input.soft_wrap && input.multiline;
         let style = window.text_style();
 
-        let placeholder_color = if style_colors.is_dark {
-            hsla(0., 0., 1., 0.35)
-        } else {
-            hsla(0., 0., 0., 0.2)
-        };
-
         let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), placeholder_color)
+            (input.placeholder.clone(), style_colors.placeholder)
         } else {
-            (content, style.color)
+            (content, style_colors.text)
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());

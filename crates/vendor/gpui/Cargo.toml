@@ -229,7 +229,7 @@ name = "action_macros"
 path = "tests/action_macros.rs"
 
 [dependencies.anyhow]
-version = "1.0.86"
+version = "1.0.100"
 
 [dependencies.async-task]
 version = "4.7"
@@ -259,10 +259,11 @@ version = "0.2.2"
 package = "gpui_collections"
 
 [dependencies.ctor]
-version = "0.4.0"
+version = "0.6.3"
 
 [dependencies.derive_more]
-version = "0.99.17"
+version = "2.1.1"
+features = ["full"]
 
 [dependencies.etagere]
 version = "0.2"
@@ -279,10 +280,10 @@ version = "0.2.2"
 package = "gpui_http_client"
 
 [dependencies.image]
-version = "0.25.1"
+version = "0.25.9"
 
 [dependencies.inventory]
-version = "0.3.19"
+version = "0.3.21"
 
 [dependencies.itertools]
 version = "0.14.0"
@@ -291,7 +292,7 @@ version = "0.14.0"
 version = "0.2"
 
 [dependencies.log]
-version = "0.4.16"
+version = "0.4.29"
 features = [
     "kv_unstable_serde",
     "serde",
@@ -301,13 +302,13 @@ features = [
 version = "1.0"
 
 [dependencies.num_cpus]
-version = "1.13"
+version = "1.17"
 
 [dependencies.parking]
-version = "2.0.0"
+version = "2.2.1"
 
 [dependencies.parking_lot]
-version = "0.12.1"
+version = "0.12.5"
 
 [dependencies.pin-project]
 version = "1.1.10"
@@ -331,7 +332,7 @@ version = "0.2.2"
 package = "gpui_refineable"
 
 [dependencies.resvg]
-version = "0.45.0"
+version = "0.46.0"
 features = [
     "text",
     "system-fonts",
@@ -340,7 +341,7 @@ features = [
 default-features = false
 
 [dependencies.schemars]
-version = "1.0"
+version = "1.2"
 features = ["indexmap2"]
 
 [dependencies.seahash]
@@ -351,31 +352,31 @@ version = "0.2.2"
 package = "gpui_semantic_version"
 
 [dependencies.serde]
-version = "1.0.221"
+version = "1.0.228"
 features = [
     "derive",
     "rc",
 ]
 
 [dependencies.serde_json]
-version = "1.0.144"
+version = "1.0.149"
 features = [
     "preserve_order",
     "raw_value",
 ]
 
 [dependencies.slotmap]
-version = "1.0.6"
+version = "1.1.1"
 
 [dependencies.smallvec]
-version = "1.6"
+version = "1.15"
 features = ["union"]
 
 [dependencies.smol]
 version = "2.0"
 
 [dependencies.stacksafe]
-version = "0.1"
+version = "1.0"
 
 [dependencies.strum]
 version = "0.27.2"
@@ -389,10 +390,10 @@ package = "gpui_sum_tree"
 version = "=0.9.0"
 
 [dependencies.thiserror]
-version = "2.0.12"
+version = "2.0.18"
 
 [dependencies.usvg]
-version = "0.45.0"
+version = "0.46.0"
 default-features = false
 
 [dependencies.util]
@@ -404,7 +405,7 @@ version = "0.2.2"
 package = "gpui_util_macros"
 
 [dependencies.uuid]
-version = "1.1.2"
+version = "1.19.0"
 features = [
     "v4",
     "v5",
@@ -436,14 +437,14 @@ version = "1.0"
 features = ["extra"]
 
 [dev-dependencies.pretty_assertions]
-version = "1.3.0"
+version = "1.4.1"
 features = ["unstable"]
 
 [dev-dependencies.rand]
 version = "0.9"
 
 [dev-dependencies.unicode-segmentation]
-version = "1.10"
+version = "1.12"
 
 [dev-dependencies.util]
 version = "0.2.2"
@@ -477,22 +478,22 @@ version = "1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.calloop]
-version = "0.13.0"
+version = "0.14.3"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.calloop-wayland-source]
-version = "0.3.0"
+version = "0.4.1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.cosmic-text]
-version = "0.14.0"
+version = "0.16.0"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.filedescriptor]
-version = "0.8.2"
+version = "0.8.3"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.flume]
-version = "0.11"
+version = "0.12"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.font-kit]
 version = "0.14.1-zed"
@@ -522,11 +523,11 @@ features = [
 default-features = false
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.open]
-version = "5.2.0"
+version = "5.3.3"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-backend]
-version = "0.3.3"
+version = "0.3.12"
 features = [
     "client_system",
     "dlopen",
@@ -534,15 +535,15 @@ features = [
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-client]
-version = "0.31.2"
+version = "0.31.12"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-cursor]
-version = "0.31.1"
+version = "0.31.12"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-protocols]
-version = "0.31.2"
+version = "0.32.10"
 features = [
     "client",
     "staging",
@@ -551,7 +552,7 @@ features = [
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.wayland-protocols-plasma]
-version = "0.2.0"
+version = "0.3.10"
 features = ["client"]
 optional = true
 
@@ -560,7 +561,7 @@ version = "0.9.3"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.x11rb]
-version = "0.13.1"
+version = "0.13.2"
 features = [
     "allow-unsafe-code",
     "xkb",
@@ -582,7 +583,7 @@ optional = true
 package = "zed-xim"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.xkbcommon]
-version = "0.8.0"
+version = "0.9.0"
 features = [
     "wayland",
     "x11",
@@ -590,7 +591,7 @@ features = [
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies.naga]
-version = "25.0"
+version = "28.0"
 features = ["wgsl-in"]
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dependencies.pathfinder_geometry]
@@ -615,10 +616,10 @@ version = "=0.2.0"
 version = "=0.10.0"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-foundation-sys]
-version = "0.8.6"
+version = "0.8.7"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-graphics]
-version = "0.24"
+version = "0.25"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-text]
 version = "21"
@@ -636,7 +637,7 @@ package = "zed-font-kit"
 version = "0.5"
 
 [target.'cfg(target_os = "macos")'.dependencies.log]
-version = "0.4.16"
+version = "0.4.29"
 features = [
     "kv_unstable_serde",
     "serde",
@@ -647,7 +648,7 @@ version = "0.2.2"
 package = "gpui_media"
 
 [target.'cfg(target_os = "macos")'.dependencies.metal]
-version = "0.29"
+version = "0.33"
 
 [target.'cfg(target_os = "macos")'.dependencies.objc]
 version = "0.2"
@@ -661,24 +662,24 @@ version = "0.3"
 optional = true
 
 [target.'cfg(target_os = "macos")'.build-dependencies.bindgen]
-version = "0.71"
+version = "0.72"
 
 [target.'cfg(target_os = "macos")'.build-dependencies.cbindgen]
-version = "0.28.0"
+version = "0.29.2"
 default-features = false
 
 [target.'cfg(target_os = "macos")'.build-dependencies.naga]
-version = "25.0"
+version = "28.0"
 features = ["wgsl-in"]
 
 [target.'cfg(target_os = "windows")'.dependencies.flume]
-version = "0.11"
+version = "0.12"
 
 [target.'cfg(target_os = "windows")'.dependencies.rand]
 version = "0.9"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Foundation_Numerics",
     "Storage_Search",
@@ -729,13 +730,13 @@ features = [
 ]
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-core]
-version = "0.61"
+version = "0.62"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-numerics]
-version = "0.2"
+version = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies.windows-registry]
-version = "0.5"
+version = "0.6"
 
 [target.'cfg(target_os = "windows")'.build-dependencies.embed-resource]
 version = "3.0"

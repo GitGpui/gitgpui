@@ -10,7 +10,7 @@ pub use gpui_macros::{
     visibility_style_methods,
 };
 
-const ELLIPSIS: SharedString = SharedString::new_static("…");
+const ELLIPSIS: SharedString = SharedString::new_static("");
 
 /// A trait for elements that can be styled.
 /// Use this to opt-in to a utility CSS-like styling API.
@@ -78,7 +78,7 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Sets the truncate overflowing text with an ellipsis (…) if needed.
+    /// Sets the truncate overflowing text with an ellipsis () if needed.
     /// [Docs](https://tailwindcss.com/docs/text-overflow#ellipsis)
     fn text_ellipsis(mut self) -> Self {
         self.text_style()
@@ -118,7 +118,7 @@ pub trait Styled: Sized {
         self.text_align(TextAlign::Right)
     }
 
-    /// Sets the truncate to prevent text from wrapping and truncate overflowing text with an ellipsis (…) if needed.
+    /// Sets the truncate to prevent text from wrapping and truncate overflowing text with an ellipsis () if needed.
     /// [Docs](https://tailwindcss.com/docs/text-overflow#truncate)
     fn truncate(mut self) -> Self {
         self.overflow_hidden().whitespace_nowrap().text_ellipsis()

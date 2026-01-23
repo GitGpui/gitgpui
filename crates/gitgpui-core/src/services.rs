@@ -86,6 +86,11 @@ pub trait GitRepository: Send + Sync {
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
     fn delete_branch(&self, name: &str) -> Result<()>;
     fn checkout_branch(&self, name: &str) -> Result<()>;
+    fn checkout_remote_branch(&self, _remote: &str, _branch: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "remote branch checkout is not implemented for this backend",
+        )))
+    }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
     fn cherry_pick(&self, id: &CommitId) -> Result<()>;
     fn revert(&self, id: &CommitId) -> Result<()>;
@@ -101,6 +106,11 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all(&self) -> Result<()>;
     fn pull(&self, mode: PullMode) -> Result<()>;
     fn push(&self) -> Result<()>;
+    fn push_set_upstream(&self, _remote: &str, _branch: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "pushing with --set-upstream is not implemented for this backend",
+        )))
+    }
 
     fn fetch_all_with_output(&self) -> Result<CommandOutput> {
         self.fetch_all()?;
@@ -115,6 +125,13 @@ pub trait GitRepository: Send + Sync {
     fn push_with_output(&self) -> Result<CommandOutput> {
         self.push()?;
         Ok(CommandOutput::empty_success("git push"))
+    }
+
+    fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        self.push_set_upstream(remote, branch)?;
+        Ok(CommandOutput::empty_success(format!(
+            "git push --set-upstream {remote} HEAD:refs/heads/{branch}"
+        )))
     }
 
     fn pull_branch_with_output(&self, _remote: &str, _branch: &str) -> Result<CommandOutput> {

@@ -104,7 +104,7 @@ impl SmokeView {
         let input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Enter…".into(),
+                    placeholder: "Enter".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -191,7 +191,7 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
             cx.new(|cx| {
                 zed::TextInput::new(
                     zed::TextInputOptions {
-                        placeholder: "Commit message…".into(),
+                        placeholder: "Commit message".into(),
                         multiline: false,
                         read_only: false,
                         chromeless: false,

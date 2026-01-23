@@ -188,16 +188,16 @@ impl Element for DiffTextSelectionOverlay {
                     underline: None,
                     strikethrough: None,
                 };
-                let layout = window
-                    .text_system()
-                    .shape_line(self.text.clone(), font_size, &[run], None);
+                let layout =
+                    window
+                        .text_system()
+                        .shape_line(self.text.clone(), font_size, &[run], None);
                 let x0 = selection
                     .as_ref()
                     .map(|r| layout.x_for_index(r.start.min(self.text.len())));
-                let x1 =
-                    selection
-                        .as_ref()
-                        .map(|r| layout.x_for_index(r.end.min(self.text.len())));
+                let x1 = selection
+                    .as_ref()
+                    .map(|r| layout.x_for_index(r.end.min(self.text.len())));
                 (x0, x1, Some(layout))
             }
         };

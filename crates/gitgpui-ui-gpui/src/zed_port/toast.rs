@@ -40,10 +40,10 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
     let accent = with_alpha(accent, if theme.is_dark { 0.85 } else { 0.75 });
 
     div()
-        .min_w(px(260.0))
-        .max_w(px(520.0))
+        .min_w(px(300.0))
+        .max_w(px(760.0))
         .flex()
-        .items_center()
+        .items_start()
         .gap_2()
         .bg(bg)
         .border_1()
@@ -52,7 +52,14 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
         .shadow_sm()
         .text_sm()
         .text_color(theme.colors.text)
-        .child(div().w(px(3.0)).h(px(18.0)).bg(accent).rounded(px(2.0)))
+        .child(
+            div()
+                .w(px(3.0))
+                .h_full()
+                .min_h(px(18.0))
+                .bg(accent)
+                .rounded(px(2.0)),
+        )
         .child(div().flex_1().px_2().py_1().child(message))
 }
 

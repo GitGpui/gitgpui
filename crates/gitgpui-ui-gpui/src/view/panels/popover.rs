@@ -247,9 +247,25 @@ impl GitGpuiView {
                     icon: Some("⎇".into()),
                     shortcut: Some("Enter".into()),
                     disabled: false,
-                    action: ContextMenuAction::CheckoutBranch {
-                        repo_id: *repo_id,
-                        name: name.clone(),
+                    action: match section {
+                        BranchSection::Local => ContextMenuAction::CheckoutBranch {
+                            repo_id: *repo_id,
+                            name: name.clone(),
+                        },
+                        BranchSection::Remote => {
+                            if let Some((remote, branch)) = name.split_once('/') {
+                                ContextMenuAction::CheckoutRemoteBranch {
+                                    repo_id: *repo_id,
+                                    remote: remote.to_string(),
+                                    name: branch.to_string(),
+                                }
+                            } else {
+                                ContextMenuAction::CheckoutBranch {
+                                    repo_id: *repo_id,
+                                    name: name.clone(),
+                                }
+                            }
+                        }
                     },
                 });
                 items.push(ContextMenuItem::Entry {
@@ -305,7 +321,7 @@ impl GitGpuiView {
                 let mut items = vec![ContextMenuItem::Header(header)];
                 items.push(ContextMenuItem::Separator);
                 items.push(ContextMenuItem::Entry {
-                    label: "Switch branch…".into(),
+                    label: "Switch branch".into(),
                     icon: Some("⎇".into()),
                     shortcut: Some("Enter".into()),
                     disabled: false,
@@ -416,6 +432,18 @@ impl GitGpuiView {
             }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                name,
+            } => {
+                self.store.dispatch(Msg::CheckoutRemoteBranch {
+                    repo_id,
+                    remote,
+                    name,
+                });
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
@@ -636,6 +664,8 @@ impl GitGpuiView {
         let (show_date, show_sha) = self.history_visible_columns();
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
+        let handle_w = px(HISTORY_COL_HANDLE_PX);
+        let handle_half = px(HISTORY_COL_HANDLE_PX / 2.0);
         let scope_label: SharedString = self
             .active_repo()
             .map(|r| match r.history_scope {
@@ -649,8 +679,10 @@ impl GitGpuiView {
         let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
             div()
                 .id(id)
-                .w(px(HISTORY_COL_HANDLE_PX))
-                .h_full()
+                .absolute()
+                .w(handle_w)
+                .top_0()
+                .bottom_0()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -732,6 +764,7 @@ impl GitGpuiView {
         };
 
         let mut header = div()
+            .relative()
             .flex()
             .w_full()
             .items_center()
@@ -799,10 +832,6 @@ impl GitGpuiView {
                             })),
                     ),
             )
-            .child(resize_handle(
-                "history_col_resize_branch",
-                HistoryColResizeHandle::Branch,
-            ))
             .child(
                 div()
                     .w(self.history_col_graph)
@@ -811,10 +840,6 @@ impl GitGpuiView {
                     .whitespace_nowrap()
                     .child("GRAPH"),
             )
-            .child(resize_handle(
-                "history_col_resize_graph",
-                HistoryColResizeHandle::Graph,
-            ))
             .child(
                 div()
                     .flex_1()
@@ -824,10 +849,6 @@ impl GitGpuiView {
             );
 
         if show_date {
-            header = header.child(resize_handle(
-                "history_col_resize_message",
-                HistoryColResizeHandle::Message,
-            ));
             header = header.child(
                 div()
                     .w(col_date)
@@ -839,10 +860,6 @@ impl GitGpuiView {
         }
 
         if show_sha {
-            header = header.child(resize_handle(
-                "history_col_resize_date",
-                HistoryColResizeHandle::Date,
-            ));
             header = header.child(
                 div()
                     .w(col_sha)
@@ -853,7 +870,36 @@ impl GitGpuiView {
             );
         }
 
-        header
+        let mut header_with_handles = header
+            .child(
+                resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
+                    .left((self.history_col_branch - handle_half).max(px(0.0))),
+            )
+            .child(
+                resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph).left(
+                    (self.history_col_branch + self.history_col_graph - handle_half).max(px(0.0)),
+                ),
+            );
+
+        if show_date {
+            let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
+            header_with_handles = header_with_handles.child(
+                resize_handle(
+                    "history_col_resize_message",
+                    HistoryColResizeHandle::Message,
+                )
+                .right((right_fixed - handle_half).max(px(0.0))),
+            );
+        }
+
+        if show_sha {
+            header_with_handles = header_with_handles.child(
+                resize_handle("history_col_resize_date", HistoryColResizeHandle::Date)
+                    .right((col_sha - handle_half).max(px(0.0))),
+            );
+        }
+
+        header_with_handles
     }
 
     pub(in super::super) fn popover_view(
@@ -867,10 +913,17 @@ impl GitGpuiView {
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+        let popover_use_surface_bg = matches!(
+            &kind,
+            PopoverKind::CreateBranch
+                | PopoverKind::StashPrompt
+                | PopoverKind::PushSetUpstreamPrompt { .. }
+        );
         let anchor_corner = match &kind {
             PopoverKind::PullPicker
             | PopoverKind::CreateBranch
             | PopoverKind::StashPrompt
+            | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
             _ => Corner::TopLeft,
         };
@@ -1000,7 +1053,7 @@ impl GitGpuiView {
                             }
                         }
                         Loadable::Loading => {
-                            menu = menu.child(zed::context_menu_label(theme, "Loading…"));
+                            menu = menu.child(zed::context_menu_label(theme, "Loading"));
                         }
                         Loadable::Error(e) => {
                             menu = menu.child(zed::context_menu_label(theme, e.clone()));
@@ -1011,40 +1064,9 @@ impl GitGpuiView {
                     }
                 }
 
-                zed::context_menu(
-                    theme,
-                    menu.child(zed::context_menu_separator(theme))
-                        .child(zed::context_menu_header(theme, "Create branch"))
-                        .child(
-                            div()
-                                .px_2()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .child(self.create_branch_input.clone()),
-                        )
-                        .child(
-                            div().px_2().child(
-                                zed::Button::new("create_branch_go", "Create")
-                                    .style(zed::ButtonStyle::Filled)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        let name = this
-                                            .create_branch_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        if let Some(repo_id) = this.active_repo_id()
-                                            && !name.is_empty()
-                                        {
-                                            this.store
-                                                .dispatch(Msg::CreateBranch { repo_id, name });
-                                        }
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            ),
-                        ),
-                )
-                .min_w(px(240.0))
-                .max_w(px(420.0))
+                zed::context_menu(theme, menu)
+                    .min_w(px(240.0))
+                    .max_w(px(420.0))
             }
             PopoverKind::CreateBranch => div()
                 .flex()
@@ -1163,6 +1185,75 @@ impl GitGpuiView {
                                 }),
                         ),
                 ),
+            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
+                let remote = remote.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(320.0))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Set upstream and push"),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(theme.colors.text_muted)
+                            .child(format!("Remote: {remote}")),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .child(self.push_upstream_branch_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                zed::Button::new("push_upstream_cancel", "Cancel")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            )
+                            .child(
+                                zed::Button::new("push_upstream_go", "Push")
+                                    .style(zed::ButtonStyle::Filled)
+                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                                        let branch = this
+                                            .push_upstream_branch_input
+                                            .read_with(cx, |i, _| i.text().trim().to_string());
+                                        if branch.is_empty() {
+                                            return;
+                                        }
+                                        this.store.dispatch(Msg::PushSetUpstream {
+                                            repo_id,
+                                            remote: remote.clone(),
+                                            branch,
+                                        });
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            ),
+                    )
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
@@ -1336,34 +1427,62 @@ impl GitGpuiView {
                 },
                 cx,
             ),
-            PopoverKind::AppMenu => div()
-                .flex()
-                .flex_col()
-                .min_w(px(200.0))
-                .child(
-                    div()
-                        .id("app_menu_quit")
-                        .debug_selector(|| "app_menu_quit".to_string())
-                        .px_2()
-                        .py_1()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
-                        .child("Quit")
-                        .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
-                            cx.quit();
-                        })),
-                )
-                .child(
-                    div()
-                        .id("app_menu_close")
-                        .debug_selector(|| "app_menu_close".to_string())
-                        .px_2()
-                        .py_1()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
-                        .child("Close")
-                        .on_click(close),
-                ),
+            PopoverKind::AppMenu => {
+                let mut install_desktop = div()
+                    .id("app_menu_install_desktop")
+                    .debug_selector(|| "app_menu_install_desktop".to_string())
+                    .px_2()
+                    .py_1()
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child("Install desktop integration");
+
+                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+                {
+                    install_desktop =
+                        install_desktop.on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                            this.install_linux_desktop_integration(cx);
+                            this.popover = None;
+                            this.popover_anchor = None;
+                            cx.notify();
+                        }));
+                }
+
+                #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+                {
+                    install_desktop = install_desktop.text_color(theme.colors.text_muted);
+                }
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(200.0))
+                    .child(install_desktop)
+                    .child(
+                        div()
+                            .id("app_menu_quit")
+                            .debug_selector(|| "app_menu_quit".to_string())
+                            .px_2()
+                            .py_1()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .active(move |s| s.bg(theme.colors.active))
+                            .child("Quit")
+                            .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
+                                cx.quit();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("app_menu_close")
+                            .debug_selector(|| "app_menu_close".to_string())
+                            .px_2()
+                            .py_1()
+                            .hover(move |s| s.bg(theme.colors.hover))
+                            .active(move |s| s.bg(theme.colors.active))
+                            .child("Close")
+                            .on_click(close),
+                    )
+            }
         };
 
         let offset_y = if is_app_menu {
@@ -1384,7 +1503,11 @@ impl GitGpuiView {
                     .debug_selector(|| "app_popover".to_string())
                     .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
                     .occlude()
-                    .bg(theme.colors.surface_bg_elevated)
+                    .bg(if popover_use_surface_bg {
+                        theme.colors.surface_bg
+                    } else {
+                        theme.colors.surface_bg_elevated
+                    })
                     .border_1()
                     .border_color(theme.colors.border)
                     .rounded(px(theme.radii.panel))

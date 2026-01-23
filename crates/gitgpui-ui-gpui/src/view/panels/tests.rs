@@ -30,10 +30,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
     });
 
     let repo_id = gitgpui_state::model::RepoId(1);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitgpui_ui_test_{}",
-        std::process::id()
-    ));
+    let workdir = std::env::temp_dir().join(format!("gitgpui_ui_test_{}", std::process::id()));
     let file_rel = std::path::PathBuf::from("preview.rs");
     let lines: Arc<Vec<String>> = Arc::new(
         (0..300)
@@ -45,7 +42,9 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
         view.update(app, |this, cx| {
             let mut repo = gitgpui_state::model::RepoState::new_opening(
                 repo_id,
-                gitgpui_core::domain::RepoSpec { workdir: workdir.clone() },
+                gitgpui_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
             );
             repo.status = gitgpui_state::model::Loadable::Ready(gitgpui_core::domain::RepoStatus {
                 staged: vec![],
@@ -108,10 +107,8 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
     });
 
     let repo_id = gitgpui_state::model::RepoId(2);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitgpui_ui_test_{}_patch",
-        std::process::id()
-    ));
+    let workdir =
+        std::env::temp_dir().join(format!("gitgpui_ui_test_{}_patch", std::process::id()));
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -140,7 +137,9 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 
             let mut repo = gitgpui_state::model::RepoState::new_opening(
                 repo_id,
-                gitgpui_core::domain::RepoSpec { workdir: workdir.clone() },
+                gitgpui_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
             );
             repo.status = gitgpui_state::model::Loadable::Ready(Default::default());
             repo.diff_target = Some(target);

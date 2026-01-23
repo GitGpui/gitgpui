@@ -289,6 +289,15 @@ pub(super) fn reduce(
         }
 
         Msg::CheckoutBranch { repo_id, name } => vec![Effect::CheckoutBranch { repo_id, name }],
+        Msg::CheckoutRemoteBranch {
+            repo_id,
+            remote,
+            name,
+        } => vec![Effect::CheckoutRemoteBranch {
+            repo_id,
+            remote,
+            name,
+        }],
         Msg::CheckoutCommit { repo_id, commit_id } => {
             vec![Effect::CheckoutCommit { repo_id, commit_id }]
         }
@@ -317,6 +326,15 @@ pub(super) fn reduce(
         }],
         Msg::MergeRef { repo_id, reference } => vec![Effect::MergeRef { repo_id, reference }],
         Msg::Push { repo_id } => vec![Effect::Push { repo_id }],
+        Msg::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+        } => vec![Effect::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+        }],
         Msg::CheckoutConflictSide {
             repo_id,
             path,
@@ -484,9 +502,7 @@ pub(super) fn reduce(
 
                 match result {
                     Ok(mut page) => {
-                        if loading_more
-                            && let Loadable::Ready(existing) = &mut repo_state.log
-                        {
+                        if loading_more && let Loadable::Ready(existing) = &mut repo_state.log {
                             existing.commits.extend(page.commits.drain(..));
                             existing.next_cursor = page.next_cursor;
                         } else {
@@ -823,6 +839,7 @@ fn summarize_command(
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::Push => "Push",
+            RepoCommandKind::PushSetUpstream { .. } => "Push",
             RepoCommandKind::CheckoutConflict { side, .. } => match side {
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
@@ -889,6 +906,14 @@ fn summarize_command(
             } else {
                 "Push: Completed".to_string()
             }
+        }
+        RepoCommandKind::PushSetUpstream { remote, branch } => {
+            let base = if output.stderr.contains("Everything up-to-date") {
+                "Everything up-to-date"
+            } else {
+                "Completed"
+            };
+            format!("Push -u {remote}/{branch}: {base}")
         }
         RepoCommandKind::CheckoutConflict { side, .. } => match side {
             ConflictSide::Ours => "Resolved using ours".to_string(),

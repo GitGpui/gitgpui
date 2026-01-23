@@ -37,6 +37,7 @@ pub(in super::super) enum DiffSyntaxLanguage {
     Json,
     Toml,
     Yaml,
+    Sql,
     Bash,
 }
 
@@ -94,6 +95,7 @@ pub(in super::super) fn diff_syntax_language_for_path(path: &str) -> Option<Diff
         "json" => DiffSyntaxLanguage::Json,
         "toml" => DiffSyntaxLanguage::Toml,
         "yaml" | "yml" => DiffSyntaxLanguage::Yaml,
+        "sql" => DiffSyntaxLanguage::Sql,
         "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
         _ => {
             if file_name == "makefile" || file_name == "gnumakefile" {
@@ -244,11 +246,12 @@ fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Lan
         DiffSyntaxLanguage::Php => return None,
         DiffSyntaxLanguage::Ruby => return None,
         DiffSyntaxLanguage::Json => tree_sitter_json::LANGUAGE.into(),
-        DiffSyntaxLanguage::Yaml => tree_sitter_yaml::language(),
+        DiffSyntaxLanguage::Yaml => tree_sitter_yaml::LANGUAGE.into(),
         DiffSyntaxLanguage::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         DiffSyntaxLanguage::Tsx | DiffSyntaxLanguage::JavaScript => {
             tree_sitter_typescript::LANGUAGE_TSX.into()
         }
+        DiffSyntaxLanguage::Sql => return None,
         DiffSyntaxLanguage::Bash => tree_sitter_bash::LANGUAGE.into(),
         DiffSyntaxLanguage::Toml => return None,
     })
@@ -337,7 +340,7 @@ fn tree_sitter_highlight_spec(
         }),
         DiffSyntaxLanguage::Yaml => YAML.get_or_init(|| {
             init(
-                tree_sitter_yaml::language(),
+                tree_sitter_yaml::LANGUAGE.into(),
                 include_str!("../../../../../../zed/crates/languages/src/yaml/highlights.scm"),
             )
         }),
@@ -369,6 +372,7 @@ fn tree_sitter_highlight_spec(
                 include_str!("../../../../../../zed/crates/languages/src/bash/highlights.scm"),
             )
         }),
+        DiffSyntaxLanguage::Sql => return None,
         DiffSyntaxLanguage::Toml => return None,
     })
 }
@@ -450,6 +454,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             }
             DiffSyntaxLanguage::Bash => (None, Some('#'), false),
             DiffSyntaxLanguage::Makefile => (None, Some('#'), false),
+            DiffSyntaxLanguage::Sql => (Some("--"), None, true),
             DiffSyntaxLanguage::Rust
             | DiffSyntaxLanguage::JavaScript
             | DiffSyntaxLanguage::TypeScript
@@ -536,6 +541,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
                         | DiffSyntaxLanguage::Tsx
                         | DiffSyntaxLanguage::Go
                         | DiffSyntaxLanguage::Bash
+                        | DiffSyntaxLanguage::Sql
                         | DiffSyntaxLanguage::Plain
                 ))
         {
@@ -1087,6 +1093,80 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         DiffSyntaxLanguage::Json => matches!(ident, "true" | "false" | "null"),
         DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Yaml => matches!(ident, "true" | "false" | "null"),
+        DiffSyntaxLanguage::Sql => matches!(
+            ident.to_ascii_lowercase().as_str(),
+            "add"
+                | "all"
+                | "alter"
+                | "and"
+                | "as"
+                | "asc"
+                | "begin"
+                | "between"
+                | "by"
+                | "case"
+                | "check"
+                | "column"
+                | "commit"
+                | "constraint"
+                | "create"
+                | "cross"
+                | "database"
+                | "default"
+                | "delete"
+                | "desc"
+                | "distinct"
+                | "drop"
+                | "else"
+                | "end"
+                | "exists"
+                | "false"
+                | "foreign"
+                | "from"
+                | "full"
+                | "group"
+                | "having"
+                | "if"
+                | "in"
+                | "index"
+                | "inner"
+                | "insert"
+                | "intersect"
+                | "into"
+                | "is"
+                | "join"
+                | "key"
+                | "left"
+                | "like"
+                | "limit"
+                | "materialized"
+                | "not"
+                | "null"
+                | "offset"
+                | "on"
+                | "or"
+                | "order"
+                | "outer"
+                | "primary"
+                | "references"
+                | "returning"
+                | "right"
+                | "rollback"
+                | "select"
+                | "set"
+                | "table"
+                | "then"
+                | "transaction"
+                | "true"
+                | "union"
+                | "unique"
+                | "update"
+                | "values"
+                | "view"
+                | "when"
+                | "where"
+                | "with"
+        ),
         DiffSyntaxLanguage::Bash => matches!(
             ident,
             "if" | "then"
@@ -1126,6 +1206,14 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_path("foo.xml"),
             Some(DiffSyntaxLanguage::Html)
+        );
+    }
+
+    #[test]
+    fn sql_extension_is_supported() {
+        assert_eq!(
+            diff_syntax_language_for_path("query.sql"),
+            Some(DiffSyntaxLanguage::Sql)
         );
     }
 

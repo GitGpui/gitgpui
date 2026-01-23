@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GitGpui
+Comment=Git UI built with GPUI
+Exec=gitgpui-app
+Icon=gitgpui
+StartupWMClass=gitgpui
+Terminal=false
+Categories=Development;VersionControl;

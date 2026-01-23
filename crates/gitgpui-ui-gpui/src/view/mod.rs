@@ -205,6 +205,10 @@ enum PopoverKind {
     BranchPicker,
     CreateBranch,
     StashPrompt,
+    PushSetUpstreamPrompt {
+        repo_id: RepoId,
+        remote: String,
+    },
     PullPicker,
     AppMenu,
     DiffHunks,
@@ -414,6 +418,7 @@ pub struct GitGpuiView {
     commit_message_input: Entity<zed::TextInput>,
     create_branch_input: Entity<zed::TextInput>,
     stash_message_input: Entity<zed::TextInput>,
+    push_upstream_branch_input: Entity<zed::TextInput>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<Point<Pixels>>,
@@ -463,7 +468,8 @@ struct DiffTextLayoutCacheEntry {
 
 impl GitGpuiView {
     fn is_file_preview_active(&self) -> bool {
-        self.untracked_worktree_preview_path().is_some() || self.added_file_preview_abs_path().is_some()
+        self.untracked_worktree_preview_path().is_some()
+            || self.added_file_preview_abs_path().is_some()
     }
 
     fn worktree_preview_line_count(&self) -> Option<usize> {
@@ -658,7 +664,7 @@ impl GitGpuiView {
         let commit_message_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Enter commit message…".into(),
+                    placeholder: "Enter commit message".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -686,7 +692,21 @@ impl GitGpuiView {
         let stash_message_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Stash message…".into(),
+                    placeholder: "Stash message".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let push_upstream_branch_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Remote branch name".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -700,7 +720,7 @@ impl GitGpuiView {
         let history_search_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Search commits…".into(),
+                    placeholder: "Search commits".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -714,7 +734,7 @@ impl GitGpuiView {
         let diff_search_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
-                    placeholder: "Search diff…".into(),
+                    placeholder: "Search diff".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -853,6 +873,7 @@ impl GitGpuiView {
             commit_message_input,
             create_branch_input,
             stash_message_input,
+            push_upstream_branch_input,
             popover: None,
             popover_anchor: None,
             context_menu_focus_handle,
@@ -894,6 +915,10 @@ impl GitGpuiView {
 
         view.set_theme(initial_theme, cx);
         view.rebuild_diff_cache();
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        view.maybe_auto_install_linux_desktop_integration(cx);
+
         view
     }
 
@@ -910,6 +935,8 @@ impl GitGpuiView {
         self.create_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.stash_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.push_upstream_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.history_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1292,7 +1319,10 @@ impl GitGpuiView {
             let Loadable::Ready(lines) = &self.worktree_preview else {
                 return fallback;
             };
-            return lines.get(visible_ix).map(|l| expand_tabs(l)).unwrap_or(fallback);
+            return lines
+                .get(visible_ix)
+                .map(|l| expand_tabs(l))
+                .unwrap_or(fallback);
         }
 
         let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
@@ -1731,21 +1761,19 @@ impl GitGpuiView {
             return (false, false);
         }
 
-        let handle_w = px(HISTORY_COL_HANDLE_PX);
         let min_message = px(220.0);
 
         // Always show Branch + Graph; Message is flex.
-        let fixed_base = self.history_col_branch + handle_w + self.history_col_graph + handle_w;
+        let fixed_base = self.history_col_branch + self.history_col_graph;
 
         // Show both by default.
         let mut show_date = true;
         let mut show_sha = true;
-        let mut fixed =
-            fixed_base + handle_w + self.history_col_date + handle_w + self.history_col_sha;
+        let mut fixed = fixed_base + self.history_col_date + self.history_col_sha;
 
         if available - fixed < min_message {
             show_sha = false;
-            fixed -= handle_w + self.history_col_sha;
+            fixed -= self.history_col_sha;
         }
         if available - fixed < min_message {
             show_date = false;
@@ -1765,7 +1793,7 @@ impl GitGpuiView {
             cx.new(|cx| {
                 zed::TextInput::new(
                     zed::TextInputOptions {
-                        placeholder: "Filter repositories…".into(),
+                        placeholder: "Filter repositories".into(),
                         multiline: false,
                         read_only: false,
                         chromeless: false,
@@ -1795,7 +1823,7 @@ impl GitGpuiView {
             cx.new(|cx| {
                 zed::TextInput::new(
                     zed::TextInputOptions {
-                        placeholder: "Filter branches…".into(),
+                        placeholder: "Filter branches".into(),
                         multiline: false,
                         read_only: false,
                         chromeless: false,
@@ -1825,7 +1853,7 @@ impl GitGpuiView {
             cx.new(|cx| {
                 zed::TextInput::new(
                     zed::TextInputOptions {
-                        placeholder: "Filter hunks…".into(),
+                        placeholder: "Filter hunks".into(),
                         multiline: false,
                         read_only: false,
                         chromeless: false,
@@ -1938,7 +1966,7 @@ impl GitGpuiView {
             }
             Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Local,
-                message: "Loading…".into(),
+                message: "Loading".into(),
             }),
             Loadable::NotLoaded => rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Local,
@@ -1969,7 +1997,7 @@ impl GitGpuiView {
             Loadable::Loading => {
                 rows.push(BranchSidebarRow::Placeholder {
                     section: BranchSection::Remote,
-                    message: "Loading…".into(),
+                    message: "Loading".into(),
                 });
                 return rows;
             }
@@ -2042,7 +2070,7 @@ impl GitGpuiView {
                 }
             }
             Loadable::Loading => rows.push(BranchSidebarRow::StashPlaceholder {
-                message: "Loading…".into(),
+                message: "Loading".into(),
             }),
             Loadable::NotLoaded => rows.push(BranchSidebarRow::StashPlaceholder {
                 message: "Not loaded".into(),
@@ -2906,7 +2934,7 @@ impl GitGpuiView {
                     multiline: true,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
+                    soft_wrap: true,
                 },
                 cx,
             )
@@ -2919,9 +2947,14 @@ impl GitGpuiView {
 
         self.toasts.push(ToastState { id, kind, input });
 
+        let ttl = match kind {
+            zed::ToastKind::Error => Duration::from_secs(15),
+            zed::ToastKind::Success => Duration::from_secs(6),
+            zed::ToastKind::Info => Duration::from_secs(6),
+        };
         cx.spawn(
             async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_secs(5)).await;
+                Timer::after(ttl).await;
                 let _ = view.update(cx, |this, cx| {
                     this.toasts.retain(|t| t.id != id);
                     cx.notify();
@@ -2929,6 +2962,130 @@ impl GitGpuiView {
             },
         )
         .detach();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn maybe_auto_install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
+        use std::path::PathBuf;
+
+        if std::env::var_os("GITGPUI_NO_DESKTOP_INSTALL").is_some() {
+            return;
+        }
+
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        if !desktop.to_ascii_lowercase().contains("gnome") {
+            return;
+        }
+
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
+        let Some(data_home) = data_home else {
+            return;
+        };
+
+        let desktop_path = data_home.join("applications/gitgpui.desktop");
+        let icon_path = data_home.join("icons/hicolor/scalable/apps/gitgpui.svg");
+        if desktop_path.exists() && icon_path.exists() {
+            return;
+        }
+
+        self.install_linux_desktop_integration(cx);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
+        use std::fs;
+        use std::path::PathBuf;
+        use std::process::Command;
+
+        const DESKTOP_TEMPLATE: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/linux/gitgpui.desktop"
+        ));
+        const ICON_SVG: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/gitgpui_logo.svg"
+        ));
+
+        let Ok(exe) = std::env::current_exe() else {
+            self.push_toast(
+                zed::ToastKind::Error,
+                "Desktop install failed: could not resolve executable path".to_string(),
+                cx,
+            );
+            return;
+        };
+
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
+        let Some(data_home) = data_home else {
+            self.push_toast(
+                zed::ToastKind::Error,
+                "Desktop install failed: HOME/XDG_DATA_HOME not set".to_string(),
+                cx,
+            );
+            return;
+        };
+
+        let applications_dir = data_home.join("applications");
+        let icons_dir = data_home.join("icons/hicolor/scalable/apps");
+        let desktop_path = applications_dir.join("gitgpui.desktop");
+        let icon_path = icons_dir.join("gitgpui.svg");
+
+        if let Err(e) =
+            fs::create_dir_all(&applications_dir).and_then(|_| fs::create_dir_all(&icons_dir))
+        {
+            self.push_toast(
+                zed::ToastKind::Error,
+                format!("Desktop install failed: {e}"),
+                cx,
+            );
+            return;
+        }
+
+        let mut desktop_out = String::new();
+        for line in DESKTOP_TEMPLATE.lines() {
+            if line.starts_with("Exec=") {
+                desktop_out.push_str("Exec=");
+                desktop_out.push_str(&exe.display().to_string());
+                desktop_out.push('\n');
+            } else {
+                desktop_out.push_str(line);
+                desktop_out.push('\n');
+            }
+        }
+
+        if let Err(e) = fs::write(&desktop_path, desktop_out.as_bytes())
+            .and_then(|_| fs::write(&icon_path, ICON_SVG))
+        {
+            self.push_toast(
+                zed::ToastKind::Error,
+                format!("Desktop install failed: {e}"),
+                cx,
+            );
+            return;
+        }
+
+        let _ = Command::new("update-desktop-database")
+            .arg(&applications_dir)
+            .output();
+        let _ = Command::new("gtk-update-icon-cache")
+            .arg(data_home.join("icons/hicolor"))
+            .output();
+
+        self.push_toast(
+            zed::ToastKind::Success,
+            format!(
+                "Installed desktop entry + icon to:\n{}\n{}\n\nIf GNOME still shows a generic icon, log out/in (or restart GNOME Shell).",
+                desktop_path.display(),
+                icon_path.display()
+            ),
+            cx,
+        );
     }
 
     fn rebuild_diff_word_highlights(&mut self) {

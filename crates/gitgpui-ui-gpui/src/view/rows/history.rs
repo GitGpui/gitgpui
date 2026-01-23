@@ -25,9 +25,12 @@ impl GitGpuiView {
             this.worktree_preview_segments_cache.clear();
         }
 
-        let language = (lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
-            .then(|| diff_syntax_language_for_path(path.to_string_lossy().as_ref()))
-            .flatten();
+        let syntax_mode = if lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+            DiffSyntaxMode::Auto
+        } else {
+            DiffSyntaxMode::HeuristicOnly
+        };
+        let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
 
         let highlight_new_file = this.untracked_worktree_preview_path().is_some()
             || this.added_file_preview_abs_path().is_some()
@@ -47,7 +50,7 @@ impl GitGpuiView {
                             &[],
                             "",
                             language,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             None,
                         )
                     });
@@ -114,7 +117,7 @@ impl GitGpuiView {
         let col_sha = this.history_col_sha;
         let (show_date, show_sha) = this.history_visible_columns();
 
-        let (show_working_tree_summary_row, unstaged_counts, staged_counts) = match &repo.status {
+        let (show_working_tree_summary_row, worktree_counts) = match &repo.status {
             Loadable::Ready(status) => {
                 let count_for = |entries: &[FileStatus]| {
                     let mut added = 0usize;
@@ -131,13 +134,18 @@ impl GitGpuiView {
                     }
                     (added, modified, deleted)
                 };
+                let unstaged_counts = count_for(&status.unstaged);
+                let staged_counts = count_for(&status.staged);
                 (
-                    !status.unstaged.is_empty(),
-                    count_for(&status.unstaged),
-                    count_for(&status.staged),
+                    !status.unstaged.is_empty() || !status.staged.is_empty(),
+                    (
+                        unstaged_counts.0 + staged_counts.0,
+                        unstaged_counts.1 + staged_counts.1,
+                        unstaged_counts.2 + staged_counts.2,
+                    ),
                 )
             }
-            _ => (false, (0, 0, 0), (0, 0, 0)),
+            _ => (false, (0, 0, 0)),
         };
 
         let page = match &repo.log {
@@ -165,8 +173,7 @@ impl GitGpuiView {
                         worktree_node_color,
                         repo.id,
                         selected,
-                        unstaged_counts,
-                        staged_counts,
+                        worktree_counts,
                         cx,
                     ));
                 }
@@ -180,6 +187,21 @@ impl GitGpuiView {
                 let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
+                let mut graph_row_with_incoming;
+                let graph_row = if show_working_tree_summary_row && visible_ix == 0 {
+                    graph_row_with_incoming = graph_row.clone();
+                    if !graph_row_with_incoming
+                        .incoming_ids
+                        .contains(&graph_row_with_incoming.node_id)
+                    {
+                        graph_row_with_incoming
+                            .incoming_ids
+                            .push(graph_row_with_incoming.node_id);
+                    }
+                    &graph_row_with_incoming
+                } else {
+                    graph_row
+                };
                 let refs = commit_refs(repo, commit);
                 let when = format_relative_time(commit.time);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
@@ -600,11 +622,9 @@ fn working_tree_summary_history_row(
     node_color: gpui::Rgba,
     repo_id: RepoId,
     selected: bool,
-    unstaged: (usize, usize, usize),
-    staged: (usize, usize, usize),
+    counts: (usize, usize, usize),
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let staged_total = staged.0 + staged.1 + staged.2;
     let icon_count = |icon: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
@@ -626,36 +646,23 @@ fn working_tree_summary_history_row(
             .into_any_element()
     };
 
-    let group = |label: &'static str, (added, modified, deleted): (usize, usize, usize)| {
-        let mut parts: Vec<AnyElement> = Vec::new();
-        if modified > 0 {
-            parts.push(icon_count("✎", theme.colors.warning, modified));
-        }
-        if added > 0 {
-            parts.push(icon_count("+", theme.colors.success, added));
-        }
-        if deleted > 0 {
-            parts.push(icon_count("−", theme.colors.danger, deleted));
-        }
-        div()
-            .flex()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .whitespace_nowrap()
-                    .child(label),
-            )
-            .children(parts)
-            .into_any_element()
-    };
+    let (added, modified, deleted) = counts;
+    let mut parts: Vec<AnyElement> = Vec::new();
+    if modified > 0 {
+        parts.push(icon_count("✎", theme.colors.warning, modified));
+    }
+    if added > 0 {
+        parts.push(icon_count("+", theme.colors.success, added));
+    }
+    if deleted > 0 {
+        parts.push(icon_count("−", theme.colors.danger, deleted));
+    }
 
     let black = gpui::rgba(0x000000ff);
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
+            use gpui::{PathBuilder, fill, point, px, size};
             let r = px(3.0);
             let border = px(1.0);
             let outer = r + border;
@@ -666,6 +673,16 @@ fn working_tree_summary_history_row(
                 bounds.left() + node_x,
                 bounds.top() + bounds.size.height / 2.0,
             );
+
+            // Connect the working tree node into the history graph below.
+            let stroke_width = px(1.6);
+            let mut path = PathBuilder::stroke(stroke_width);
+            path.move_to(point(center.x, center.y));
+            path.line_to(point(center.x, bounds.bottom()));
+            if let Ok(p) = path.build() {
+                window.paint_path(p, node_color);
+            }
+
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(
@@ -690,11 +707,10 @@ fn working_tree_summary_history_row(
 
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
-        .h(px(28.0))
+        .h(px(24.0))
         .flex()
         .w_full()
         .items_center()
-        .gap_2()
         .px_2()
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
@@ -703,34 +719,35 @@ fn working_tree_summary_history_row(
                 .w(col_branch)
                 .text_xs()
                 .text_color(theme.colors.text_muted)
+                .line_clamp(1)
                 .whitespace_nowrap()
-                .child("Working tree"),
+                .child(div()),
         )
-        .child(div().w(col_graph).h_full().child(circle))
         .child(
             div()
-                .flex_1()
-                .min_w(px(0.0))
+                .w(col_graph)
+                .h_full()
                 .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .min_w(px(0.0))
-                        .child(
-                            div()
-                                .text_sm()
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child("Uncommitted changes"),
-                        )
-                        .child(group("Unstaged", unstaged))
-                        .when(staged_total > 0, |this| this.child(group("Staged", staged))),
-                ),
+                .justify_center()
+                .overflow_hidden()
+                .child(circle),
         )
+        .child(div().flex_1().min_w(px(0.0)).flex().items_center().child({
+            let mut summary = div().flex_1().min_w(px(0.0)).flex().items_center().gap_2();
+            summary = summary.child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child("Uncommitted changes"),
+            );
+            if !parts.is_empty() {
+                summary = summary.child(div().flex().items_center().gap_2().children(parts));
+            }
+            summary
+        }))
         .when(show_date, |row| {
             row.child(
                 div()
@@ -748,8 +765,7 @@ fn working_tree_summary_history_row(
             this.store.dispatch(Msg::ClearCommitSelection { repo_id });
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             cx.notify();
-        }))
-        ;
+        }));
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));

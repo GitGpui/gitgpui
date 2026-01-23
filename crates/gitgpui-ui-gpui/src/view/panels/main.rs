@@ -24,7 +24,7 @@ impl GitGpuiView {
             match repo.map(|r| &r.log) {
                 None => zed::empty_state(theme, "History", "No repository.").into_any_element(),
                 Some(Loadable::Loading) => {
-                    zed::empty_state(theme, "History", "Loading…").into_any_element()
+                    zed::empty_state(theme, "History", "Loading").into_any_element()
                 }
                 Some(Loadable::Error(e)) => {
                     zed::empty_state(theme, "History", e.clone()).into_any_element()
@@ -50,17 +50,13 @@ impl GitGpuiView {
                 } else {
                     self.history_search_debounced.is_empty()
                 };
-                let should_load_more = state.last_item_size.is_some()
-                    && repo.is_some_and(|repo| {
-                        !repo.log_loading_more
-                            && matches!(&repo.log, Loadable::Ready(page) if page.next_cursor.is_some())
-                    })
-                    && should_load_by_scroll;
+                let should_load_more = state.last_item_size.is_some() && repo.is_some_and(|repo| {
+                    !repo.log_loading_more
+                        && matches!(&repo.log, Loadable::Ready(page) if page.next_cursor.is_some())
+                }) && should_load_by_scroll;
                 (scroll_handle, should_load_more)
             };
-            if should_load_more
-                && let Some(repo_id) = self.active_repo_id()
-            {
+            if should_load_more && let Some(repo_id) = self.active_repo_id() {
                 self.store.dispatch(Msg::LoadMoreHistory { repo_id });
             }
             div()
@@ -209,6 +205,14 @@ impl GitGpuiView {
 
         let repo = self.active_repo();
 
+        let diff_nav_hotkey_hint = |label: &'static str| {
+            div()
+                .font_family("monospace")
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(label)
+        };
+
         let mut controls = div().flex().items_center().gap_1();
         if !is_file_preview {
             let nav_entries = self.diff_nav_entries();
@@ -265,6 +269,7 @@ impl GitGpuiView {
                 )
                 .child(
                     zed::Button::new("diff_prev_hunk", "Prev")
+                        .end_slot(diff_nav_hotkey_hint("F2"))
                         .style(zed::ButtonStyle::Outlined)
                         .disabled(!can_nav_prev)
                         .on_click(theme, cx, |this, _e, _w, cx| {
@@ -272,7 +277,8 @@ impl GitGpuiView {
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Previous change (Shift+F7 / Alt+Up)".into();
+                            let text: SharedString =
+                                "Previous change (F2 / Shift+F7 / Alt+Up)".into();
                             if *hovering {
                                 this.tooltip_text = Some(text);
                             } else if this.tooltip_text.as_ref() == Some(&text) {
@@ -283,6 +289,7 @@ impl GitGpuiView {
                 )
                 .child(
                     zed::Button::new("diff_next_hunk", "Next")
+                        .end_slot(diff_nav_hotkey_hint("F3"))
                         .style(zed::ButtonStyle::Outlined)
                         .disabled(!can_nav_next)
                         .on_click(theme, cx, |this, _e, _w, cx| {
@@ -290,7 +297,7 @@ impl GitGpuiView {
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Next change (F7 / Alt+Down)".into();
+                            let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
                             if *hovering {
                                 this.tooltip_text = Some(text);
                             } else if this.tooltip_text.as_ref() == Some(&text) {
@@ -301,7 +308,7 @@ impl GitGpuiView {
                 )
                 .when(!wants_file_diff, |controls| {
                     controls.child(
-                        zed::Button::new("diff_hunks", "Hunks…")
+                        zed::Button::new("diff_hunks", "Hunks")
                             .style(zed::ButtonStyle::Outlined)
                             .on_click(theme, cx, |this, e, window, cx| {
                                 let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
@@ -310,7 +317,7 @@ impl GitGpuiView {
                                 cx.notify();
                             })
                             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Jump to hunk… (Alt+H)".into();
+                                let text: SharedString = "Jump to hunk (Alt+H)".into();
                                 if *hovering {
                                     this.tooltip_text = Some(text);
                                 } else if this.tooltip_text.as_ref() == Some(&text) {
@@ -363,7 +370,7 @@ impl GitGpuiView {
             }
             match &self.worktree_preview {
                 Loadable::NotLoaded | Loadable::Loading => {
-                    zed::empty_state(theme, "File", "Loading…").into_any_element()
+                    zed::empty_state(theme, "File", "Loading").into_any_element()
                 }
                 Loadable::Error(e) => {
                     self.diff_raw_input.update(cx, |input, cx| {
@@ -395,7 +402,8 @@ impl GitGpuiView {
                         .min_h(px(0.0))
                         .track_scroll(self.worktree_preview_scroll.clone());
 
-                        let scroll_handle = self.worktree_preview_scroll.0.borrow().base_handle.clone();
+                        let scroll_handle =
+                            self.worktree_preview_scroll.0.borrow().base_handle.clone();
                         div()
                             .id("worktree_preview_scroll_container")
                             .debug_selector(|| "worktree_preview_scroll_container".to_string())
@@ -419,7 +427,7 @@ impl GitGpuiView {
                         zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
                     }
                     Loadable::Loading => {
-                        zed::empty_state(theme, "Diff", "Loading…").into_any_element()
+                        zed::empty_state(theme, "Diff", "Loading").into_any_element()
                     }
                     Loadable::Error(e) => {
                         self.diff_raw_input.update(cx, |input, cx| {
@@ -463,7 +471,7 @@ impl GitGpuiView {
                                         .into_any_element()
                                 }
                                 DiffFileState::Loading => {
-                                    zed::empty_state(theme, "Diff", "Loading…").into_any_element()
+                                    zed::empty_state(theme, "Diff", "Loading").into_any_element()
                                 }
                                 DiffFileState::Error(e) => {
                                     self.diff_raw_input.update(cx, |input, cx| {
@@ -760,7 +768,7 @@ impl GitGpuiView {
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .bg(theme.colors.surface_bg)
+            .bg(theme.colors.surface_bg_elevated)
             .track_focus(&self.diff_panel_focus_handle)
             .on_mouse_down(
                 MouseButton::Left,

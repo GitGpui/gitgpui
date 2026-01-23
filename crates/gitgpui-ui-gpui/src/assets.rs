@@ -6,6 +6,12 @@ pub struct GitGpuiAssets;
 impl GitGpuiAssets {
     fn load_static(path: &str) -> Option<Cow<'static, [u8]>> {
         match path {
+            "gitgpui_logo.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitgpui_logo.svg"
+            ))),
+            "gitgpui_logo_window.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitgpui_logo_window.svg"
+            ))),
             "icons/arrow_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_down.svg"
             ))),
@@ -36,13 +42,21 @@ impl GitGpuiAssets {
             "icons/git_branch.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/git_branch.svg"
             ))),
+            "icons/gitgpui_mark.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/gitgpui_mark.svg"
+            ))),
+            "icons/menu.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/menu.svg"))),
             _ => None,
         }
     }
 
     fn list_static(dir: &str) -> Vec<SharedString> {
         match dir.trim_end_matches('/') {
-            "" => vec!["icons".into()],
+            "" => vec![
+                "gitgpui_logo.svg".into(),
+                "gitgpui_logo_window.svg".into(),
+                "icons".into(),
+            ],
             "icons" => vec![
                 "icons/arrow_down.svg".into(),
                 "icons/arrow_up.svg".into(),
@@ -56,6 +70,8 @@ impl GitGpuiAssets {
                 "icons/generic_restore.svg".into(),
                 "icons/generic_close.svg".into(),
                 "icons/git_branch.svg".into(),
+                "icons/gitgpui_mark.svg".into(),
+                "icons/menu.svg".into(),
             ],
             _ => vec![],
         }

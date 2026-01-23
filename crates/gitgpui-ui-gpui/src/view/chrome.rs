@@ -1,4 +1,5 @@
 use super::*;
+use gpui::ObjectFit;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 
@@ -8,6 +9,38 @@ fn titlebar_control_icon(theme: AppTheme, path: &'static str) -> gpui::Svg {
         .w(px(16.0))
         .h(px(16.0))
         .text_color(theme.colors.text)
+}
+
+fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
+    gpui::image_cache(gpui::retain_all("titlebar_icon_cache"))
+        .child(
+            div()
+                .id("titlebar_app_icon")
+                .size(px(16.0))
+                .rounded(px(4.0))
+                .bg(with_alpha(
+                    theme.colors.text,
+                    if theme.is_dark { 0.12 } else { 0.08 },
+                ))
+                .overflow_hidden()
+                .child(
+                    gpui::img("gitgpui_logo_window.svg")
+                        .size(px(16.0))
+                        .object_fit(ObjectFit::Contain)
+                        .with_fallback({
+                            let theme = theme;
+                            move || {
+                                gpui::svg()
+                                    .path("icons/gitgpui_mark.svg")
+                                    .w(px(16.0))
+                                    .h(px(16.0))
+                                    .text_color(theme.colors.text)
+                                    .into_any_element()
+                            }
+                        }),
+                ),
+        )
+        .into_any_element()
 }
 
 fn titlebar_control_button(
@@ -138,17 +171,36 @@ impl GitGpuiView {
             with_alpha(theme.colors.border, 0.7)
         };
 
+        let app_icon = div()
+            .id("app_icon")
+            .h_full()
+            .pl_2()
+            .pr_1()
+            .flex()
+            .items_center()
+            .child(titlebar_app_icon(theme));
+
         let hamburger = div()
             .id("app_menu")
             .debug_selector(|| "app_menu".to_string())
             .h_full()
-            .px_2()
+            .w(px(44.0))
             .flex()
             .items_center()
+            .justify_center()
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
-            .child("≡")
+            .child(
+                div()
+                    .id("app_menu_btn")
+                    .size(px(26.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme.radii.pill))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(titlebar_control_icon(theme, "icons/menu.svg")),
+            )
             .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
                 this.popover = Some(PopoverKind::AppMenu);
                 this.popover_anchor = Some(e.position());
@@ -166,6 +218,10 @@ impl GitGpuiView {
             .id("title_drag")
             .flex_1()
             .h_full()
+            .flex()
+            .items_center()
+            .min_w(px(0.0))
+            .px_2()
             .window_control_area(WindowControlArea::Drag)
             .on_mouse_down(
                 MouseButton::Left,
@@ -196,8 +252,12 @@ impl GitGpuiView {
             }))
             .child(
                 div()
+                    .h_full()
+                    .flex()
+                    .items_center()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
+                    .whitespace_nowrap()
                     .child("GitGpui"),
             );
 
@@ -263,7 +323,15 @@ impl GitGpuiView {
             .bg(bar_bg)
             .border_b_1()
             .border_color(bar_border)
-            .child(hamburger)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .h_full()
+                    .gap_1()
+                    .child(app_icon)
+                    .child(hamburger),
+            )
             .child(drag_region)
             .child(
                 div()

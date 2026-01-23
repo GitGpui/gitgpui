@@ -26,6 +26,14 @@ impl GitGpuiView {
         .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
         let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
+        let list = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            .px(px(2.0))
+            .child(list)
+            .into_any_element();
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .relative()
@@ -59,8 +67,7 @@ impl GitGpuiView {
                 .and_then(|r| r.selected_commit.clone())
         });
 
-        if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id)
-        {
+        if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
             let show_delayed_loading = self.commit_details_delay.as_ref().is_some_and(|s| {
                 s.repo_id == repo_id && s.commit_id == selected_id && s.show_loading
             });
@@ -116,7 +123,7 @@ impl GitGpuiView {
                 None => zed::empty_state(theme, "Commit", "No repository.").into_any_element(),
                 Some(Loadable::Loading) => {
                     if show_delayed_loading {
-                        zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        zed::empty_state(theme, "Commit", "Loading").into_any_element()
                     } else {
                         div().into_any_element()
                     }
@@ -126,7 +133,7 @@ impl GitGpuiView {
                 }
                 Some(Loadable::NotLoaded) => {
                     if show_delayed_loading {
-                        zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                        zed::empty_state(theme, "Commit", "Loading").into_any_element()
                     } else {
                         div().into_any_element()
                     }
@@ -134,7 +141,7 @@ impl GitGpuiView {
                 Some(Loadable::Ready(details)) => {
                     if &details.id != &selected_id {
                         if show_delayed_loading {
-                            zed::empty_state(theme, "Commit", "Loading…").into_any_element()
+                            zed::empty_state(theme, "Commit", "Loading").into_any_element()
                         } else {
                             let parent = details
                                 .parent_ids
@@ -150,13 +157,16 @@ impl GitGpuiView {
                                     .into_any_element()
                             } else {
                                 let total_files = details.files.len();
+                                let list_h = px((total_files as f32 * 24.0)
+                                    .min(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX)
+                                    .max(24.0));
                                 let list = uniform_list(
                                     ("commit_details_files_list", repo_id.0),
                                     total_files,
                                     cx.processor(Self::render_commit_file_rows),
                                 )
                                 .w_full()
-                                .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                .h(list_h)
                                 .track_scroll(self.commit_files_scroll.clone());
                                 let scroll_handle =
                                     self.commit_files_scroll.0.borrow().base_handle.clone();
@@ -165,7 +175,7 @@ impl GitGpuiView {
                                     .id(("commit_details_files_container", repo_id.0))
                                     .relative()
                                     .w_full()
-                                    .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                    .h(list_h)
                                     .child(list)
                                     .child(
                                         zed::Scrollbar::new(
@@ -254,21 +264,25 @@ impl GitGpuiView {
                                 .into_any_element()
                         } else {
                             let total_files = details.files.len();
+                            let list_h = px((total_files as f32 * 24.0)
+                                .min(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX)
+                                .max(24.0));
                             let list = uniform_list(
                                 ("commit_details_files_list", repo_id.0),
                                 total_files,
                                 cx.processor(Self::render_commit_file_rows),
                             )
                             .w_full()
-                            .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                            .h(list_h)
                             .track_scroll(self.commit_files_scroll.clone());
-                            let scroll_handle = self.commit_files_scroll.0.borrow().base_handle.clone();
+                            let scroll_handle =
+                                self.commit_files_scroll.0.borrow().base_handle.clone();
 
                             div()
                                 .id(("commit_details_files_container", repo_id.0))
                                 .relative()
                                 .w_full()
-                                .max_h(px(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX))
+                                .h(list_h)
                                 .child(list)
                                 .child(
                                     zed::Scrollbar::new(
@@ -531,7 +545,7 @@ impl GitGpuiView {
                             .bg(theme.colors.surface_bg)
                             .px_2()
                             .py_2()
-                            .child(self.commit_box(cx)),
+                            .child(self.commit_box(staged_count > 0, cx)),
                     )
                     .into_any_element()
             } else {
@@ -591,7 +605,11 @@ impl GitGpuiView {
         }
     }
 
-    pub(in super::super) fn commit_box(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    pub(in super::super) fn commit_box(
+        &mut self,
+        can_commit: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
         let theme = self.theme;
         div()
             .flex()
@@ -612,6 +630,7 @@ impl GitGpuiView {
                     .child(
                         zed::Button::new("commit", "Commit")
                             .style(zed::ButtonStyle::Filled)
+                            .disabled(!can_commit)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 let Some(repo_id) = this.active_repo_id() else {
                                     return;

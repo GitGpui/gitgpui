@@ -218,6 +218,21 @@ pub(super) fn schedule_effect(
             }
         }
 
+        Effect::CheckoutRemoteBranch {
+            repo_id,
+            remote,
+            name,
+        } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoActionFinished {
+                        repo_id,
+                        result: repo.checkout_remote_branch(&remote, &name),
+                    });
+                });
+            }
+        }
+
         Effect::CheckoutCommit { repo_id, commit_id } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
@@ -392,6 +407,25 @@ pub(super) fn schedule_effect(
                         repo_id,
                         command: crate::msg::RepoCommandKind::Push,
                         result: repo.push_with_output(),
+                    });
+                });
+            }
+        }
+
+        Effect::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+        } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::PushSetUpstream {
+                            remote: remote.clone(),
+                            branch: branch.clone(),
+                        },
+                        result: repo.push_set_upstream_with_output(&remote, &branch),
                     });
                 });
             }

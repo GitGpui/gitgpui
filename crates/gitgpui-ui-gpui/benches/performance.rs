@@ -1,6 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use gitgpui_ui_gpui::benchmarks::{CommitDetailsFixture, LargeFileDiffScrollFixture, OpenRepoFixture};
+use gitgpui_ui_gpui::benchmarks::{
+    CommitDetailsFixture, LargeFileDiffScrollFixture, OpenRepoFixture,
+};
 use std::env;
+use std::time::Duration;
 
 fn env_usize(key: &str, default: usize) -> usize {
     env::var(key)
@@ -10,14 +13,18 @@ fn env_usize(key: &str, default: usize) -> usize {
 }
 
 fn bench_open_repo(c: &mut Criterion) {
-    let commits = env_usize("GITGPUI_BENCH_COMMITS", 100_000);
-    let local_branches = env_usize("GITGPUI_BENCH_LOCAL_BRANCHES", 5_000);
-    let remote_branches = env_usize("GITGPUI_BENCH_REMOTE_BRANCHES", 20_000);
-    let remotes = env_usize("GITGPUI_BENCH_REMOTES", 3);
+    // Note: Criterion's "Warming up for Xs" can look "stuck" if a single iteration takes longer
+    // than the warm-up duration. Keep defaults moderate; scale up via env vars for stress runs.
+    let commits = env_usize("GITGPUI_BENCH_COMMITS", 5_000);
+    let local_branches = env_usize("GITGPUI_BENCH_LOCAL_BRANCHES", 200);
+    let remote_branches = env_usize("GITGPUI_BENCH_REMOTE_BRANCHES", 800);
+    let remotes = env_usize("GITGPUI_BENCH_REMOTES", 2);
 
     let fixture = OpenRepoFixture::new(commits, local_branches, remote_branches, remotes);
 
     let mut group = c.benchmark_group("open_repo");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
     group.bench_with_input(
         BenchmarkId::new("long_history_and_branches", commits),
         &commits,
@@ -27,25 +34,27 @@ fn bench_open_repo(c: &mut Criterion) {
 }
 
 fn bench_commit_details(c: &mut Criterion) {
-    let files = env_usize("GITGPUI_BENCH_COMMIT_FILES", 50_000);
+    let files = env_usize("GITGPUI_BENCH_COMMIT_FILES", 5_000);
     let depth = env_usize("GITGPUI_BENCH_COMMIT_PATH_DEPTH", 4);
     let fixture = CommitDetailsFixture::new(files, depth);
 
     let mut group = c.benchmark_group("commit_details");
-    group.bench_with_input(
-        BenchmarkId::new("many_files", files),
-        &files,
-        |b, _| b.iter(|| fixture.run()),
-    );
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_with_input(BenchmarkId::new("many_files", files), &files, |b, _| {
+        b.iter(|| fixture.run())
+    });
     group.finish();
 }
 
 fn bench_large_file_diff_scroll(c: &mut Criterion) {
-    let lines = env_usize("GITGPUI_BENCH_DIFF_LINES", 100_000);
+    let lines = env_usize("GITGPUI_BENCH_DIFF_LINES", 10_000);
     let window = env_usize("GITGPUI_BENCH_DIFF_WINDOW", 200);
     let fixture = LargeFileDiffScrollFixture::new(lines);
 
     let mut group = c.benchmark_group("diff_scroll");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
     group.bench_with_input(
         BenchmarkId::new("style_window", window),
         &window,

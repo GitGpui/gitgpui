@@ -74,6 +74,7 @@ pub fn run(backend: Arc<dyn GitBackend>) {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(9.0), px(9.0))),
                     }),
+                    app_id: Some("gitgpui".to_string()),
                     window_decorations: Some(WindowDecorations::Client),
                     is_movable: true,
                     is_resizable: true,

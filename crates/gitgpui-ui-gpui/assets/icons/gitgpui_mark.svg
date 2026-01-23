@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <path
+    d="M196 188V324M196 236C250 236 256 176 352 176"
+    stroke="currentColor"
+    stroke-width="44"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="196" cy="144" r="46" fill="currentColor" />
+  <circle cx="352" cy="176" r="46" fill="currentColor" />
+  <circle cx="196" cy="368" r="46" fill="currentColor" />
+</svg>

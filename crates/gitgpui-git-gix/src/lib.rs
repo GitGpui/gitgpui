@@ -165,6 +165,21 @@ impl GitRepository for GixRepo {
             }
         }
 
+        // Remote tracking branches (often where "other branches" live)
+        let branches = refs
+            .remote_branches()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?
+            .peeled()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
+        for reference in branches {
+            let reference = reference
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
+            let id = reference.id().detach();
+            if id != head_id && !tips.iter().any(|t| *t == id) {
+                tips.push(id);
+            }
+        }
+
         let mut walk = repo
             .rev_walk(tips)
             .sorting(gix::revision::walk::Sorting::ByCommitTime(
@@ -855,6 +870,54 @@ impl GitRepository for GixRepo {
         run_git_simple(cmd, "git checkout")
     }
 
+    fn checkout_remote_branch(&self, remote: &str, branch: &str) -> Result<()> {
+        let upstream = format!("{remote}/{branch}");
+
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout")
+            .arg("--track")
+            .arg("-b")
+            .arg(branch)
+            .arg(&upstream)
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let already_exists =
+            stderr.contains("already exists") || stderr.contains("fatal: a branch named");
+
+        if !already_exists {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git checkout --track failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        // If the local branch already exists, check it out and update its upstream.
+        let mut checkout = Command::new("git");
+        checkout
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout")
+            .arg(branch);
+        run_git_simple(checkout, "git checkout")?;
+
+        let mut set_upstream = Command::new("git");
+        set_upstream
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("branch")
+            .arg(format!("--set-upstream-to={upstream}"))
+            .arg(branch);
+        run_git_simple(set_upstream, "git branch --set-upstream-to")
+    }
+
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -1095,6 +1158,34 @@ impl GitRepository for GixRepo {
         run_git_with_output(cmd, "git push")
     }
 
+    fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("push")
+            .arg("--set-upstream")
+            .arg(remote)
+            .arg(format!("HEAD:refs/heads/{branch}"));
+        run_git_simple(
+            cmd,
+            &format!("git push --set-upstream {remote} HEAD:refs/heads/{branch}"),
+        )
+    }
+
+    fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("push")
+            .arg("--set-upstream")
+            .arg(remote)
+            .arg(format!("HEAD:refs/heads/{branch}"));
+        run_git_with_output(
+            cmd,
+            &format!("git push --set-upstream {remote} HEAD:refs/heads/{branch}"),
+        )
+    }
+
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -1229,8 +1320,7 @@ fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
         .output()
         .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-    let ok_exit = output.status.success() || output.status.code() == Some(1);
-    if !ok_exit {
+    if !output.status.success() {
         let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
         return Err(Error::new(ErrorKind::Backend(format!(
             "{label} failed: {stderr}"
@@ -1249,8 +1339,7 @@ fn run_git_with_output(mut cmd: Command, label: &str) -> Result<CommandOutput> {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    let ok_exit = output.status.success() || output.status.code() == Some(1);
-    if !ok_exit {
+    if !output.status.success() {
         return Err(Error::new(ErrorKind::Backend(format!(
             "{label} failed: {}",
             stderr.trim()

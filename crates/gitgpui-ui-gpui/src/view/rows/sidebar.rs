@@ -294,6 +294,7 @@ impl GitGpuiView {
                     is_upstream,
                 } => {
                     let name_for_tooltip: SharedString = name.clone();
+                    let full_name_for_checkout = name.to_string();
                     let branch_icon_color = if muted {
                         theme.colors.text_muted
                     } else {
@@ -342,8 +343,8 @@ impl GitGpuiView {
                         has_right = true;
                         right = right.child(
                             div()
-                                .px_1()
-                                .py(px(1.0))
+                                .px(px(3.0))
+                                .py(px(0.0))
                                 .rounded(px(999.0))
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
@@ -399,6 +400,34 @@ impl GitGpuiView {
                     }
 
                     row = row
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() < 2 {
+                                return;
+                            }
+                            match section {
+                                BranchSection::Local => {
+                                    this.store.dispatch(Msg::CheckoutBranch {
+                                        repo_id,
+                                        name: full_name_for_checkout.clone(),
+                                    });
+                                    this.rebuild_diff_cache();
+                                    cx.notify();
+                                }
+                                BranchSection::Remote => {
+                                    if let Some((remote, branch)) =
+                                        full_name_for_checkout.split_once('/')
+                                    {
+                                        this.store.dispatch(Msg::CheckoutRemoteBranch {
+                                            repo_id,
+                                            remote: remote.to_string(),
+                                            name: branch.to_string(),
+                                        });
+                                        this.rebuild_diff_cache();
+                                        cx.notify();
+                                    }
+                                }
+                            }
+                        }))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -460,7 +489,7 @@ impl GitGpuiView {
                 let (icon, color) = match f.kind {
                     FileStatusKind::Added => (Some("+"), theme.colors.success),
                     FileStatusKind::Modified => (Some("✎"), theme.colors.warning),
-                    FileStatusKind::Deleted => (None, theme.colors.text_muted),
+                    FileStatusKind::Deleted => (Some("−"), theme.colors.danger),
                     FileStatusKind::Renamed => (Some("→"), theme.colors.accent),
                     FileStatusKind::Untracked => (Some("?"), theme.colors.warning),
                     FileStatusKind::Conflicted => (Some("!"), theme.colors.danger),

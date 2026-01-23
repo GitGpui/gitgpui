@@ -216,7 +216,7 @@ impl GitGpuiView {
             .active_repo()
             .map(|r| match &r.head_branch {
                 Loadable::Ready(name) => name.clone().into(),
-                Loadable::Loading => "…".into(),
+                Loadable::Loading => "".into(),
                 Loadable::Error(_) => "error".into(),
                 Loadable::NotLoaded => "—".into(),
             })
@@ -373,10 +373,67 @@ impl GitGpuiView {
             push = push.end_slot(count_badge(push_count, push_color));
         }
         let push = push
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                if let Some(repo_id) = this.active_repo_id() {
-                    this.store.dispatch(Msg::Push { repo_id });
+            .on_click(theme, cx, |this, e, window, cx| {
+                let Some(repo) = this.active_repo() else {
+                    return;
+                };
+                let repo_id = repo.id;
+                let head = match &repo.head_branch {
+                    Loadable::Ready(head) => head.clone(),
+                    _ => {
+                        this.store.dispatch(Msg::Push { repo_id });
+                        cx.notify();
+                        return;
+                    }
+                };
+
+                let upstream_missing = match &repo.branches {
+                    Loadable::Ready(branches) => branches
+                        .iter()
+                        .find(|b| b.name == head)
+                        .is_some_and(|b| b.upstream.is_none()),
+                    _ => false,
+                };
+
+                if upstream_missing {
+                    let remote = match &repo.remotes {
+                        Loadable::Ready(remotes) => {
+                            if remotes.is_empty() {
+                                None
+                            } else if remotes.iter().any(|r| r.name == "origin") {
+                                Some("origin".to_string())
+                            } else {
+                                Some(remotes[0].name.clone())
+                            }
+                        }
+                        _ => Some("origin".to_string()),
+                    };
+
+                    if let Some(remote) = remote {
+                        this.push_upstream_branch_input
+                            .update(cx, |i, cx| i.set_text(head, cx));
+                        let focus = this
+                            .push_upstream_branch_input
+                            .read_with(cx, |i, _| i.focus_handle());
+                        window.focus(&focus);
+                        this.open_popover_at(
+                            PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                            e.position(),
+                            window,
+                            cx,
+                        );
+                        return;
+                    }
+
+                    this.push_toast(
+                        zed::ToastKind::Error,
+                        "Cannot push: no remotes configured".to_string(),
+                        cx,
+                    );
+                    return;
                 }
+
+                this.store.dispatch(Msg::Push { repo_id });
                 cx.notify();
             })
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
@@ -404,7 +461,7 @@ impl GitGpuiView {
             })
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                 let text: SharedString = if can_stash {
-                    "Create stash…".into()
+                    "Create stash".into()
                 } else {
                     "No changes to stash".into()
                 };
@@ -429,7 +486,7 @@ impl GitGpuiView {
                 this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Create branch…".into();
+                let text: SharedString = "Create branch".into();
                 if *hovering {
                     this.tooltip_text = Some(text);
                 } else if this.tooltip_text.as_ref() == Some(&text) {

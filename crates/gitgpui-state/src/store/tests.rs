@@ -889,6 +889,24 @@ fn repo_operations_emit_effects() {
         [Effect::Push { repo_id: RepoId(1) }]
     ));
 
+    let push_set_upstream = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PushSetUpstream {
+            repo_id: RepoId(1),
+            remote: "origin".to_string(),
+            branch: "feature/foo".to_string(),
+        },
+    );
+    assert!(matches!(
+        push_set_upstream.as_slice(),
+        [Effect::PushSetUpstream {
+            repo_id: RepoId(1),
+            ..
+        }]
+    ));
+
     let stash = reduce(
         &mut repos,
         &id_alloc,

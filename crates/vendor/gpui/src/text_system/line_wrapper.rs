@@ -514,8 +514,8 @@ mod tests {
         perform_test(
             &mut wrapper,
             "aa bbb cccc ddddd eeee ffff gggg",
-            "aa bbb cccc ddddd eee…",
-            "…",
+            "aa bbb cccc ddddd eee",
+            "",
         );
         perform_test(
             &mut wrapper,
@@ -539,7 +539,7 @@ mod tests {
         ) {
             let mut dummy_runs = generate_test_runs(run_lens);
             assert_eq!(
-                wrapper.truncate_line(text.into(), line_width, "…", &mut dummy_runs),
+                wrapper.truncate_line(text.into(), line_width, "", &mut dummy_runs),
                 result
             );
             for (run, result_len) in dummy_runs.iter().zip(result_run_len) {
@@ -550,20 +550,20 @@ mod tests {
         // Text: abcdefghijkl
         // Runs: Run0 { len: 12, ... }
         //
-        // Truncate res: abcd… (truncate_at = 4)
-        // Run res: Run0 { string: abcd…, len: 7, ... }
-        perform_test(&mut wrapper, "abcdefghijkl", "abcd…", &[12], &[7], px(50.));
+        // Truncate res: abcd (truncate_at = 4)
+        // Run res: Run0 { string: abcd, len: 7, ... }
+        perform_test(&mut wrapper, "abcdefghijkl", "abcd", &[12], &[7], px(50.));
         // Case 1: Drop some runs
         // Text: abcdefghijkl
         // Runs: Run0 { len: 4, ... }, Run1 { len: 4, ... }, Run2 { len: 4, ... }
         //
-        // Truncate res: abcdef… (truncate_at = 6)
-        // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: ef…, len:
+        // Truncate res: abcdef (truncate_at = 6)
+        // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: ef, len:
         // 5, ... }
         perform_test(
             &mut wrapper,
             "abcdefghijkl",
-            "abcdef…",
+            "abcdef",
             &[4, 4, 4],
             &[4, 5],
             px(70.),
@@ -572,13 +572,13 @@ mod tests {
         // Text: abcdefghijkl
         // Runs: Run0 { len: 4, ... }, Run1 { len: 4, ... }, Run2 { len: 4, ... }
         //
-        // Truncate res: abcdefgh… (truncate_at = 8)
+        // Truncate res: abcdefgh (truncate_at = 8)
         // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: efgh, len:
-        // 4, ... }, Run2 { string: …, len: 3, ... }
+        // 4, ... }, Run2 { string: , len: 3, ... }
         perform_test(
             &mut wrapper,
             "abcdefghijkl",
-            "abcdefgh…",
+            "abcdefgh",
             &[4, 4, 4],
             &[4, 4, 3],
             px(90.),
@@ -589,7 +589,7 @@ mod tests {
     fn test_update_run_after_truncation() {
         fn perform_test(result: &str, run_lens: &[usize], result_run_lens: &[usize]) {
             let mut dummy_runs = generate_test_runs(run_lens);
-            update_runs_after_truncation(result, "…", &mut dummy_runs);
+            update_runs_after_truncation(result, "", &mut dummy_runs);
             for (run, result_len) in dummy_runs.iter().zip(result_run_lens) {
                 assert_eq!(run.len, *result_len);
             }
@@ -598,25 +598,25 @@ mod tests {
         // Text: abcdefghijkl
         // Runs: Run0 { len: 12, ... }
         //
-        // Truncate res: abcd… (truncate_at = 4)
-        // Run res: Run0 { string: abcd…, len: 7, ... }
-        perform_test("abcd…", &[12], &[7]);
+        // Truncate res: abcd (truncate_at = 4)
+        // Run res: Run0 { string: abcd, len: 7, ... }
+        perform_test("abcd", &[12], &[7]);
         // Case 1: Drop some runs
         // Text: abcdefghijkl
         // Runs: Run0 { len: 4, ... }, Run1 { len: 4, ... }, Run2 { len: 4, ... }
         //
-        // Truncate res: abcdef… (truncate_at = 6)
-        // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: ef…, len:
+        // Truncate res: abcdef (truncate_at = 6)
+        // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: ef, len:
         // 5, ... }
-        perform_test("abcdef…", &[4, 4, 4], &[4, 5]);
+        perform_test("abcdef", &[4, 4, 4], &[4, 5]);
         // Case 2: Truncate at start of some run
         // Text: abcdefghijkl
         // Runs: Run0 { len: 4, ... }, Run1 { len: 4, ... }, Run2 { len: 4, ... }
         //
-        // Truncate res: abcdefgh… (truncate_at = 8)
+        // Truncate res: abcdefgh (truncate_at = 8)
         // Runs res: Run0 { string: abcd, len: 4, ... }, Run1 { string: efgh, len:
-        // 4, ... }, Run2 { string: …, len: 3, ... }
-        perform_test("abcdefgh…", &[4, 4, 4], &[4, 4, 3]);
+        // 4, ... }, Run2 { string: , len: 3, ... }
+        perform_test("abcdefgh", &[4, 4, 4], &[4, 4, 3]);
     }
 
     #[test]

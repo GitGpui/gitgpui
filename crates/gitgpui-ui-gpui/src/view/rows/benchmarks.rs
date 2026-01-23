@@ -3,8 +3,8 @@ use super::*;
 use crate::theme::AppTheme;
 use crate::view::history_graph;
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, FileStatusKind, Remote, RemoteBranch,
-    RepoSpec, Upstream, UpstreamDivergence,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, FileStatusKind, Remote,
+    RemoteBranch, RepoSpec, Upstream, UpstreamDivergence,
 };
 use gitgpui_state::model::{Loadable, RepoId, RepoState};
 use std::collections::hash_map::DefaultHasher;
@@ -18,10 +18,16 @@ pub struct OpenRepoFixture {
 }
 
 impl OpenRepoFixture {
-    pub fn new(commits: usize, local_branches: usize, remote_branches: usize, remotes: usize) -> Self {
+    pub fn new(
+        commits: usize,
+        local_branches: usize,
+        remote_branches: usize,
+        remotes: usize,
+    ) -> Self {
         let theme = AppTheme::zed_ayu_dark();
         let commits_vec = build_synthetic_commits(commits);
-        let repo = build_synthetic_repo_state(local_branches, remote_branches, remotes, &commits_vec);
+        let repo =
+            build_synthetic_repo_state(local_branches, remote_branches, remotes, &commits_vec);
         Self {
             repo,
             commits: commits_vec,
@@ -166,7 +172,10 @@ fn build_synthetic_repo_state(
             remote: "origin".to_string(),
             branch: head.clone(),
         }),
-        divergence: Some(UpstreamDivergence { ahead: 1, behind: 2 }),
+        divergence: Some(UpstreamDivergence {
+            ahead: 1,
+            behind: 2,
+        }),
     });
     for ix in 0..local_branches.saturating_sub(1) {
         branches.push(Branch {
@@ -286,10 +295,15 @@ fn build_synthetic_source_lines(count: usize) -> Vec<String> {
             1 => format!("{indent}let value_{ix} = \"string {ix}\";"),
             2 => format!("{indent}// comment {ix} with some extra words and tokens"),
             3 => format!("{indent}if value_{ix} > 10 {{ return value_{ix}; }}"),
-            4 => format!("{indent}for i in 0..{r} {{ sum += i; }}", r = (ix % 100) + 1),
+            4 => format!(
+                "{indent}for i in 0..{r} {{ sum += i; }}",
+                r = (ix % 100) + 1
+            ),
             5 => format!("{indent}match tag_{ix} {{ Some(v) => v, None => 0 }}"),
             6 => format!("{indent}struct S{ix} {{ a: i32, b: String }}"),
-            7 => format!("{indent}impl S{ix} {{ fn new() -> Self {{ Self {{ a: 0, b: String::new() }} }} }}"),
+            7 => format!(
+                "{indent}impl S{ix} {{ fn new() -> Self {{ Self {{ a: 0, b: String::new() }} }} }}"
+            ),
             8 => format!("{indent}const CONST_{ix}: u64 = {v};", v = ix as u64 * 31),
             _ => format!("{indent}println!(\"{ix} {{}}\", value_{ix});"),
         };

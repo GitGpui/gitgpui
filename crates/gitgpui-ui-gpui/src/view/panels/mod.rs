@@ -24,6 +24,11 @@ enum ContextMenuAction {
         repo_id: RepoId,
         name: String,
     },
+    CheckoutRemoteBranch {
+        repo_id: RepoId,
+        remote: String,
+        name: String,
+    },
     SetHistoryScope {
         repo_id: RepoId,
         scope: gitgpui_core::domain::LogScope,

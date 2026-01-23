@@ -14,6 +14,7 @@ pub enum RepoCommandKind {
     PullBranch { remote: String, branch: String },
     MergeRef { reference: String },
     Push,
+    PushSetUpstream { remote: String, branch: String },
     CheckoutConflict { path: PathBuf, side: ConflictSide },
 }
 
@@ -61,6 +62,11 @@ pub enum Msg {
     },
     CheckoutBranch {
         repo_id: RepoId,
+        name: String,
+    },
+    CheckoutRemoteBranch {
+        repo_id: RepoId,
+        remote: String,
         name: String,
     },
     CheckoutCommit {
@@ -117,6 +123,11 @@ pub enum Msg {
     },
     Push {
         repo_id: RepoId,
+    },
+    PushSetUpstream {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
     },
     CheckoutConflictSide {
         repo_id: RepoId,
@@ -287,6 +298,16 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("name", name)
                 .finish(),
+            Msg::CheckoutRemoteBranch {
+                repo_id,
+                remote,
+                name,
+            } => f
+                .debug_struct("CheckoutRemoteBranch")
+                .field("repo_id", repo_id)
+                .field("remote", remote)
+                .field("name", name)
+                .finish(),
             Msg::CheckoutCommit { repo_id, commit_id } => f
                 .debug_struct("CheckoutCommit")
                 .field("repo_id", repo_id)
@@ -357,6 +378,16 @@ impl std::fmt::Debug for Msg {
                 .field("reference", reference)
                 .finish(),
             Msg::Push { repo_id } => f.debug_struct("Push").field("repo_id", repo_id).finish(),
+            Msg::PushSetUpstream {
+                repo_id,
+                remote,
+                branch,
+            } => f
+                .debug_struct("PushSetUpstream")
+                .field("repo_id", repo_id)
+                .field("remote", remote)
+                .field("branch", branch)
+                .finish(),
             Msg::CheckoutConflictSide {
                 repo_id,
                 path,
@@ -570,6 +601,11 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
     },
+    CheckoutRemoteBranch {
+        repo_id: RepoId,
+        remote: String,
+        name: String,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -624,6 +660,11 @@ pub enum Effect {
     },
     Push {
         repo_id: RepoId,
+    },
+    PushSetUpstream {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
     },
     CheckoutConflictSide {
         repo_id: RepoId,

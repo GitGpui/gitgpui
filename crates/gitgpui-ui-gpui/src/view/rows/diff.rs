@@ -16,13 +16,16 @@ impl GitGpuiView {
             }
             let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
-            let language = (this.file_diff_inline_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
-                .then(|| {
-                    this.file_diff_cache_path
-                        .as_ref()
-                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
-                })
-                .flatten();
+            let syntax_mode =
+                if this.file_diff_inline_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+                    DiffSyntaxMode::Auto
+                } else {
+                    DiffSyntaxMode::HeuristicOnly
+                };
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
 
             return range
                 .map(|visible_ix| {
@@ -38,7 +41,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
 
@@ -57,7 +60,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
 
@@ -82,7 +85,7 @@ impl GitGpuiView {
                             word_ranges,
                             query.as_str(),
                             language,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             word_color,
                         );
                         this.diff_text_segments_cache_set(inline_ix, computed);
@@ -96,7 +99,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
                     let styled = this
@@ -124,7 +127,11 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
+        let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+            DiffSyntaxMode::Auto
+        } else {
+            DiffSyntaxMode::HeuristicOnly
+        };
         range
             .map(|visible_ix| {
                 let selected = this
@@ -139,7 +146,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
                 let click_kind = {
@@ -151,7 +158,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
 
@@ -174,14 +181,11 @@ impl GitGpuiView {
 
                 let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
 
-                let language = if syntax_enabled {
-                    this.diff_file_for_src_ix
-                        .get(src_ix)
-                        .and_then(|p| p.as_deref())
-                        .and_then(diff_syntax_language_for_path)
-                } else {
-                    None
-                };
+                let language = this
+                    .diff_file_for_src_ix
+                    .get(src_ix)
+                    .and_then(|p| p.as_deref())
+                    .and_then(diff_syntax_language_for_path);
 
                 if matches!(click_kind, DiffClickKind::Line)
                     && this.diff_text_segments_cache_get(src_ix).is_none()
@@ -194,7 +198,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
 
@@ -219,7 +223,7 @@ impl GitGpuiView {
                         word_ranges,
                         query.as_str(),
                         language,
-                        DiffSyntaxMode::Auto,
+                        syntax_mode,
                         word_color,
                     );
                     this.diff_text_segments_cache_set(src_ix, computed);
@@ -238,7 +242,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
 
@@ -271,13 +275,16 @@ impl GitGpuiView {
             }
             let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
-            let language = (this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
-                .then(|| {
-                    this.file_diff_cache_path
-                        .as_ref()
-                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
-                })
-                .flatten();
+            let syntax_mode =
+                if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+                    DiffSyntaxMode::Auto
+                } else {
+                    DiffSyntaxMode::HeuristicOnly
+                };
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
 
             return range
                 .map(|visible_ix| {
@@ -293,7 +300,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
                     let key = row_ix * 2;
@@ -306,7 +313,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
 
@@ -330,7 +337,7 @@ impl GitGpuiView {
                                 word_ranges,
                                 query.as_str(),
                                 language,
-                                DiffSyntaxMode::Auto,
+                                syntax_mode,
                                 word_color,
                             );
                             this.diff_text_segments_cache_set(key, computed);
@@ -345,7 +352,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
                     let styled: Option<&CachedDiffStyledText> = row
@@ -373,7 +380,11 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
+        let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+            DiffSyntaxMode::Auto
+        } else {
+            DiffSyntaxMode::HeuristicOnly
+        };
         let empty_ranges: &[Range<usize>] = &[];
         range
             .map(|visible_ix| {
@@ -389,7 +400,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
                 let Some(row) = this.diff_split_cache.get(row_ix) else {
@@ -400,7 +411,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
 
@@ -419,19 +430,16 @@ impl GitGpuiView {
                                     .font_family("monospace")
                                     .text_xs()
                                     .text_color(theme.colors.text_muted)
-                                    .child("…")
+                                    .child("")
                                     .into_any_element();
                             };
 
                             let text = row.old.as_deref().unwrap_or("");
-                            let language = if syntax_enabled {
-                                this.diff_file_for_src_ix
-                                    .get(src_ix)
-                                    .and_then(|p| p.as_deref())
-                                    .and_then(diff_syntax_language_for_path)
-                            } else {
-                                None
-                            };
+                            let language = this
+                                .diff_file_for_src_ix
+                                .get(src_ix)
+                                .and_then(|p| p.as_deref())
+                                .and_then(diff_syntax_language_for_path);
                             let language = this
                                 .diff_cache
                                 .get(src_ix)
@@ -469,7 +477,7 @@ impl GitGpuiView {
                                 word_ranges,
                                 query.as_str(),
                                 language,
-                                DiffSyntaxMode::Auto,
+                                syntax_mode,
                                 word_color,
                             );
                             this.diff_text_segments_cache_set(src_ix, computed);
@@ -486,7 +494,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
 
@@ -512,7 +520,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
                         let file_stat = this.diff_file_stats.get(*src_ix).and_then(|s| *s);
@@ -546,13 +554,16 @@ impl GitGpuiView {
             }
             let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
-            let language = (this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING)
-                .then(|| {
-                    this.file_diff_cache_path
-                        .as_ref()
-                        .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()))
-                })
-                .flatten();
+            let syntax_mode =
+                if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+                    DiffSyntaxMode::Auto
+                } else {
+                    DiffSyntaxMode::HeuristicOnly
+                };
+            let language = this
+                .file_diff_cache_path
+                .as_ref()
+                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
 
             return range
                 .map(|visible_ix| {
@@ -568,7 +579,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
                     let key = row_ix * 2 + 1;
@@ -581,7 +592,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
 
@@ -605,7 +616,7 @@ impl GitGpuiView {
                                 word_ranges,
                                 query.as_str(),
                                 language,
-                                DiffSyntaxMode::Auto,
+                                syntax_mode,
                                 word_color,
                             );
                             this.diff_text_segments_cache_set(key, computed);
@@ -620,7 +631,7 @@ impl GitGpuiView {
                             .font_family("monospace")
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("…")
+                            .child("")
                             .into_any_element();
                     };
                     let styled: Option<&CachedDiffStyledText> = row
@@ -648,7 +659,11 @@ impl GitGpuiView {
             this.diff_text_segments_cache.clear();
         }
         let query = this.diff_visible_query.clone();
-        let syntax_enabled = this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING;
+        let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+            DiffSyntaxMode::Auto
+        } else {
+            DiffSyntaxMode::HeuristicOnly
+        };
         let empty_ranges: &[Range<usize>] = &[];
         range
             .map(|visible_ix| {
@@ -664,7 +679,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
                 let Some(row) = this.diff_split_cache.get(row_ix) else {
@@ -675,7 +690,7 @@ impl GitGpuiView {
                         .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child("…")
+                        .child("")
                         .into_any_element();
                 };
 
@@ -694,19 +709,16 @@ impl GitGpuiView {
                                     .font_family("monospace")
                                     .text_xs()
                                     .text_color(theme.colors.text_muted)
-                                    .child("…")
+                                    .child("")
                                     .into_any_element();
                             };
 
                             let text = row.new.as_deref().unwrap_or("");
-                            let language = if syntax_enabled {
-                                this.diff_file_for_src_ix
-                                    .get(src_ix)
-                                    .and_then(|p| p.as_deref())
-                                    .and_then(diff_syntax_language_for_path)
-                            } else {
-                                None
-                            };
+                            let language = this
+                                .diff_file_for_src_ix
+                                .get(src_ix)
+                                .and_then(|p| p.as_deref())
+                                .and_then(diff_syntax_language_for_path);
                             let language = this
                                 .diff_cache
                                 .get(src_ix)
@@ -744,7 +756,7 @@ impl GitGpuiView {
                                 word_ranges,
                                 query.as_str(),
                                 language,
-                                DiffSyntaxMode::Auto,
+                                syntax_mode,
                                 word_color,
                             );
                             this.diff_text_segments_cache_set(src_ix, computed);
@@ -761,7 +773,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
 
@@ -787,7 +799,7 @@ impl GitGpuiView {
                                 .font_family("monospace")
                                 .text_xs()
                                 .text_color(theme.colors.text_muted)
-                                .child("…")
+                                .child("")
                                 .into_any_element();
                         };
                         let file_stat = this.diff_file_stats.get(*src_ix).and_then(|s| *s);

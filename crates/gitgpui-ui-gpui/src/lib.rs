@@ -7,7 +7,7 @@ mod zed_port;
 
 pub use app::run;
 
-#[cfg(feature = "bench")]
+#[doc(hidden)]
 pub mod benchmarks {
     pub use crate::view::rows::benchmarks::*;
 }

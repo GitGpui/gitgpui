@@ -83,13 +83,13 @@ impl Button {
         let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match self.style
         {
             ButtonStyle::Filled => (
+                transparent,
+                hover_overlay,
+                active_overlay,
+                with_alpha(theme.colors.accent, 0.90),
+                with_alpha(theme.colors.accent, 1.00),
+                with_alpha(theme.colors.accent, 1.00),
                 theme.colors.accent,
-                with_alpha(theme.colors.accent, 0.85),
-                with_alpha(theme.colors.accent, 0.78),
-                with_alpha(theme.colors.accent, 0.9),
-                with_alpha(theme.colors.accent, 0.9),
-                with_alpha(theme.colors.accent, 0.9),
-                theme.colors.window_bg,
             ),
             ButtonStyle::Outlined => (
                 transparent,
@@ -200,7 +200,7 @@ impl Button {
 }
 
 fn looks_like_icon_button(label: &str) -> bool {
-    matches!(label.trim(), "✕" | "＋" | "▾" | "≡" | "…" | "⋯" | "⟳" | "↻")
+    matches!(label.trim(), "✕" | "＋" | "▾" | "≡" | "" | "⋯" | "⟳" | "↻")
         || (label.chars().count() <= 2 && !label.chars().any(|c| c.is_alphanumeric()))
 }
 
