@@ -47,6 +47,7 @@ pub(crate) use chrome::window_frame;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
+const HISTORY_COL_GRAPH_MAX_PX: f32 = 240.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
 const HISTORY_COL_HANDLE_PX: f32 = 8.0;
@@ -3815,7 +3816,9 @@ impl GitGpuiView {
                     if this.history_col_graph_auto && this.history_col_resize.is_none() {
                         let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
                             + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32));
-                        this.history_col_graph = required.max(px(HISTORY_COL_GRAPH_MIN_PX));
+                        this.history_col_graph = required
+                            .min(px(HISTORY_COL_GRAPH_MAX_PX))
+                            .max(px(HISTORY_COL_GRAPH_MIN_PX));
                     }
 
                     this.history_cache_inflight = None;

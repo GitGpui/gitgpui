@@ -5,3 +5,4 @@
 *.swo
 .idea
 zed
+callgrind.out*

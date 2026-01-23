@@ -9,6 +9,7 @@ use gitgpui_core::services::{
 };
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -148,34 +149,30 @@ impl GitRepository for GixRepo {
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
-        let mut tips = vec![head_id];
+        // Emulate `git log --all`: include all refs under `refs/`, not just `refs/heads` and
+        // `refs/remotes`. Some repositories (e.g. Chromium) use additional namespaces like
+        // `refs/branch-heads/*`.
+        let mut tips = Vec::new();
+        let mut seen = HashSet::new();
+        tips.push(head_id);
+        seen.insert(head_id);
 
-        // Local branches
-        let branches = refs
-            .local_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix local_branches: {e}"))))?
+        let iter = refs
+            .all()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?
             .peeled()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
-        for reference in branches {
+        for reference in iter {
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
-            let id = reference.id().detach();
-            if id != head_id && !tips.iter().any(|t| *t == id) {
-                tips.push(id);
+            if matches!(
+                reference.name().category(),
+                Some(gix::reference::Category::Tag)
+            ) {
+                continue;
             }
-        }
-
-        // Remote tracking branches (often where "other branches" live)
-        let branches = refs
-            .remote_branches()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix remote_branches: {e}"))))?
-            .peeled()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix peel refs: {e}"))))?;
-        for reference in branches {
-            let reference = reference
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let id = reference.id().detach();
-            if id != head_id && !tips.iter().any(|t| *t == id) {
+            if seen.insert(id) {
                 tips.push(id);
             }
         }

@@ -1,0 +1,7 @@
+valgrind --tool=callgrind --callgrind-out-file=callgrind.out --dump-instr=yes --instr-atstart=no --collect-jumps=yes --sigill-diagnostics=no --error-limit=no ./target/release-with-debug/gitgpui-app
+
+callgrind_control -i on
+
+callgrind_control -i off
+
+kcachegrind callgrind.out
