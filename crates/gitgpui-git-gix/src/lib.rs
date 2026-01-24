@@ -968,13 +968,16 @@ impl GitRepository for GixRepo {
             .arg("stash")
             .arg("list")
             .arg("--date=unix")
-            .arg("--format=%gd%x00%ct%x00%gs");
+            .arg("--format=%gd%x00%H%x00%ct%x00%gs");
 
         let output = run_git_capture(cmd, "git stash list")?;
         let mut entries = Vec::new();
         for (ix, line) in output.lines().enumerate() {
             let mut parts = line.split('\0');
             let Some(selector) = parts.next().filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let Some(id) = parts.next().filter(|s| !s.is_empty()) else {
                 continue;
             };
             let created_at = parts
@@ -985,6 +988,7 @@ impl GitRepository for GixRepo {
             let index = parse_reflog_index(selector).unwrap_or(ix);
             entries.push(gitgpui_core::domain::StashEntry {
                 index,
+                id: CommitId(id.to_string()),
                 message,
                 created_at,
             });

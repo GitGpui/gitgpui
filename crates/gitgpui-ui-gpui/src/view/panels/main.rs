@@ -48,7 +48,7 @@ impl GitGpuiView {
                 let should_load_by_scroll = if max_offset > px(0.0) {
                     scroll_is_near_bottom(&scroll_handle, px(240.0))
                 } else {
-                    self.history_search_debounced.is_empty()
+                    true
                 };
                 let should_load_more = state.last_item_size.is_some() && repo.is_some_and(|repo| {
                     !repo.log_loading_more
@@ -91,28 +91,12 @@ impl GitGpuiView {
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
-        // Diff search is intentionally hidden in the UI; keep it inactive to avoid "invisible filters".
-        self.diff_raw_mode = false;
-        if !self.diff_search_debounced.is_empty() || !self.diff_search_raw.is_empty() {
-            self.diff_search_debounced.clear();
-            self.diff_search_raw.clear();
-            self.diff_visible_indices.clear();
-            self.diff_visible_cache_len = 0;
-            self.diff_scrollbar_markers_cache.clear();
-        }
-        let search_text = self
-            .diff_search_input
-            .read_with(cx, |i, _| i.text().to_string());
-        if !search_text.is_empty() {
-            self.diff_search_input
-                .update(cx, |i, cx| i.set_text(String::new(), cx));
-        }
-
         let title: AnyElement = self
             .active_repo()
             .and_then(|r| r.diff_target.as_ref())
             .map(|t| {
-                let (icon, color, text) = match t {
+                let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) =
+                    match t {
                     DiffTarget::WorkingTree { path, area } => {
                         let kind = self.active_repo().and_then(|repo| match &repo.status {
                             Loadable::Ready(status) => {
@@ -134,15 +118,15 @@ impl GitGpuiView {
                             FileStatusKind::Renamed => ("→", theme.colors.accent),
                             FileStatusKind::Conflicted => ("!", theme.colors.danger),
                         };
-                        (Some(icon), color, path.display().to_string())
+                        (Some(icon), color, self.cached_path_display(path))
                     }
                     DiffTarget::Commit { commit_id: _, path } => match path {
                         Some(path) => (
                             Some("✎"),
                             theme.colors.text_muted,
-                            path.display().to_string(),
+                            self.cached_path_display(path),
                         ),
-                        None => (Some("✎"), theme.colors.text_muted, "Full diff".to_string()),
+                        None => (Some("✎"), theme.colors.text_muted, "Full diff".into()),
                     },
                 };
 
@@ -230,18 +214,20 @@ impl GitGpuiView {
                         })
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_view = DiffViewMode::Inline;
-                            this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString = "Inline diff view (Alt+I)".into();
+                            let mut changed = false;
                             if *hovering {
-                                this.tooltip_text = Some(text);
+                                changed |= this.set_tooltip_text_if_changed(Some(text));
                             } else if this.tooltip_text.as_ref() == Some(&text) {
-                                this.tooltip_text = None;
+                                changed |= this.set_tooltip_text_if_changed(None);
                             }
-                            cx.notify();
+                            if changed {
+                                cx.notify();
+                            }
                         })),
                 )
                 .child(
@@ -253,18 +239,20 @@ impl GitGpuiView {
                         })
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_view = DiffViewMode::Split;
-                            this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString = "Split diff view (Alt+S)".into();
+                            let mut changed = false;
                             if *hovering {
-                                this.tooltip_text = Some(text);
+                                changed |= this.set_tooltip_text_if_changed(Some(text));
                             } else if this.tooltip_text.as_ref() == Some(&text) {
-                                this.tooltip_text = None;
+                                changed |= this.set_tooltip_text_if_changed(None);
                             }
-                            cx.notify();
+                            if changed {
+                                cx.notify();
+                            }
                         })),
                 )
                 .child(
@@ -279,12 +267,15 @@ impl GitGpuiView {
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString =
                                 "Previous change (F2 / Shift+F7 / Alt+Up)".into();
+                            let mut changed = false;
                             if *hovering {
-                                this.tooltip_text = Some(text);
+                                changed |= this.set_tooltip_text_if_changed(Some(text));
                             } else if this.tooltip_text.as_ref() == Some(&text) {
-                                this.tooltip_text = None;
+                                changed |= this.set_tooltip_text_if_changed(None);
                             }
-                            cx.notify();
+                            if changed {
+                                cx.notify();
+                            }
                         })),
                 )
                 .child(
@@ -298,12 +289,15 @@ impl GitGpuiView {
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
+                            let mut changed = false;
                             if *hovering {
-                                this.tooltip_text = Some(text);
+                                changed |= this.set_tooltip_text_if_changed(Some(text));
                             } else if this.tooltip_text.as_ref() == Some(&text) {
-                                this.tooltip_text = None;
+                                changed |= this.set_tooltip_text_if_changed(None);
                             }
-                            cx.notify();
+                            if changed {
+                                cx.notify();
+                            }
                         })),
                 )
                 .when(!wants_file_diff, |controls| {
@@ -318,12 +312,15 @@ impl GitGpuiView {
                             })
                             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                                 let text: SharedString = "Jump to hunk (Alt+H)".into();
+                                let mut changed = false;
                                 if *hovering {
-                                    this.tooltip_text = Some(text);
+                                    changed |= this.set_tooltip_text_if_changed(Some(text));
                                 } else if this.tooltip_text.as_ref() == Some(&text) {
-                                    this.tooltip_text = None;
+                                    changed |= this.set_tooltip_text_if_changed(None);
                                 }
-                                cx.notify();
+                                if changed {
+                                    cx.notify();
+                                }
                             })),
                     )
                 });
@@ -339,12 +336,15 @@ impl GitGpuiView {
                     })
                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                         let text: SharedString = "Close diff".into();
+                        let mut changed = false;
                         if *hovering {
-                            this.tooltip_text = Some(text);
+                            changed |= this.set_tooltip_text_if_changed(Some(text));
                         } else if this.tooltip_text.as_ref() == Some(&text) {
-                            this.tooltip_text = None;
+                            changed |= this.set_tooltip_text_if_changed(None);
                         }
-                        cx.notify();
+                        if changed {
+                            cx.notify();
+                        }
                     })),
             );
         }
@@ -482,6 +482,7 @@ impl GitGpuiView {
                                     div()
                                         .id("diff_file_error_scroll")
                                         .font_family("monospace")
+                                        .bg(theme.colors.window_bg)
                                         .flex()
                                         .flex_col()
                                         .flex_1()
@@ -499,8 +500,6 @@ impl GitGpuiView {
                                         )
                                         .into_any_element()
                                     } else {
-                                        // Diff search is intentionally hidden; keep it disabled.
-                                        self.diff_search_debounced.clear();
                                         self.ensure_diff_visible_indices();
                                         self.maybe_autoscroll_diff_to_first_change();
 
@@ -512,11 +511,6 @@ impl GitGpuiView {
                                         };
                                         if total_len == 0 {
                                             zed::empty_state(theme, "Diff", "Empty file.")
-                                                .into_any_element()
-                                        } else if !self.diff_visible_query.is_empty()
-                                            && self.diff_query_match_count == 0
-                                        {
-                                            zed::empty_state(theme, "Diff", "No matches.")
                                                 .into_any_element()
                                         } else if self.diff_visible_indices.is_empty() {
                                             zed::empty_state(theme, "Diff", "Nothing to render.")
@@ -540,6 +534,7 @@ impl GitGpuiView {
                                                         .relative()
                                                         .h_full()
                                                         .min_h(px(0.0))
+                                                        .bg(theme.colors.window_bg)
                                                         .child(list)
                                                         .child(
                                                             zed::Scrollbar::new(
@@ -587,6 +582,7 @@ impl GitGpuiView {
                                                         .min_h(px(0.0))
                                                         .flex()
                                                         .flex_col()
+                                                        .bg(theme.colors.window_bg)
                                                         .child(columns_header)
                                                         .child(
                                                             div()
@@ -638,17 +634,11 @@ impl GitGpuiView {
                                 self.rebuild_diff_cache();
                             }
 
-                            // Diff search is intentionally hidden; keep it disabled.
-                            self.diff_search_debounced.clear();
                             self.ensure_diff_visible_indices();
                             self.maybe_autoscroll_diff_to_first_change();
                             if self.diff_cache.is_empty() {
                                 zed::empty_state(theme, "Diff", "No differences.")
                                     .into_any_element()
-                            } else if !self.diff_visible_query.is_empty()
-                                && self.diff_query_match_count == 0
-                            {
-                                zed::empty_state(theme, "Diff", "No matches.").into_any_element()
                             } else if self.diff_visible_indices.is_empty() {
                                 zed::empty_state(theme, "Diff", "Nothing to render.")
                                     .into_any_element()
@@ -670,6 +660,7 @@ impl GitGpuiView {
                                             .relative()
                                             .h_full()
                                             .min_h(px(0.0))
+                                            .bg(theme.colors.window_bg)
                                             .child(list)
                                             .child(
                                                 zed::Scrollbar::new(
@@ -713,6 +704,7 @@ impl GitGpuiView {
                                             .min_h(px(0.0))
                                             .flex()
                                             .flex_col()
+                                            .bg(theme.colors.window_bg)
                                             .child(columns_header)
                                             .child(
                                                 div()
@@ -796,11 +788,6 @@ impl GitGpuiView {
                     && !mods.alt
                     && !mods.platform
                     && !mods.function
-                    && !this
-                        .diff_search_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
                     && !this
                         .diff_raw_input
                         .read(cx)
@@ -888,27 +875,20 @@ impl GitGpuiView {
                 }
 
                 let copy_target_is_focused = this
-                    .diff_search_input
+                    .diff_raw_input
                     .read(cx)
                     .focus_handle()
-                    .is_focused(window)
-                    || this
-                        .diff_raw_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window);
+                    .is_focused(window);
 
                 if mods.alt && !mods.control && !mods.platform && !mods.function {
                     match key {
                         "i" => {
                             this.diff_view = DiffViewMode::Inline;
-                            this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             handled = true;
                         }
                         "s" => {
                             this.diff_view = DiffViewMode::Split;
-                            this.diff_text_segments_cache_query.clear();
                             this.diff_text_segments_cache.clear();
                             handled = true;
                         }

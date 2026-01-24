@@ -1,0 +1,213 @@
+use super::*;
+use gpui::{Bounds, Pixels, Window, fill, point, px, size};
+
+pub(super) fn paint_history_graph(
+    theme: AppTheme,
+    row: &history_graph::GraphRow,
+    is_stash_node: bool,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+) {
+    use gpui::PathBuilder;
+
+    if row.lanes_now.is_empty() {
+        return;
+    }
+
+    let stroke_width = px(1.6);
+    let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
+    let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
+    let node_radius = if row.is_merge { px(3.5) } else { px(3.0) };
+
+    let y_top = bounds.top();
+    let y_center = bounds.top() + bounds.size.height / 2.0;
+    let y_bottom = bounds.bottom();
+
+    let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
+    let node_x = x_for_col(row.node_col);
+
+    let mut col_now: std::collections::HashMap<history_graph::LaneId, usize> =
+        std::collections::HashMap::new();
+    for (ix, lane) in row.lanes_now.iter().enumerate() {
+        col_now.insert(lane.id, ix);
+    }
+
+    let mut col_next: std::collections::HashMap<history_graph::LaneId, usize> =
+        std::collections::HashMap::new();
+    for (ix, lane) in row.lanes_next.iter().enumerate() {
+        col_next.insert(lane.id, ix);
+    }
+
+    // Incoming vertical segments.
+    for lane in row.lanes_now.iter() {
+        let Some(col) = col_now.get(&lane.id).copied() else {
+            continue;
+        };
+        if !row.incoming_ids.contains(&lane.id) {
+            continue;
+        }
+        let x = x_for_col(col);
+        let mut path = PathBuilder::stroke(stroke_width);
+        path.move_to(point(bounds.left() + x, y_top));
+        path.line_to(point(bounds.left() + x, y_center));
+        if let Ok(p) = path.build() {
+            window.paint_path(p, lane.color);
+        }
+    }
+
+    // Incoming join edges into the node (used both for merge commits and fork points).
+    for edge in row.joins_in.iter() {
+        if edge.from_col == edge.to_col {
+            continue;
+        }
+        let x_from = x_for_col(edge.from_col);
+        let x_to = x_for_col(edge.to_col);
+        let mut path = PathBuilder::stroke(stroke_width);
+        path.move_to(point(bounds.left() + x_from, y_center));
+        if (x_from - x_to).abs() < px(0.5) {
+            path.line_to(point(bounds.left() + x_to, y_center));
+        } else {
+            let ctrl = px(8.0);
+            path.cubic_bezier_to(
+                point(bounds.left() + x_to, y_center),
+                point(bounds.left() + x_from + ctrl, y_center),
+                point(bounds.left() + x_to - ctrl, y_center),
+            );
+        }
+        if let Ok(p) = path.build() {
+            window.paint_path(p, edge.color);
+        }
+    }
+
+    // Continuations from current row to next row.
+    for lane in row.lanes_next.iter() {
+        let Some(out_col) = col_next.get(&lane.id).copied() else {
+            continue;
+        };
+        let x_out = x_for_col(out_col);
+
+        let x_from = match col_now.get(&lane.id).copied() {
+            Some(now_col) => x_for_col(now_col),
+            None => node_x,
+        };
+
+        let mut path = PathBuilder::stroke(stroke_width);
+        path.move_to(point(bounds.left() + x_from, y_center));
+        if (x_from - x_out).abs() < px(0.5) {
+            path.line_to(point(bounds.left() + x_out, y_bottom));
+        } else {
+            let y_mid = y_center + (y_bottom - y_center) * 0.5;
+            path.cubic_bezier_to(
+                point(bounds.left() + x_out, y_bottom),
+                point(bounds.left() + x_from, y_mid),
+                point(bounds.left() + x_out, y_mid),
+            );
+        }
+        if let Ok(p) = path.build() {
+            window.paint_path(p, lane.color);
+        }
+    }
+
+    // Additional merge edges from the node into lanes that were re-targeted to secondary parents.
+    for edge in row.edges_out.iter() {
+        if edge.from_col == edge.to_col {
+            continue;
+        }
+        let x_to = x_for_col(edge.to_col);
+        let mut path = PathBuilder::stroke(stroke_width);
+        path.move_to(point(bounds.left() + node_x, y_center));
+        if (node_x - x_to).abs() < px(0.5) {
+            path.line_to(point(bounds.left() + x_to, y_bottom));
+        } else {
+            let y_mid = y_center + (y_bottom - y_center) * 0.5;
+            path.cubic_bezier_to(
+                point(bounds.left() + x_to, y_bottom),
+                point(bounds.left() + node_x, y_mid),
+                point(bounds.left() + x_to, y_mid),
+            );
+        }
+        if let Ok(p) = path.build() {
+            window.paint_path(p, edge.color);
+        }
+    }
+
+    let node_color = row
+        .lanes_now
+        .get(row.node_col)
+        .map(|l| l.color)
+        .unwrap_or(theme.colors.text_muted);
+    let black = gpui::rgba(0x000000ff);
+
+    if is_stash_node {
+        paint_stash_node(bounds.left() + node_x, y_center, node_color, black, window);
+    } else {
+        paint_commit_node(bounds.left() + node_x, y_center, node_radius, node_color, black, window);
+    }
+}
+
+fn paint_commit_node(
+    x_center: Pixels,
+    y_center: Pixels,
+    node_radius: Pixels,
+    node_color: gpui::Rgba,
+    border_color: gpui::Rgba,
+    window: &mut Window,
+) {
+    let node_border = px(1.0);
+    let outer_r = node_radius + node_border;
+    window.paint_quad(
+        fill(
+            gpui::Bounds::new(
+                point(x_center - outer_r, y_center - outer_r),
+                size(outer_r * 2.0, outer_r * 2.0),
+            ),
+            border_color,
+        )
+        .corner_radii(outer_r),
+    );
+    window.paint_quad(
+        fill(
+            gpui::Bounds::new(
+                point(x_center - node_radius, y_center - node_radius),
+                size(node_radius * 2.0, node_radius * 2.0),
+            ),
+            node_color,
+        )
+        .corner_radii(node_radius),
+    );
+}
+
+fn paint_stash_node(
+    x_center: Pixels,
+    y_center: Pixels,
+    fill_color: gpui::Rgba,
+    border_color: gpui::Rgba,
+    window: &mut Window,
+) {
+    let border = px(1.0);
+    let box_w = px(8.0);
+    let box_h = px(7.0);
+    let outer_w = box_w + border * 2.0;
+    let outer_h = box_h + border * 2.0;
+    let r = px(1.6);
+
+    let outer = Bounds::new(
+        point(x_center - outer_w * 0.5, y_center - outer_h * 0.5),
+        size(outer_w, outer_h),
+    );
+    let inner = Bounds::new(
+        point(outer.left() + border, outer.top() + border),
+        size(box_w, box_h),
+    );
+
+    window.paint_quad(fill(outer, border_color).corner_radii(r));
+    window.paint_quad(fill(inner, fill_color).corner_radii((r - px(0.4)).max(px(0.0))));
+
+    // Simple "lid" line to make it read as a stash/box.
+    let lid_y = inner.top() + px(2.2);
+    let lid = Bounds::new(
+        point(inner.left() + px(1.0), lid_y),
+        size((inner.size.width - px(2.0)).max(px(0.0)), px(1.0)),
+    );
+    window.paint_quad(fill(lid, with_alpha(border_color, 0.65)));
+}

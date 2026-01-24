@@ -1,4 +1,5 @@
 use super::diff_text::*;
+use super::diff_canvas;
 use super::*;
 
 impl GitGpuiView {
@@ -10,11 +11,6 @@ impl GitGpuiView {
     ) -> Vec<AnyElement> {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
-            if this.diff_text_segments_cache_query != this.diff_visible_query {
-                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-                this.diff_text_segments_cache.clear();
-            }
-            let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
             let syntax_mode =
                 if this.file_diff_inline_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
@@ -83,7 +79,7 @@ impl GitGpuiView {
                             theme,
                             diff_content_text(line),
                             word_ranges,
-                            query.as_str(),
+                            "",
                             language,
                             syntax_mode,
                             word_color,
@@ -122,11 +118,6 @@ impl GitGpuiView {
         }
 
         let theme = this.theme;
-        if this.diff_text_segments_cache_query != this.diff_visible_query {
-            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-            this.diff_text_segments_cache.clear();
-        }
-        let query = this.diff_visible_query.clone();
         let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
             DiffSyntaxMode::Auto
         } else {
@@ -221,7 +212,7 @@ impl GitGpuiView {
                         theme,
                         diff_content_text(line),
                         word_ranges,
-                        query.as_str(),
+                        "",
                         language,
                         syntax_mode,
                         word_color,
@@ -269,11 +260,6 @@ impl GitGpuiView {
     ) -> Vec<AnyElement> {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
-            if this.diff_text_segments_cache_query != this.diff_visible_query {
-                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-                this.diff_text_segments_cache.clear();
-            }
-            let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
             let syntax_mode =
                 if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
@@ -335,7 +321,7 @@ impl GitGpuiView {
                                 theme,
                                 text,
                                 word_ranges,
-                                query.as_str(),
+                                "",
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -375,11 +361,6 @@ impl GitGpuiView {
         }
 
         let theme = this.theme;
-        if this.diff_text_segments_cache_query != this.diff_visible_query {
-            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-            this.diff_text_segments_cache.clear();
-        }
-        let query = this.diff_visible_query.clone();
         let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
             DiffSyntaxMode::Auto
         } else {
@@ -475,7 +456,7 @@ impl GitGpuiView {
                                 theme,
                                 text,
                                 word_ranges,
-                                query.as_str(),
+                                "",
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -548,11 +529,6 @@ impl GitGpuiView {
     ) -> Vec<AnyElement> {
         if this.is_file_diff_view_active() {
             let theme = this.theme;
-            if this.diff_text_segments_cache_query != this.diff_visible_query {
-                this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-                this.diff_text_segments_cache.clear();
-            }
-            let query = this.diff_visible_query.clone();
             let empty_ranges: &[Range<usize>] = &[];
             let syntax_mode =
                 if this.file_diff_cache_rows.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
@@ -614,7 +590,7 @@ impl GitGpuiView {
                                 theme,
                                 text,
                                 word_ranges,
-                                query.as_str(),
+                                "",
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -654,11 +630,6 @@ impl GitGpuiView {
         }
 
         let theme = this.theme;
-        if this.diff_text_segments_cache_query != this.diff_visible_query {
-            this.diff_text_segments_cache_query = this.diff_visible_query.clone();
-            this.diff_text_segments_cache.clear();
-        }
-        let query = this.diff_visible_query.clone();
         let syntax_mode = if this.diff_cache.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
             DiffSyntaxMode::Auto
         } else {
@@ -754,7 +725,7 @@ impl GitGpuiView {
                                 theme,
                                 text,
                                 word_ranges,
-                                query.as_str(),
+                                "",
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -871,9 +842,10 @@ fn diff_row(
             .on_click(on_click);
 
         if selected {
-            row = row
-                .border_1()
-                .border_color(with_alpha(theme.colors.accent, 0.55));
+            row = row.bg(with_alpha(
+                theme.colors.accent,
+                if theme.is_dark { 0.10 } else { 0.07 },
+            ));
         }
 
         return row.into_any_element();
@@ -921,9 +893,10 @@ fn diff_row(
             .on_click(on_click);
 
         if selected {
-            row = row
-                .border_1()
-                .border_color(with_alpha(theme.colors.accent, 0.55));
+            row = row.bg(with_alpha(
+                theme.colors.accent,
+                if theme.is_dark { 0.14 } else { 0.10 },
+            ));
         }
 
         return row.into_any_element();
@@ -936,55 +909,18 @@ fn diff_row(
 
     match mode {
         DiffViewMode::Inline => {
-            let mut row = div()
-                .id(("diff_row", visible_ix))
-                .h(px(20.0))
-                .flex()
-                .items_center()
-                .bg(bg)
-                .font_family("monospace")
-                .text_xs()
-                .on_click(on_click)
-                .child(
-                    div()
-                        .w(px(44.0))
-                        .px_2()
-                        .text_color(gutter_fg)
-                        .whitespace_nowrap()
-                        .child(old),
-                )
-                .child(
-                    div()
-                        .w(px(44.0))
-                        .px_2()
-                        .text_color(gutter_fg)
-                        .whitespace_nowrap()
-                        .child(new),
-                );
-
-            if selected {
-                row = row
-                    .border_1()
-                    .border_color(with_alpha(theme.colors.accent, 0.55));
-            }
-
-            row.child(
-                div()
-                    .flex_1()
-                    .px_2()
-                    .text_color(fg)
-                    .whitespace_nowrap()
-                    .child(selectable_cached_diff_text(
-                        visible_ix,
-                        DiffTextRegion::Inline,
-                        DiffClickKind::Line,
-                        fg,
-                        styled,
-                        SharedString::default(),
-                        cx,
-                    )),
+            diff_canvas::inline_diff_line_row_canvas(
+                theme,
+                cx.entity(),
+                visible_ix,
+                selected,
+                old,
+                new,
+                bg,
+                fg,
+                gutter_fg,
+                styled,
             )
-            .into_any_element()
         }
         DiffViewMode::Split => {
             let left_kind = match line.kind {
@@ -1014,97 +950,28 @@ fn diff_row(
                 _ => (styled, None),
             };
 
-            let mut row = div()
-                .id(("diff_row", visible_ix))
-                .h(px(20.0))
-                .flex()
-                .items_center()
-                .font_family("monospace")
-                .text_xs()
-                .on_click(on_click)
-                .child(
-                    div()
-                        .bg(left_bg)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .w(px(44.0))
-                                .px_2()
-                                .text_color(left_gutter)
-                                .whitespace_nowrap()
-                                .child(old),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .px_2()
-                                .text_color(left_fg)
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(selectable_cached_diff_text(
-                                    visible_ix,
-                                    DiffTextRegion::SplitLeft,
-                                    DiffClickKind::Line,
-                                    left_fg,
-                                    left_text,
-                                    SharedString::default(),
-                                    cx,
-                                )),
-                        ),
-                )
-                .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-                .child(
-                    div()
-                        .bg(right_bg)
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .w(px(44.0))
-                                .px_2()
-                                .text_color(right_gutter)
-                                .whitespace_nowrap()
-                                .child(new),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .px_2()
-                                .text_color(right_fg)
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(selectable_cached_diff_text(
-                                    visible_ix,
-                                    DiffTextRegion::SplitRight,
-                                    DiffClickKind::Line,
-                                    right_fg,
-                                    right_text,
-                                    SharedString::default(),
-                                    cx,
-                                )),
-                        ),
-                );
-
-            if selected {
-                row = row
-                    .border_1()
-                    .border_color(with_alpha(theme.colors.accent, 0.55));
-            }
-
-            row.into_any_element()
+            diff_canvas::split_diff_line_row_canvas(
+                theme,
+                cx.entity(),
+                visible_ix,
+                selected,
+                old,
+                new,
+                left_bg,
+                left_fg,
+                left_gutter,
+                right_bg,
+                right_fg,
+                right_gutter,
+                left_text,
+                right_text,
+            )
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PatchSplitColumn {
+pub(super) enum PatchSplitColumn {
     Left,
     Right,
 }
@@ -1118,15 +985,6 @@ fn patch_split_column_row(
     styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
-        if this.consume_suppress_click_after_drag() {
-            cx.notify();
-            return;
-        }
-        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, e.modifiers().shift);
-        cx.notify();
-    });
-
     let (ctx_bg, ctx_fg, ctx_gutter) =
         diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Context);
     let (add_bg, add_fg, add_gutter) =
@@ -1153,65 +1011,18 @@ fn patch_split_column_row(
         PatchSplitColumn::Right => line_number_string(row.new_line),
     };
 
-    let mut el = div()
-        .id((
-            match column {
-                PatchSplitColumn::Left => "diff_split_left_row",
-                PatchSplitColumn::Right => "diff_split_right_row",
-            },
-            visible_ix,
-        ))
-        .h(px(20.0))
-        .flex()
-        .items_center()
-        .font_family("monospace")
-        .text_xs()
-        .on_click(on_click)
-        .child(
-            div()
-                .bg(bg)
-                .flex_1()
-                .min_w(px(0.0))
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .w(px(44.0))
-                        .px_2()
-                        .text_color(gutter_fg)
-                        .whitespace_nowrap()
-                        .child(line_no),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .px_2()
-                        .text_color(fg)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(selectable_cached_diff_text(
-                            visible_ix,
-                            match column {
-                                PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
-                                PatchSplitColumn::Right => DiffTextRegion::SplitRight,
-                            },
-                            DiffClickKind::Line,
-                            fg,
-                            styled,
-                            SharedString::default(),
-                            cx,
-                        )),
-                ),
-        );
-
-    if selected {
-        el = el
-            .border_1()
-            .border_color(with_alpha(theme.colors.accent, 0.55));
-    }
-
-    el.into_any_element()
+    diff_canvas::patch_split_column_row_canvas(
+        theme,
+        cx.entity(),
+        column,
+        visible_ix,
+        selected,
+        bg,
+        fg,
+        gutter_fg,
+        line_no,
+        styled,
+    )
 }
 
 fn patch_split_header_row(
@@ -1275,9 +1086,10 @@ fn patch_split_header_row(
                 .on_click(on_click);
 
             if selected {
-                row = row
-                    .border_1()
-                    .border_color(with_alpha(theme.colors.accent, 0.55));
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.10 } else { 0.07 },
+                ));
             }
 
             row.into_any_element()
@@ -1330,9 +1142,10 @@ fn patch_split_header_row(
                 .on_click(on_click);
 
             if selected {
-                row = row
-                    .border_1()
-                    .border_color(with_alpha(theme.colors.accent, 0.55));
+                row = row.bg(with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.14 } else { 0.10 },
+                ));
             }
 
             row.into_any_element()
@@ -1392,9 +1205,10 @@ fn patch_split_meta_row(
         .on_click(on_click);
 
     if selected {
-        row = row
-            .border_1()
-            .border_color(with_alpha(theme.colors.accent, 0.55));
+        row = row.bg(with_alpha(
+            theme.colors.accent,
+            if theme.is_dark { 0.10 } else { 0.07 },
+        ));
     }
 
     row.into_any_element()

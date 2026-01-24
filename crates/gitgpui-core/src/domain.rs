@@ -191,6 +191,7 @@ impl Diff {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StashEntry {
     pub index: usize,
+    pub id: CommitId,
     pub message: String,
     pub created_at: Option<SystemTime>,
 }

@@ -28,8 +28,12 @@ fn line_number_string(n: Option<u32>) -> SharedString {
 }
 
 mod diff;
+mod diff_canvas;
 mod diff_text;
+mod canvas;
 mod history;
+mod history_canvas;
+mod history_graph_paint;
 mod sidebar;
 mod status;
 

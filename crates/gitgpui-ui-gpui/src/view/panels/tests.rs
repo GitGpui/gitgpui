@@ -151,7 +151,6 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
 
             // Ensure a clean render path.
             this.rebuild_diff_cache();
-            this.diff_text_segments_cache_query.clear();
             this.diff_text_segments_cache.clear();
             cx.notify();
         });

@@ -8,7 +8,6 @@ use super::CONTROL_HEIGHT_PX;
 pub enum SplitButtonStyle {
     Filled,
     Outlined,
-    Transparent,
 }
 
 /// A button composed of a primary action and a secondary affordance (typically a menu).
@@ -35,13 +34,9 @@ impl SplitButton {
     }
 
     pub fn render(self, theme: AppTheme) -> Div {
-        let bordered = matches!(
-            self.style,
-            SplitButtonStyle::Filled | SplitButtonStyle::Outlined
-        );
         let bg = match self.style {
             SplitButtonStyle::Filled => theme.colors.surface_bg_elevated,
-            SplitButtonStyle::Outlined | SplitButtonStyle::Transparent => gpui::rgba(0x00000000),
+            SplitButtonStyle::Outlined => gpui::rgba(0x00000000),
         };
         let border_color = with_alpha(
             theme.colors.text_muted,
@@ -61,7 +56,7 @@ impl SplitButton {
             .rounded(px(theme.radii.row))
             .bg(bg)
             .overflow_hidden()
-            .when(bordered, |this| this.p(px(1.0)))
+            .p(px(1.0))
             .child(
                 div()
                     .flex_1()
@@ -79,7 +74,8 @@ impl SplitButton {
             .h(px(CONTROL_HEIGHT_PX))
             .rounded(px(theme.radii.row))
             .bg(gpui::rgba(0x00000000))
-            .when(bordered, |this| this.border_1().border_color(border_color))
+            .border_1()
+            .border_color(border_color)
             .when(self.style == SplitButtonStyle::Filled, |this| {
                 this.shadow_sm()
             })

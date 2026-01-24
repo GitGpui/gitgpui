@@ -5,11 +5,15 @@
 
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{Div, FontWeight, IntoElement, SharedString, div, px};
+use gpui::{Div, FontWeight, SharedString, div, px};
 
+#[cfg(test)]
+use gpui::IntoElement;
+#[cfg(test)]
 use super::CONTROL_HEIGHT_MD_PX;
 use super::CONTROL_HEIGHT_PX;
 
+#[cfg(test)]
 pub fn panel(
     theme: AppTheme,
     title: impl Into<SharedString>,
@@ -59,6 +63,7 @@ pub fn panel(
         )
 }
 
+#[cfg(test)]
 pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> Div {
     div()
         .px_2()

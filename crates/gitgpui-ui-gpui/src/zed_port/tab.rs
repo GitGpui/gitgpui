@@ -10,20 +10,11 @@ pub enum TabPosition {
     Middle(Ordering),
     Last,
 }
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TabCloseSide {
-    Start,
-    End,
-}
-
 /// Ported/adapted from Zed's `ui::Tab`.
 pub struct Tab {
     div: Stateful<Div>,
     selected: bool,
     position: TabPosition,
-    close_side: TabCloseSide,
-    start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     children: Vec<AnyElement>,
 }
@@ -38,8 +29,6 @@ impl Tab {
             div: div().id(id.clone()),
             selected: false,
             position: TabPosition::First,
-            close_side: TabCloseSide::End,
-            start_slot: None,
             end_slot: None,
             children: Vec::new(),
         }
@@ -52,16 +41,6 @@ impl Tab {
 
     pub fn position(mut self, position: TabPosition) -> Self {
         self.position = position;
-        self
-    }
-
-    pub fn close_side(mut self, close_side: TabCloseSide) -> Self {
-        self.close_side = close_side;
-        self
-    }
-
-    pub fn start_slot(mut self, slot: impl IntoElement) -> Self {
-        self.start_slot = Some(slot.into_any_element());
         self
     }
 
@@ -88,18 +67,9 @@ impl Tab {
         let hover_bg = theme.colors.hover;
         let active_bg = theme.colors.active;
 
-        let (start_slot, end_slot) = match self.close_side {
-            TabCloseSide::End => (self.start_slot, self.end_slot),
-            TabCloseSide::Start => (self.end_slot, self.start_slot),
-        };
-
         let start_slot = div()
             .flex_none()
-            .size(Self::START_TAB_SLOT_SIZE)
-            .flex()
-            .items_center()
-            .justify_center()
-            .children(start_slot);
+            .size(Self::START_TAB_SLOT_SIZE);
 
         let end_slot = div()
             .flex_none()
@@ -107,7 +77,7 @@ impl Tab {
             .flex()
             .items_center()
             .justify_center()
-            .children(end_slot);
+            .children(self.end_slot);
 
         let mut base = self
             .div

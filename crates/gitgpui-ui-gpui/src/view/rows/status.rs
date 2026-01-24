@@ -18,10 +18,7 @@ impl GitGpuiView {
         range
             .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
-                let show_stage_button =
-                    this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
-                        *r == repo.id && *a == DiffArea::Unstaged && p == &entry.path
-                    });
+                let path_display = this.cached_path_display(&entry.path);
                 let is_selected = selected.is_some_and(|t| match t {
                     DiffTarget::WorkingTree { path, area } => {
                         *area == DiffArea::Unstaged && path == &entry.path
@@ -32,9 +29,9 @@ impl GitGpuiView {
                     theme,
                     ix,
                     entry,
+                    path_display,
                     DiffArea::Unstaged,
                     repo.id,
-                    show_stage_button,
                     is_selected,
                     cx,
                 )
@@ -59,10 +56,7 @@ impl GitGpuiView {
         range
             .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
-                let show_stage_button =
-                    this.hovered_status_row.as_ref().is_some_and(|(r, a, p)| {
-                        *r == repo.id && *a == DiffArea::Staged && p == &entry.path
-                    });
+                let path_display = this.cached_path_display(&entry.path);
                 let is_selected = selected.is_some_and(|t| match t {
                     DiffTarget::WorkingTree { path, area } => {
                         *area == DiffArea::Staged && path == &entry.path
@@ -73,9 +67,9 @@ impl GitGpuiView {
                     theme,
                     ix,
                     entry,
+                    path_display,
                     DiffArea::Staged,
                     repo.id,
-                    show_stage_button,
                     is_selected,
                     cx,
                 )
@@ -88,9 +82,9 @@ fn status_row(
     theme: AppTheme,
     ix: usize,
     entry: &FileStatus,
+    path_display: SharedString,
     area: DiffArea,
     repo_id: RepoId,
-    show_stage_button: bool,
     selected: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
@@ -109,15 +103,21 @@ fn status_row(
     let path = entry.path.clone();
     let path_for_stage = path.clone();
     let path_for_row = path.clone();
-    let path_for_hover = path.clone();
     let path_for_menu = path.clone();
     let stage_label = match area {
         DiffArea::Unstaged => "Stage",
         DiffArea::Staged => "Unstage",
     };
-    let row_tooltip: SharedString = path.display().to_string().into();
+    let row_tooltip = path_display.clone();
+    let stage_tooltip: SharedString = format!("{stage_label} file").into();
+    let row_group: SharedString = {
+        let area_label = match area {
+            DiffArea::Unstaged => "unstaged",
+            DiffArea::Staged => "staged",
+        };
+        format!("status_row_{}_{}_{}", repo_id.0, area_label, ix).into()
+    };
 
-    let hover_area = area;
     let stage_button = zed::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(zed::ButtonStyle::Outlined)
         .on_click(theme, cx, move |this, _e, window, cx| {
@@ -174,18 +174,23 @@ fn status_row(
             cx.notify();
         })
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let text: SharedString = format!("{stage_label} file").into();
+            let mut changed = false;
             if *hovering {
-                this.tooltip_text = Some(text);
-            } else if this.tooltip_text.as_ref() == Some(&text) {
-                this.tooltip_text = None;
+                changed |= this.set_tooltip_text_if_changed(Some(stage_tooltip.clone()));
+            } else if this.tooltip_text.as_ref() == Some(&stage_tooltip) {
+                changed |= this.set_tooltip_text_if_changed(None);
             }
-            cx.notify();
+            if changed {
+                cx.notify();
+            }
         }));
+
+    let path_display_for_label = path_display.clone();
 
     div()
         .id(ix)
         .relative()
+        .group(row_group.clone())
         .flex()
         .items_center()
         .gap_2()
@@ -197,20 +202,15 @@ fn status_row(
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let mut changed = false;
             if *hovering {
-                this.hovered_status_row = Some((repo_id, hover_area, path_for_hover.clone()));
-                this.tooltip_text = Some(row_tooltip.clone());
-            } else if this
-                .hovered_status_row
-                .as_ref()
-                .is_some_and(|(r, a, p)| *r == repo_id && *a == hover_area && p == &path_for_hover)
-            {
-                this.hovered_status_row = None;
-                if this.tooltip_text.as_ref() == Some(&row_tooltip) {
-                    this.tooltip_text = None;
-                }
+                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()));
+            } else if this.tooltip_text.as_ref() == Some(&row_tooltip) {
+                changed |= this.set_tooltip_text_if_changed(None);
             }
-            cx.notify();
+            if changed {
+                cx.notify();
+            }
         }))
         .on_mouse_down(
             MouseButton::Right,
@@ -235,7 +235,7 @@ fn status_row(
                 .gap_2()
                 .flex_1()
                 .min_w(px(0.0))
-                .pr(if show_stage_button { px(92.0) } else { px(0.0) })
+                .pr(px(92.0))
                 .child(
                     div()
                         .w(px(16.0))
@@ -256,21 +256,21 @@ fn status_row(
                         .flex_1()
                         .min_w(px(0.0))
                         .line_clamp(1)
-                        .child(path.display().to_string()),
+                        .child(path_display_for_label.clone()),
                 ),
         )
-        .when(show_stage_button, |row| {
-            row.child(
-                div()
-                    .absolute()
-                    .right(px(6.0))
-                    .top_0()
-                    .bottom_0()
-                    .flex()
-                    .items_center()
-                    .child(stage_button),
-            )
-        })
+        .child(
+            div()
+                .absolute()
+                .right(px(6.0))
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .invisible()
+                .group_hover(row_group.clone(), |d| d.visible())
+                .child(stage_button),
+        )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
             window.focus(&this.diff_panel_focus_handle);
             this.store.dispatch(Msg::SelectDiff {

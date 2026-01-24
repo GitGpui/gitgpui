@@ -4,21 +4,12 @@ use gpui::{Div, div, px};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ToastKind {
-    Info,
     Success,
     Error,
 }
 
 pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div {
     let (accent, bg, border) = match kind {
-        ToastKind::Info => (
-            theme.colors.accent,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(theme.colors.border, if theme.is_dark { 0.9 } else { 1.0 }),
-        ),
         ToastKind::Success => (
             theme.colors.success,
             with_alpha(

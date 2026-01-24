@@ -33,7 +33,7 @@ fn builds_pure_components_without_panics() {
         });
 
         assert_no_panic("zed::toast", || {
-            let _ = zed::toast(theme, zed::ToastKind::Info, "Hello");
+            let _ = zed::toast(theme, zed::ToastKind::Success, "Hello");
         });
 
         assert_no_panic("zed::Button render variants", || {

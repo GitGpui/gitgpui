@@ -208,41 +208,6 @@ mod tests {
     }
 }
 
-pub(super) fn render_cached_diff_styled_text(
-    base_fg: gpui::Rgba,
-    styled: Option<&CachedDiffStyledText>,
-) -> AnyElement {
-    let Some(styled) = styled else {
-        return div().into_any_element();
-    };
-    if styled.text.is_empty() {
-        return div().into_any_element();
-    }
-
-    if styled.highlights.is_empty() {
-        return div()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_color(base_fg)
-            .child(styled.text.clone())
-            .into_any_element();
-    }
-
-    div()
-        .flex()
-        .items_center()
-        .min_w(px(0.0))
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_color(base_fg)
-        .child(
-            gpui::StyledText::new(styled.text.clone())
-                .with_highlights(styled.highlights.as_ref().iter().cloned()),
-        )
-        .into_any_element()
-}
-
 pub(super) fn selectable_cached_diff_text(
     visible_ix: usize,
     region: DiffTextRegion,
@@ -483,12 +448,12 @@ pub(super) fn diff_line_colors(
 
     match (theme.is_dark, kind) {
         (_, Header) => (
-            theme.colors.surface_bg,
+            theme.colors.window_bg,
             theme.colors.text_muted,
             theme.colors.text_muted,
         ),
         (_, Hunk) => (
-            theme.colors.surface_bg_elevated,
+            theme.colors.window_bg,
             theme.colors.accent,
             theme.colors.text_muted,
         ),
@@ -513,7 +478,7 @@ pub(super) fn diff_line_colors(
             theme.colors.text_muted,
         ),
         (_, Context) => (
-            theme.colors.surface_bg_elevated,
+            theme.colors.window_bg,
             theme.colors.text,
             theme.colors.text_muted,
         ),

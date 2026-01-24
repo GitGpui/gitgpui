@@ -15,8 +15,9 @@ mod toast;
 mod tokens;
 
 pub use button::{Button, ButtonStyle};
-#[allow(unused_imports)]
-pub use components::{empty_state, key_value, panel, pill, split_columns_header};
+pub use components::{empty_state, key_value, split_columns_header};
+#[cfg(test)]
+pub use components::{panel, pill};
 pub use context_menu::{
     context_menu, context_menu_entry, context_menu_header, context_menu_label,
     context_menu_separator,
@@ -24,8 +25,7 @@ pub use context_menu::{
 pub use diff_stat::diff_stat;
 pub use picker_prompt::PickerPrompt;
 pub use split_button::{SplitButton, SplitButtonStyle};
-#[allow(unused_imports)]
-pub use tab::{Tab, TabCloseSide, TabPosition};
+pub use tab::{Tab, TabPosition};
 pub use tab_bar::TabBar;
 pub use toast::{ToastKind, toast};
 pub use tokens::*;

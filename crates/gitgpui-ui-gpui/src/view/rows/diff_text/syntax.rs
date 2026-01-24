@@ -11,7 +11,6 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in super::super) enum DiffSyntaxLanguage {
-    Plain,
     Html,
     Css,
     Hcl,
@@ -225,7 +224,6 @@ fn syntax_tokens_for_line_treesitter(
 
 fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
     Some(match language {
-        DiffSyntaxLanguage::Plain => return None,
         DiffSyntaxLanguage::Html => tree_sitter_html::LANGUAGE.into(),
         DiffSyntaxLanguage::Css => tree_sitter_css::LANGUAGE.into(),
         DiffSyntaxLanguage::Hcl => return None,
@@ -287,7 +285,6 @@ fn tree_sitter_highlight_spec(
     };
 
     Some(match language {
-        DiffSyntaxLanguage::Plain => return None,
         DiffSyntaxLanguage::Html => HTML.get_or_init(|| {
             init(
                 tree_sitter_html::LANGUAGE.into(),
@@ -475,7 +472,6 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             | DiffSyntaxLanguage::Html
             | DiffSyntaxLanguage::Css => (None, None, false),
             DiffSyntaxLanguage::Json => (None, None, false),
-            DiffSyntaxLanguage::Plain => (Some("//"), Some('#'), true),
             DiffSyntaxLanguage::Lua => (None, None, false),
         };
 
@@ -542,7 +538,6 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
                         | DiffSyntaxLanguage::Go
                         | DiffSyntaxLanguage::Bash
                         | DiffSyntaxLanguage::Sql
-                        | DiffSyntaxLanguage::Plain
                 ))
         {
             let quote = ch;
@@ -654,7 +649,6 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
 fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     // NOTE: This is a heuristic fallback when we don't want to use tree-sitter for a line.
     match language {
-        DiffSyntaxLanguage::Plain => matches!(ident, "true" | "false" | "null"),
         DiffSyntaxLanguage::Html => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Css => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Hcl => matches!(

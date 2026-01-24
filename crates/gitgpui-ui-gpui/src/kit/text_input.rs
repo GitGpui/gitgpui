@@ -30,7 +30,7 @@ actions!(
     ]
 );
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct TextInputStyle {
     background: Rgba,
     border: Rgba,
@@ -208,18 +208,29 @@ impl TextInput {
     }
 
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
-        self.style = TextInputStyle::from_theme(theme);
+        let style = TextInputStyle::from_theme(theme);
+        if self.style == style {
+            return;
+        }
+        self.style = style;
         cx.notify();
     }
 
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.content = text.into();
+        let text = text.into();
+        if self.content == text {
+            return;
+        }
+        self.content = text;
         self.selected_range = self.content.len()..self.content.len();
         self.cursor_blink_visible = true;
         cx.notify();
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
+        if self.read_only == read_only {
+            return;
+        }
         self.read_only = read_only;
         cx.notify();
     }
@@ -340,12 +351,6 @@ impl TextInput {
         } else {
             self.selected_range.end
         }
-    }
-
-    fn set_cursor(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.selected_range = offset..offset;
-        self.selection_reversed = false;
-        cx.notify();
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
