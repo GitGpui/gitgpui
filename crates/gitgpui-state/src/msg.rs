@@ -2,8 +2,7 @@ use crate::model::RepoId;
 use gitgpui_core::domain::*;
 use gitgpui_core::error::Error;
 use gitgpui_core::services::GitRepository;
-use gitgpui_core::services::PullMode;
-use gitgpui_core::services::{CommandOutput, ConflictSide};
+use gitgpui_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,8 +13,34 @@ pub enum RepoCommandKind {
     PullBranch { remote: String, branch: String },
     MergeRef { reference: String },
     Push,
+    ForcePush,
     PushSetUpstream { remote: String, branch: String },
+    Reset { mode: ResetMode, target: String },
+    Rebase { onto: String },
+    RebaseContinue,
+    RebaseAbort,
+    CreateTag { name: String, target: String },
+    DeleteTag { name: String },
+    AddRemote { name: String, url: String },
+    RemoveRemote { name: String },
+    SetRemoteUrl {
+        name: String,
+        url: String,
+        kind: RemoteUrlKind,
+    },
     CheckoutConflict { path: PathBuf, side: ConflictSide },
+    ExportPatch { commit_id: CommitId, dest: PathBuf },
+    ApplyPatch { patch: PathBuf },
+    AddWorktree {
+        path: PathBuf,
+        reference: Option<String>,
+    },
+    RemoveWorktree { path: PathBuf },
+    AddSubmodule { url: String, path: PathBuf },
+    UpdateSubmodules,
+    RemoveSubmodule { path: PathBuf },
+    StageHunk,
+    UnstageHunk,
 }
 
 pub enum Msg {
@@ -60,6 +85,30 @@ pub enum Msg {
     LoadReflog {
         repo_id: RepoId,
     },
+    LoadFileHistory {
+        repo_id: RepoId,
+        path: PathBuf,
+        limit: usize,
+    },
+    LoadBlame {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+    },
+    LoadWorktrees {
+        repo_id: RepoId,
+    },
+    LoadSubmodules {
+        repo_id: RepoId,
+    },
+    StageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
+    UnstageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
     CheckoutBranch {
         repo_id: RepoId,
         name: String,
@@ -85,6 +134,57 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
     },
+    CreateBranchAndCheckout {
+        repo_id: RepoId,
+        name: String,
+    },
+    DeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CloneRepo {
+        url: String,
+        dest: PathBuf,
+    },
+    CloneRepoProgress {
+        dest: PathBuf,
+        line: String,
+    },
+    CloneRepoFinished {
+        url: String,
+        dest: PathBuf,
+        result: Result<CommandOutput, Error>,
+    },
+    ExportPatch {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        dest: PathBuf,
+    },
+    ApplyPatch {
+        repo_id: RepoId,
+        patch: PathBuf,
+    },
+    AddWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: Option<String>,
+    },
+    RemoveWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AddSubmodule {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+    },
+    UpdateSubmodules {
+        repo_id: RepoId,
+    },
+    RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     StagePath {
         repo_id: RepoId,
         path: PathBuf,
@@ -101,7 +201,19 @@ pub enum Msg {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
     },
+    DiscardWorktreeChangesPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    DiscardWorktreeChangesPaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
     Commit {
+        repo_id: RepoId,
+        message: String,
+    },
+    CommitAmend {
         repo_id: RepoId,
         message: String,
     },
@@ -124,10 +236,52 @@ pub enum Msg {
     Push {
         repo_id: RepoId,
     },
+    ForcePush {
+        repo_id: RepoId,
+    },
     PushSetUpstream {
         repo_id: RepoId,
         remote: String,
         branch: String,
+    },
+    Reset {
+        repo_id: RepoId,
+        target: String,
+        mode: ResetMode,
+    },
+    Rebase {
+        repo_id: RepoId,
+        onto: String,
+    },
+    RebaseContinue {
+        repo_id: RepoId,
+    },
+    RebaseAbort {
+        repo_id: RepoId,
+    },
+    CreateTag {
+        repo_id: RepoId,
+        name: String,
+        target: String,
+    },
+    DeleteTag {
+        repo_id: RepoId,
+        name: String,
+    },
+    AddRemote {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+    },
+    RemoveRemote {
+        repo_id: RepoId,
+        name: String,
+    },
+    SetRemoteUrl {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+        kind: RemoteUrlKind,
     },
     CheckoutConflictSide {
         repo_id: RepoId,
@@ -144,6 +298,10 @@ pub enum Msg {
         index: usize,
     },
     DropStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    PopStash {
         repo_id: RepoId,
         index: usize,
     },
@@ -200,6 +358,29 @@ pub enum Msg {
         repo_id: RepoId,
         result: Result<Vec<ReflogEntry>, Error>,
     },
+    RebaseStateLoaded {
+        repo_id: RepoId,
+        result: Result<bool, Error>,
+    },
+    FileHistoryLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<LogPage, Error>,
+    },
+    BlameLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+        result: Result<Vec<gitgpui_core::services::BlameLine>, Error>,
+    },
+    WorktreesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Worktree>, Error>,
+    },
+    SubmodulesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Submodule>, Error>,
+    },
 
     CommitDetailsLoaded {
         repo_id: RepoId,
@@ -217,12 +398,21 @@ pub enum Msg {
         target: DiffTarget,
         result: Result<Option<FileDiffText>, Error>,
     },
+    DiffFileImageLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<Option<FileDiffImage>, Error>,
+    },
 
     RepoActionFinished {
         repo_id: RepoId,
         result: Result<(), Error>,
     },
     CommitFinished {
+        repo_id: RepoId,
+        result: Result<(), Error>,
+    },
+    CommitAmendFinished {
         repo_id: RepoId,
         result: Result<(), Error>,
     },
@@ -293,6 +483,40 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("LoadReflog")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::LoadFileHistory {
+                repo_id,
+                path,
+                limit,
+            } => f
+                .debug_struct("LoadFileHistory")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("limit", limit)
+                .finish(),
+            Msg::LoadBlame { repo_id, path, rev } => f
+                .debug_struct("LoadBlame")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("rev", rev)
+                .finish(),
+            Msg::LoadWorktrees { repo_id } => f
+                .debug_struct("LoadWorktrees")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::LoadSubmodules { repo_id } => f
+                .debug_struct("LoadSubmodules")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::StageHunk { repo_id, patch } => f
+                .debug_struct("StageHunk")
+                .field("repo_id", repo_id)
+                .field("patch_len", &patch.len())
+                .finish(),
+            Msg::UnstageHunk { repo_id, patch } => f
+                .debug_struct("UnstageHunk")
+                .field("repo_id", repo_id)
+                .field("patch_len", &patch.len())
+                .finish(),
             Msg::CheckoutBranch { repo_id, name } => f
                 .debug_struct("CheckoutBranch")
                 .field("repo_id", repo_id)
@@ -328,6 +552,77 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("name", name)
                 .finish(),
+            Msg::CreateBranchAndCheckout { repo_id, name } => f
+                .debug_struct("CreateBranchAndCheckout")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
+            Msg::DeleteBranch { repo_id, name } => f
+                .debug_struct("DeleteBranch")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
+            Msg::CloneRepo { url, dest } => f
+                .debug_struct("CloneRepo")
+                .field("url", url)
+                .field("dest", dest)
+                .finish(),
+            Msg::CloneRepoProgress { dest, line } => f
+                .debug_struct("CloneRepoProgress")
+                .field("dest", dest)
+                .field("line", line)
+                .finish(),
+            Msg::CloneRepoFinished { url, dest, result } => f
+                .debug_struct("CloneRepoFinished")
+                .field("url", url)
+                .field("dest", dest)
+                .field("ok", &result.is_ok())
+                .finish(),
+            Msg::ExportPatch {
+                repo_id,
+                commit_id,
+                dest,
+            } => f
+                .debug_struct("ExportPatch")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .field("dest", dest)
+                .finish(),
+            Msg::ApplyPatch { repo_id, patch } => f
+                .debug_struct("ApplyPatch")
+                .field("repo_id", repo_id)
+                .field("patch", patch)
+                .finish(),
+            Msg::AddWorktree {
+                repo_id,
+                path,
+                reference,
+            } => f
+                .debug_struct("AddWorktree")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("reference", reference)
+                .finish(),
+            Msg::RemoveWorktree { repo_id, path } => f
+                .debug_struct("RemoveWorktree")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .finish(),
+            Msg::AddSubmodule { repo_id, url, path } => f
+                .debug_struct("AddSubmodule")
+                .field("repo_id", repo_id)
+                .field("url", url)
+                .field("path", path)
+                .finish(),
+            Msg::UpdateSubmodules { repo_id } => f
+                .debug_struct("UpdateSubmodules")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::RemoveSubmodule { repo_id, path } => f
+                .debug_struct("RemoveSubmodule")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .finish(),
             Msg::StagePath { repo_id, path } => f
                 .debug_struct("StagePath")
                 .field("repo_id", repo_id)
@@ -348,8 +643,23 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("paths_len", &paths.len())
                 .finish(),
+            Msg::DiscardWorktreeChangesPath { repo_id, path } => f
+                .debug_struct("DiscardWorktreeChangesPath")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .finish(),
+            Msg::DiscardWorktreeChangesPaths { repo_id, paths } => f
+                .debug_struct("DiscardWorktreeChangesPaths")
+                .field("repo_id", repo_id)
+                .field("paths_len", &paths.len())
+                .finish(),
             Msg::Commit { repo_id, message } => f
                 .debug_struct("Commit")
+                .field("repo_id", repo_id)
+                .field("message", message)
+                .finish(),
+            Msg::CommitAmend { repo_id, message } => f
+                .debug_struct("CommitAmend")
                 .field("repo_id", repo_id)
                 .field("message", message)
                 .finish(),
@@ -378,6 +688,10 @@ impl std::fmt::Debug for Msg {
                 .field("reference", reference)
                 .finish(),
             Msg::Push { repo_id } => f.debug_struct("Push").field("repo_id", repo_id).finish(),
+            Msg::ForcePush { repo_id } => f
+                .debug_struct("ForcePush")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::PushSetUpstream {
                 repo_id,
                 remote,
@@ -387,6 +701,67 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("remote", remote)
                 .field("branch", branch)
+                .finish(),
+            Msg::Reset {
+                repo_id,
+                target,
+                mode,
+            } => f
+                .debug_struct("Reset")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("mode", mode)
+                .finish(),
+            Msg::Rebase { repo_id, onto } => f
+                .debug_struct("Rebase")
+                .field("repo_id", repo_id)
+                .field("onto", onto)
+                .finish(),
+            Msg::RebaseContinue { repo_id } => f
+                .debug_struct("RebaseContinue")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::RebaseAbort { repo_id } => f
+                .debug_struct("RebaseAbort")
+                .field("repo_id", repo_id)
+                .finish(),
+            Msg::CreateTag {
+                repo_id,
+                name,
+                target,
+            } => f
+                .debug_struct("CreateTag")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("target", target)
+                .finish(),
+            Msg::DeleteTag { repo_id, name } => f
+                .debug_struct("DeleteTag")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
+            Msg::AddRemote { repo_id, name, url } => f
+                .debug_struct("AddRemote")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("url", url)
+                .finish(),
+            Msg::RemoveRemote { repo_id, name } => f
+                .debug_struct("RemoveRemote")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
+            Msg::SetRemoteUrl {
+                repo_id,
+                name,
+                url,
+                kind,
+            } => f
+                .debug_struct("SetRemoteUrl")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("url", url)
+                .field("kind", kind)
                 .finish(),
             Msg::CheckoutConflictSide {
                 repo_id,
@@ -415,6 +790,11 @@ impl std::fmt::Debug for Msg {
                 .finish(),
             Msg::DropStash { repo_id, index } => f
                 .debug_struct("DropStash")
+                .field("repo_id", repo_id)
+                .field("index", index)
+                .finish(),
+            Msg::PopStash { repo_id, index } => f
+                .debug_struct("PopStash")
                 .field("repo_id", repo_id)
                 .field("index", index)
                 .finish(),
@@ -489,6 +869,43 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::RebaseStateLoaded { repo_id, result } => f
+                .debug_struct("RebaseStateLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            Msg::FileHistoryLoaded {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("FileHistoryLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
+            Msg::BlameLoaded {
+                repo_id,
+                path,
+                rev,
+                result,
+            } => f
+                .debug_struct("BlameLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("rev", rev)
+                .field("result", result)
+                .finish(),
+            Msg::WorktreesLoaded { repo_id, result } => f
+                .debug_struct("WorktreesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            Msg::SubmodulesLoaded { repo_id, result } => f
+                .debug_struct("SubmodulesLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             Msg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,
@@ -519,6 +936,16 @@ impl std::fmt::Debug for Msg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
+            Msg::DiffFileImageLoaded {
+                repo_id,
+                target,
+                result,
+            } => f
+                .debug_struct("DiffFileImageLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
             Msg::RepoActionFinished { repo_id, result } => f
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
@@ -526,6 +953,11 @@ impl std::fmt::Debug for Msg {
                 .finish(),
             Msg::CommitFinished { repo_id, result } => f
                 .debug_struct("CommitFinished")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            Msg::CommitAmendFinished { repo_id, result } => f
+                .debug_struct("CommitAmendFinished")
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
@@ -584,6 +1016,25 @@ pub enum Effect {
         repo_id: RepoId,
         limit: usize,
     },
+    LoadFileHistory {
+        repo_id: RepoId,
+        path: PathBuf,
+        limit: usize,
+    },
+    LoadBlame {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+    },
+    LoadWorktrees {
+        repo_id: RepoId,
+    },
+    LoadSubmodules {
+        repo_id: RepoId,
+    },
+    LoadRebaseState {
+        repo_id: RepoId,
+    },
     LoadCommitDetails {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -593,6 +1044,10 @@ pub enum Effect {
         target: DiffTarget,
     },
     LoadDiffFile {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
     },
@@ -622,6 +1077,56 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
     },
+    CreateBranchAndCheckout {
+        repo_id: RepoId,
+        name: String,
+    },
+    DeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CloneRepo {
+        url: String,
+        dest: PathBuf,
+    },
+    ExportPatch {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        dest: PathBuf,
+    },
+    ApplyPatch {
+        repo_id: RepoId,
+        patch: PathBuf,
+    },
+    AddWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: Option<String>,
+    },
+    RemoveWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AddSubmodule {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+    },
+    UpdateSubmodules {
+        repo_id: RepoId,
+    },
+    RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    StageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
+    UnstageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
     StagePath {
         repo_id: RepoId,
         path: PathBuf,
@@ -638,7 +1143,19 @@ pub enum Effect {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
     },
+    DiscardWorktreeChangesPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    DiscardWorktreeChangesPaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
     Commit {
+        repo_id: RepoId,
+        message: String,
+    },
+    CommitAmend {
         repo_id: RepoId,
         message: String,
     },
@@ -661,10 +1178,52 @@ pub enum Effect {
     Push {
         repo_id: RepoId,
     },
+    ForcePush {
+        repo_id: RepoId,
+    },
     PushSetUpstream {
         repo_id: RepoId,
         remote: String,
         branch: String,
+    },
+    Reset {
+        repo_id: RepoId,
+        target: String,
+        mode: ResetMode,
+    },
+    Rebase {
+        repo_id: RepoId,
+        onto: String,
+    },
+    RebaseContinue {
+        repo_id: RepoId,
+    },
+    RebaseAbort {
+        repo_id: RepoId,
+    },
+    CreateTag {
+        repo_id: RepoId,
+        name: String,
+        target: String,
+    },
+    DeleteTag {
+        repo_id: RepoId,
+        name: String,
+    },
+    AddRemote {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+    },
+    RemoveRemote {
+        repo_id: RepoId,
+        name: String,
+    },
+    SetRemoteUrl {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+        kind: RemoteUrlKind,
     },
     CheckoutConflictSide {
         repo_id: RepoId,
@@ -681,6 +1240,10 @@ pub enum Effect {
         index: usize,
     },
     DropStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    PopStash {
         repo_id: RepoId,
         index: usize,
     },

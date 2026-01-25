@@ -174,6 +174,27 @@ impl GitGpuiView {
                         }
                     }));
 
+                    let pop_tooltip: SharedString = "Pop stash".into();
+                    let pop_button =
+                        zed::Button::new(format!("stash_sidebar_pop_{index}"), "Pop")
+                            .style(zed::ButtonStyle::Filled)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                this.store.dispatch(Msg::PopStash { repo_id, index });
+                                cx.notify();
+                            })
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(pop_tooltip.clone()));
+                                } else if this.tooltip_text.as_ref() == Some(&pop_tooltip) {
+                                    changed |= this.set_tooltip_text_if_changed(None);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            }));
+
                     let drop_tooltip: SharedString = "Drop stash".into();
                     let drop_button = zed::Button::new(
                         format!("stash_sidebar_drop_{index}"),
@@ -237,6 +258,7 @@ impl GitGpuiView {
                                 .invisible()
                                 .group_hover(row_group.clone(), |d| d.visible())
                                 .child(apply_button)
+                                .child(pop_button)
                                 .child(drop_button),
                         )
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {

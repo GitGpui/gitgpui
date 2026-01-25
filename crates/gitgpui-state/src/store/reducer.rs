@@ -1,5 +1,6 @@
 use crate::model::{
-    AppState, CommandLogEntry, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoState,
+    AppState, CloneOpState, CloneOpStatus, CommandLogEntry, DiagnosticEntry, DiagnosticKind,
+    Loadable, RepoId, RepoState,
 };
 use crate::msg::{Effect, Msg};
 use crate::session;
@@ -7,10 +8,30 @@ use gitgpui_core::domain::{DiffTarget, RepoSpec};
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
+
+fn is_supported_image_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tif" | "tiff"
+    )
+}
+
+fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
+    match target {
+        DiffTarget::WorkingTree { path, .. } => is_supported_image_path(path),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => is_supported_image_path(path),
+        _ => false,
+    }
+}
 
 pub(super) fn reduce(
     repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
@@ -116,12 +137,17 @@ pub(super) fn reduce(
                     &target,
                     DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
                 );
+                let wants_image = diff_target_wants_image_preview(&target);
                 effects.push(Effect::LoadDiff {
                     repo_id,
                     target: target.clone(),
                 });
                 if supports_file {
-                    effects.push(Effect::LoadDiffFile { repo_id, target });
+                    if wants_image {
+                        effects.push(Effect::LoadDiffFileImage { repo_id, target });
+                    } else {
+                        effects.push(Effect::LoadDiffFile { repo_id, target });
+                    }
                 }
             }
             effects
@@ -142,6 +168,14 @@ pub(super) fn reduce(
             repo_state.log_loading_more = false;
             repo_state.stashes = Loadable::Loading;
             repo_state.reflog = Loadable::Loading;
+            repo_state.rebase_in_progress = Loadable::Loading;
+            repo_state.file_history_path = None;
+            repo_state.file_history = Loadable::NotLoaded;
+            repo_state.blame_path = None;
+            repo_state.blame_rev = None;
+            repo_state.blame = Loadable::NotLoaded;
+            repo_state.worktrees = Loadable::NotLoaded;
+            repo_state.submodules = Loadable::NotLoaded;
             repo_state.selected_commit = None;
             repo_state.commit_details = Loadable::NotLoaded;
 
@@ -194,6 +228,85 @@ pub(super) fn reduce(
             }]
         }
 
+        Msg::RebaseStateLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.rebase_in_progress = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::FileHistoryLoaded {
+            repo_id,
+            path,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.file_history_path.as_ref() == Some(&path)
+            {
+                repo_state.file_history = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::BlameLoaded {
+            repo_id,
+            path,
+            rev,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.blame_path.as_ref() == Some(&path)
+                && repo_state.blame_rev == rev
+            {
+                repo_state.blame = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::WorktreesLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.worktrees = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
+        Msg::SubmodulesLoaded { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.submodules = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
         Msg::SelectCommit { repo_id, commit_id } => {
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
@@ -242,7 +355,13 @@ pub(super) fn reduce(
                 &target,
                 DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
             );
-            repo_state.diff_file = if supports_file {
+            let wants_image = diff_target_wants_image_preview(&target);
+            repo_state.diff_file = if supports_file && !wants_image {
+                Loadable::Loading
+            } else {
+                Loadable::NotLoaded
+            };
+            repo_state.diff_file_image = if supports_file && wants_image {
                 Loadable::Loading
             } else {
                 Loadable::NotLoaded
@@ -253,7 +372,11 @@ pub(super) fn reduce(
                 target: target.clone(),
             }];
             if supports_file {
-                effects.push(Effect::LoadDiffFile { repo_id, target });
+                if wants_image {
+                    effects.push(Effect::LoadDiffFileImage { repo_id, target });
+                } else {
+                    effects.push(Effect::LoadDiffFile { repo_id, target });
+                }
             }
             effects
         }
@@ -266,6 +389,7 @@ pub(super) fn reduce(
             repo_state.diff_target = None;
             repo_state.diff = Loadable::NotLoaded;
             repo_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_file_image = Loadable::NotLoaded;
             Vec::new()
         }
 
@@ -288,6 +412,60 @@ pub(super) fn reduce(
             }]
         }
 
+        Msg::LoadFileHistory {
+            repo_id,
+            path,
+            limit,
+        } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.file_history_path = Some(path.clone());
+            repo_state.file_history = Loadable::Loading;
+            vec![Effect::LoadFileHistory {
+                repo_id,
+                path,
+                limit,
+            }]
+        }
+
+        Msg::LoadBlame {
+            repo_id,
+            path,
+            rev,
+        } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.blame_path = Some(path.clone());
+            repo_state.blame_rev = rev.clone();
+            repo_state.blame = Loadable::Loading;
+            vec![Effect::LoadBlame {
+                repo_id,
+                path,
+                rev,
+            }]
+        }
+
+        Msg::LoadWorktrees { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.worktrees = Loadable::Loading;
+            vec![Effect::LoadWorktrees { repo_id }]
+        }
+
+        Msg::LoadSubmodules { repo_id } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.submodules = Loadable::Loading;
+            vec![Effect::LoadSubmodules { repo_id }]
+        }
+
+        Msg::StageHunk { repo_id, patch } => vec![Effect::StageHunk { repo_id, patch }],
+        Msg::UnstageHunk { repo_id, patch } => vec![Effect::UnstageHunk { repo_id, patch }],
+
         Msg::CheckoutBranch { repo_id, name } => vec![Effect::CheckoutBranch { repo_id, name }],
         Msg::CheckoutRemoteBranch {
             repo_id,
@@ -308,11 +486,104 @@ pub(super) fn reduce(
             vec![Effect::RevertCommit { repo_id, commit_id }]
         }
         Msg::CreateBranch { repo_id, name } => vec![Effect::CreateBranch { repo_id, name }],
+        Msg::CreateBranchAndCheckout { repo_id, name } => {
+            vec![Effect::CreateBranchAndCheckout { repo_id, name }]
+        }
+        Msg::DeleteBranch { repo_id, name } => vec![Effect::DeleteBranch { repo_id, name }],
+        Msg::CloneRepo { url, dest } => {
+            state.clone = Some(CloneOpState {
+                url: url.clone(),
+                dest: dest.clone(),
+                status: CloneOpStatus::Running,
+                seq: 0,
+                output_tail: Vec::new(),
+            });
+            vec![Effect::CloneRepo { url, dest }]
+        }
+        Msg::CloneRepoProgress { dest, line } => {
+            if let Some(op) = state.clone.as_mut()
+                && matches!(op.status, CloneOpStatus::Running)
+                && op.dest == dest
+            {
+                op.seq = op.seq.wrapping_add(1);
+                if !line.trim().is_empty() {
+                    op.output_tail.push(line);
+                    const MAX_LINES: usize = 80;
+                    if op.output_tail.len() > MAX_LINES {
+                        let drain = op.output_tail.len() - MAX_LINES;
+                        op.output_tail.drain(0..drain);
+                    }
+                }
+            }
+            Vec::new()
+        }
+        Msg::CloneRepoFinished {
+            url,
+            dest,
+            result,
+        } => {
+            if let Some(op) = state.clone.as_mut()
+                && op.dest == dest
+            {
+                op.url = url;
+                op.status = match result {
+                    Ok(_) => CloneOpStatus::FinishedOk,
+                    Err(e) => CloneOpStatus::FinishedErr(e.to_string()),
+                };
+                op.seq = op.seq.wrapping_add(1);
+            } else {
+                state.clone = Some(CloneOpState {
+                    url,
+                    dest,
+                    status: match result {
+                        Ok(_) => CloneOpStatus::FinishedOk,
+                        Err(e) => CloneOpStatus::FinishedErr(e.to_string()),
+                    },
+                    seq: 1,
+                    output_tail: Vec::new(),
+                });
+            }
+            Vec::new()
+        }
+        Msg::ExportPatch {
+            repo_id,
+            commit_id,
+            dest,
+        } => vec![Effect::ExportPatch {
+            repo_id,
+            commit_id,
+            dest,
+        }],
+        Msg::ApplyPatch { repo_id, patch } => vec![Effect::ApplyPatch { repo_id, patch }],
+        Msg::AddWorktree {
+            repo_id,
+            path,
+            reference,
+        } => vec![Effect::AddWorktree {
+            repo_id,
+            path,
+            reference,
+        }],
+        Msg::RemoveWorktree { repo_id, path } => vec![Effect::RemoveWorktree { repo_id, path }],
+        Msg::AddSubmodule { repo_id, url, path } => vec![Effect::AddSubmodule {
+            repo_id,
+            url,
+            path,
+        }],
+        Msg::UpdateSubmodules { repo_id } => vec![Effect::UpdateSubmodules { repo_id }],
+        Msg::RemoveSubmodule { repo_id, path } => vec![Effect::RemoveSubmodule { repo_id, path }],
         Msg::StagePath { repo_id, path } => vec![Effect::StagePath { repo_id, path }],
         Msg::StagePaths { repo_id, paths } => vec![Effect::StagePaths { repo_id, paths }],
         Msg::UnstagePath { repo_id, path } => vec![Effect::UnstagePath { repo_id, path }],
         Msg::UnstagePaths { repo_id, paths } => vec![Effect::UnstagePaths { repo_id, paths }],
+        Msg::DiscardWorktreeChangesPath { repo_id, path } => {
+            vec![Effect::DiscardWorktreeChangesPath { repo_id, path }]
+        }
+        Msg::DiscardWorktreeChangesPaths { repo_id, paths } => {
+            vec![Effect::DiscardWorktreeChangesPaths { repo_id, paths }]
+        }
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
+        Msg::CommitAmend { repo_id, message } => vec![Effect::CommitAmend { repo_id, message }],
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
         Msg::Pull { repo_id, mode } => vec![Effect::Pull { repo_id, mode }],
         Msg::PullBranch {
@@ -326,6 +597,7 @@ pub(super) fn reduce(
         }],
         Msg::MergeRef { repo_id, reference } => vec![Effect::MergeRef { repo_id, reference }],
         Msg::Push { repo_id } => vec![Effect::Push { repo_id }],
+        Msg::ForcePush { repo_id } => vec![Effect::ForcePush { repo_id }],
         Msg::PushSetUpstream {
             repo_id,
             remote,
@@ -334,6 +606,41 @@ pub(super) fn reduce(
             repo_id,
             remote,
             branch,
+        }],
+        Msg::Reset {
+            repo_id,
+            target,
+            mode,
+        } => vec![Effect::Reset {
+            repo_id,
+            target,
+            mode,
+        }],
+        Msg::Rebase { repo_id, onto } => vec![Effect::Rebase { repo_id, onto }],
+        Msg::RebaseContinue { repo_id } => vec![Effect::RebaseContinue { repo_id }],
+        Msg::RebaseAbort { repo_id } => vec![Effect::RebaseAbort { repo_id }],
+        Msg::CreateTag {
+            repo_id,
+            name,
+            target,
+        } => vec![Effect::CreateTag {
+            repo_id,
+            name,
+            target,
+        }],
+        Msg::DeleteTag { repo_id, name } => vec![Effect::DeleteTag { repo_id, name }],
+        Msg::AddRemote { repo_id, name, url } => vec![Effect::AddRemote { repo_id, name, url }],
+        Msg::RemoveRemote { repo_id, name } => vec![Effect::RemoveRemote { repo_id, name }],
+        Msg::SetRemoteUrl {
+            repo_id,
+            name,
+            url,
+            kind,
+        } => vec![Effect::SetRemoteUrl {
+            repo_id,
+            name,
+            url,
+            kind,
         }],
         Msg::CheckoutConflictSide {
             repo_id,
@@ -355,6 +662,7 @@ pub(super) fn reduce(
         }],
         Msg::ApplyStash { repo_id, index } => vec![Effect::ApplyStash { repo_id, index }],
         Msg::DropStash { repo_id, index } => vec![Effect::DropStash { repo_id, index }],
+        Msg::PopStash { repo_id, index } => vec![Effect::PopStash { repo_id, index }],
 
         Msg::RepoOpenedOk {
             repo_id,
@@ -380,10 +688,20 @@ pub(super) fn reduce(
                 repo_state.log_loading_more = false;
                 repo_state.stashes = Loadable::Loading;
                 repo_state.reflog = Loadable::Loading;
+                repo_state.rebase_in_progress = Loadable::Loading;
+                repo_state.file_history_path = None;
+                repo_state.file_history = Loadable::NotLoaded;
+                repo_state.blame_path = None;
+                repo_state.blame_rev = None;
+                repo_state.blame = Loadable::NotLoaded;
+                repo_state.worktrees = Loadable::NotLoaded;
+                repo_state.submodules = Loadable::NotLoaded;
                 repo_state.selected_commit = None;
                 repo_state.commit_details = Loadable::NotLoaded;
                 repo_state.diff_target = None;
                 repo_state.diff = Loadable::NotLoaded;
+                repo_state.diff_file = Loadable::NotLoaded;
+                repo_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.last_error = None;
 
                 return refresh_effects(repo_id, repo_state.history_scope);
@@ -622,6 +940,26 @@ pub(super) fn reduce(
             Vec::new()
         }
 
+        Msg::DiffFileImageLoaded {
+            repo_id,
+            target,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.diff_target.as_ref() == Some(&target)
+            {
+                repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
+                repo_state.diff_file_image = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
         Msg::RepoActionFinished { repo_id, result } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 match result {
@@ -650,12 +988,17 @@ pub(super) fn reduce(
                     &target,
                     DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
                 );
+                let wants_image = diff_target_wants_image_preview(&target);
                 effects.push(Effect::LoadDiff {
                     repo_id,
                     target: target.clone(),
                 });
                 if supports_file {
-                    effects.push(Effect::LoadDiffFile { repo_id, target });
+                    if wants_image {
+                        effects.push(Effect::LoadDiffFileImage { repo_id, target });
+                    } else {
+                        effects.push(Effect::LoadDiffFile { repo_id, target });
+                    }
                 }
             }
             effects
@@ -669,6 +1012,7 @@ pub(super) fn reduce(
                         repo_state.diff_target = None;
                         repo_state.diff = Loadable::NotLoaded;
                         repo_state.diff_file = Loadable::NotLoaded;
+                        repo_state.diff_file_image = Loadable::NotLoaded;
                         push_action_log(
                             repo_state,
                             true,
@@ -700,6 +1044,46 @@ pub(super) fn reduce(
             refresh_effects(repo_id, scope)
         }
 
+        Msg::CommitAmendFinished { repo_id, result } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                match result {
+                    Ok(()) => {
+                        repo_state.last_error = None;
+                        repo_state.diff_target = None;
+                        repo_state.diff = Loadable::NotLoaded;
+                        repo_state.diff_file = Loadable::NotLoaded;
+                        repo_state.diff_file_image = Loadable::NotLoaded;
+                        push_action_log(
+                            repo_state,
+                            true,
+                            "Amend".to_string(),
+                            "Amend: Completed".to_string(),
+                            None,
+                        );
+                    }
+                    Err(e) => {
+                        repo_state.last_error = Some(e.to_string());
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        push_action_log(
+                            repo_state,
+                            false,
+                            "Amend".to_string(),
+                            format!("Amend failed: {e}"),
+                            Some(&e),
+                        );
+                    }
+                }
+            }
+
+            let scope = state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.history_scope)
+                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
+            refresh_effects(repo_id, scope)
+        }
+
         Msg::RepoCommandFinished {
             repo_id,
             command,
@@ -709,6 +1093,18 @@ pub(super) fn reduce(
                 match result {
                     Ok(output) => {
                         repo_state.last_error = None;
+                        if matches!(
+                            &command,
+                            crate::msg::RepoCommandKind::Reset { .. }
+                                | crate::msg::RepoCommandKind::Rebase { .. }
+                                | crate::msg::RepoCommandKind::RebaseContinue
+                                | crate::msg::RepoCommandKind::RebaseAbort
+                        ) {
+                            repo_state.diff_target = None;
+                            repo_state.diff = Loadable::NotLoaded;
+                            repo_state.diff_file = Loadable::NotLoaded;
+                            repo_state.diff_file_image = Loadable::NotLoaded;
+                        }
                         push_command_log(repo_state, true, &command, &output, None);
                     }
                     Err(e) => {
@@ -724,13 +1120,53 @@ pub(super) fn reduce(
                     }
                 }
             }
+            let mut extra_effects = Vec::new();
+            if matches!(
+                &command,
+                crate::msg::RepoCommandKind::StageHunk | crate::msg::RepoCommandKind::UnstageHunk
+            ) {
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                    && let Some(target) = repo_state.diff_target.clone()
+                {
+                    repo_state.diff = Loadable::Loading;
+                    let supports_file = matches!(
+                        &target,
+                        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+                    );
+                    let wants_image = diff_target_wants_image_preview(&target);
+                    repo_state.diff_file = if supports_file && !wants_image {
+                        Loadable::Loading
+                    } else {
+                        Loadable::NotLoaded
+                    };
+                    repo_state.diff_file_image = if supports_file && wants_image {
+                        Loadable::Loading
+                    } else {
+                        Loadable::NotLoaded
+                    };
+                    extra_effects.push(Effect::LoadDiff {
+                        repo_id,
+                        target: target.clone(),
+                    });
+                    if supports_file {
+                        if wants_image {
+                            extra_effects.push(Effect::LoadDiffFileImage { repo_id, target });
+                        } else {
+                            extra_effects.push(Effect::LoadDiffFile { repo_id, target });
+                        }
+                    }
+                }
+            }
+
             let scope = state
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
                 .map(|r| r.history_scope)
                 .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            refresh_effects(repo_id, scope)
+            let mut effects = refresh_effects(repo_id, scope);
+            effects.extend(extra_effects);
+            effects
         }
     }
 }
@@ -839,11 +1275,29 @@ fn summarize_command(
             RepoCommandKind::PullBranch { .. } => "Pull",
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::Push => "Push",
+            RepoCommandKind::ForcePush => "Force push",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
+            RepoCommandKind::Reset { .. } => "Reset",
+            RepoCommandKind::Rebase { .. } => "Rebase",
+            RepoCommandKind::RebaseContinue => "Rebase",
+            RepoCommandKind::RebaseAbort => "Rebase",
+            RepoCommandKind::CreateTag { .. } => "Tag",
+            RepoCommandKind::DeleteTag { .. } => "Tag",
+            RepoCommandKind::AddRemote { .. } => "Remote",
+            RepoCommandKind::RemoveRemote { .. } => "Remote",
+            RepoCommandKind::SetRemoteUrl { .. } => "Remote",
             RepoCommandKind::CheckoutConflict { side, .. } => match side {
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
             },
+            RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
+            RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
+                "Worktree"
+            }
+            RepoCommandKind::AddSubmodule { .. }
+            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
+            RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
         };
         return (
             output.command.clone().if_empty_else(|| label.to_string()),
@@ -907,6 +1361,13 @@ fn summarize_command(
                 "Push: Completed".to_string()
             }
         }
+        RepoCommandKind::ForcePush => {
+            if output.stderr.contains("Everything up-to-date") {
+                "Force push: Everything up-to-date".to_string()
+            } else {
+                "Force push: Completed".to_string()
+            }
+        }
         RepoCommandKind::PushSetUpstream { remote, branch } => {
             let base = if output.stderr.contains("Everything up-to-date") {
                 "Everything up-to-date"
@@ -919,6 +1380,49 @@ fn summarize_command(
             ConflictSide::Ours => "Resolved using ours".to_string(),
             ConflictSide::Theirs => "Resolved using theirs".to_string(),
         },
+        RepoCommandKind::Reset { mode, target } => {
+            let mode = match mode {
+                gitgpui_core::services::ResetMode::Soft => "soft",
+                gitgpui_core::services::ResetMode::Mixed => "mixed",
+                gitgpui_core::services::ResetMode::Hard => "hard",
+            };
+            format!("Reset (--{mode}) {target}: Completed")
+        }
+        RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
+        RepoCommandKind::RebaseContinue => "Rebase: Continued".to_string(),
+        RepoCommandKind::RebaseAbort => "Rebase: Aborted".to_string(),
+        RepoCommandKind::CreateTag { name, target } => format!("Tag {name} → {target}: Created"),
+        RepoCommandKind::DeleteTag { name } => format!("Tag {name}: Deleted"),
+        RepoCommandKind::AddRemote { name, .. } => format!("Remote {name}: Added"),
+        RepoCommandKind::RemoveRemote { name } => format!("Remote {name}: Removed"),
+        RepoCommandKind::SetRemoteUrl { name, kind, .. } => {
+            let kind = match kind {
+                gitgpui_core::services::RemoteUrlKind::Fetch => "fetch",
+                gitgpui_core::services::RemoteUrlKind::Push => "push",
+            };
+            format!("Remote {name} ({kind}): URL updated")
+        }
+        RepoCommandKind::ExportPatch { dest, .. } => {
+            format!("Patch exported → {}", dest.display())
+        }
+        RepoCommandKind::ApplyPatch { patch } => format!("Patch applied → {}", patch.display()),
+        RepoCommandKind::AddWorktree { path, reference } => {
+            if let Some(reference) = reference {
+                format!("Worktree added → {} ({reference})", path.display())
+            } else {
+                format!("Worktree added → {}", path.display())
+            }
+        }
+        RepoCommandKind::RemoveWorktree { path } => format!("Worktree removed → {}", path.display()),
+        RepoCommandKind::AddSubmodule { path, .. } => {
+            format!("Submodule added → {}", path.display())
+        }
+        RepoCommandKind::UpdateSubmodules => "Submodules: Updated".to_string(),
+        RepoCommandKind::RemoveSubmodule { path } => {
+            format!("Submodule removed → {}", path.display())
+        }
+        RepoCommandKind::StageHunk => "Hunk staged".to_string(),
+        RepoCommandKind::UnstageHunk => "Hunk unstaged".to_string(),
     };
 
     (output.command.clone(), summary)
@@ -948,6 +1452,7 @@ fn refresh_effects(repo_id: RepoId, history_scope: gitgpui_core::domain::LogScop
             repo_id,
             limit: 200,
         },
+        Effect::LoadRebaseState { repo_id },
         Effect::LoadLog {
             repo_id,
             scope: history_scope,

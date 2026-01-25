@@ -78,6 +78,21 @@ pub struct Remote {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    pub head: Option<CommitId>,
+    pub branch: Option<String>,
+    pub detached: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Submodule {
+    pub path: PathBuf,
+    pub head: CommitId,
+    pub status: char,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RemoteBranch {
     pub remote: String,
     pub name: String,
@@ -134,6 +149,13 @@ pub struct FileDiffText {
     pub path: PathBuf,
     pub old: Option<String>,
     pub new: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffImage {
+    pub path: PathBuf,
+    pub old: Option<Vec<u8>>,
+    pub new: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -29,6 +29,10 @@ enum ContextMenuAction {
         remote: String,
         name: String,
     },
+    DeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     SetHistoryScope {
         repo_id: RepoId,
         scope: gitgpui_core::domain::LogScope,
@@ -38,6 +42,10 @@ enum ContextMenuAction {
         path: std::path::PathBuf,
     },
     UnstagePath {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    DiscardWorktreeChangesPath {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
@@ -57,11 +65,22 @@ enum ContextMenuAction {
         repo_id: RepoId,
         reference: String,
     },
+    Push {
+        repo_id: RepoId,
+    },
     OpenPopover {
         kind: PopoverKind,
     },
     CopyText {
         text: String,
+    },
+    StageHunk {
+        repo_id: RepoId,
+        src_ix: usize,
+    },
+    UnstageHunk {
+        repo_id: RepoId,
+        src_ix: usize,
     },
 }
 

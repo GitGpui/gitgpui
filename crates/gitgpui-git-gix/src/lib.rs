@@ -1,11 +1,12 @@
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
     FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
-    RepoStatus, Tag, Upstream, UpstreamDivergence,
+    RepoStatus, Submodule, Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, Result,
+    BlameLine, CommandOutput, ConflictSide, GitBackend, GitRepository, PullMode, RemoteUrlKind,
+    ResetMode, Result,
 };
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
@@ -252,6 +253,22 @@ impl GitRepository for GixRepo {
             commits,
             next_cursor,
         })
+    }
+
+    fn log_file_page(&self, path: &Path, limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("log")
+            .arg("--follow")
+            .arg(format!("-n{limit}"))
+            .arg("--date=unix")
+            .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e")
+            .arg("--")
+            .arg(path);
+
+        let output = run_git_capture(cmd, "git log --follow")?;
+        Ok(parse_git_log_pretty_records(&output))
     }
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
@@ -693,7 +710,7 @@ impl GitRepository for GixRepo {
     }
 
     fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
-        let command_str = format!("git merge {reference}");
+        let command_str = format!("git merge --no-edit {reference}");
         let output = Command::new("git")
             .arg("-C")
             .arg(&self.spec.workdir)
@@ -701,6 +718,7 @@ impl GitRepository for GixRepo {
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("merge")
+            .arg("--no-edit")
             .arg(reference)
             .output()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
@@ -842,20 +860,90 @@ impl GitRepository for GixRepo {
         }
     }
 
+    fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<gitgpui_core::domain::FileDiffImage>> {
+        use gitgpui_core::domain::FileDiffImage;
+
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                let path_str = path.to_string_lossy();
+                let (old, new) = match area {
+                    DiffArea::Unstaged => {
+                        let old = git_show_path_bytes_optional(
+                            &self.spec.workdir,
+                            ":",
+                            path_str.as_ref(),
+                        )?;
+                        let new = read_worktree_file_bytes_optional(&self.spec.workdir, path)?;
+                        (old, new)
+                    }
+                    DiffArea::Staged => {
+                        let old = git_show_path_bytes_optional(
+                            &self.spec.workdir,
+                            "HEAD:",
+                            path_str.as_ref(),
+                        )?;
+                        let new = git_show_path_bytes_optional(
+                            &self.spec.workdir,
+                            ":",
+                            path_str.as_ref(),
+                        )?;
+                        (old, new)
+                    }
+                };
+
+                Ok(Some(FileDiffImage {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
+            DiffTarget::Commit { commit_id, path } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let path_str = path.to_string_lossy();
+                let parent = git_first_parent_optional(&self.spec.workdir, commit_id.as_ref())?;
+
+                let old = match parent {
+                    Some(parent) => {
+                        let spec = format!("{parent}:");
+                        git_show_path_bytes_optional(&self.spec.workdir, &spec, path_str.as_ref())?
+                    }
+                    None => None,
+                };
+                let new = {
+                    let spec = format!("{}:", commit_id.as_ref());
+                    git_show_path_bytes_optional(&self.spec.workdir, &spec, path_str.as_ref())?
+                };
+
+                Ok(Some(FileDiffImage {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
+        }
+    }
+
     fn create_branch(&self, _name: &str, _target: &gitgpui_core::domain::CommitId) -> Result<()> {
-        let _ = _target;
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("branch")
-            .arg(_name);
+            .arg(_name)
+            .arg(_target.as_ref());
         run_git_simple(cmd, "git branch")
     }
 
     fn delete_branch(&self, _name: &str) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: delete_branch not implemented yet",
-        )))
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("branch")
+            .arg("-d")
+            .arg(_name);
+        run_git_simple(cmd, "git branch -d")
     }
 
     fn checkout_branch(&self, _name: &str) -> Result<()> {
@@ -1093,6 +1181,17 @@ impl GitRepository for GixRepo {
         run_git_simple(cmd, "git commit")
     }
 
+    fn commit_amend(&self, message: &str) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("commit")
+            .arg("--amend")
+            .arg("-m")
+            .arg(message);
+        run_git_simple(cmd, "git commit --amend")
+    }
+
     fn fetch_all(&self) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -1159,6 +1258,147 @@ impl GitRepository for GixRepo {
         run_git_with_output(cmd, "git push")
     }
 
+    fn push_force(&self) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("push")
+            .arg("--force-with-lease");
+        run_git_simple(cmd, "git push --force-with-lease")
+    }
+
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("push")
+            .arg("--force-with-lease");
+        run_git_with_output(cmd, "git push --force-with-lease")
+    }
+
+    fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("reset");
+        let mode_flag = match mode {
+            ResetMode::Soft => "--soft",
+            ResetMode::Mixed => "--mixed",
+            ResetMode::Hard => "--hard",
+        };
+        cmd.arg(mode_flag).arg(target);
+        let label = format!("git reset {mode_flag} {target}");
+        run_git_with_output(cmd, &label)
+    }
+
+    fn rebase_with_output(&self, onto: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&self.spec.workdir).arg("rebase").arg(onto);
+        run_git_with_output(cmd, &format!("git rebase {onto}"))
+    }
+
+    fn rebase_continue_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rebase")
+            .arg("--continue");
+        run_git_with_output(cmd, "git rebase --continue")
+    }
+
+    fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rebase")
+            .arg("--abort");
+        run_git_with_output(cmd, "git rebase --abort")
+    }
+
+    fn rebase_in_progress(&self) -> Result<bool> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("REBASE_HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        Ok(output.status.success())
+    }
+
+    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("alias.tag=")
+            .arg("-c")
+            .arg("tag.gpgSign=false")
+            .arg("tag")
+            .arg("-m")
+            .arg(name)
+            .arg(name)
+            .arg(target);
+        run_git_with_output(cmd, &format!("git tag -m {name} {name} {target}"))
+    }
+
+    fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("-c")
+            .arg("alias.tag=")
+            .arg("tag")
+            .arg("-d")
+            .arg(name);
+        run_git_with_output(cmd, &format!("git tag -d {name}"))
+    }
+
+    fn add_remote_with_output(&self, name: &str, url: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("remote")
+            .arg("add")
+            .arg(name)
+            .arg(url);
+        run_git_with_output(cmd, &format!("git remote add {name} {url}"))
+    }
+
+    fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("remote")
+            .arg("remove")
+            .arg(name);
+        run_git_with_output(cmd, &format!("git remote remove {name}"))
+    }
+
+    fn set_remote_url_with_output(
+        &self,
+        name: &str,
+        url: &str,
+        kind: RemoteUrlKind,
+    ) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("remote")
+            .arg("set-url");
+        match kind {
+            RemoteUrlKind::Fetch => {}
+            RemoteUrlKind::Push => {
+                cmd.arg("--push");
+            }
+        }
+        cmd.arg(name).arg(url);
+        let label = match kind {
+            RemoteUrlKind::Fetch => format!("git remote set-url {name} {url}"),
+            RemoteUrlKind::Push => format!("git remote set-url --push {name} {url}"),
+        };
+        run_git_with_output(cmd, &label)
+    }
+
     fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -1217,10 +1457,202 @@ impl GitRepository for GixRepo {
         run_git_with_output(cmd, "git checkout --ours/--theirs")
     }
 
-    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "gix backend skeleton: discard not implemented yet",
-        )))
+    fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {
+        let sha = commit_id.as_ref();
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("format-patch")
+            .arg("-1")
+            .arg(sha)
+            .arg("--stdout")
+            .arg("--binary");
+        let patch = run_git_capture(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
+        std::fs::write(dest, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        Ok(CommandOutput {
+            command: format!("Export patch {sha}"),
+            stdout: format!("Saved patch to {}", dest.display()),
+            stderr: String::new(),
+            exit_code: Some(0),
+        })
+    }
+
+    fn apply_patch_with_output(&self, patch: &Path) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("am")
+            .arg("--3way")
+            .arg("--")
+            .arg(patch);
+        run_git_with_output(cmd, &format!("git am --3way {}", patch.display()))
+    }
+
+    fn apply_unified_patch_to_index_with_output(
+        &self,
+        patch: &str,
+        reverse: bool,
+    ) -> Result<CommandOutput> {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp_path = std::env::temp_dir().join(format!(
+            "gitgpui-index-patch-{}-{nanos}.patch",
+            std::process::id()
+        ));
+        std::fs::write(&tmp_path, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("apply")
+            .arg("--cached")
+            .arg("--recount")
+            .arg("--whitespace=nowarn");
+        if reverse {
+            cmd.arg("--reverse");
+        }
+        cmd.arg(&tmp_path);
+
+        let label = if reverse {
+            format!("git apply --cached --reverse {}", tmp_path.display())
+        } else {
+            format!("git apply --cached {}", tmp_path.display())
+        };
+
+        let result = run_git_with_output(cmd, &label);
+        let _ = std::fs::remove_file(&tmp_path);
+        result
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<Worktree>> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("worktree")
+            .arg("list")
+            .arg("--porcelain");
+        let output = run_git_capture(cmd, "git worktree list --porcelain")?;
+        Ok(parse_git_worktree_list_porcelain(&output))
+    }
+
+    fn add_worktree_with_output(
+        &self,
+        path: &Path,
+        reference: Option<&str>,
+    ) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("worktree")
+            .arg("add")
+            .arg(path);
+        let label = if let Some(reference) = reference {
+            cmd.arg(reference);
+            format!("git worktree add {} {}", path.display(), reference)
+        } else {
+            format!("git worktree add {}", path.display())
+        };
+        run_git_with_output(cmd, &label)
+    }
+
+    fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("worktree")
+            .arg("remove")
+            .arg(path);
+        run_git_with_output(cmd, &format!("git worktree remove {}", path.display()))
+    }
+
+    fn list_submodules(&self) -> Result<Vec<Submodule>> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("submodule")
+            .arg("status")
+            .arg("--recursive");
+        let output = run_git_capture(cmd, "git submodule status --recursive")?;
+        Ok(parse_git_submodule_status(&output))
+    }
+
+    fn add_submodule_with_output(&self, url: &str, path: &Path) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("submodule")
+            .arg("add")
+            .arg(url)
+            .arg(path);
+        run_git_with_output(cmd, &format!("git submodule add {url} {}", path.display()))
+    }
+
+    fn update_submodules_with_output(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("submodule")
+            .arg("update")
+            .arg("--init")
+            .arg("--recursive");
+        run_git_with_output(cmd, "git submodule update --init --recursive")
+    }
+
+    fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        let mut cmd1 = Command::new("git");
+        cmd1.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("submodule")
+            .arg("deinit")
+            .arg("-f")
+            .arg("--")
+            .arg(path);
+        let out1 = run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
+
+        let mut cmd2 = Command::new("git");
+        cmd2.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rm")
+            .arg("-f")
+            .arg("--")
+            .arg(path);
+        let out2 = run_git_with_output(cmd2, &format!("git rm -f {}", path.display()))?;
+
+        Ok(CommandOutput {
+            command: format!("Remove submodule {}", path.display()),
+            stdout: [out1.stdout.trim_end(), out2.stdout.trim_end()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            stderr: [out1.stderr.trim_end(), out2.stderr.trim_end()]
+                .iter()
+                .filter(|s| !s.is_empty())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            exit_code: Some(0),
+        })
+    }
+
+    fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout")
+            .arg("--");
+        for path in paths {
+            cmd.arg(path);
+        }
+
+        run_git_simple(cmd, "git checkout --")
     }
 }
 
@@ -1230,6 +1662,15 @@ fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Optio
         Ok(bytes) => String::from_utf8(bytes)
             .map(Some)
             .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8"))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+    }
+}
+
+fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
+    let full = workdir.join(path);
+    match std::fs::read(&full) {
+        Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
     }
@@ -1259,6 +1700,42 @@ fn git_show_path_utf8_optional(
         return String::from_utf8(output.stdout)
             .map(Some)
             .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.to_string();
+    if git_blob_missing_for_show(&stderr) {
+        return Ok(None);
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git show failed: {}",
+        stderr.trim()
+    ))))
+}
+
+fn git_show_path_bytes_optional(
+    workdir: &Path,
+    rev_prefix: &str,
+    path: &str,
+) -> Result<Option<Vec<u8>>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("--no-pager")
+        .arg("show")
+        .arg("--no-ext-diff")
+        .arg("--pretty=format:")
+        .arg(format!("{rev_prefix}{path}"));
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        return Ok(Some(output.stdout));
     }
 
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1442,6 +1919,134 @@ fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
         }
     }
 
+    out
+}
+
+fn parse_git_log_pretty_records(output: &str) -> LogPage {
+    let mut commits = Vec::new();
+    for record in output.split('\u{001e}') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+        let mut parts = record.split('\u{001f}');
+        let Some(id) = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let parents = parts.next().unwrap_or_default();
+        let author = parts.next().unwrap_or_default().to_string();
+        let time_secs = parts
+            .next()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0);
+        let summary = parts.next().unwrap_or_default().to_string();
+
+        let time = if time_secs >= 0 {
+            SystemTime::UNIX_EPOCH + Duration::from_secs(time_secs as u64)
+        } else {
+            SystemTime::UNIX_EPOCH
+        };
+
+        let parent_ids = parents
+            .split_whitespace()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| CommitId(p.to_string()))
+            .collect::<Vec<_>>();
+
+        commits.push(Commit {
+            id: CommitId(id),
+            parent_ids,
+            summary,
+            author,
+            time,
+        });
+    }
+
+    LogPage {
+        commits,
+        next_cursor: None,
+    }
+}
+
+fn parse_git_worktree_list_porcelain(output: &str) -> Vec<Worktree> {
+    let mut out = Vec::new();
+    let mut current: Option<Worktree> = None;
+
+    for raw in output.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            if let Some(wt) = current.take() {
+                out.push(wt);
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            if let Some(wt) = current.take() {
+                out.push(wt);
+            }
+            current = Some(Worktree {
+                path: PathBuf::from(rest.trim()),
+                head: None,
+                branch: None,
+                detached: false,
+            });
+            continue;
+        }
+
+        let Some(wt) = current.as_mut() else {
+            continue;
+        };
+
+        if let Some(rest) = line.strip_prefix("HEAD ") {
+            let sha = rest.trim();
+            if !sha.is_empty() {
+                wt.head = Some(CommitId(sha.to_string()));
+            }
+        } else if let Some(rest) = line.strip_prefix("branch ") {
+            let b = rest.trim();
+            if let Some(stripped) = b.strip_prefix("refs/heads/") {
+                wt.branch = Some(stripped.to_string());
+            } else if !b.is_empty() {
+                wt.branch = Some(b.to_string());
+            }
+        } else if line == "detached" {
+            wt.detached = true;
+            wt.branch = None;
+        }
+    }
+
+    if let Some(wt) = current.take() {
+        out.push(wt);
+    }
+
+    out
+}
+
+fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
+    let mut out = Vec::new();
+    for raw in output.lines() {
+        let line = raw.trim_end();
+        if line.trim().is_empty() {
+            continue;
+        }
+        let mut chars = line.chars();
+        let status = chars.next().unwrap_or(' ');
+        let rest: String = chars.collect();
+        let rest = rest.trim();
+        let mut parts = rest.split_whitespace();
+        let Some(sha) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        out.push(Submodule {
+            path: PathBuf::from(path),
+            head: CommitId(sha.to_string()),
+            status,
+        });
+    }
     out
 }
 

@@ -1,10 +1,29 @@
 use gitgpui_core::domain::*;
+use gitgpui_core::services::BlameLine;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
+    pub clone: Option<CloneOpState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CloneOpState {
+    pub url: String,
+    pub dest: PathBuf,
+    pub status: CloneOpStatus,
+    pub seq: u64,
+    pub output_tail: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CloneOpStatus {
+    Running,
+    FinishedOk,
+    FinishedErr(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -35,6 +54,14 @@ pub struct RepoState {
     pub log_loading_more: bool,
     pub stashes: Loadable<Vec<StashEntry>>,
     pub reflog: Loadable<Vec<ReflogEntry>>,
+    pub rebase_in_progress: Loadable<bool>,
+    pub file_history_path: Option<PathBuf>,
+    pub file_history: Loadable<LogPage>,
+    pub blame_path: Option<PathBuf>,
+    pub blame_rev: Option<String>,
+    pub blame: Loadable<Vec<BlameLine>>,
+    pub worktrees: Loadable<Vec<Worktree>>,
+    pub submodules: Loadable<Vec<Submodule>>,
 
     pub selected_commit: Option<CommitId>,
     pub commit_details: Loadable<CommitDetails>,
@@ -43,6 +70,7 @@ pub struct RepoState {
     pub diff: Loadable<Diff>,
     pub diff_file_rev: u64,
     pub diff_file: Loadable<Option<FileDiffText>>,
+    pub diff_file_image: Loadable<Option<FileDiffImage>>,
 
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
@@ -68,6 +96,14 @@ impl RepoState {
             log_loading_more: false,
             stashes: Loadable::NotLoaded,
             reflog: Loadable::NotLoaded,
+            rebase_in_progress: Loadable::NotLoaded,
+            file_history_path: None,
+            file_history: Loadable::NotLoaded,
+            blame_path: None,
+            blame_rev: None,
+            blame: Loadable::NotLoaded,
+            worktrees: Loadable::NotLoaded,
+            submodules: Loadable::NotLoaded,
             selected_commit: None,
             commit_details: Loadable::NotLoaded,
             diff_target: None,
@@ -75,6 +111,7 @@ impl RepoState {
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
             diff_file: Loadable::NotLoaded,
+            diff_file_image: Loadable::NotLoaded,
             last_error: None,
             diagnostics: Vec::new(),
             command_log: Vec::new(),

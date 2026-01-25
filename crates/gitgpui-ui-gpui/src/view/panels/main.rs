@@ -448,6 +448,121 @@ impl GitGpuiView {
                     }
                     Loadable::Ready(diff) => {
                         if wants_file_diff {
+                            let rendered = if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
+                                enum DiffFileImageState {
+                                    NotLoaded,
+                                    Loading,
+                                    Error(String),
+                                    Ready { has_file: bool },
+                                }
+
+                                let diff_file_state = match &repo.diff_file_image {
+                                    Loadable::NotLoaded => DiffFileImageState::NotLoaded,
+                                    Loadable::Loading => DiffFileImageState::Loading,
+                                    Loadable::Error(e) => DiffFileImageState::Error(e.clone()),
+                                    Loadable::Ready(file) => DiffFileImageState::Ready {
+                                        has_file: file.is_some(),
+                                    },
+                                };
+
+                                self.ensure_file_image_diff_cache();
+                                match diff_file_state {
+                                    DiffFileImageState::NotLoaded => {
+                                        zed::empty_state(theme, "Diff", "Select a file.")
+                                            .into_any_element()
+                                    }
+                                    DiffFileImageState::Loading => {
+                                        zed::empty_state(theme, "Diff", "Loading").into_any_element()
+                                    }
+                                    DiffFileImageState::Error(e) => {
+                                        self.diff_raw_input.update(cx, |input, cx| {
+                                            input.set_theme(theme, cx);
+                                            input.set_text(e, cx);
+                                            input.set_read_only(true, cx);
+                                        });
+                                        div()
+                                            .id("diff_file_image_error_scroll")
+                                            .font_family("monospace")
+                                            .bg(theme.colors.window_bg)
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .overflow_y_scroll()
+                                            .child(self.diff_raw_input.clone())
+                                            .into_any_element()
+                                    }
+                                    DiffFileImageState::Ready { has_file } => {
+                                        if !has_file || !self.is_file_image_diff_view_active() {
+                                            zed::empty_state(
+                                                theme,
+                                                "Diff",
+                                                "No image contents available.",
+                                            )
+                                            .into_any_element()
+                                        } else {
+                                            let old = self.file_image_diff_cache_old.clone();
+                                            let new = self.file_image_diff_cache_new.clone();
+
+                                            let cell = |id: &'static str,
+                                                        image: Option<Arc<gpui::Image>>| {
+                                                div()
+                                                    .id(id)
+                                                    .flex_1()
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .overflow_hidden()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(match image {
+                                                        Some(img_data) => gpui::img(img_data)
+                                                            .w_full()
+                                                            .h_full()
+                                                            .object_fit(gpui::ObjectFit::Contain)
+                                                            .into_any_element(),
+                                                        None => div()
+                                                            .text_sm()
+                                                            .text_color(theme.colors.text_muted)
+                                                            .child("No image")
+                                                            .into_any_element(),
+                                                    })
+                                            };
+
+                                            let columns_header = zed::split_columns_header(
+                                                theme,
+                                                "A (before)",
+                                                "B (after)",
+                                            );
+
+                                            div()
+                                                .id("diff_image_container")
+                                                .relative()
+                                                .h_full()
+                                                .min_h(px(0.0))
+                                                .flex()
+                                                .flex_col()
+                                                .bg(theme.colors.window_bg)
+                                                .child(columns_header)
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_h(px(0.0))
+                                                        .flex()
+                                                        .child(cell("diff_image_left", old))
+                                                        .child(
+                                                            div()
+                                                                .w(px(1.0))
+                                                                .h_full()
+                                                                .bg(theme.colors.border),
+                                                        )
+                                                        .child(cell("diff_image_right", new)),
+                                                )
+                                                .into_any_element()
+                                        }
+                                    }
+                                }
+                            } else {
                             enum DiffFileState {
                                 NotLoaded,
                                 Loading,
@@ -624,7 +739,8 @@ impl GitGpuiView {
                                         }
                                     }
                                 }
-                            }
+                            }};
+                            rendered
                         } else {
                             if self.diff_cache_repo_id != Some(repo.id)
                                 || self.diff_cache_rev != repo.diff_rev

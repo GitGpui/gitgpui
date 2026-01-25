@@ -5,8 +5,8 @@ use gitgpui_core::domain::{
     UpstreamDivergence,
 };
 use gitgpui_core::file_diff::FileDiffRow;
-use gitgpui_core::services::PullMode;
-use gitgpui_state::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoState};
+use gitgpui_core::services::{PullMode, RemoteUrlKind, ResetMode};
+use gitgpui_state::model::{AppState, CloneOpStatus, DiagnosticKind, Loadable, RepoId, RepoState};
 use gitgpui_state::msg::{Msg, StoreEvent};
 use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
@@ -204,13 +204,91 @@ enum PopoverKind {
     BranchPicker,
     CreateBranch,
     StashPrompt,
+    CloneRepo,
+    ResetPrompt {
+        repo_id: RepoId,
+        target: String,
+        mode: ResetMode,
+    },
+    RebasePrompt {
+        repo_id: RepoId,
+    },
+    CreateTagPrompt {
+        repo_id: RepoId,
+        target: String,
+    },
+    TagDeletePicker {
+        repo_id: RepoId,
+    },
+    RemoteAddPrompt {
+        repo_id: RepoId,
+    },
+    RemoteUrlPicker {
+        repo_id: RepoId,
+        kind: RemoteUrlKind,
+    },
+    RemoteRemovePicker {
+        repo_id: RepoId,
+    },
+    RemoteEditUrlPrompt {
+        repo_id: RepoId,
+        name: String,
+        kind: RemoteUrlKind,
+    },
+    RemoteRemoveConfirm {
+        repo_id: RepoId,
+        name: String,
+    },
+    WorktreeAddPrompt {
+        repo_id: RepoId,
+    },
+    WorktreeOpenPicker {
+        repo_id: RepoId,
+    },
+    WorktreeRemovePicker {
+        repo_id: RepoId,
+    },
+    WorktreeRemoveConfirm {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    SubmoduleAddPrompt {
+        repo_id: RepoId,
+    },
+    SubmoduleOpenPicker {
+        repo_id: RepoId,
+    },
+    SubmoduleRemovePicker {
+        repo_id: RepoId,
+    },
+    SubmoduleRemoveConfirm {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    FileHistory {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    Blame {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        rev: Option<String>,
+    },
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,
     },
+    ForcePushConfirm {
+        repo_id: RepoId,
+    },
     PullPicker,
+    PushPicker,
     AppMenu,
     DiffHunks,
+    DiffHunkMenu {
+        repo_id: RepoId,
+        src_ix: usize,
+    },
     CommitMenu {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -377,6 +455,13 @@ pub struct GitGpuiView {
     file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
     file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
 
+    file_image_diff_cache_repo_id: Option<RepoId>,
+    file_image_diff_cache_rev: u64,
+    file_image_diff_cache_target: Option<DiffTarget>,
+    file_image_diff_cache_path: Option<std::path::PathBuf>,
+    file_image_diff_cache_old: Option<Arc<gpui::Image>>,
+    file_image_diff_cache_new: Option<Arc<gpui::Image>>,
+
     worktree_preview_path: Option<std::path::PathBuf>,
     worktree_preview: Loadable<Arc<Vec<String>>>,
     worktree_preview_scroll: UniformListScrollHandle,
@@ -398,14 +483,30 @@ pub struct GitGpuiView {
     history_col_resize: Option<HistoryColResizeState>,
     repo_picker_search_input: Option<Entity<zed::TextInput>>,
     branch_picker_search_input: Option<Entity<zed::TextInput>>,
+    tag_picker_search_input: Option<Entity<zed::TextInput>>,
+    remote_picker_search_input: Option<Entity<zed::TextInput>>,
+    file_history_search_input: Option<Entity<zed::TextInput>>,
+    worktree_picker_search_input: Option<Entity<zed::TextInput>>,
+    submodule_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
 
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
+    clone_repo_url_input: Entity<zed::TextInput>,
+    clone_repo_parent_dir_input: Entity<zed::TextInput>,
     commit_message_input: Entity<zed::TextInput>,
+    rebase_onto_input: Entity<zed::TextInput>,
+    create_tag_input: Entity<zed::TextInput>,
+    remote_name_input: Entity<zed::TextInput>,
+    remote_url_input: Entity<zed::TextInput>,
+    remote_url_edit_input: Entity<zed::TextInput>,
     create_branch_input: Entity<zed::TextInput>,
     stash_message_input: Entity<zed::TextInput>,
     push_upstream_branch_input: Entity<zed::TextInput>,
+    worktree_path_input: Entity<zed::TextInput>,
+    worktree_ref_input: Entity<zed::TextInput>,
+    submodule_url_input: Entity<zed::TextInput>,
+    submodule_path_input: Entity<zed::TextInput>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<Point<Pixels>>,
@@ -421,6 +522,7 @@ pub struct GitGpuiView {
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     commit_files_scroll: UniformListScrollHandle,
+    blame_scroll: UniformListScrollHandle,
     commit_scroll: ScrollHandle,
 
     sidebar_width: Pixels,
@@ -436,6 +538,9 @@ pub struct GitGpuiView {
     tooltip_delay_seq: u64,
 
     toasts: Vec<ToastState>,
+    clone_progress_toast_id: Option<u64>,
+    clone_progress_last_seq: u64,
+    clone_progress_dest: Option<std::path::PathBuf>,
 
     hovered_repo_tab: Option<RepoId>,
 
@@ -578,6 +683,17 @@ impl GitGpuiView {
             && self.file_diff_cache_path.is_some()
     }
 
+    fn is_file_image_diff_view_active(&self) -> bool {
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        self.file_image_diff_cache_repo_id == Some(repo.id)
+            && self.file_image_diff_cache_rev == repo.diff_file_rev
+            && self.file_image_diff_cache_target == repo.diff_target
+            && self.file_image_diff_cache_path.is_some()
+            && (self.file_image_diff_cache_old.is_some() || self.file_image_diff_cache_new.is_some())
+    }
+
     fn handle_file_diff_row_click(&mut self, clicked_visible_ix: usize, shift: bool) {
         let list_len = self.diff_visible_indices.len();
         if list_len == 0 {
@@ -670,10 +786,108 @@ impl GitGpuiView {
             )
         });
 
+        let clone_repo_url_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let clone_repo_parent_dir_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "/path/to/parent/folder".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let commit_message_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
                     placeholder: "Enter commit message".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let rebase_onto_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "onto branch / tag / SHA (e.g. origin/main)".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let create_tag_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "tag-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_name_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "remote name (e.g. origin)".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_url_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "remote URL".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_url_edit_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "new remote URL".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -716,6 +930,62 @@ impl GitGpuiView {
             zed::TextInput::new(
                 zed::TextInputOptions {
                     placeholder: "Remote branch name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let worktree_path_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Worktree folder".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let worktree_ref_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Branch / commit (optional)".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_url_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Submodule URL".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_path_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Submodule path (relative)".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -816,6 +1086,12 @@ impl GitGpuiView {
             file_diff_inline_word_highlights: Vec::new(),
             file_diff_split_word_highlights_old: Vec::new(),
             file_diff_split_word_highlights_new: Vec::new(),
+            file_image_diff_cache_repo_id: None,
+            file_image_diff_cache_rev: 0,
+            file_image_diff_cache_target: None,
+            file_image_diff_cache_path: None,
+            file_image_diff_cache_old: None,
+            file_image_diff_cache_new: None,
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_scroll: UniformListScrollHandle::default(),
@@ -836,13 +1112,29 @@ impl GitGpuiView {
             history_col_resize: None,
             repo_picker_search_input: None,
             branch_picker_search_input: None,
+            tag_picker_search_input: None,
+            remote_picker_search_input: None,
+            file_history_search_input: None,
+            worktree_picker_search_input: None,
+            submodule_picker_search_input: None,
             history_cache: None,
             open_repo_panel: false,
             open_repo_input,
+            clone_repo_url_input,
+            clone_repo_parent_dir_input,
             commit_message_input,
+            rebase_onto_input,
+            create_tag_input,
+            remote_name_input,
+            remote_url_input,
+            remote_url_edit_input,
             create_branch_input,
             stash_message_input,
             push_upstream_branch_input,
+            worktree_path_input,
+            worktree_ref_input,
+            submodule_url_input,
+            submodule_path_input,
             popover: None,
             popover_anchor: None,
             context_menu_focus_handle,
@@ -855,6 +1147,7 @@ impl GitGpuiView {
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
+            blame_scroll: UniformListScrollHandle::default(),
             commit_scroll: ScrollHandle::new(),
             sidebar_width: restored_sidebar_width
                 .map(|w| px(w as f32))
@@ -873,6 +1166,9 @@ impl GitGpuiView {
             tooltip_visible_pos: None,
             tooltip_delay_seq: 0,
             toasts: Vec::new(),
+            clone_progress_toast_id: None,
+            clone_progress_last_seq: 0,
+            clone_progress_dest: None,
             hovered_repo_tab: None,
             commit_details_message_input,
             error_banner_input,
@@ -897,13 +1193,35 @@ impl GitGpuiView {
         self.worktree_preview_segments_cache.clear();
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.clone_repo_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.clone_repo_parent_dir_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.rebase_onto_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.create_tag_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_name_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_url_edit_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.stash_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.push_upstream_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.worktree_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.worktree_ref_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -915,6 +1233,21 @@ impl GitGpuiView {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.branch_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.tag_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.remote_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.file_history_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.worktree_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.submodule_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.diff_hunk_picker_search_input {
@@ -1776,6 +2109,156 @@ impl GitGpuiView {
         input.clone()
     }
 
+    fn ensure_tag_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<zed::TextInput> {
+        let theme = self.theme;
+        let input = self.tag_picker_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
+                        placeholder: "Filter tags".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle);
+        input.clone()
+    }
+
+    fn ensure_remote_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<zed::TextInput> {
+        let theme = self.theme;
+        let input = self.remote_picker_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
+                        placeholder: "Filter remotes".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle);
+        input.clone()
+    }
+
+    fn ensure_worktree_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<zed::TextInput> {
+        let theme = self.theme;
+        let input = self.worktree_picker_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
+                        placeholder: "Filter worktrees".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle);
+        input.clone()
+    }
+
+    fn ensure_submodule_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<zed::TextInput> {
+        let theme = self.theme;
+        let input = self.submodule_picker_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
+                        placeholder: "Filter submodules".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle);
+        input.clone()
+    }
+
+    fn ensure_file_history_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<zed::TextInput> {
+        let theme = self.theme;
+        let input = self.file_history_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                zed::TextInput::new(
+                    zed::TextInputOptions {
+                        placeholder: "Filter commits".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle);
+        input.clone()
+    }
+
     fn ensure_diff_hunk_picker_search_input(
         &mut self,
         window: &mut Window,
@@ -2531,6 +3014,136 @@ impl GitGpuiView {
         }
     }
 
+    fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
+        let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+        match ext.as_str() {
+            "png" => Some(gpui::ImageFormat::Png),
+            "jpg" | "jpeg" => Some(gpui::ImageFormat::Jpeg),
+            "gif" => Some(gpui::ImageFormat::Gif),
+            "webp" => Some(gpui::ImageFormat::Webp),
+            "bmp" => Some(gpui::ImageFormat::Bmp),
+            "svg" => Some(gpui::ImageFormat::Svg),
+            "tif" | "tiff" => Some(gpui::ImageFormat::Tiff),
+            _ => None,
+        }
+    }
+
+    fn ensure_file_image_diff_cache(&mut self) {
+        struct Rebuild {
+            repo_id: RepoId,
+            diff_file_rev: u64,
+            diff_target: Option<DiffTarget>,
+            file_path: Option<std::path::PathBuf>,
+            old: Option<Arc<gpui::Image>>,
+            new: Option<Arc<gpui::Image>>,
+        }
+
+        enum Action {
+            Clear,
+            Noop,
+            Reset {
+                repo_id: RepoId,
+                diff_file_rev: u64,
+                diff_target: Option<DiffTarget>,
+            },
+            Rebuild(Rebuild),
+        }
+
+        let action = (|| {
+            let Some(repo) = self.active_repo() else {
+                return Action::Clear;
+            };
+
+            if !Self::is_file_diff_target(repo.diff_target.as_ref()) {
+                return Action::Clear;
+            }
+
+            if self.file_image_diff_cache_repo_id == Some(repo.id)
+                && self.file_image_diff_cache_rev == repo.diff_file_rev
+                && self.file_image_diff_cache_target.as_ref() == repo.diff_target.as_ref()
+            {
+                return Action::Noop;
+            }
+
+            let repo_id = repo.id;
+            let diff_file_rev = repo.diff_file_rev;
+            let diff_target = repo.diff_target.clone();
+
+            let Loadable::Ready(file_opt) = &repo.diff_file_image else {
+                return Action::Reset {
+                    repo_id,
+                    diff_file_rev,
+                    diff_target,
+                };
+            };
+            let Some(file) = file_opt.as_ref() else {
+                return Action::Reset {
+                    repo_id,
+                    diff_file_rev,
+                    diff_target,
+                };
+            };
+
+            let format = Self::image_format_for_path(&file.path);
+            let old = file
+                .old
+                .as_ref()
+                .and_then(|bytes| format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone()))));
+            let new = file
+                .new
+                .as_ref()
+                .and_then(|bytes| format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone()))));
+
+            let workdir = &repo.spec.workdir;
+            let file_path = Some(if file.path.is_absolute() {
+                file.path.clone()
+            } else {
+                workdir.join(&file.path)
+            });
+
+            Action::Rebuild(Rebuild {
+                repo_id,
+                diff_file_rev,
+                diff_target,
+                file_path,
+                old,
+                new,
+            })
+        })();
+
+        match action {
+            Action::Noop => {}
+            Action::Clear => {
+                self.file_image_diff_cache_repo_id = None;
+                self.file_image_diff_cache_target = None;
+                self.file_image_diff_cache_rev = 0;
+                self.file_image_diff_cache_path = None;
+                self.file_image_diff_cache_old = None;
+                self.file_image_diff_cache_new = None;
+            }
+            Action::Reset {
+                repo_id,
+                diff_file_rev,
+                diff_target,
+            } => {
+                self.file_image_diff_cache_repo_id = Some(repo_id);
+                self.file_image_diff_cache_rev = diff_file_rev;
+                self.file_image_diff_cache_target = diff_target;
+                self.file_image_diff_cache_path = None;
+                self.file_image_diff_cache_old = None;
+                self.file_image_diff_cache_new = None;
+            }
+            Action::Rebuild(rebuild) => {
+                self.file_image_diff_cache_repo_id = Some(rebuild.repo_id);
+                self.file_image_diff_cache_rev = rebuild.diff_file_rev;
+                self.file_image_diff_cache_target = rebuild.diff_target;
+                self.file_image_diff_cache_path = rebuild.file_path;
+                self.file_image_diff_cache_old = rebuild.old;
+                self.file_image_diff_cache_new = rebuild.new;
+            }
+        }
+    }
+
     fn rebuild_diff_cache(&mut self) {
         self.diff_cache.clear();
         self.diff_cache_repo_id = None;
@@ -2706,6 +3319,8 @@ impl GitGpuiView {
             .and_then(|r| r.diff_target.as_ref())
             .cloned();
 
+        let next_clone = next.clone.clone();
+
         for next_repo in &next.repos {
             let (old_diag_len, old_cmd_len) = self
                 .state
@@ -2742,6 +3357,87 @@ impl GitGpuiView {
                     summary,
                     cx,
                 );
+            }
+        }
+
+        match next_clone.as_ref() {
+            Some(op) => match &op.status {
+                CloneOpStatus::Running => {
+                    let needs_reset = self.clone_progress_toast_id.is_none()
+                        || self.clone_progress_dest.as_ref() != Some(&op.dest);
+                    if needs_reset {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_last_seq = 0;
+                        self.clone_progress_dest = Some(op.dest.clone());
+
+                        let id = self.push_persistent_toast(
+                            zed::ToastKind::Success,
+                            format!(
+                                "Cloning repository…\n{}\n→ {}",
+                                op.url,
+                                op.dest.display()
+                            ),
+                            cx,
+                        );
+                        self.clone_progress_toast_id = Some(id);
+                    }
+
+                    if let Some(id) = self.clone_progress_toast_id
+                        && self.clone_progress_last_seq != op.seq
+                    {
+                        self.clone_progress_last_seq = op.seq;
+                        let tail_lines = op.output_tail.iter().rev().take(12).rev().cloned();
+                        let tail = tail_lines.collect::<Vec<_>>().join("\n");
+                        let message = if tail.is_empty() {
+                            format!(
+                                "Cloning repository…\n{}\n→ {}",
+                                op.url,
+                                op.dest.display()
+                            )
+                        } else {
+                            format!(
+                                "Cloning repository…\n{}\n→ {}\n\n{}",
+                                op.url,
+                                op.dest.display(),
+                                tail
+                            )
+                        };
+                        self.update_toast_text(id, message, cx);
+                    }
+                }
+                CloneOpStatus::FinishedOk => {
+                    if self.clone_progress_last_seq != op.seq {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_dest = None;
+                        self.clone_progress_last_seq = op.seq;
+                        self.push_toast(
+                            zed::ToastKind::Success,
+                            format!("Clone finished: {}", op.dest.display()),
+                            cx,
+                        );
+                    }
+                }
+                CloneOpStatus::FinishedErr(err) => {
+                    if self.clone_progress_last_seq != op.seq {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_dest = None;
+                        self.clone_progress_last_seq = op.seq;
+                        self.push_toast(zed::ToastKind::Error, format!("Clone failed: {err}"), cx);
+                    }
+                }
+            },
+            None => {
+                if let Some(id) = self.clone_progress_toast_id.take() {
+                    self.remove_toast(id, cx);
+                }
+                self.clone_progress_last_seq = 0;
+                self.clone_progress_dest = None;
             }
         }
 
@@ -2851,6 +3547,44 @@ impl GitGpuiView {
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
+        let id = self.push_toast_inner(kind, message, Some(match kind {
+            zed::ToastKind::Error => Duration::from_secs(15),
+            zed::ToastKind::Success => Duration::from_secs(6),
+        }), cx);
+
+        let ttl = match kind {
+            zed::ToastKind::Error => Duration::from_secs(15),
+            zed::ToastKind::Success => Duration::from_secs(6),
+        };
+
+        cx.spawn(
+            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(ttl).await;
+                let _ = view.update(cx, |this, cx| {
+                    this.toasts.retain(|t| t.id != id);
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
+    fn push_persistent_toast(
+        &mut self,
+        kind: zed::ToastKind,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) -> u64 {
+        self.push_toast_inner(kind, message, None, cx)
+    }
+
+    fn push_toast_inner(
+        &mut self,
+        kind: zed::ToastKind,
+        message: String,
+        _ttl: Option<Duration>,
+        cx: &mut gpui::Context<Self>,
+    ) -> u64 {
         let id = self
             .toasts
             .last()
@@ -2876,21 +3610,32 @@ impl GitGpuiView {
         });
 
         self.toasts.push(ToastState { id, kind, input });
+        id
+    }
 
-        let ttl = match kind {
-            zed::ToastKind::Error => Duration::from_secs(15),
-            zed::ToastKind::Success => Duration::from_secs(6),
+    fn update_toast_text(
+        &mut self,
+        id: u64,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
+            return;
         };
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(ttl).await;
-                let _ = view.update(cx, |this, cx| {
-                    this.toasts.retain(|t| t.id != id);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
+        let theme = self.theme;
+        toast.input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(message, cx);
+            input.set_read_only(true, cx);
+        });
+    }
+
+    fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| t.id != id);
+        if self.toasts.len() != before {
+            cx.notify();
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -4431,14 +5176,23 @@ impl GitGpuiView {
         }
         let theme = self.theme;
 
-        let toasts = self
+        let progress_id = self.clone_progress_toast_id;
+        let max_other = if progress_id.is_some() { 2 } else { 3 };
+        let mut displayed = self
             .toasts
             .iter()
             .rev()
-            .take(3)
+            .filter(|t| Some(t.id) != progress_id)
+            .take(max_other)
             .cloned()
             .collect::<Vec<_>>();
-        let children = toasts
+        if let Some(id) = progress_id
+            && let Some(progress) = self.toasts.iter().find(|t| t.id == id).cloned()
+        {
+            displayed.push(progress);
+        }
+
+        let children = displayed
             .into_iter()
             .map(|t| zed::toast(theme, t.kind, t.input.clone()).id(("toast", t.id)));
 

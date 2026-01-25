@@ -611,6 +611,9 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
+        let can_amend = self
+            .active_repo()
+            .is_some_and(|repo| matches!(&repo.log, Loadable::Ready(page) if !page.commits.is_empty()));
         div()
             .flex()
             .flex_col()
@@ -628,33 +631,70 @@ impl GitGpuiView {
                             .child("Commit staged changes"),
                     )
                     .child(
-                        zed::Button::new("commit", "Commit")
-                            .style(zed::ButtonStyle::Filled)
-                            .disabled(!can_commit)
-                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                let Some(repo_id) = this.active_repo_id() else {
-                                    return;
-                                };
-                                let message = this
-                                    .commit_message_input
-                                    .read_with(cx, |i, _| i.text().trim().to_string());
-                                if message.is_empty() {
-                                    return;
-                                }
-                                this.store.dispatch(Msg::Commit { repo_id, message });
-                                this.commit_message_input
-                                    .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                cx.notify();
-                            })
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Commit staged changes".into();
-                                if *hovering {
-                                    this.tooltip_text = Some(text);
-                                } else if this.tooltip_text.as_ref() == Some(&text) {
-                                    this.tooltip_text = None;
-                                }
-                                cx.notify();
-                            })),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                zed::Button::new("amend", "Amend")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .disabled(!can_amend)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        let Some(repo_id) = this.active_repo_id() else {
+                                            return;
+                                        };
+                                        let message = this
+                                            .commit_message_input
+                                            .read_with(cx, |i, _| i.text().trim().to_string());
+                                        if message.is_empty() {
+                                            return;
+                                        }
+                                        this.store
+                                            .dispatch(Msg::CommitAmend { repo_id, message });
+                                        this.commit_message_input
+                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
+                                        cx.notify();
+                                    })
+                                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                        let text: SharedString =
+                                            "Amend last commit (message + staged changes)".into();
+                                        if *hovering {
+                                            this.tooltip_text = Some(text);
+                                        } else if this.tooltip_text.as_ref() == Some(&text) {
+                                            this.tooltip_text = None;
+                                        }
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                zed::Button::new("commit", "Commit")
+                                    .style(zed::ButtonStyle::Filled)
+                                    .disabled(!can_commit)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        let Some(repo_id) = this.active_repo_id() else {
+                                            return;
+                                        };
+                                        let message = this
+                                            .commit_message_input
+                                            .read_with(cx, |i, _| i.text().trim().to_string());
+                                        if message.is_empty() {
+                                            return;
+                                        }
+                                        this.store.dispatch(Msg::Commit { repo_id, message });
+                                        this.commit_message_input
+                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
+                                        cx.notify();
+                                    })
+                                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                        let text: SharedString = "Commit staged changes".into();
+                                        if *hovering {
+                                            this.tooltip_text = Some(text);
+                                        } else if this.tooltip_text.as_ref() == Some(&text) {
+                                            this.tooltip_text = None;
+                                        }
+                                        cx.notify();
+                                    })),
+                            ),
                     ),
             )
     }

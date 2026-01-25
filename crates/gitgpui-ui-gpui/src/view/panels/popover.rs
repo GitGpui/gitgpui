@@ -19,6 +19,7 @@ impl GitGpuiView {
             &kind,
             PopoverKind::PullPicker
                 | PopoverKind::HistoryBranchFilter { .. }
+                | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -34,6 +35,193 @@ impl GitGpuiView {
                 .context_menu_model(&kind)
                 .and_then(|m| m.first_selectable());
             window.focus(&self.context_menu_focus_handle);
+        } else {
+            match &kind {
+                PopoverKind::RepoPicker => {
+                    let _ = self.ensure_repo_picker_search_input(window, cx);
+                }
+                PopoverKind::BranchPicker => {
+                    let _ = self.ensure_branch_picker_search_input(window, cx);
+                }
+                PopoverKind::CreateBranch => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::StashPrompt => {
+                    let theme = self.theme;
+                    self.stash_message_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .stash_message_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CloneRepo => {
+                    let theme = self.theme;
+                    let url_text = self
+                        .clone_repo_url_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    let parent_text = self
+                        .clone_repo_parent_dir_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    self.clone_repo_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(url_text, cx);
+                        cx.notify();
+                    });
+                    self.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(parent_text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .clone_repo_url_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RebasePrompt { .. } => {
+                    let theme = self.theme;
+                    self.rebase_onto_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.rebase_onto_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CreateTagPrompt { .. } => {
+                    let theme = self.theme;
+                    self.create_tag_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::TagDeletePicker { .. } => {
+                    let _ = self.ensure_tag_picker_search_input(window, cx);
+                }
+                PopoverKind::RemoteAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.remote_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.remote_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.remote_name_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RemoteEditUrlPrompt { .. } => {
+                    let theme = self.theme;
+                    let text = self
+                        .remote_url_edit_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    self.remote_url_edit_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .remote_url_edit_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RemoteUrlPicker { .. } | PopoverKind::RemoteRemovePicker { .. } => {
+                    let _ = self.ensure_remote_picker_search_input(window, cx);
+                }
+                PopoverKind::WorktreeAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.worktree_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.worktree_ref_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.worktree_path_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::WorktreeOpenPicker { repo_id }
+                | PopoverKind::WorktreeRemovePicker { repo_id } => {
+                    let _ = self.ensure_worktree_picker_search_input(window, cx);
+                    self.store.dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
+                }
+                PopoverKind::SubmoduleAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.submodule_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.submodule_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.submodule_url_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::SubmoduleOpenPicker { repo_id }
+                | PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                    let _ = self.ensure_submodule_picker_search_input(window, cx);
+                    self.store.dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
+                }
+                PopoverKind::FileHistory { repo_id, path } => {
+                    self.ensure_file_history_search_input(window, cx);
+                    self.store.dispatch(Msg::LoadFileHistory {
+                        repo_id: *repo_id,
+                        path: path.clone(),
+                        limit: 200,
+                    });
+                }
+                PopoverKind::Blame { repo_id, path, rev } => {
+                    self.blame_scroll = UniformListScrollHandle::default();
+                    self.store.dispatch(Msg::LoadBlame {
+                        repo_id: *repo_id,
+                        path: path.clone(),
+                        rev: rev.clone(),
+                    });
+                }
+                PopoverKind::PushSetUpstreamPrompt { .. } => {
+                    let theme = self.theme;
+                    let text = self
+                        .push_upstream_branch_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    self.push_upstream_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .push_upstream_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::DiffHunks => {
+                    let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
+                }
+                _ => {}
+            }
         }
         cx.notify();
     }
@@ -98,6 +286,32 @@ impl GitGpuiView {
                     },
                 ]))
             }
+            PopoverKind::PushPicker => {
+                let repo_id = self.active_repo_id();
+                let disabled = repo_id.is_none();
+                let repo_id = repo_id.unwrap_or(RepoId(0));
+
+                Some(ContextMenuModel::new(vec![
+                    ContextMenuItem::Header("Push".into()),
+                    ContextMenuItem::Separator,
+                    ContextMenuItem::Entry {
+                        label: "Push".into(),
+                        icon: Some("↑".into()),
+                        shortcut: Some("Enter".into()),
+                        disabled,
+                        action: ContextMenuAction::Push { repo_id },
+                    },
+                    ContextMenuItem::Entry {
+                        label: "Force push (with lease)…".into(),
+                        icon: Some("⚠".into()),
+                        shortcut: Some("F".into()),
+                        disabled,
+                        action: ContextMenuAction::OpenPopover {
+                            kind: PopoverKind::ForcePushConfirm { repo_id },
+                        },
+                    },
+                ]))
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 let sha = commit_id.as_ref().to_string();
                 let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
@@ -152,24 +366,64 @@ impl GitGpuiView {
                         commit_id: commit_id.clone(),
                     },
                 });
-                items.push(ContextMenuItem::Entry {
-                    label: "Revert".into(),
-                    icon: Some("↶".into()),
-                    shortcut: Some("R".into()),
-                    disabled: false,
-                    action: ContextMenuAction::RevertCommit {
-                        repo_id: *repo_id,
-                        commit_id: commit_id.clone(),
-                    },
-                });
+	                items.push(ContextMenuItem::Entry {
+	                    label: "Revert".into(),
+	                    icon: Some("↶".into()),
+	                    shortcut: Some("R".into()),
+	                    disabled: false,
+	                    action: ContextMenuAction::RevertCommit {
+	                        repo_id: *repo_id,
+	                        commit_id: commit_id.clone(),
+	                    },
+	                });
 
-                Some(ContextMenuModel::new(items))
-            }
+	                items.push(ContextMenuItem::Separator);
+	                for (label, icon, mode) in [
+	                    ("Reset (--soft) to here", "↺", ResetMode::Soft),
+	                    ("Reset (--mixed) to here", "↺", ResetMode::Mixed),
+	                    ("Reset (--hard) to here", "↺", ResetMode::Hard),
+	                ] {
+	                    items.push(ContextMenuItem::Entry {
+	                        label: label.into(),
+	                        icon: Some(icon.into()),
+	                        shortcut: None,
+	                        disabled: false,
+	                        action: ContextMenuAction::OpenPopover {
+	                            kind: PopoverKind::ResetPrompt {
+	                                repo_id: *repo_id,
+	                                target: sha.clone(),
+	                                mode,
+	                            },
+	                        },
+	                    });
+	                }
+
+	                Some(ContextMenuModel::new(items))
+	            }
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,
                 path,
             } => {
+                let can_discard_worktree_changes = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == *repo_id)
+                    .and_then(|r| match &r.status {
+                        Loadable::Ready(status) => Some(
+                            status
+                                .unstaged
+                                .iter()
+                                .any(|s| {
+                                    s.path == path.as_path()
+                                        && s.kind != gitgpui_core::domain::FileStatusKind::Untracked
+                                }),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+
                 let mut items = vec![ContextMenuItem::Header(
                     path.file_name()
                         .map(|p| p.to_string_lossy().to_string())
@@ -189,6 +443,31 @@ impl GitGpuiView {
                         target: DiffTarget::WorkingTree {
                             path: path.clone(),
                             area: *area,
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "File history".into(),
+                    icon: Some("⟲".into()),
+                    shortcut: Some("H".into()),
+                    disabled: false,
+                    action: ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::FileHistory {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Blame".into(),
+                    icon: Some("≡".into()),
+                    shortcut: Some("B".into()),
+                    disabled: false,
+                    action: ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::Blame {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                            rev: None,
                         },
                     },
                 });
@@ -216,6 +495,17 @@ impl GitGpuiView {
                     }),
                 };
 
+                items.push(ContextMenuItem::Entry {
+                    label: "Discard changes".into(),
+                    icon: Some("↺".into()),
+                    shortcut: Some("D".into()),
+                    disabled: !can_discard_worktree_changes,
+                    action: ContextMenuAction::DiscardWorktreeChangesPath {
+                        repo_id: *repo_id,
+                        path: path.clone(),
+                    },
+                });
+
                 items.push(ContextMenuItem::Separator);
                 items.push(ContextMenuItem::Entry {
                     label: "Copy path".into(),
@@ -241,6 +531,17 @@ impl GitGpuiView {
                 let mut items = vec![ContextMenuItem::Header(header)];
                 items.push(ContextMenuItem::Label(name.clone().into()));
                 items.push(ContextMenuItem::Separator);
+
+                let is_current_branch = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == *repo_id)
+                    .and_then(|r| match &r.head_branch {
+                        Loadable::Ready(b) => Some(b == name),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
 
                 items.push(ContextMenuItem::Entry {
                     label: "Checkout".into(),
@@ -275,6 +576,20 @@ impl GitGpuiView {
                     disabled: false,
                     action: ContextMenuAction::CopyText { text: name.clone() },
                 });
+
+                if *section == BranchSection::Local {
+                    items.push(ContextMenuItem::Separator);
+                    items.push(ContextMenuItem::Entry {
+                        label: "Delete branch".into(),
+                        icon: Some("🗑".into()),
+                        shortcut: None,
+                        disabled: is_current_branch,
+                        action: ContextMenuAction::DeleteBranch {
+                            repo_id: *repo_id,
+                            name: name.clone(),
+                        },
+                    });
+                }
 
                 if *section == BranchSection::Remote {
                     items.push(ContextMenuItem::Separator);
@@ -369,6 +684,31 @@ impl GitGpuiView {
                     },
                 });
                 items.push(ContextMenuItem::Entry {
+                    label: "File history".into(),
+                    icon: Some("⟲".into()),
+                    shortcut: Some("H".into()),
+                    disabled: false,
+                    action: ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::FileHistory {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
+                    label: "Blame (this commit)".into(),
+                    icon: Some("≡".into()),
+                    shortcut: Some("B".into()),
+                    disabled: false,
+                    action: ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::Blame {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                            rev: Some(commit_id.as_ref().to_string()),
+                        },
+                    },
+                });
+                items.push(ContextMenuItem::Entry {
                     label: "Copy path".into(),
                     icon: Some("⧉".into()),
                     shortcut: Some("C".into()),
@@ -377,6 +717,51 @@ impl GitGpuiView {
                         text: path.display().to_string(),
                     },
                 });
+                Some(ContextMenuModel::new(items))
+            }
+            PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
+                let mut items = vec![ContextMenuItem::Header("Hunk".into())];
+                items.push(ContextMenuItem::Separator);
+
+                let (disabled, label, icon, shortcut) = match self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == *repo_id)
+                    .and_then(|r| r.diff_target.as_ref())
+                {
+                    Some(DiffTarget::WorkingTree { area, .. }) => match area {
+                        DiffArea::Unstaged => (false, "Stage hunk", "+", Some("S")),
+                        DiffArea::Staged => (false, "Unstage hunk", "−", Some("U")),
+                    },
+                    _ => (true, "Stage/Unstage hunk", "+", None::<&'static str>),
+                };
+
+                items.push(ContextMenuItem::Entry {
+                    label: label.into(),
+                    icon: Some(icon.into()),
+                    shortcut: shortcut.map(Into::into),
+                    disabled,
+                    action: match self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == *repo_id)
+                        .and_then(|r| r.diff_target.as_ref())
+                    {
+                        Some(DiffTarget::WorkingTree { area: DiffArea::Staged, .. }) => {
+                            ContextMenuAction::UnstageHunk {
+                                repo_id: *repo_id,
+                                src_ix: *src_ix,
+                            }
+                        }
+                        _ => ContextMenuAction::StageHunk {
+                            repo_id: *repo_id,
+                            src_ix: *src_ix,
+                        },
+                    },
+                });
+
                 Some(ContextMenuModel::new(items))
             }
             PopoverKind::HistoryBranchFilter { repo_id } => Some(ContextMenuModel::new(vec![
@@ -410,7 +795,7 @@ impl GitGpuiView {
     fn context_menu_activate_action(
         &mut self,
         action: ContextMenuAction,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match action {
@@ -446,6 +831,10 @@ impl GitGpuiView {
                 });
                 self.rebuild_diff_cache();
             }
+            ContextMenuAction::DeleteBranch { repo_id, name } => {
+                self.store.dispatch(Msg::DeleteBranch { repo_id, name });
+                self.rebuild_diff_cache();
+            }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
@@ -471,6 +860,18 @@ impl GitGpuiView {
                 self.store.dispatch(Msg::UnstagePath { repo_id, path });
                 self.rebuild_diff_cache();
             }
+            ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
+                self.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: DiffArea::Unstaged,
+                    },
+                });
+                self.store
+                    .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
+                self.rebuild_diff_cache();
+            }
             ContextMenuAction::FetchAll { repo_id } => {
                 self.store.dispatch(Msg::FetchAll { repo_id });
             }
@@ -491,17 +892,90 @@ impl GitGpuiView {
             ContextMenuAction::MergeRef { repo_id, reference } => {
                 self.store.dispatch(Msg::MergeRef { repo_id, reference });
             }
+            ContextMenuAction::Push { repo_id } => {
+                self.store.dispatch(Msg::Push { repo_id });
+            }
             ContextMenuAction::OpenPopover { kind } => {
-                self.popover = Some(kind);
-                self.context_menu_selected_ix = None;
-                cx.notify();
+                let anchor = self
+                    .popover_anchor
+                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
+                self.open_popover_at(kind, anchor, window, cx);
                 return;
             }
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+            ContextMenuAction::StageHunk { repo_id, src_ix } => {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(src_ix) {
+                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
+                } else {
+                    self.push_toast(
+                        zed::ToastKind::Error,
+                        "Couldn't build patch for this hunk".to_string(),
+                        cx,
+                    );
+                }
+            }
+            ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(src_ix) {
+                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
+                } else {
+                    self.push_toast(
+                        zed::ToastKind::Error,
+                        "Couldn't build patch for this hunk".to_string(),
+                        cx,
+                    );
+                }
+            }
         }
         self.close_popover(cx);
+    }
+
+    fn build_unified_patch_for_hunk_src_ix(&self, hunk_src_ix: usize) -> Option<String> {
+        if self.is_file_diff_view_active() {
+            return None;
+        }
+        let lines = &self.diff_cache;
+        let hunk = lines.get(hunk_src_ix)?;
+        if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+            return None;
+        }
+
+        let file_start = (0..=hunk_src_ix)
+            .rev()
+            .find(|&ix| lines.get(ix).is_some_and(|l| l.text.starts_with("diff --git ")))?;
+
+        let first_hunk = (file_start + 1..lines.len())
+            .find(|&ix| {
+                let Some(line) = lines.get(ix) else {
+                    return false;
+                };
+                matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                    || line.text.starts_with("diff --git ")
+            })
+            .unwrap_or(lines.len());
+
+        let header_end = first_hunk.min(hunk_src_ix);
+        let hunk_end = (hunk_src_ix + 1..lines.len())
+            .find(|&ix| {
+                let Some(line) = lines.get(ix) else {
+                    return false;
+                };
+                matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                    || line.text.starts_with("diff --git ")
+            })
+            .unwrap_or(lines.len());
+
+        let mut out = String::new();
+        for line in &lines[file_start..header_end] {
+            out.push_str(&line.text);
+            out.push('\n');
+        }
+        for line in &lines[hunk_src_ix..hunk_end] {
+            out.push_str(&line.text);
+            out.push('\n');
+        }
+        (!out.trim().is_empty()).then_some(out)
     }
 
     fn context_menu_view(&mut self, kind: PopoverKind, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -902,6 +1376,110 @@ impl GitGpuiView {
         header_with_handles
     }
 
+    pub(in super::super) fn render_blame_popover_rows(
+        this: &mut Self,
+        range: std::ops::Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some((repo_id, path)) = this.popover.as_ref().and_then(|k| match k {
+            PopoverKind::Blame { repo_id, path, .. } => Some((*repo_id, path.clone())),
+            _ => None,
+        }) else {
+            return Vec::new();
+        };
+
+        let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let Loadable::Ready(lines) = &repo.blame else {
+            return Vec::new();
+        };
+
+        let theme = this.theme;
+        let mut rows = Vec::with_capacity(range.len());
+        for ix in range {
+            let Some(line) = lines.get(ix) else {
+                continue;
+            };
+            let line_no = ix + 1;
+            let sha = line.commit_id.clone();
+            let short = sha.get(0..8).unwrap_or(&sha).to_string();
+            let author: SharedString = line.author.clone().into();
+            let code: SharedString = line.line.clone().into();
+            let commit_id = CommitId(sha);
+            let path = path.clone();
+
+            rows.push(
+                div()
+                    .id(("blame_row", ix))
+                    .h(px(20.0))
+                    .flex()
+                    .items_center()
+                    .px_2()
+                    .gap_2()
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(
+                        div()
+                            .w(px(44.0))
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .whitespace_nowrap()
+                            .child(format!("{line_no:>4}")),
+                    )
+                    .child(
+                        div()
+                            .w(px(76.0))
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .whitespace_nowrap()
+                            .child(short),
+                    )
+                    .child(
+                        div()
+                            .w(px(140.0))
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(author),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_xs()
+                            .font_family("monospace")
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .child(code),
+                    )
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.store.dispatch(Msg::SelectCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        });
+                        this.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::Commit {
+                                commit_id: commit_id.clone(),
+                                path: Some(path.clone()),
+                            },
+                        });
+                        this.rebuild_diff_cache();
+                        this.popover = None;
+                        this.popover_anchor = None;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        rows
+    }
+
     pub(in super::super) fn popover_view(
         &mut self,
         kind: PopoverKind,
@@ -913,20 +1491,34 @@ impl GitGpuiView {
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
-        let popover_use_surface_bg = matches!(
-            &kind,
-            PopoverKind::CreateBranch
-                | PopoverKind::StashPrompt
-                | PopoverKind::PushSetUpstreamPrompt { .. }
-        );
-        let anchor_corner = match &kind {
-            PopoverKind::PullPicker
-            | PopoverKind::CreateBranch
-            | PopoverKind::StashPrompt
-            | PopoverKind::PushSetUpstreamPrompt { .. }
-            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
-            _ => Corner::TopLeft,
-        };
+	        let anchor_corner = match &kind {
+	            PopoverKind::PullPicker
+	            | PopoverKind::PushPicker
+	            | PopoverKind::CreateBranch
+	            | PopoverKind::StashPrompt
+	            | PopoverKind::CloneRepo
+	            | PopoverKind::ResetPrompt { .. }
+	            | PopoverKind::RebasePrompt { .. }
+	            | PopoverKind::CreateTagPrompt { .. }
+	            | PopoverKind::TagDeletePicker { .. }
+	            | PopoverKind::RemoteAddPrompt { .. }
+	            | PopoverKind::RemoteUrlPicker { .. }
+	            | PopoverKind::RemoteRemovePicker { .. }
+	            | PopoverKind::RemoteEditUrlPrompt { .. }
+	            | PopoverKind::RemoteRemoveConfirm { .. }
+	            | PopoverKind::WorktreeAddPrompt { .. }
+	            | PopoverKind::WorktreeOpenPicker { .. }
+	            | PopoverKind::WorktreeRemovePicker { .. }
+	            | PopoverKind::WorktreeRemoveConfirm { .. }
+	            | PopoverKind::SubmoduleAddPrompt { .. }
+	            | PopoverKind::SubmoduleOpenPicker { .. }
+	            | PopoverKind::SubmoduleRemovePicker { .. }
+	            | PopoverKind::SubmoduleRemoveConfirm { .. }
+	            | PopoverKind::PushSetUpstreamPrompt { .. }
+	            | PopoverKind::ForcePushConfirm { .. }
+	            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
+	            _ => Corner::TopLeft,
+	        };
 
         let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
@@ -1115,7 +1707,10 @@ impl GitGpuiView {
                                     if let Some(repo_id) = this.active_repo_id()
                                         && !name.is_empty()
                                     {
-                                        this.store.dispatch(Msg::CreateBranch { repo_id, name });
+                                        this.store.dispatch(Msg::CreateBranchAndCheckout {
+                                            repo_id,
+                                            name,
+                                        });
                                     }
                                     this.popover = None;
                                     this.popover_anchor = None;
@@ -1185,9 +1780,1568 @@ impl GitGpuiView {
                                 }),
                         ),
                 ),
-            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
-                let remote = remote.clone();
-                div()
+	            PopoverKind::CloneRepo => {
+	                div()
+                    .flex()
+                    .flex_col()
+                    .min_w(px(420.0))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Clone repository"),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Repository URL / Path"),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .child(self.clone_repo_url_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Destination parent folder"),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w(px(0.0)).child(
+                                self.clone_repo_parent_dir_input.clone(),
+                            ))
+                            .child(
+                                zed::Button::new("clone_repo_browse", "Browse")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |_this, _e, window, cx| {
+                                        cx.stop_propagation();
+                                        let view = cx.weak_entity();
+                                        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                            files: false,
+                                            directories: true,
+                                            multiple: false,
+                                            prompt: Some("Clone into folder".into()),
+                                        });
+
+                                        window
+                                            .spawn(cx, async move |cx| {
+                                                let result = rx.await;
+                                                let paths = match result {
+                                                    Ok(Ok(Some(paths))) => paths,
+                                                    Ok(Ok(None)) => return,
+                                                    Ok(Err(_)) | Err(_) => return,
+                                                };
+                                                let Some(path) = paths.into_iter().next() else {
+                                                    return;
+                                                };
+                                                let _ = view.update(cx, |this, cx| {
+                                                    this.clone_repo_parent_dir_input.update(
+                                                        cx,
+                                                        |input, cx| {
+                                                            input.set_text(
+                                                                path.display().to_string(),
+                                                                cx,
+                                                            );
+                                                        },
+                                                    );
+                                                    cx.notify();
+                                                });
+                                            })
+                                            .detach();
+                                    }),
+                            ),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                zed::Button::new("clone_repo_cancel", "Cancel")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            )
+                            .child(
+                                zed::Button::new("clone_repo_go", "Clone")
+                                    .style(zed::ButtonStyle::Filled)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        let url = this
+                                            .clone_repo_url_input
+                                            .read_with(cx, |i, _| i.text().trim().to_string());
+                                        let parent = this
+                                            .clone_repo_parent_dir_input
+                                            .read_with(cx, |i, _| i.text().trim().to_string());
+                                        if url.is_empty() || parent.is_empty() {
+                                            this.push_toast(
+                                                zed::ToastKind::Error,
+                                                "Clone: URL and destination are required"
+                                                    .to_string(),
+                                                cx,
+                                            );
+                                            return;
+                                        }
+
+                                        let repo_name = clone_repo_name_from_url(&url);
+                                        let dest = std::path::PathBuf::from(parent).join(repo_name);
+                                        this.store.dispatch(Msg::CloneRepo { url, dest });
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            ),
+	                    )
+	            }
+		            PopoverKind::ResetPrompt {
+		                repo_id,
+		                target,
+		                mode,
+		            } => {
+	                let mode_label = match mode {
+	                    ResetMode::Soft => "--soft",
+	                    ResetMode::Mixed => "--mixed",
+	                    ResetMode::Hard => "--hard",
+	                };
+
+	                div()
+	                    .flex()
+	                    .flex_col()
+	                    .min_w(px(380.0))
+	                    .child(
+	                        div()
+	                            .px_2()
+	                            .py_1()
+	                            .text_sm()
+	                            .font_weight(FontWeight::BOLD)
+	                            .child("Reset"),
+	                    )
+	                    .child(div().border_t_1().border_color(theme.colors.border))
+	                    .child(
+	                        div()
+	                            .px_2()
+	                            .py_1()
+	                            .text_sm()
+	                            .text_color(theme.colors.text_muted)
+	                            .child(format!("{mode_label} → {target}")),
+	                    )
+	                    .child(
+	                        div()
+	                            .px_2()
+	                            .pb_1()
+	                            .text_xs()
+	                            .text_color(theme.colors.text_muted)
+	                            .child(match mode {
+	                                ResetMode::Hard => {
+	                                    "Hard reset updates index + working tree (destructive)."
+	                                }
+	                                ResetMode::Mixed => "Mixed reset updates index only.",
+	                                ResetMode::Soft => "Soft reset moves HEAD only.",
+	                            }),
+	                    )
+	                    .child(div().border_t_1().border_color(theme.colors.border))
+	                    .child(
+	                        div()
+	                            .px_2()
+	                            .py_1()
+	                            .flex()
+	                            .items_center()
+	                            .justify_between()
+	                            .child(
+	                                zed::Button::new("reset_cancel", "Cancel")
+	                                    .style(zed::ButtonStyle::Outlined)
+	                                    .on_click(theme, cx, |this, _e, _w, cx| {
+	                                        this.popover = None;
+	                                        this.popover_anchor = None;
+	                                        cx.notify();
+	                                    }),
+	                            )
+	                            .child(
+	                                zed::Button::new("reset_go", "Reset")
+	                                    .style(zed::ButtonStyle::Filled)
+	                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+	                                        this.store.dispatch(Msg::Reset {
+	                                            repo_id,
+	                                            target: target.clone(),
+	                                            mode,
+	                                        });
+	                                        this.popover = None;
+	                                        this.popover_anchor = None;
+	                                        cx.notify();
+	                                    }),
+	                            ),
+		                    )
+		            }
+		            PopoverKind::RebasePrompt { repo_id } => div()
+		                .flex()
+		                .flex_col()
+		                .min_w(px(420.0))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_sm()
+		                        .font_weight(FontWeight::BOLD)
+		                        .child("Rebase"),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_xs()
+		                        .text_color(theme.colors.text_muted)
+		                        .child("Rebase current branch onto"),
+		                )
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .pb_1()
+		                        .w_full()
+		                        .min_w(px(0.0))
+		                        .child(self.rebase_onto_input.clone()),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .flex()
+		                        .items_center()
+		                        .justify_between()
+		                        .child(
+		                            zed::Button::new("rebase_cancel", "Cancel")
+		                                .style(zed::ButtonStyle::Outlined)
+		                                .on_click(theme, cx, |this, _e, _w, cx| {
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        )
+		                        .child(
+		                            zed::Button::new("rebase_go", "Rebase")
+		                                .style(zed::ButtonStyle::Filled)
+		                                .on_click(theme, cx, move |this, _e, _w, cx| {
+		                                    let onto = this
+		                                        .rebase_onto_input
+		                                        .read_with(cx, |i, _| i.text().trim().to_string());
+		                                    if onto.is_empty() {
+		                                        this.push_toast(
+		                                            zed::ToastKind::Error,
+		                                            "Rebase: target is required".to_string(),
+		                                            cx,
+		                                        );
+		                                        return;
+		                                    }
+		                                    this.store.dispatch(Msg::Rebase { repo_id, onto });
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        ),
+		                ),
+		            PopoverKind::CreateTagPrompt { repo_id, target } => div()
+		                .flex()
+		                .flex_col()
+		                .min_w(px(420.0))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_sm()
+		                        .font_weight(FontWeight::BOLD)
+		                        .child("Create tag"),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_xs()
+		                        .text_color(theme.colors.text_muted)
+		                        .child(format!("Target: {target}")),
+		                )
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .pb_1()
+		                        .w_full()
+		                        .min_w(px(0.0))
+		                        .child(self.create_tag_input.clone()),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .flex()
+		                        .items_center()
+		                        .justify_between()
+		                        .child(
+		                            zed::Button::new("create_tag_cancel", "Cancel")
+		                                .style(zed::ButtonStyle::Outlined)
+		                                .on_click(theme, cx, |this, _e, _w, cx| {
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        )
+		                        .child(
+		                            zed::Button::new("create_tag_go", "Create")
+		                                .style(zed::ButtonStyle::Filled)
+		                                .on_click(theme, cx, move |this, _e, _w, cx| {
+		                                    let name = this
+		                                        .create_tag_input
+		                                        .read_with(cx, |i, _| i.text().trim().to_string());
+		                                    if name.is_empty() {
+		                                        this.push_toast(
+		                                            zed::ToastKind::Error,
+		                                            "Tag: name is required".to_string(),
+		                                            cx,
+		                                        );
+		                                        return;
+		                                    }
+		                                    this.store.dispatch(Msg::CreateTag {
+		                                        repo_id,
+		                                        name,
+		                                        target: target.clone(),
+		                                    });
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        ),
+		                ),
+		            PopoverKind::TagDeletePicker { repo_id } => {
+		                let tags = self
+		                    .active_repo()
+		                    .and_then(|r| match &r.tags {
+		                        Loadable::Ready(tags) => Some(tags.clone()),
+		                        _ => None,
+		                    })
+		                    .unwrap_or_default();
+		                let items = tags.iter().map(|t| t.name.clone().into()).collect::<Vec<_>>();
+		                let names = tags.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+		                if let Some(search) = self.tag_picker_search_input.clone() {
+		                    zed::context_menu(
+		                        theme,
+		                        zed::PickerPrompt::new(search)
+		                            .items(items)
+		                            .empty_text("No tags")
+		                            .max_height(px(260.0))
+		                            .render(theme, cx, move |this, ix, _e, _w, cx| {
+		                                let Some(name) = names.get(ix).cloned() else {
+		                                    return;
+		                                };
+		                                this.store.dispatch(Msg::DeleteTag { repo_id, name });
+		                                this.popover = None;
+		                                this.popover_anchor = None;
+		                                cx.notify();
+		                            }),
+		                    )
+		                    .min_w(px(260.0))
+		                    .max_w(px(420.0))
+		                } else {
+		                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+		                    for (ix, item) in items.into_iter().enumerate() {
+		                        let name = names.get(ix).cloned().unwrap_or_default();
+		                        menu = menu.child(
+		                            div()
+		                                .id(("tag_delete_item", ix))
+		                                .px_2()
+		                                .py_1()
+		                                .hover(move |s| s.bg(theme.colors.hover))
+		                                .child(div().text_sm().line_clamp(1).child(item))
+		                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+		                                    this.store.dispatch(Msg::DeleteTag {
+		                                        repo_id,
+		                                        name: name.clone(),
+		                                    });
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                })),
+		                        );
+		                    }
+		                    menu.child(
+		                        div()
+		                            .id("tag_delete_close")
+		                            .px_2()
+		                            .py_1()
+		                            .hover(move |s| s.bg(theme.colors.hover))
+		                            .child("Close")
+		                            .on_click(close),
+		                    )
+		                }
+		            }
+		            PopoverKind::RemoteAddPrompt { repo_id } => div()
+		                .flex()
+		                .flex_col()
+		                .min_w(px(420.0))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_sm()
+		                        .font_weight(FontWeight::BOLD)
+		                        .child("Add remote"),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_xs()
+		                        .text_color(theme.colors.text_muted)
+		                        .child("Name"),
+		                )
+		                .child(div().px_2().pb_1().min_w(px(0.0)).child(
+		                    self.remote_name_input.clone(),
+		                ))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_xs()
+		                        .text_color(theme.colors.text_muted)
+		                        .child("URL"),
+		                )
+		                .child(div().px_2().pb_1().min_w(px(0.0)).child(
+		                    self.remote_url_input.clone(),
+		                ))
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .flex()
+		                        .items_center()
+		                        .justify_between()
+		                        .child(
+		                            zed::Button::new("add_remote_cancel", "Cancel")
+		                                .style(zed::ButtonStyle::Outlined)
+		                                .on_click(theme, cx, |this, _e, _w, cx| {
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        )
+		                        .child(
+		                            zed::Button::new("add_remote_go", "Add")
+		                                .style(zed::ButtonStyle::Filled)
+		                                .on_click(theme, cx, move |this, _e, _w, cx| {
+		                                    let name = this
+		                                        .remote_name_input
+		                                        .read_with(cx, |i, _| i.text().trim().to_string());
+		                                    let url = this
+		                                        .remote_url_input
+		                                        .read_with(cx, |i, _| i.text().trim().to_string());
+		                                    if name.is_empty() || url.is_empty() {
+		                                        this.push_toast(
+		                                            zed::ToastKind::Error,
+		                                            "Remote: name and URL are required".to_string(),
+		                                            cx,
+		                                        );
+		                                        return;
+		                                    }
+		                                    this.store.dispatch(Msg::AddRemote { repo_id, name, url });
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        ),
+		                ),
+		            PopoverKind::RemoteUrlPicker { repo_id, kind } => {
+		                let remotes = self
+		                    .active_repo()
+		                    .and_then(|r| match &r.remotes {
+		                        Loadable::Ready(remotes) => Some(remotes.clone()),
+		                        _ => None,
+		                    })
+		                    .unwrap_or_default();
+		                let items = remotes
+		                    .iter()
+		                    .map(|r| r.name.clone().into())
+		                    .collect::<Vec<_>>();
+		                let names = remotes.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+		                if let Some(search) = self.remote_picker_search_input.clone() {
+		                    zed::context_menu(
+		                        theme,
+		                        zed::PickerPrompt::new(search)
+		                            .items(items)
+		                            .empty_text("No remotes")
+		                            .max_height(px(260.0))
+		                            .render(theme, cx, move |this, ix, e, window, cx| {
+		                                let Some(name) = names.get(ix).cloned() else {
+		                                    return;
+		                                };
+		                                let url = this
+		                                    .active_repo()
+		                                    .and_then(|r| match &r.remotes {
+		                                        Loadable::Ready(remotes) => remotes
+		                                            .iter()
+		                                            .find(|rr| rr.name == name)
+		                                            .and_then(|rr| rr.url.clone()),
+		                                        _ => None,
+		                                    })
+		                                    .unwrap_or_default();
+		                                this.remote_url_edit_input
+		                                    .update(cx, |i, cx| i.set_text(url, cx));
+		                                this.open_popover_at(
+		                                    PopoverKind::RemoteEditUrlPrompt { repo_id, name, kind },
+		                                    e.position(),
+		                                    window,
+		                                    cx,
+		                                );
+		                            }),
+		                    )
+		                    .min_w(px(260.0))
+		                    .max_w(px(420.0))
+		                } else {
+		                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+		                    for (ix, item) in items.into_iter().enumerate() {
+		                        let name = names.get(ix).cloned().unwrap_or_default();
+		                        menu = menu.child(
+		                            div()
+		                                .id(("remote_url_item", ix))
+		                                .px_2()
+		                                .py_1()
+		                                .hover(move |s| s.bg(theme.colors.hover))
+		                                .child(div().text_sm().line_clamp(1).child(item))
+		                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+		                                    let url = this
+		                                        .active_repo()
+		                                        .and_then(|r| match &r.remotes {
+		                                            Loadable::Ready(remotes) => remotes
+		                                                .iter()
+		                                                .find(|rr| rr.name == name)
+		                                                .and_then(|rr| rr.url.clone()),
+		                                            _ => None,
+		                                        })
+		                                        .unwrap_or_default();
+		                                    this.remote_url_edit_input
+		                                        .update(cx, |i, cx| i.set_text(url, cx));
+		                                    this.open_popover_at(
+		                                        PopoverKind::RemoteEditUrlPrompt {
+		                                            repo_id,
+		                                            name: name.clone(),
+		                                            kind,
+		                                        },
+		                                        e.position(),
+		                                        window,
+		                                        cx,
+		                                    );
+		                                })),
+		                        );
+		                    }
+		                    menu.child(
+		                        div()
+		                            .id("remote_url_close")
+		                            .px_2()
+		                            .py_1()
+		                            .hover(move |s| s.bg(theme.colors.hover))
+		                            .child("Close")
+		                            .on_click(close),
+		                    )
+		                }
+		            }
+		            PopoverKind::RemoteEditUrlPrompt {
+		                repo_id,
+		                name,
+		                kind,
+		            } => {
+		                let kind_label = match kind {
+		                    RemoteUrlKind::Fetch => "fetch",
+		                    RemoteUrlKind::Push => "push",
+		                };
+		                div()
+		                    .flex()
+		                    .flex_col()
+		                    .min_w(px(420.0))
+		                    .child(
+		                        div()
+		                            .px_2()
+		                            .py_1()
+		                            .text_sm()
+		                            .font_weight(FontWeight::BOLD)
+		                            .child(format!("Edit remote URL ({kind_label})")),
+		                    )
+		                    .child(div().border_t_1().border_color(theme.colors.border))
+		                    .child(
+		                        div()
+		                            .px_2()
+		                            .py_1()
+		                            .text_xs()
+		                            .text_color(theme.colors.text_muted)
+		                            .child(format!("Remote: {name}")),
+		                    )
+		                    .child(div().px_2().pb_1().min_w(px(0.0)).child(
+		                        self.remote_url_edit_input.clone(),
+		                    ))
+		                    .child(div().border_t_1().border_color(theme.colors.border))
+		                    .child(
+		                        div()
+		                            .px_2()
+		                            .py_1()
+		                            .flex()
+		                            .items_center()
+		                            .justify_between()
+		                            .child(
+		                                zed::Button::new("edit_remote_url_cancel", "Cancel")
+		                                    .style(zed::ButtonStyle::Outlined)
+		                                    .on_click(theme, cx, |this, _e, _w, cx| {
+		                                        this.popover = None;
+		                                        this.popover_anchor = None;
+		                                        cx.notify();
+		                                    }),
+		                            )
+		                            .child(
+		                                zed::Button::new("edit_remote_url_go", "Save")
+		                                    .style(zed::ButtonStyle::Filled)
+		                                    .on_click(theme, cx, move |this, _e, _w, cx| {
+		                                        let url = this
+		                                            .remote_url_edit_input
+		                                            .read_with(cx, |i, _| i.text().trim().to_string());
+		                                        if url.is_empty() {
+		                                            this.push_toast(
+		                                                zed::ToastKind::Error,
+		                                                "Remote URL cannot be empty".to_string(),
+		                                                cx,
+		                                            );
+		                                            return;
+		                                        }
+		                                        this.store.dispatch(Msg::SetRemoteUrl {
+		                                            repo_id,
+		                                            name: name.clone(),
+		                                            url,
+		                                            kind,
+		                                        });
+		                                        this.popover = None;
+		                                        this.popover_anchor = None;
+		                                        cx.notify();
+		                                    }),
+		                            ),
+		                    )
+		            }
+		            PopoverKind::RemoteRemovePicker { repo_id } => {
+		                let remotes = self
+		                    .active_repo()
+		                    .and_then(|r| match &r.remotes {
+		                        Loadable::Ready(remotes) => Some(remotes.clone()),
+		                        _ => None,
+		                    })
+		                    .unwrap_or_default();
+		                let items = remotes
+		                    .iter()
+		                    .map(|r| r.name.clone().into())
+		                    .collect::<Vec<_>>();
+		                let names = remotes.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+		                if let Some(search) = self.remote_picker_search_input.clone() {
+		                    zed::context_menu(
+		                        theme,
+		                        zed::PickerPrompt::new(search)
+		                            .items(items)
+		                            .empty_text("No remotes")
+		                            .max_height(px(260.0))
+		                            .render(theme, cx, move |this, ix, e, window, cx| {
+		                                let Some(name) = names.get(ix).cloned() else {
+		                                    return;
+		                                };
+		                                this.open_popover_at(
+		                                    PopoverKind::RemoteRemoveConfirm { repo_id, name },
+		                                    e.position(),
+		                                    window,
+		                                    cx,
+		                                );
+		                            }),
+		                    )
+		                    .min_w(px(260.0))
+		                    .max_w(px(420.0))
+		                } else {
+		                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+		                    for (ix, item) in items.into_iter().enumerate() {
+		                        let name = names.get(ix).cloned().unwrap_or_default();
+		                        menu = menu.child(
+		                            div()
+		                                .id(("remote_remove_item", ix))
+		                                .px_2()
+		                                .py_1()
+		                                .hover(move |s| s.bg(theme.colors.hover))
+		                                .child(div().text_sm().line_clamp(1).child(item))
+		                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+		                                    this.open_popover_at(
+		                                        PopoverKind::RemoteRemoveConfirm {
+		                                            repo_id,
+		                                            name: name.clone(),
+		                                        },
+		                                        e.position(),
+		                                        window,
+		                                        cx,
+		                                    );
+		                                })),
+		                        );
+		                    }
+		                    menu.child(
+		                        div()
+		                            .id("remote_remove_close")
+		                            .px_2()
+		                            .py_1()
+		                            .hover(move |s| s.bg(theme.colors.hover))
+		                            .child("Close")
+		                            .on_click(close),
+		                    )
+		                }
+		            }
+		            PopoverKind::RemoteRemoveConfirm { repo_id, name } => div()
+		                .flex()
+		                .flex_col()
+		                .min_w(px(380.0))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_sm()
+		                        .font_weight(FontWeight::BOLD)
+		                        .child("Remove remote"),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .text_sm()
+		                        .text_color(theme.colors.text_muted)
+		                        .child(format!("Remote: {name}")),
+		                )
+		                .child(div().border_t_1().border_color(theme.colors.border))
+		                .child(
+		                    div()
+		                        .px_2()
+		                        .py_1()
+		                        .flex()
+		                        .items_center()
+		                        .justify_between()
+		                        .child(
+		                            zed::Button::new("remove_remote_cancel", "Cancel")
+		                                .style(zed::ButtonStyle::Outlined)
+		                                .on_click(theme, cx, |this, _e, _w, cx| {
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        )
+		                        .child(
+		                            zed::Button::new("remove_remote_go", "Remove")
+		                                .style(zed::ButtonStyle::Danger)
+		                                .on_click(theme, cx, move |this, _e, _w, cx| {
+		                                    this.store.dispatch(Msg::RemoveRemote {
+		                                        repo_id,
+		                                        name: name.clone(),
+		                                    });
+		                                    this.popover = None;
+		                                    this.popover_anchor = None;
+		                                    cx.notify();
+		                                }),
+		                        ),
+		                ),
+                    PopoverKind::WorktreeAddPrompt { repo_id } => div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(520.0))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Add worktree"),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Worktree folder"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().flex_1().min_w(px(0.0)).child(
+                                    self.worktree_path_input.clone(),
+                                ))
+                                .child(
+                                    zed::Button::new("worktree_browse", "Browse")
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |_this, _e, window, cx| {
+                                            cx.stop_propagation();
+                                            let view = cx.weak_entity();
+                                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                                                files: false,
+                                                directories: true,
+                                                multiple: false,
+                                                prompt: Some("Select worktree folder".into()),
+                                            });
+
+                                            window
+                                                .spawn(cx, async move |cx| {
+                                                    let result = rx.await;
+                                                    let paths = match result {
+                                                        Ok(Ok(Some(paths))) => paths,
+                                                        Ok(Ok(None)) => return,
+                                                        Ok(Err(_)) | Err(_) => return,
+                                                    };
+                                                    let Some(path) = paths.into_iter().next()
+                                                    else {
+                                                        return;
+                                                    };
+                                                    let _ = view.update(cx, |this, cx| {
+                                                        this.worktree_path_input.update(
+                                                            cx,
+                                                            |input, cx| {
+                                                                input.set_text(
+                                                                    path.display().to_string(),
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        );
+                                                        cx.notify();
+                                                    });
+                                                })
+                                                .detach();
+                                        }),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Branch / commit (optional)"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .child(self.worktree_ref_input.clone()),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    zed::Button::new("worktree_add_cancel", "Cancel")
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                )
+                                .child(
+                                    zed::Button::new("worktree_add_go", "Add")
+                                        .style(zed::ButtonStyle::Filled)
+                                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                                            let folder = this.worktree_path_input.read_with(
+                                                cx,
+                                                |i, _| i.text().trim().to_string(),
+                                            );
+                                            if folder.is_empty() {
+                                                this.push_toast(
+                                                    zed::ToastKind::Error,
+                                                    "Worktree folder is required".to_string(),
+                                                    cx,
+                                                );
+                                                return;
+                                            }
+                                            let reference = this.worktree_ref_input.read_with(
+                                                cx,
+                                                |i, _| i.text().trim().to_string(),
+                                            );
+                                            let reference = (!reference.is_empty())
+                                                .then_some(reference);
+                                            this.store.dispatch(Msg::AddWorktree {
+                                                repo_id,
+                                                path: std::path::PathBuf::from(folder),
+                                                reference,
+                                            });
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                ),
+                        ),
+                    PopoverKind::WorktreeOpenPicker { repo_id } => {
+                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                            match &repo.worktrees {
+                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
+                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
+                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
+                                Loadable::Ready(worktrees) => {
+                                    let workdir = repo.spec.workdir.clone();
+                                    let items = worktrees
+                                        .iter()
+                                        .filter(|w| w.path != workdir)
+                                        .map(|w| {
+                                            let label = if let Some(branch) = &w.branch {
+                                                format!("{branch}  {}", w.path.display())
+                                            } else if w.detached {
+                                                format!("(detached)  {}", w.path.display())
+                                            } else {
+                                                w.path.display().to_string()
+                                            };
+                                            label.into()
+                                        })
+                                        .collect::<Vec<SharedString>>();
+                                    let paths = worktrees
+                                        .iter()
+                                        .filter(|w| w.path != workdir)
+                                        .map(|w| w.path.clone())
+                                        .collect::<Vec<_>>();
+
+                                    if let Some(search) = self.worktree_picker_search_input.clone() {
+                                        zed::context_menu(
+                                            theme,
+                                            zed::PickerPrompt::new(search)
+                                                .items(items)
+                                                .empty_text("No worktrees")
+                                                .max_height(px(260.0))
+                                                .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                                    let Some(path) = paths.get(ix).cloned() else {
+                                                        return;
+                                                    };
+                                                    this.store.dispatch(Msg::OpenRepo(path));
+                                                    this.popover = None;
+                                                    this.popover_anchor = None;
+                                                    cx.notify();
+                                                }),
+                                        )
+                                        .min_w(px(420.0))
+                                        .max_w(px(820.0))
+                                    } else {
+                                        zed::context_menu_label(
+                                            theme,
+                                            "Search input not initialized",
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            zed::context_menu_label(theme, "No repository")
+                        }
+                    }
+                    PopoverKind::WorktreeRemovePicker { repo_id } => {
+                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                            match &repo.worktrees {
+                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
+                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
+                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
+                                Loadable::Ready(worktrees) => {
+                                    let workdir = repo.spec.workdir.clone();
+                                    let items = worktrees
+                                        .iter()
+                                        .filter(|w| w.path != workdir)
+                                        .map(|w| w.path.display().to_string().into())
+                                        .collect::<Vec<SharedString>>();
+                                    let paths = worktrees
+                                        .iter()
+                                        .filter(|w| w.path != workdir)
+                                        .map(|w| w.path.clone())
+                                        .collect::<Vec<_>>();
+
+                                    if let Some(search) = self.worktree_picker_search_input.clone() {
+                                        zed::context_menu(
+                                            theme,
+                                            zed::PickerPrompt::new(search)
+                                                .items(items)
+                                                .empty_text("No worktrees")
+                                                .max_height(px(260.0))
+                                                .render(
+                                                    theme,
+                                                    cx,
+                                                    move |this, ix, e, window, cx| {
+                                                        let Some(path) =
+                                                            paths.get(ix).cloned() else {
+                                                                return;
+                                                            };
+                                                        this.open_popover_at(
+                                                            PopoverKind::WorktreeRemoveConfirm {
+                                                                repo_id,
+                                                                path,
+                                                            },
+                                                            e.position(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ),
+                                        )
+                                        .min_w(px(420.0))
+                                        .max_w(px(820.0))
+                                    } else {
+                                        zed::context_menu_label(
+                                            theme,
+                                            "Search input not initialized",
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            zed::context_menu_label(theme, "No repository")
+                        }
+                    }
+                    PopoverKind::WorktreeRemoveConfirm { repo_id, path } => div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(420.0))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Remove worktree"),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child(path.display().to_string()),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    zed::Button::new("worktree_remove_cancel", "Cancel")
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                )
+                                .child(
+                                    zed::Button::new("worktree_remove_go", "Remove")
+                                        .style(zed::ButtonStyle::Danger)
+                                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                                            this.store.dispatch(Msg::RemoveWorktree { repo_id, path: path.clone() });
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                ),
+                        ),
+                    PopoverKind::SubmoduleAddPrompt { repo_id } => div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(520.0))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Add submodule"),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("URL"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .child(self.submodule_url_input.clone()),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Path (relative)"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .pb_1()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .child(self.submodule_path_input.clone()),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    zed::Button::new("submodule_add_cancel", "Cancel")
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                )
+                                .child(
+                                    zed::Button::new("submodule_add_go", "Add")
+                                        .style(zed::ButtonStyle::Filled)
+                                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                                            let url = this.submodule_url_input.read_with(
+                                                cx,
+                                                |i, _| i.text().trim().to_string(),
+                                            );
+                                            let path_text = this.submodule_path_input.read_with(
+                                                cx,
+                                                |i, _| i.text().trim().to_string(),
+                                            );
+                                            if url.is_empty() || path_text.is_empty() {
+                                                this.push_toast(
+                                                    zed::ToastKind::Error,
+                                                    "Submodule URL and path are required".to_string(),
+                                                    cx,
+                                                );
+                                                return;
+                                            }
+                                            this.store.dispatch(Msg::AddSubmodule {
+                                                repo_id,
+                                                url,
+                                                path: std::path::PathBuf::from(path_text),
+                                            });
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                ),
+                        ),
+                    PopoverKind::SubmoduleOpenPicker { repo_id } => {
+                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                            match &repo.submodules {
+                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
+                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
+                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
+                                Loadable::Ready(subs) => {
+                                    let base = repo.spec.workdir.clone();
+                                    let items = subs
+                                        .iter()
+                                        .map(|s| s.path.display().to_string().into())
+                                        .collect::<Vec<SharedString>>();
+                                    let paths = subs
+                                        .iter()
+                                        .map(|s| base.join(&s.path))
+                                        .collect::<Vec<_>>();
+                                    if let Some(search) = self.submodule_picker_search_input.clone()
+                                    {
+                                        zed::context_menu(
+                                            theme,
+                                            zed::PickerPrompt::new(search)
+                                                .items(items)
+                                                .empty_text("No submodules")
+                                                .max_height(px(260.0))
+                                                .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                                    let Some(path) =
+                                                        paths.get(ix).cloned() else {
+                                                            return;
+                                                        };
+                                                    this.store.dispatch(Msg::OpenRepo(path));
+                                                    this.popover = None;
+                                                    this.popover_anchor = None;
+                                                    cx.notify();
+                                                }),
+                                        )
+                                        .min_w(px(420.0))
+                                        .max_w(px(820.0))
+                                    } else {
+                                        zed::context_menu_label(
+                                            theme,
+                                            "Search input not initialized",
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            zed::context_menu_label(theme, "No repository")
+                        }
+                    }
+                    PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                            match &repo.submodules {
+                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
+                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
+                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
+                                Loadable::Ready(subs) => {
+                                    let items = subs
+                                        .iter()
+                                        .map(|s| s.path.display().to_string().into())
+                                        .collect::<Vec<SharedString>>();
+                                    let paths =
+                                        subs.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
+                                    if let Some(search) = self.submodule_picker_search_input.clone()
+                                    {
+                                        zed::context_menu(
+                                            theme,
+                                            zed::PickerPrompt::new(search)
+                                                .items(items)
+                                                .empty_text("No submodules")
+                                                .max_height(px(260.0))
+                                                .render(
+                                                    theme,
+                                                    cx,
+                                                    move |this, ix, e, window, cx| {
+                                                        let Some(path) =
+                                                            paths.get(ix).cloned() else {
+                                                                return;
+                                                            };
+                                                        this.open_popover_at(
+                                                            PopoverKind::SubmoduleRemoveConfirm {
+                                                                repo_id,
+                                                                path,
+                                                            },
+                                                            e.position(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                ),
+                                        )
+                                        .min_w(px(420.0))
+                                        .max_w(px(820.0))
+                                    } else {
+                                        zed::context_menu_label(
+                                            theme,
+                                            "Search input not initialized",
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            zed::context_menu_label(theme, "No repository")
+                        }
+                    }
+                    PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(420.0))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child("Remove submodule"),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child(path.display().to_string()),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    zed::Button::new("submodule_remove_cancel", "Cancel")
+                                        .style(zed::ButtonStyle::Outlined)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                )
+                                .child(
+                                    zed::Button::new("submodule_remove_go", "Remove")
+                                        .style(zed::ButtonStyle::Danger)
+                                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                                            this.store.dispatch(Msg::RemoveSubmodule { repo_id, path: path.clone() });
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        }),
+                                ),
+                        ),
+                    PopoverKind::FileHistory { repo_id, path } => {
+                        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
+                        let title: SharedString = path.display().to_string().into();
+
+                        let header = div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .min_w(px(0.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .child("File history"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .line_clamp(1)
+                                            .whitespace_nowrap()
+                                            .child(title),
+                                    ),
+                            )
+                            .child(
+                                zed::Button::new("file_history_close", "Close")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            );
+
+                        let body: AnyElement = match repo.map(|r| &r.file_history) {
+                            None => zed::context_menu_label(theme, "No repository")
+                                .into_any_element(),
+                            Some(Loadable::Loading) => {
+                                zed::context_menu_label(theme, "Loading").into_any_element()
+                            }
+                            Some(Loadable::Error(e)) => {
+                                zed::context_menu_label(theme, e.clone()).into_any_element()
+                            }
+                            Some(Loadable::NotLoaded) => {
+                                zed::context_menu_label(theme, "Not loaded").into_any_element()
+                            }
+                            Some(Loadable::Ready(page)) => {
+                                let commit_ids = page
+                                    .commits
+                                    .iter()
+                                    .map(|c| c.id.clone())
+                                    .collect::<Vec<_>>();
+                                let items = page
+                                    .commits
+                                    .iter()
+                                    .map(|c| {
+                                        let sha = c.id.as_ref();
+                                        let short = sha.get(0..8).unwrap_or(sha);
+                                        format!("{short}  {}", c.summary).into()
+                                    })
+                                    .collect::<Vec<SharedString>>();
+
+                                if let Some(search) = self.file_history_search_input.clone() {
+                                    zed::PickerPrompt::new(search)
+                                        .items(items)
+                                        .empty_text("No commits")
+                                        .max_height(px(340.0))
+                                        .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                            let Some(commit_id) =
+                                                commit_ids.get(ix).cloned() else {
+                                                    return;
+                                                };
+                                            this.store.dispatch(Msg::SelectCommit {
+                                                repo_id,
+                                                commit_id: commit_id.clone(),
+                                            });
+                                            this.store.dispatch(Msg::SelectDiff {
+                                                repo_id,
+                                                target: DiffTarget::Commit {
+                                                    commit_id,
+                                                    path: Some(path.clone()),
+                                                },
+                                            });
+                                            this.rebuild_diff_cache();
+                                            this.popover = None;
+                                            this.popover_anchor = None;
+                                            cx.notify();
+                                        })
+                                        .into_any_element()
+                                } else {
+                                    zed::context_menu_label(
+                                        theme,
+                                        "Search input not initialized",
+                                    )
+                                    .into_any_element()
+                                }
+                            }
+                        };
+
+                        zed::context_menu(
+                            theme,
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w(px(520.0))
+                                .max_w(px(820.0))
+                                .child(header)
+                                .child(div().border_t_1().border_color(theme.colors.border))
+                                .child(body),
+                        )
+                    }
+                    PopoverKind::Blame { repo_id, path, rev } => {
+                        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
+                        let title: SharedString = path.display().to_string().into();
+                        let subtitle: SharedString = rev
+                            .clone()
+                            .map(|r| format!("rev: {r}").into())
+                            .unwrap_or_else(|| "rev: HEAD".into());
+
+                        let header = div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .min_w(px(0.0))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .child("Blame"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .line_clamp(1)
+                                            .whitespace_nowrap()
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .line_clamp(1)
+                                            .whitespace_nowrap()
+                                            .child(subtitle),
+                                    ),
+                            )
+                            .child(
+                                zed::Button::new("blame_close", "Close")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.popover = None;
+                                        this.popover_anchor = None;
+                                        cx.notify();
+                                    }),
+                            );
+
+                        let body: AnyElement = match repo.map(|r| &r.blame) {
+                            None => zed::context_menu_label(theme, "No repository")
+                                .into_any_element(),
+                            Some(Loadable::Loading) => {
+                                zed::context_menu_label(theme, "Loading").into_any_element()
+                            }
+                            Some(Loadable::Error(e)) => {
+                                zed::context_menu_label(theme, e.clone()).into_any_element()
+                            }
+                            Some(Loadable::NotLoaded) => {
+                                zed::context_menu_label(theme, "Not loaded").into_any_element()
+                            }
+                            Some(Loadable::Ready(lines)) => {
+                                let count = lines.len();
+                                let list = uniform_list(
+                                    "blame_popover",
+                                    count,
+                                    cx.processor(Self::render_blame_popover_rows),
+                                )
+                                .h(px(360.0))
+                                .track_scroll(self.blame_scroll.clone());
+                                let scroll_handle = {
+                                    let state = self.blame_scroll.0.borrow();
+                                    state.base_handle.clone()
+                                };
+
+                                div()
+                                    .relative()
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new("blame_popover_scrollbar", scroll_handle)
+                                            .render(theme),
+                                    )
+                                    .into_any_element()
+                            }
+                        };
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(720.0))
+                            .max_w(px(980.0))
+                            .child(header)
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(body)
+                    }
+		            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
+		                let remote = remote.clone();
+		                div()
                     .flex()
                     .flex_col()
                     .min_w(px(320.0))
@@ -1254,11 +3408,70 @@ impl GitGpuiView {
                             ),
                     )
             }
+            PopoverKind::ForcePushConfirm { repo_id } => div()
+                .flex()
+                .flex_col()
+                .min_w(px(420.0))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .child("Force push"),
+                )
+                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .text_sm()
+                        .text_color(theme.colors.text_muted)
+                        .child("This will overwrite remote history if your branch has diverged."),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .text_xs()
+                        .font_family("monospace")
+                        .text_color(theme.colors.text_muted)
+                        .child("git push --force-with-lease"),
+                )
+                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            zed::Button::new("force_push_cancel", "Cancel")
+                                .style(zed::ButtonStyle::Outlined)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        )
+                        .child(
+                            zed::Button::new("force_push_go", "Force push")
+                                .style(zed::ButtonStyle::Danger)
+                                .on_click(theme, cx, move |this, _e, _w, cx| {
+                                    this.store.dispatch(Msg::ForcePush { repo_id });
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                }),
+                        ),
+                ),
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
+            PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::DiffHunks => {
                 let mut items: Vec<SharedString> = Vec::new();
                 let mut targets: Vec<usize> = Vec::new();
@@ -1388,6 +3601,10 @@ impl GitGpuiView {
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
+            PopoverKind::DiffHunkMenu { repo_id, src_ix } => self
+                .context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
+                .min_w(px(160.0))
+                .max_w(px(220.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,
@@ -1427,10 +3644,61 @@ impl GitGpuiView {
                 },
                 cx,
             ),
-            PopoverKind::AppMenu => {
-                let mut install_desktop = div()
-                    .id("app_menu_install_desktop")
-                    .debug_selector(|| "app_menu_install_desktop".to_string())
+	            PopoverKind::AppMenu => {
+	                let active_repo = self.active_repo();
+	                let active_repo_id = active_repo.map(|r| r.id);
+	                let rebase_in_progress = active_repo
+	                    .and_then(|r| match &r.rebase_in_progress {
+	                        Loadable::Ready(v) => Some(*v),
+	                        _ => None,
+	                    })
+	                    .unwrap_or(false);
+	                let tag_target = active_repo
+	                    .and_then(|r| r.selected_commit.clone())
+	                    .map(|id| id.as_ref().to_string())
+	                    .unwrap_or_else(|| "HEAD".to_string());
+                    let selected_commit = active_repo.and_then(|r| r.selected_commit.clone());
+                    let selected_short = selected_commit.as_ref().map(|id| {
+                        let sha = id.as_ref();
+                        sha.get(0..8).unwrap_or(sha).to_string()
+                    });
+
+	                let separator = || {
+	                    div()
+	                        .h(px(1.0))
+	                        .w_full()
+	                        .bg(theme.colors.border)
+	                        .my(px(4.0))
+	                };
+
+	                let section_label = |id: &'static str, text: &'static str| {
+	                    div()
+	                        .id(id)
+	                        .px_2()
+	                        .pt(px(6.0))
+	                        .pb(px(4.0))
+	                        .text_xs()
+	                        .text_color(theme.colors.text_muted)
+	                        .child(text)
+	                };
+
+	                let entry = |id: &'static str, label: SharedString, disabled: bool| {
+	                    div()
+	                        .id(id)
+	                        .debug_selector(move || id.to_string())
+	                        .px_2()
+	                        .py_1()
+	                        .when(!disabled, |d| {
+	                            d.hover(move |s| s.bg(theme.colors.hover))
+	                                .active(move |s| s.bg(theme.colors.active))
+	                        })
+	                        .when(disabled, |d| d.text_color(theme.colors.text_muted))
+	                        .child(label)
+	                };
+
+	                let mut install_desktop = div()
+	                    .id("app_menu_install_desktop")
+	                    .debug_selector(|| "app_menu_install_desktop".to_string())
                     .px_2()
                     .py_1()
                     .hover(move |s| s.bg(theme.colors.hover))
@@ -1451,15 +3719,428 @@ impl GitGpuiView {
                 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
                 {
                     install_desktop = install_desktop.text_color(theme.colors.text_muted);
-                }
+	                }
 
-                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(200.0))
-                    .child(install_desktop)
-                    .child(
-                        div()
+		                let menu = div()
+	                    .flex()
+	                    .flex_col()
+	                    .min_w(px(200.0))
+	                    .child(section_label("app_menu_repo_section", "Repository"))
+	                    .child(
+	                        entry(
+	                            "app_menu_rebase",
+	                            "Rebase onto…".into(),
+	                            active_repo_id.is_none() || rebase_in_progress,
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            if rebase_in_progress {
+	                                return;
+	                            }
+	                            this.open_popover_at(
+	                                PopoverKind::RebasePrompt { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_rebase_continue",
+	                            "Rebase --continue".into(),
+	                            active_repo_id.is_none() || !rebase_in_progress,
+	                        )
+	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            if !rebase_in_progress {
+	                                return;
+	                            }
+	                            this.store.dispatch(Msg::RebaseContinue { repo_id });
+	                            this.popover = None;
+	                            this.popover_anchor = None;
+	                            cx.notify();
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_rebase_abort",
+	                            "Rebase --abort".into(),
+	                            active_repo_id.is_none() || !rebase_in_progress,
+	                        )
+	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            if !rebase_in_progress {
+	                                return;
+	                            }
+	                            this.store.dispatch(Msg::RebaseAbort { repo_id });
+	                            this.popover = None;
+	                            this.popover_anchor = None;
+	                            cx.notify();
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(section_label("app_menu_tags_section", "Tags"))
+	                    .child(
+	                        entry(
+	                            "app_menu_create_tag",
+	                            format!("Create tag at {tag_target}…").into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::CreateTagPrompt {
+	                                    repo_id,
+	                                    target: tag_target.clone(),
+	                                },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_delete_tag",
+	                            "Delete tag…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.ensure_tag_picker_search_input(window, cx);
+	                            this.open_popover_at(
+	                                PopoverKind::TagDeletePicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(section_label("app_menu_remotes_section", "Remotes"))
+	                    .child(
+	                        entry(
+	                            "app_menu_add_remote",
+	                            "Add remote…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::RemoteAddPrompt { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_edit_remote_fetch_url",
+	                            "Edit remote fetch URL…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.ensure_remote_picker_search_input(window, cx);
+	                            this.open_popover_at(
+	                                PopoverKind::RemoteUrlPicker {
+	                                    repo_id,
+	                                    kind: RemoteUrlKind::Fetch,
+	                                },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_edit_remote_push_url",
+	                            "Edit remote push URL…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.ensure_remote_picker_search_input(window, cx);
+	                            this.open_popover_at(
+	                                PopoverKind::RemoteUrlPicker {
+	                                    repo_id,
+	                                    kind: RemoteUrlKind::Push,
+	                                },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_remove_remote",
+	                            "Remove remote…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.ensure_remote_picker_search_input(window, cx);
+	                            this.open_popover_at(
+	                                PopoverKind::RemoteRemovePicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(section_label("app_menu_patches_section", "Patches"))
+	                    .child({
+	                        let disabled = active_repo_id.is_none() || selected_commit.is_none();
+	                        let label: SharedString = selected_short
+	                            .as_ref()
+	                            .map(|s| format!("Export patch for {s}…").into())
+	                            .unwrap_or_else(|| "Export patch…".into());
+	                        let selected_commit = selected_commit.clone();
+	                        let selected_short = selected_short.clone();
+	                        entry("app_menu_export_patch", label, disabled).on_click(cx.listener(
+	                            move |this, _e: &ClickEvent, window, cx| {
+	                                let Some(repo_id) = active_repo_id else {
+	                                    return;
+	                                };
+	                                let Some(commit_id) = selected_commit.clone() else {
+	                                    return;
+	                                };
+	                                cx.stop_propagation();
+	                                let view = cx.weak_entity();
+	                                let short = selected_short.clone().unwrap_or_else(|| {
+	                                    let sha = commit_id.as_ref();
+	                                    sha.get(0..8).unwrap_or(sha).to_string()
+	                                });
+	                                let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+	                                    files: false,
+	                                    directories: true,
+	                                    multiple: false,
+	                                    prompt: Some("Export patch to folder".into()),
+	                                });
+	                                window
+	                                    .spawn(cx, async move |cx| {
+	                                        let result = rx.await;
+	                                        let paths = match result {
+	                                            Ok(Ok(Some(paths))) => paths,
+	                                            Ok(Ok(None)) => return,
+	                                            Ok(Err(_)) | Err(_) => return,
+	                                        };
+	                                        let Some(folder) = paths.into_iter().next() else {
+	                                            return;
+	                                        };
+	                                        let dest =
+	                                            folder.join(format!("commit-{short}.patch"));
+	                                        let _ = view.update(cx, |this, cx| {
+	                                            this.store.dispatch(Msg::ExportPatch {
+	                                                repo_id,
+	                                                commit_id: commit_id.clone(),
+	                                                dest,
+	                                            });
+	                                            cx.notify();
+	                                        });
+	                                    })
+	                                    .detach();
+	                                this.popover = None;
+	                                this.popover_anchor = None;
+	                                cx.notify();
+	                            },
+	                        ))
+	                    })
+	                    .child(
+	                        entry(
+	                            "app_menu_apply_patch",
+	                            "Apply patch…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            cx.stop_propagation();
+	                            let view = cx.weak_entity();
+	                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+	                                files: true,
+	                                directories: false,
+	                                multiple: false,
+	                                prompt: Some("Select patch file".into()),
+	                            });
+	                            window
+	                                .spawn(cx, async move |cx| {
+	                                    let result = rx.await;
+	                                    let paths = match result {
+	                                        Ok(Ok(Some(paths))) => paths,
+	                                        Ok(Ok(None)) => return,
+	                                        Ok(Err(_)) | Err(_) => return,
+	                                    };
+	                                    let Some(patch) = paths.into_iter().next() else {
+	                                        return;
+	                                    };
+	                                    let _ = view.update(cx, |this, cx| {
+	                                        this.store.dispatch(Msg::ApplyPatch { repo_id, patch });
+	                                        cx.notify();
+	                                    });
+	                                })
+	                                .detach();
+	                            this.popover = None;
+	                            this.popover_anchor = None;
+	                            cx.notify();
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(section_label("app_menu_worktrees_section", "Worktrees"))
+	                    .child(
+	                        entry(
+	                            "app_menu_add_worktree",
+	                            "Add worktree…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::WorktreeAddPrompt { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_open_worktree",
+	                            "Open worktree…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::WorktreeOpenPicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_remove_worktree",
+	                            "Remove worktree…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::WorktreeRemovePicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(section_label("app_menu_submodules_section", "Submodules"))
+	                    .child(
+	                        entry(
+	                            "app_menu_add_submodule",
+	                            "Add submodule…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::SubmoduleAddPrompt { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_update_submodules",
+	                            "Update submodules".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.store.dispatch(Msg::UpdateSubmodules { repo_id });
+	                            this.popover = None;
+	                            this.popover_anchor = None;
+	                            cx.notify();
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_open_submodule",
+	                            "Open submodule…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::SubmoduleOpenPicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(
+	                        entry(
+	                            "app_menu_remove_submodule",
+	                            "Remove submodule…".into(),
+	                            active_repo_id.is_none(),
+	                        )
+	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+	                            let Some(repo_id) = active_repo_id else {
+	                                return;
+	                            };
+	                            this.open_popover_at(
+	                                PopoverKind::SubmoduleRemovePicker { repo_id },
+	                                e.position(),
+	                                window,
+	                                cx,
+	                            );
+	                        })),
+	                    )
+	                    .child(separator())
+	                    .child(install_desktop)
+	                    .child(
+	                        div()
                             .id("app_menu_quit")
                             .debug_selector(|| "app_menu_quit".to_string())
                             .px_2()
@@ -1479,10 +4160,13 @@ impl GitGpuiView {
                             .py_1()
                             .hover(move |s| s.bg(theme.colors.hover))
                             .active(move |s| s.bg(theme.colors.active))
-                            .child("Close")
-                            .on_click(close),
-                    )
-            }
+	                            .child("Close")
+	                            .on_click(close),
+	                    )
+	                    ;
+
+	                menu
+	            }
         };
 
         let offset_y = if is_app_menu {
@@ -1503,11 +4187,7 @@ impl GitGpuiView {
                     .debug_selector(|| "app_popover".to_string())
                     .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
                     .occlude()
-                    .bg(if popover_use_surface_bg {
-                        theme.colors.surface_bg
-                    } else {
-                        theme.colors.surface_bg_elevated
-                    })
+                    .bg(theme.colors.surface_bg_elevated)
                     .border_1()
                     .border_color(theme.colors.border)
                     .rounded(px(theme.radii.panel))
@@ -1516,5 +4196,19 @@ impl GitGpuiView {
                     .p_1()
                     .child(panel),
             )
+    }
+}
+
+fn clone_repo_name_from_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches(['/', '\\']);
+    let last = trimmed
+        .rsplit(|c| c == '/' || c == '\\')
+        .next()
+        .unwrap_or(trimmed);
+    let name = last.strip_suffix(".git").unwrap_or(last).trim();
+    if name.is_empty() {
+        "repo".to_string()
+    } else {
+        name.to_string()
     }
 }

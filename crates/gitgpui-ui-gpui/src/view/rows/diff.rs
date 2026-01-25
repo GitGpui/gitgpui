@@ -891,6 +891,22 @@ fn diff_row(
                 cx,
             ))
             .on_click(on_click);
+        let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+            cx.stop_propagation();
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            let Some(&src_ix) = this.diff_visible_indices.get(visible_ix) else {
+                return;
+            };
+            this.open_popover_at(
+                PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                e.position,
+                window,
+                cx,
+            );
+        });
+        row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
         if selected {
             row = row.bg(with_alpha(
@@ -1140,6 +1156,32 @@ fn patch_split_header_row(
                     cx,
                 ))
                 .on_click(on_click);
+            let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let Some(&row_ix) = this.diff_visible_indices.get(visible_ix) else {
+                    return;
+                };
+                let Some(PatchSplitRow::Raw {
+                    src_ix,
+                    click_kind: DiffClickKind::HunkHeader,
+                }) = this.diff_split_cache.get(row_ix)
+                else {
+                    return;
+                };
+                this.open_popover_at(
+                    PopoverKind::DiffHunkMenu {
+                        repo_id,
+                        src_ix: *src_ix,
+                    },
+                    e.position,
+                    window,
+                    cx,
+                );
+            });
+            row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
                 row = row.bg(with_alpha(

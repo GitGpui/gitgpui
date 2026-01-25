@@ -112,6 +112,14 @@ impl GitGpuiView {
             bar = bar.tab(tab);
         }
 
+        let icon = |path: &'static str| {
+            gpui::svg()
+                .path(path)
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(theme.colors.text)
+        };
+
         bar.end_child(
             div()
                 .id("add_repo_container")
@@ -119,21 +127,47 @@ impl GitGpuiView {
                 .h_full()
                 .flex()
                 .items_center()
-                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                    let text: SharedString = "Add repository".into();
-                    if *hovering {
-                        this.tooltip_text = Some(text);
-                    } else if this.tooltip_text.as_ref() == Some(&text) {
-                        this.tooltip_text = None;
-                    }
-                    cx.notify();
-                }))
+                .gap_1()
                 .child(
-                    zed::Button::new("add_repo", "⨁")
+                    zed::Button::new("open_repo", "")
+                        .start_slot(icon("icons/folder.svg"))
                         .style(zed::ButtonStyle::Subtle)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.prompt_open_repo(window, cx)
-                        }),
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Open repository".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    zed::Button::new("clone_repo", "")
+                        .start_slot(icon("icons/cloud.svg"))
+                        .style(zed::ButtonStyle::Subtle)
+                        .on_click(theme, cx, move |this, e, window, cx| {
+                            this.clone_repo_url_input.update(cx, |input, cx| {
+                                input.set_theme(theme, cx);
+                                input.set_text("", cx);
+                            });
+                            this.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                                input.set_theme(theme, cx);
+                            });
+                            this.open_popover_at(PopoverKind::CloneRepo, e.position(), window, cx);
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Clone repository".into();
+                            if *hovering {
+                                this.tooltip_text = Some(text);
+                            } else if this.tooltip_text.as_ref() == Some(&text) {
+                                this.tooltip_text = None;
+                            }
+                            cx.notify();
+                        })),
                 ),
         )
         .render(theme)
@@ -366,14 +400,21 @@ impl GitGpuiView {
         } else {
             theme.colors.text
         };
-        let mut push = zed::Button::new("push", "Push")
+        let mut push_main = zed::Button::new("push", "Push")
             .start_slot(icon("icons/arrow_up.svg", push_color))
             .style(zed::ButtonStyle::Outlined);
         if push_count > 0 {
-            push = push.end_slot(count_badge(push_count, push_color));
+            push_main = push_main.end_slot(count_badge(push_count, push_color));
         }
-        let push = push
-            .on_click(theme, cx, |this, e, window, cx| {
+        let push_menu = zed::Button::new("push_menu", "")
+            .start_slot(icon("icons/chevron_down.svg", theme.colors.text))
+            .style(zed::ButtonStyle::Subtle);
+
+        let push = div()
+            .id("push")
+            .child(
+                zed::SplitButton::new(
+                    push_main.on_click(theme, cx, |this, e, window, cx| {
                 let Some(repo) = this.active_repo() else {
                     return;
                 };
@@ -412,10 +453,6 @@ impl GitGpuiView {
                     if let Some(remote) = remote {
                         this.push_upstream_branch_input
                             .update(cx, |i, cx| i.set_text(head, cx));
-                        let focus = this
-                            .push_upstream_branch_input
-                            .read_with(cx, |i, _| i.focus_handle());
-                        window.focus(&focus);
                         this.open_popover_at(
                             PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
                             e.position(),
@@ -435,7 +472,14 @@ impl GitGpuiView {
 
                 this.store.dispatch(Msg::Push { repo_id });
                 cx.notify();
-            })
+                    }),
+                    push_menu.on_click(theme, cx, |this, e, window, cx| {
+                        this.open_popover_at(PopoverKind::PushPicker, e.position(), window, cx);
+                    }),
+                )
+                .style(zed::SplitButtonStyle::Outlined)
+                .render(theme),
+            )
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                 let text: SharedString = format!("Push ({push_count} ahead)").into();
                 if *hovering {
@@ -451,12 +495,6 @@ impl GitGpuiView {
             .style(zed::ButtonStyle::Outlined)
             .disabled(!can_stash)
             .on_click(theme, cx, |this, e, window, cx| {
-                this.stash_message_input
-                    .update(cx, |i, cx| i.set_text(String::new(), cx));
-                let focus = this
-                    .stash_message_input
-                    .read_with(cx, |i, _| i.focus_handle());
-                window.focus(&focus);
                 this.open_popover_at(PopoverKind::StashPrompt, e.position(), window, cx);
             })
             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
@@ -477,12 +515,6 @@ impl GitGpuiView {
             .start_slot(icon("icons/git_branch.svg", theme.colors.text))
             .style(zed::ButtonStyle::Outlined)
             .on_click(theme, cx, |this, e, window, cx| {
-                this.create_branch_input
-                    .update(cx, |i, cx| i.set_text(String::new(), cx));
-                let focus = this
-                    .create_branch_input
-                    .read_with(cx, |i, _| i.focus_handle());
-                window.focus(&focus);
                 this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
