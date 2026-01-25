@@ -261,7 +261,7 @@ fn build_synthetic_commit_details(files: usize, depth: usize) -> CommitDetails {
         let kind = match ix % 23 {
             0 => FileStatusKind::Deleted,
             1 | 2 => FileStatusKind::Renamed,
-            3 | 4 | 5 => FileStatusKind::Added,
+            3..=5 => FileStatusKind::Added,
             6 => FileStatusKind::Conflicted,
             7 => FileStatusKind::Untracked,
             _ => FileStatusKind::Modified,

@@ -82,6 +82,10 @@ enum ContextMenuAction {
         repo_id: RepoId,
         src_ix: usize,
     },
+    DeleteTag {
+        repo_id: RepoId,
+        name: String,
+    },
 }
 
 #[derive(Clone)]

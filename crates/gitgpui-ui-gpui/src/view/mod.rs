@@ -12,10 +12,10 @@ use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations, Element, ElementId,
-    Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId, IsZero, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge,
-    ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling, Timer,
+    Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations,
+    Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
+    IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling, Timer,
     UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
     relative, size, uniform_list,
 };
@@ -26,14 +26,20 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 mod chrome;
+mod branch_sidebar;
+mod date_time;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
 mod panels;
+mod word_diff;
 pub(crate) mod rows;
 
+use branch_sidebar::{BranchSection, BranchSidebarRow};
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
+use date_time::{DateTimeFormat, format_datetime_utc};
+use word_diff::word_diff_ranges;
 
 use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
@@ -66,6 +72,20 @@ const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
 
 const DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4000;
+const TOAST_FADE_IN_MS: u64 = 140;
+const TOAST_FADE_OUT_MS: u64 = 180;
+
+fn toast_fade_in_duration() -> Duration {
+    Duration::from_millis(TOAST_FADE_IN_MS)
+}
+
+fn toast_fade_out_duration() -> Duration {
+    Duration::from_millis(TOAST_FADE_OUT_MS)
+}
+
+fn toast_total_lifetime(ttl: Duration) -> Duration {
+    toast_fade_in_duration() + ttl + toast_fade_out_duration()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum HistoryColResizeHandle {
@@ -175,6 +195,7 @@ struct ToastState {
     id: u64,
     kind: zed::ToastKind,
     input: Entity<zed::TextInput>,
+    ttl: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
@@ -205,6 +226,7 @@ enum PopoverKind {
     CreateBranch,
     StashPrompt,
     CloneRepo,
+    Settings,
     ResetPrompt {
         repo_id: RepoId,
         target: String,
@@ -216,9 +238,6 @@ enum PopoverKind {
     CreateTagPrompt {
         repo_id: RepoId,
         target: String,
-    },
-    TagDeletePicker {
-        repo_id: RepoId,
     },
     RemoteAddPrompt {
         repo_id: RepoId,
@@ -312,6 +331,10 @@ enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    TagMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     HistoryBranchFilter {
         repo_id: RepoId,
     },
@@ -322,69 +345,6 @@ enum PopoverKind {
 enum RemoteRow {
     Header(String),
     Branch { remote: String, name: String },
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BranchSection {
-    Local,
-    Remote,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum BranchSidebarRow {
-    SectionHeader {
-        section: BranchSection,
-        top_border: bool,
-    },
-    SectionSpacer,
-    Placeholder {
-        section: BranchSection,
-        message: SharedString,
-    },
-    RemoteHeader {
-        name: SharedString,
-    },
-    GroupHeader {
-        label: SharedString,
-        depth: usize,
-    },
-    Branch {
-        label: SharedString,
-        name: SharedString,
-        section: BranchSection,
-        depth: usize,
-        muted: bool,
-        divergence: Option<UpstreamDivergence>,
-        is_head: bool,
-        is_upstream: bool,
-    },
-    StashHeader {
-        top_border: bool,
-    },
-    StashPlaceholder {
-        message: SharedString,
-    },
-    StashItem {
-        index: usize,
-        message: SharedString,
-        created_at: Option<std::time::SystemTime>,
-    },
-}
-
-#[derive(Default)]
-struct SlashTree {
-    is_leaf: bool,
-    children: BTreeMap<String, SlashTree>,
-}
-
-impl SlashTree {
-    fn insert(&mut self, name: &str) {
-        let mut node = self;
-        for part in name.split('/').filter(|p| !p.is_empty()) {
-            node = node.children.entry(part.to_string()).or_default();
-        }
-        node.is_leaf = true;
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -483,12 +443,14 @@ pub struct GitGpuiView {
     history_col_resize: Option<HistoryColResizeState>,
     repo_picker_search_input: Option<Entity<zed::TextInput>>,
     branch_picker_search_input: Option<Entity<zed::TextInput>>,
-    tag_picker_search_input: Option<Entity<zed::TextInput>>,
     remote_picker_search_input: Option<Entity<zed::TextInput>>,
     file_history_search_input: Option<Entity<zed::TextInput>>,
     worktree_picker_search_input: Option<Entity<zed::TextInput>>,
     submodule_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
+
+    date_time_format: DateTimeFormat,
+    settings_date_format_open: bool,
 
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
@@ -734,6 +696,11 @@ impl GitGpuiView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let date_time_format = ui_session
+            .date_time_format
+            .as_deref()
+            .and_then(DateTimeFormat::from_key)
+            .unwrap_or(DateTimeFormat::YmdHm);
 
         if !ui_session.open_repos.is_empty() {
             store.dispatch(Msg::RestoreSession {
@@ -1112,12 +1079,13 @@ impl GitGpuiView {
             history_col_resize: None,
             repo_picker_search_input: None,
             branch_picker_search_input: None,
-            tag_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
             history_cache: None,
+            date_time_format,
+            settings_date_format_open: false,
             open_repo_panel: false,
             open_repo_input,
             clone_repo_url_input,
@@ -1233,9 +1201,6 @@ impl GitGpuiView {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.branch_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.tag_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         if let Some(input) = &self.remote_picker_search_input {
@@ -1414,7 +1379,7 @@ impl GitGpuiView {
 
         let restrict_region = self
             .diff_text_selecting
-            .then(|| self.diff_text_anchor)
+            .then_some(self.diff_text_anchor)
             .flatten()
             .map(|p| p.region)
             .filter(|r| matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight));
@@ -2109,36 +2074,6 @@ impl GitGpuiView {
         input.clone()
     }
 
-    fn ensure_tag_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.tag_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter tags".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
     fn ensure_remote_picker_search_input(
         &mut self,
         window: &mut Window,
@@ -2327,176 +2262,7 @@ impl GitGpuiView {
     }
 
     fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
-        let mut rows = Vec::new();
-        let head_upstream_full = match (&repo.branches, &repo.head_branch) {
-            (Loadable::Ready(branches), Loadable::Ready(head)) => branches
-                .iter()
-                .find(|b| b.name == *head)
-                .and_then(|b| b.upstream.as_ref())
-                .map(|u| format!("{}/{}", u.remote, u.branch)),
-            _ => None,
-        };
-
-        rows.push(BranchSidebarRow::SectionHeader {
-            section: BranchSection::Local,
-            top_border: false,
-        });
-
-        match &repo.branches {
-            Loadable::Ready(branches) if branches.is_empty() => {
-                rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Local,
-                    message: "No branches".into(),
-                });
-            }
-            Loadable::Ready(branches) => {
-                let head = match &repo.head_branch {
-                    Loadable::Ready(h) => Some(h.as_str()),
-                    _ => None,
-                };
-                let mut local_meta: std::collections::HashMap<
-                    String,
-                    (Option<UpstreamDivergence>, bool),
-                > = std::collections::HashMap::new();
-                for b in branches {
-                    local_meta.insert(
-                        b.name.clone(),
-                        (b.divergence, head.is_some_and(|h| h == b.name)),
-                    );
-                }
-
-                let mut tree = SlashTree::default();
-                for branch in branches {
-                    tree.insert(&branch.name);
-                }
-                push_slash_tree_rows(
-                    &tree,
-                    &mut rows,
-                    Some(&local_meta),
-                    head_upstream_full.as_deref(),
-                    0,
-                    false,
-                    BranchSection::Local,
-                    "",
-                );
-            }
-            Loadable::Loading => rows.push(BranchSidebarRow::Placeholder {
-                section: BranchSection::Local,
-                message: "Loading".into(),
-            }),
-            Loadable::NotLoaded => rows.push(BranchSidebarRow::Placeholder {
-                section: BranchSection::Local,
-                message: "Not loaded".into(),
-            }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::Placeholder {
-                section: BranchSection::Local,
-                message: e.clone().into(),
-            }),
-        }
-
-        rows.push(BranchSidebarRow::SectionSpacer);
-        rows.push(BranchSidebarRow::SectionHeader {
-            section: BranchSection::Remote,
-            top_border: true,
-        });
-
-        let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        match &repo.remote_branches {
-            Loadable::Ready(branches) => {
-                for branch in branches {
-                    remotes
-                        .entry(branch.remote.clone())
-                        .or_default()
-                        .push(branch.name.clone());
-                }
-            }
-            Loadable::Loading => {
-                rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Remote,
-                    message: "Loading".into(),
-                });
-                return rows;
-            }
-            Loadable::Error(e) => {
-                rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Remote,
-                    message: e.clone().into(),
-                });
-                return rows;
-            }
-            Loadable::NotLoaded => {
-                if let Loadable::Ready(known) = &repo.remotes {
-                    for remote in known {
-                        remotes.entry(remote.name.clone()).or_default();
-                    }
-                }
-            }
-        }
-
-        if remotes.is_empty() {
-            rows.push(BranchSidebarRow::Placeholder {
-                section: BranchSection::Remote,
-                message: "No remotes".into(),
-            });
-            return rows;
-        }
-
-        for (remote, mut branches) in remotes {
-            branches.sort();
-            branches.dedup();
-            rows.push(BranchSidebarRow::RemoteHeader {
-                name: remote.clone().into(),
-            });
-            if branches.is_empty() {
-                continue;
-            }
-
-            let mut tree = SlashTree::default();
-            for branch in branches {
-                tree.insert(&branch);
-            }
-            let name_prefix = format!("{remote}/");
-            push_slash_tree_rows(
-                &tree,
-                &mut rows,
-                None,
-                head_upstream_full.as_deref(),
-                1,
-                true,
-                BranchSection::Remote,
-                &name_prefix,
-            );
-        }
-
-        rows.push(BranchSidebarRow::SectionSpacer);
-        rows.push(BranchSidebarRow::StashHeader { top_border: true });
-        match &repo.stashes {
-            Loadable::Ready(stashes) if stashes.is_empty() => {
-                rows.push(BranchSidebarRow::StashPlaceholder {
-                    message: "No stashes".into(),
-                });
-            }
-            Loadable::Ready(stashes) => {
-                for stash in stashes {
-                    rows.push(BranchSidebarRow::StashItem {
-                        index: stash.index,
-                        message: stash.message.clone().into(),
-                        created_at: stash.created_at,
-                    });
-                }
-            }
-            Loadable::Loading => rows.push(BranchSidebarRow::StashPlaceholder {
-                message: "Loading".into(),
-            }),
-            Loadable::NotLoaded => rows.push(BranchSidebarRow::StashPlaceholder {
-                message: "Not loaded".into(),
-            }),
-            Loadable::Error(e) => rows.push(BranchSidebarRow::StashPlaceholder {
-                message: e.clone().into(),
-            }),
-        }
-
-        rows
+        branch_sidebar::branch_sidebar_rows(repo)
     }
 
     fn prompt_open_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -3547,26 +3313,11 @@ impl GitGpuiView {
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
-        let id = self.push_toast_inner(kind, message, Some(match kind {
-            zed::ToastKind::Error => Duration::from_secs(15),
-            zed::ToastKind::Success => Duration::from_secs(6),
-        }), cx);
-
         let ttl = match kind {
             zed::ToastKind::Error => Duration::from_secs(15),
             zed::ToastKind::Success => Duration::from_secs(6),
         };
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(ttl).await;
-                let _ = view.update(cx, |this, cx| {
-                    this.toasts.retain(|t| t.id != id);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
+        self.push_toast_inner(kind, message, Some(ttl), cx);
     }
 
     fn push_persistent_toast(
@@ -3582,7 +3333,7 @@ impl GitGpuiView {
         &mut self,
         kind: zed::ToastKind,
         message: String,
-        _ttl: Option<Duration>,
+        ttl: Option<Duration>,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
         let id = self
@@ -3609,7 +3360,26 @@ impl GitGpuiView {
             input.set_read_only(true, cx);
         });
 
-        self.toasts.push(ToastState { id, kind, input });
+        self.toasts.push(ToastState {
+            id,
+            kind,
+            input,
+            ttl,
+        });
+
+        if let Some(ttl) = ttl {
+            let lifetime = toast_total_lifetime(ttl);
+            cx.spawn(
+                async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+                    Timer::after(lifetime).await;
+                    let _ = view.update(cx, |this, cx| {
+                        this.remove_toast(id, cx);
+                    });
+                },
+            )
+            .detach();
+        }
+
         id
     }
 
@@ -4296,77 +4066,6 @@ impl GitGpuiView {
     }
 }
 
-fn push_slash_tree_rows(
-    tree: &SlashTree,
-    out: &mut Vec<BranchSidebarRow>,
-    local_meta: Option<&std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)>>,
-    upstream_full: Option<&str>,
-    depth: usize,
-    muted: bool,
-    section: BranchSection,
-    name_prefix: &str,
-) {
-    for (label, node) in &tree.children {
-        if node.children.is_empty() {
-            if node.is_leaf {
-                let full = format!("{name_prefix}{label}");
-                let is_upstream = upstream_full.is_some_and(|u| u == full.as_str());
-                let (divergence, is_head) = local_meta
-                    .and_then(|m| m.get(&full))
-                    .copied()
-                    .unwrap_or((None, false));
-                out.push(BranchSidebarRow::Branch {
-                    label: label.clone().into(),
-                    name: full.into(),
-                    section,
-                    depth,
-                    muted,
-                    divergence,
-                    is_head,
-                    is_upstream,
-                });
-            }
-            continue;
-        }
-
-        out.push(BranchSidebarRow::GroupHeader {
-            label: format!("{label}/").into(),
-            depth,
-        });
-
-        if node.is_leaf {
-            let full = format!("{name_prefix}{label}");
-            let is_upstream = upstream_full.is_some_and(|u| u == full.as_str());
-            let (divergence, is_head) = local_meta
-                .and_then(|m| m.get(&full))
-                .copied()
-                .unwrap_or((None, false));
-            out.push(BranchSidebarRow::Branch {
-                label: label.clone().into(),
-                name: full.into(),
-                section,
-                depth: depth + 1,
-                muted,
-                divergence,
-                is_head,
-                is_upstream,
-            });
-        }
-
-        let next_prefix = format!("{name_prefix}{label}/");
-        push_slash_tree_rows(
-            node,
-            out,
-            local_meta,
-            upstream_full,
-            depth + 1,
-            muted,
-            section,
-            &next_prefix,
-        );
-    }
-}
-
 fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
     use gitgpui_core::domain::DiffLineKind as DK;
     use gitgpui_core::file_diff::FileDiffRowKind as K;
@@ -4831,6 +4530,7 @@ impl GitGpuiView {
                             .then_some(sidebar_width as u32),
                         details_width: (details_width.is_finite() && details_width >= 1.0)
                             .then_some(details_width as u32),
+                        date_time_format: Some(this.date_time_format.key().to_string()),
                     };
 
                     let _ = session::persist_ui_settings(settings);
@@ -4862,228 +4562,6 @@ impl GitGpuiView {
 pub(super) fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
     color
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TokenKind {
-    Whitespace,
-    Other,
-}
-
-#[derive(Clone, Debug)]
-struct Token {
-    range: Range<usize>,
-    kind: TokenKind,
-}
-
-fn tokenize_for_word_diff(s: &str) -> Vec<Token> {
-    fn classify(c: char) -> (u8, TokenKind) {
-        if c.is_whitespace() {
-            return (0, TokenKind::Whitespace);
-        }
-        if c.is_alphanumeric() || c == '_' {
-            return (1, TokenKind::Other);
-        }
-        (2, TokenKind::Other)
-    }
-
-    let mut out = Vec::new();
-    let mut it = s.char_indices().peekable();
-    while let Some((start, ch)) = it.next() {
-        let (class, kind) = classify(ch);
-        let mut end = start + ch.len_utf8();
-        while let Some(&(next_start, next_ch)) = it.peek() {
-            let (next_class, _) = classify(next_ch);
-            if next_class != class {
-                break;
-            }
-            it.next();
-            end = next_start + next_ch.len_utf8();
-        }
-        out.push(Token {
-            range: start..end,
-            kind,
-        });
-    }
-    out
-}
-
-fn coalesce_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    if ranges.len() <= 1 {
-        return ranges;
-    }
-    ranges.sort_by_key(|r| (r.start, r.end));
-    let mut out: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
-    for r in ranges {
-        if let Some(last) = out.last_mut()
-            && r.start <= last.end
-        {
-            last.end = last.end.max(r.end);
-            continue;
-        }
-        out.push(r);
-    }
-    out
-}
-
-fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    let old_tokens = tokenize_for_word_diff(old);
-    let new_tokens = tokenize_for_word_diff(new);
-
-    const MAX_TOKENS: usize = 128;
-    if old_tokens.len() > MAX_TOKENS || new_tokens.len() > MAX_TOKENS {
-        return fallback_affix_diff_ranges(old, new);
-    }
-    if old_tokens.is_empty() || new_tokens.is_empty() {
-        return fallback_affix_diff_ranges(old, new);
-    }
-
-    let old_slices: Vec<&str> = old_tokens
-        .iter()
-        .map(|t| &old[t.range.clone()])
-        .collect::<Vec<_>>();
-    let new_slices: Vec<&str> = new_tokens
-        .iter()
-        .map(|t| &new[t.range.clone()])
-        .collect::<Vec<_>>();
-
-    // Compute the longest common subsequence via Myers' diff algorithm, marking matching tokens
-    // as "kept". This is substantially faster than O(n*m) DP for typical lines.
-    let n = old_slices.len() as isize;
-    let m = new_slices.len() as isize;
-    let max = (n + m) as usize;
-    let offset = max as isize;
-
-    let mut v: Vec<isize> = vec![0; 2 * max + 1];
-    let mut trace: Vec<Vec<isize>> = Vec::new();
-
-    let mut done = false;
-    for d in 0..=max {
-        for k in (-(d as isize)..=(d as isize)).step_by(2) {
-            let k_ix = (k + offset) as usize;
-            let x = if k == -(d as isize)
-                || (k != d as isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
-            {
-                v[(k + 1 + offset) as usize]
-            } else {
-                v[(k - 1 + offset) as usize] + 1
-            };
-
-            let mut x = x;
-            let mut y = x - k;
-            while x < n && y < m && old_slices[x as usize] == new_slices[y as usize] {
-                x += 1;
-                y += 1;
-            }
-
-            v[k_ix] = x;
-            if x >= n && y >= m {
-                done = true;
-                break;
-            }
-        }
-
-        trace.push(v.clone());
-        if done {
-            break;
-        }
-    }
-
-    let mut keep_old = vec![false; old_tokens.len()];
-    let mut keep_new = vec![false; new_tokens.len()];
-
-    let mut x = n;
-    let mut y = m;
-
-    for d in (1..trace.len()).rev() {
-        let d_isize = d as isize;
-        let v = &trace[d - 1];
-        let k = x - y;
-        let prev_k = if k == -d_isize
-            || (k != d_isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
-        {
-            k + 1
-        } else {
-            k - 1
-        };
-
-        let prev_x = v[(prev_k + offset) as usize];
-        let prev_y = prev_x - prev_k;
-
-        while x > prev_x && y > prev_y {
-            keep_old[(x - 1) as usize] = true;
-            keep_new[(y - 1) as usize] = true;
-            x -= 1;
-            y -= 1;
-        }
-
-        // Step to the previous edit.
-        if x == prev_x {
-            y -= 1;
-        } else {
-            x -= 1;
-        }
-    }
-
-    while x > 0 && y > 0 {
-        if old_slices[(x - 1) as usize] != new_slices[(y - 1) as usize] {
-            break;
-        }
-        keep_old[(x - 1) as usize] = true;
-        keep_new[(y - 1) as usize] = true;
-        x -= 1;
-        y -= 1;
-    }
-
-    let old_ranges = old_tokens
-        .iter()
-        .zip(keep_old.iter().copied())
-        .filter_map(|(t, keep)| (!keep && t.kind == TokenKind::Other).then_some(t.range.clone()))
-        .collect::<Vec<_>>();
-    let new_ranges = new_tokens
-        .iter()
-        .zip(keep_new.iter().copied())
-        .filter_map(|(t, keep)| (!keep && t.kind == TokenKind::Other).then_some(t.range.clone()))
-        .collect::<Vec<_>>();
-
-    (coalesce_ranges(old_ranges), coalesce_ranges(new_ranges))
-}
-
-fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    let mut prefix = 0usize;
-    for ((old_ix, old_ch), (_new_ix, new_ch)) in old.char_indices().zip(new.char_indices()) {
-        if old_ch != new_ch {
-            break;
-        }
-        prefix = old_ix + old_ch.len_utf8();
-    }
-
-    let mut suffix = 0usize;
-    let old_tail = &old[prefix.min(old.len())..];
-    let new_tail = &new[prefix.min(new.len())..];
-    for (old_ch, new_ch) in old_tail.chars().rev().zip(new_tail.chars().rev()) {
-        if old_ch != new_ch {
-            break;
-        }
-        suffix += old_ch.len_utf8();
-    }
-
-    let old_mid_start = prefix.min(old.len());
-    let old_mid_end = old.len().saturating_sub(suffix).max(old_mid_start);
-    let new_mid_start = prefix.min(new.len());
-    let new_mid_end = new.len().saturating_sub(suffix).max(new_mid_start);
-
-    let old_ranges = if old_mid_end > old_mid_start {
-        vec![old_mid_start..old_mid_end]
-    } else {
-        Vec::new()
-    };
-    let new_ranges = if new_mid_end > new_mid_start {
-        vec![new_mid_start..new_mid_end]
-    } else {
-        Vec::new()
-    };
-    (old_ranges, new_ranges)
 }
 
 fn build_new_file_preview_from_diff(
@@ -5192,9 +4670,32 @@ impl GitGpuiView {
             displayed.push(progress);
         }
 
-        let children = displayed
-            .into_iter()
-            .map(|t| zed::toast(theme, t.kind, t.input.clone()).id(("toast", t.id)));
+        let fade_in = toast_fade_in_duration();
+        let fade_out = toast_fade_out_duration();
+        let children = displayed.into_iter().map(move |t| {
+            let animations = match t.ttl {
+                Some(ttl) => vec![
+                    Animation::new(fade_in).with_easing(gpui::quadratic),
+                    Animation::new(ttl),
+                    Animation::new(fade_out).with_easing(gpui::quadratic),
+                ],
+                None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
+            };
+
+            zed::toast(theme, t.kind, t.input.clone()).with_animations(
+                ("toast", t.id),
+                animations,
+                move |toast, animation_ix, delta| {
+                    let opacity = match animation_ix {
+                        0 => delta,
+                        1 => 1.0,
+                        2 => 1.0 - delta,
+                        _ => 1.0,
+                    };
+                    toast.opacity(opacity)
+                },
+            )
+        });
 
         div()
             .id("toast_layer")
@@ -5259,6 +4760,15 @@ mod tests {
     use gitgpui_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
     use std::path::PathBuf;
     use std::time::Instant;
+
+    #[test]
+    fn toast_total_lifetime_includes_fade_in_and_out() {
+        let ttl = Duration::from_secs(6);
+        assert_eq!(
+            toast_total_lifetime(ttl),
+            ttl + Duration::from_millis(TOAST_FADE_IN_MS + TOAST_FADE_OUT_MS)
+        );
+    }
 
     #[test]
     fn diff_nav_prev_next_targets_do_not_wrap() {

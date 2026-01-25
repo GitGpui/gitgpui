@@ -11,6 +11,7 @@ pub struct UiSession {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub date_time_format: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -29,6 +30,7 @@ struct UiSessionFileV2 {
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
+    date_time_format: Option<String>,
 }
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
@@ -81,6 +83,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
                 window_height: file.window_height,
                 sidebar_width: file.sidebar_width,
                 details_width: file.details_width,
+                date_time_format: file.date_time_format,
             }
         }
         _ => UiSession::default(),
@@ -117,12 +120,13 @@ pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<(
     persist_to_path(path, &file)
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UiSettings {
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub date_time_format: Option<String>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -144,6 +148,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(w) = settings.details_width {
         file.details_width = Some(w);
+    }
+    if let Some(fmt) = settings.date_time_format {
+        file.date_time_format = Some(fmt);
     }
 
     persist_to_path(path, &file)
@@ -345,5 +352,45 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.open_repos, vec![repo_a, repo_b.clone()]);
         assert_eq!(loaded.active_repo, Some(repo_b));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_date_time_format() {
+        let dir = env::temp_dir().join(format!(
+            "gitgpui-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                date_time_format: Some("ymd_hm_utc".to_string()),
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
     }
 }

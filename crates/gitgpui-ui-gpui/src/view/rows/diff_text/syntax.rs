@@ -11,6 +11,7 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in super::super) enum DiffSyntaxLanguage {
+    Markdown,
     Html,
     Css,
     Hcl,
@@ -67,6 +68,7 @@ pub(in super::super) fn diff_syntax_language_for_path(path: &str) -> Option<Diff
         .to_ascii_lowercase();
 
     Some(match ext.as_str() {
+        "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" => DiffSyntaxLanguage::Markdown,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         // Use HTML highlighting for XML-ish formats as a pragmatic baseline.
         "xml" | "svg" | "xsl" | "xslt" | "xsd" => DiffSyntaxLanguage::Html,
@@ -111,6 +113,10 @@ pub(super) fn syntax_tokens_for_line(
     language: DiffSyntaxLanguage,
     mode: DiffSyntaxMode,
 ) -> Vec<SyntaxToken> {
+    if matches!(language, DiffSyntaxLanguage::Markdown) {
+        return syntax_tokens_for_line_markdown(text);
+    }
+
     match mode {
         DiffSyntaxMode::HeuristicOnly => syntax_tokens_for_line_heuristic(text, language),
         DiffSyntaxMode::Auto => {
@@ -224,6 +230,7 @@ fn syntax_tokens_for_line_treesitter(
 
 fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
     Some(match language {
+        DiffSyntaxLanguage::Markdown => return None,
         DiffSyntaxLanguage::Html => tree_sitter_html::LANGUAGE.into(),
         DiffSyntaxLanguage::Css => tree_sitter_css::LANGUAGE.into(),
         DiffSyntaxLanguage::Hcl => return None,
@@ -285,6 +292,7 @@ fn tree_sitter_highlight_spec(
     };
 
     Some(match language {
+        DiffSyntaxLanguage::Markdown => return None,
         DiffSyntaxLanguage::Html => HTML.get_or_init(|| {
             init(
                 tree_sitter_html::LANGUAGE.into(),
@@ -449,6 +457,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
             DiffSyntaxLanguage::Python | DiffSyntaxLanguage::Toml | DiffSyntaxLanguage::Yaml => {
                 (None, Some('#'), false)
             }
+            DiffSyntaxLanguage::Markdown => (None, None, false),
             DiffSyntaxLanguage::Bash => (None, Some('#'), false),
             DiffSyntaxLanguage::Makefile => (None, Some('#'), false),
             DiffSyntaxLanguage::Sql => (Some("--"), None, true),
@@ -649,6 +658,7 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
 fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     // NOTE: This is a heuristic fallback when we don't want to use tree-sitter for a line.
     match language {
+        DiffSyntaxLanguage::Markdown => false,
         DiffSyntaxLanguage::Html => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Css => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Hcl => matches!(
@@ -1182,6 +1192,97 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     }
 }
 
+fn syntax_tokens_for_line_markdown(text: &str) -> Vec<SyntaxToken> {
+    let len = text.len();
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let trimmed = text.trim_start_matches([' ', '\t']);
+    let indent = len.saturating_sub(trimmed.len());
+
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        return vec![SyntaxToken {
+            range: 0..len,
+            kind: SyntaxTokenKind::Keyword,
+        }];
+    }
+
+    if trimmed.starts_with('>') {
+        return vec![SyntaxToken {
+            range: indent..len,
+            kind: SyntaxTokenKind::Comment,
+        }];
+    }
+
+    // Headings: up to 6 leading `#` and a following space.
+    let mut hashes = 0usize;
+    for ch in trimmed.chars() {
+        if ch == '#' && hashes < 6 {
+            hashes += 1;
+        } else {
+            break;
+        }
+    }
+    if hashes > 0 {
+        let after_hashes = trimmed[hashes..].chars().next();
+        if after_hashes.is_some_and(|c| c.is_whitespace()) {
+            return vec![SyntaxToken {
+                range: indent..len,
+                kind: SyntaxTokenKind::Keyword,
+            }];
+        }
+    }
+
+    // Inline code: highlight backtick-delimited ranges.
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    let mut tokens: Vec<SyntaxToken> = Vec::new();
+    while i < len {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+
+        let start = i;
+        let mut tick_len = 0usize;
+        while i < len && bytes[i] == b'`' {
+            tick_len += 1;
+            i += 1;
+        }
+
+        let mut j = i;
+        while j < len {
+            if bytes[j] != b'`' {
+                j += 1;
+                continue;
+            }
+            let mut run = 0usize;
+            while j + run < len && bytes[j + run] == b'`' {
+                run += 1;
+            }
+            if run == tick_len {
+                let end = (j + run).min(len);
+                if start < end {
+                    tokens.push(SyntaxToken {
+                        range: start..end,
+                        kind: SyntaxTokenKind::String,
+                    });
+                }
+                i = end;
+                break;
+            }
+            j += run.max(1);
+        }
+        if j >= len {
+            // Unterminated inline code; stop scanning to avoid odd highlighting.
+            break;
+        }
+    }
+
+    tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1208,6 +1309,41 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_path("query.sql"),
             Some(DiffSyntaxLanguage::Sql)
+        );
+    }
+
+    #[test]
+    fn markdown_extension_is_supported() {
+        assert_eq!(
+            diff_syntax_language_for_path("README.md"),
+            Some(DiffSyntaxLanguage::Markdown)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("notes.markdown"),
+            Some(DiffSyntaxLanguage::Markdown)
+        );
+    }
+
+    #[test]
+    fn markdown_heading_and_inline_code_are_highlighted() {
+        let heading = syntax_tokens_for_line(
+            "# Hello world",
+            DiffSyntaxLanguage::Markdown,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            heading.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "expected markdown heading to be highlighted"
+        );
+
+        let inline = syntax_tokens_for_line(
+            "Use `git status` here",
+            DiffSyntaxLanguage::Markdown,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            inline.iter().any(|t| t.kind == SyntaxTokenKind::String),
+            "expected markdown inline code to be highlighted"
         );
     }
 

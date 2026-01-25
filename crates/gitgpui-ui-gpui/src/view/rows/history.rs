@@ -73,7 +73,7 @@ impl GitGpuiView {
     pub(in super::super) fn render_history_table_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let Some(repo) = this.active_repo() else {
@@ -81,6 +81,7 @@ impl GitGpuiView {
         };
 
         let theme = this.theme;
+        let row_pad = window.rem_size() * 0.5;
         let col_branch = this.history_col_branch;
         let col_graph = this.history_col_graph;
         let col_date = this.history_col_date;
@@ -179,8 +180,8 @@ impl GitGpuiView {
                 } else {
                     graph_row
                 };
-                let refs = commit_refs(repo, commit);
-                let when = format_relative_time(commit.time);
+                let refs = commit_refs_parts(repo, commit);
+                let when = super::super::format_datetime_utc(commit.time, this.date_time_format);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
                 let show_graph_color_marker =
                     repo.history_scope == gitgpui_core::domain::LogScope::AllBranches;
@@ -190,6 +191,7 @@ impl GitGpuiView {
 
                 Some(history_table_row(
                     theme,
+                    row_pad,
                     col_branch,
                     col_graph,
                     col_date,
@@ -213,8 +215,15 @@ impl GitGpuiView {
 
 }
 
+#[derive(Clone, Debug)]
+struct CommitRefsParts {
+    branches: String,
+    tags: Vec<String>,
+}
+
 fn history_table_row(
     theme: AppTheme,
+    row_pad: Pixels,
     col_branch: Pixels,
     col_graph: Pixels,
     col_date: Pixels,
@@ -226,7 +235,7 @@ fn history_table_row(
     repo_id: RepoId,
     commit: &Commit,
     graph_row: &history_graph::GraphRow,
-    refs: String,
+    refs: CommitRefsParts,
     when: String,
     selected: bool,
     is_stash_node: bool,
@@ -246,7 +255,7 @@ fn history_table_row(
         show_graph_color_marker,
         is_stash_node,
         graph_row.clone(),
-        refs.clone().into(),
+        SharedString::default(),
         commit.summary.clone().into(),
         when.clone().into(),
         short.to_string().into(),
@@ -254,13 +263,73 @@ fn history_table_row(
 
     let commit_id = commit.id.clone();
     let commit_id_for_menu = commit.id.clone();
+    let commit_id_for_tag_menu = commit.id.clone();
+    let tag_names = refs.tags.clone();
+    let branches_text = refs.branches.clone();
+
+    let tag_chip = |name: String| {
+        let commit_id_for_tag_menu = commit_id_for_tag_menu.clone();
+        div()
+            .px(px(6.0))
+            .py(px(2.0))
+            .rounded(px(theme.radii.pill))
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.35))
+            .bg(with_alpha(theme.colors.accent, 0.12))
+            .text_xs()
+            .text_color(theme.colors.accent)
+            .whitespace_nowrap()
+            .child(name)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_popover_at(
+                        PopoverKind::TagMenu {
+                            repo_id,
+                            commit_id: commit_id_for_tag_menu.clone(),
+                        },
+                        e.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+    };
+
+    let refs_overlay = div()
+        .absolute()
+        .top_0()
+        .left(row_pad)
+        .h_full()
+        .w(col_branch.max(px(0.0)))
+        .flex()
+        .items_center()
+        .gap_1()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .children(tag_names.into_iter().map(tag_chip))
+        .when(!branches_text.trim().is_empty(), move |d| {
+            d.child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child(branches_text.clone()),
+            )
+        });
     let mut row = div()
         .id(ix)
+        .relative()
         .h(px(24.0))
         .w_full()
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
+        .child(refs_overlay)
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
             let selection_changed =
                 this.active_repo().and_then(|r| r.selected_commit.as_ref()) != Some(&commit_id);
@@ -459,15 +528,16 @@ fn working_tree_summary_history_row(
     row.into_any_element()
 }
 
-fn commit_refs(repo: &RepoState, commit: &Commit) -> String {
+fn commit_refs_parts(repo: &RepoState, commit: &Commit) -> CommitRefsParts {
     use std::collections::BTreeSet;
 
-    let mut refs: BTreeSet<String> = BTreeSet::new();
+    let mut branches: BTreeSet<String> = BTreeSet::new();
+    let mut tags: BTreeSet<String> = BTreeSet::new();
     let mut head_branch_name: Option<String> = None;
     let head_target = match (&repo.head_branch, &repo.branches) {
-        (Loadable::Ready(head_name), Loadable::Ready(branches)) => {
+        (Loadable::Ready(head_name), Loadable::Ready(repo_branches)) => {
             head_branch_name = Some(head_name.clone());
-            branches
+            repo_branches
                 .iter()
                 .find(|b| b.name == *head_name)
                 .map(|b| b.target.clone())
@@ -477,68 +547,64 @@ fn commit_refs(repo: &RepoState, commit: &Commit) -> String {
     if head_target.as_ref() == Some(&commit.id)
         && let Loadable::Ready(head) = &repo.head_branch
     {
-        refs.insert(format!("HEAD → {head}"));
+        branches.insert(format!("HEAD → {head}"));
     }
 
-    if let Loadable::Ready(branches) = &repo.branches {
-        for branch in branches {
+    if let Loadable::Ready(repo_branches) = &repo.branches {
+        for branch in repo_branches {
             if head_target.as_ref() == Some(&commit.id)
                 && head_branch_name.as_ref() == Some(&branch.name)
             {
                 continue;
             }
             if branch.target == commit.id {
-                refs.insert(branch.name.clone());
+                branches.insert(branch.name.clone());
             }
         }
     }
 
-    if let Loadable::Ready(tags) = &repo.tags {
-        for tag in tags {
+    if let Loadable::Ready(repo_tags) = &repo.tags {
+        for tag in repo_tags {
             if tag.target == commit.id {
-                refs.insert(tag.name.clone());
+                tags.insert(tag.name.clone());
             }
         }
     }
 
-    refs.into_iter().collect::<Vec<_>>().join(", ")
+    CommitRefsParts {
+        branches: branches.into_iter().collect::<Vec<_>>().join(", "),
+        tags: tags.into_iter().collect::<Vec<_>>(),
+    }
 }
 
-fn format_relative_time(time: std::time::SystemTime) -> String {
-    use std::time::SystemTime;
+#[cfg(test)]
+mod tests {
+    use super::super::super::format_datetime_utc;
+    use super::super::super::DateTimeFormat;
+    use std::time::{Duration, UNIX_EPOCH};
 
-    let Ok(elapsed) = SystemTime::now().duration_since(time) else {
-        return "in the future".to_string();
-    };
+    #[test]
+    fn commit_date_formats_as_yyyy_mm_dd_utc() {
+        assert_eq!(
+            format_datetime_utc(UNIX_EPOCH, DateTimeFormat::YmdHm),
+            "1970-01-01 00:00"
+        );
+        assert_eq!(
+            format_datetime_utc(UNIX_EPOCH + Duration::from_secs(86_400), DateTimeFormat::YmdHm),
+            "1970-01-02 00:00"
+        );
+        assert_eq!(
+            format_datetime_utc(UNIX_EPOCH - Duration::from_secs(86_400), DateTimeFormat::YmdHm),
+            "1969-12-31 00:00"
+        );
 
-    fn fmt(n: u64, unit: &str) -> String {
-        if n == 1 {
-            format!("1 {unit} ago")
-        } else {
-            format!("{n} {unit}s ago")
-        }
+        // 2000-02-29 12:34:56 UTC
+        assert_eq!(
+            format_datetime_utc(
+                UNIX_EPOCH + Duration::from_secs(951_782_400 + 12 * 3600 + 34 * 60 + 56),
+                DateTimeFormat::YmdHms
+            ),
+            "2000-02-29 12:34:56"
+        );
     }
-
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        return fmt(secs.max(1), "second");
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        return fmt(mins, "minute");
-    }
-    let hours = mins / 60;
-    if hours < 24 {
-        return fmt(hours, "hour");
-    }
-    let days = hours / 24;
-    if days < 30 {
-        return fmt(days, "day");
-    }
-    let months = days / 30;
-    if months < 12 {
-        return fmt(months, "month");
-    }
-    let years = months / 12;
-    fmt(years, "year")
 }
