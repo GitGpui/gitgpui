@@ -14,13 +14,14 @@ impl GitGpuiView {
         let repo_id = repo.id;
         let rows = Self::branch_sidebar_rows(repo);
 
-        let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
-            gpui::svg()
-                .path(path)
-                .w(px(size_px))
-                .h(px(size_px))
-                .text_color(color)
-        };
+	        let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
+	            gpui::svg()
+	                .path(path)
+	                .w(px(size_px))
+	                .h(px(size_px))
+	                .text_color(color)
+	                .flex_shrink_0()
+	        };
 
         fn indent_px(depth: usize) -> Pixels {
             px(6.0 + depth as f32 * 10.0)
@@ -217,38 +218,32 @@ impl GitGpuiView {
                         }
                     }));
 
-                    div()
-                        .id(("stash_sidebar_row", index))
-                        .relative()
-                        .group(row_group.clone())
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .px_2()
-                        .py(px(2.0))
-                        .w_full()
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .pr(px(160.0))
-                                .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .min_w(px(0.0))
-                                        .line_clamp(1)
-                                        .child(message.clone()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .absolute()
+	                    div()
+	                        .id(("stash_sidebar_row", index))
+	                        .relative()
+	                        .group(row_group.clone())
+	                        .flex()
+	                        .items_center()
+	                        .gap_2()
+	                        .px_2()
+	                        .h(px(24.0))
+	                        .w_full()
+	                        .hover(move |s| s.bg(theme.colors.hover))
+	                        .active(move |s| s.bg(theme.colors.active))
+	                        .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
+	                        .child(
+	                            div()
+	                                .flex_1()
+	                                .min_w(px(0.0))
+	                                .pr(px(160.0))
+	                                .text_sm()
+	                                .line_clamp(1)
+	                                .whitespace_nowrap()
+	                                .child(message.clone()),
+	                        )
+	                        .child(
+	                            div()
+	                                .absolute()
                                 .right(px(6.0))
                                 .top(px(2.0))
                                 .bottom(px(2.0))
@@ -553,18 +548,17 @@ impl GitGpuiView {
                 let path_label = this.cached_path_display(&path);
                 let tooltip = path_label.clone();
 
-                let mut row = div()
-                    .id(("commit_file", ix))
-                    .h(px(24.0))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .w_full()
-                    .rounded(px(theme.radii.row))
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
+	                let mut row = div()
+	                    .id(("commit_file", ix))
+	                    .h(px(24.0))
+	                    .flex()
+	                    .items_center()
+	                    .gap_2()
+	                    .px_2()
+	                    .w_full()
+	                    .rounded(px(theme.radii.row))
+	                    .hover(move |s| s.bg(theme.colors.hover))
+	                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .w(px(16.0))

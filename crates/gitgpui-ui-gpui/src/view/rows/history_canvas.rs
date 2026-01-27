@@ -179,6 +179,7 @@ pub(super) fn history_commit_row_canvas(
             if show_date && !when.as_ref().is_empty() {
                 let mut style = base_style.clone();
                 style.color = theme.colors.text_muted.into();
+                style.font_family = "monospace".into();
                 let mut runs = vec![style.to_run(when.len())];
                 let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
                 let truncated = wrapper.truncate_line(
@@ -205,6 +206,7 @@ pub(super) fn history_commit_row_canvas(
             if show_sha && !short_sha.as_ref().is_empty() {
                 let mut style = base_style.clone();
                 style.color = theme.colors.text_muted.into();
+                style.font_family = "monospace".into();
                 let mut runs = vec![style.to_run(short_sha.len())];
                 let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
                 let truncated = wrapper.truncate_line(

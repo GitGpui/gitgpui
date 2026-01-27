@@ -188,6 +188,23 @@ impl GitGpuiView {
                 .is_some_and(|r| Self::is_file_diff_target(r.diff_target.as_ref()));
 
         let repo = self.active_repo();
+        let conflict_target_path = repo.and_then(|repo| {
+            let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+                return None;
+            };
+            if *area != DiffArea::Unstaged {
+                return None;
+            }
+            match &repo.status {
+                Loadable::Ready(status) => status
+                    .unstaged
+                    .iter()
+                    .any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
+                    .then_some(path.clone()),
+                _ => None,
+            }
+        });
+        let is_conflict_resolver = conflict_target_path.is_some();
 
         let diff_nav_hotkey_hint = |label: &'static str| {
             div()
@@ -198,15 +215,78 @@ impl GitGpuiView {
         };
 
         let mut controls = div().flex().items_center().gap_1();
-        if !is_file_preview {
-            let nav_entries = self.diff_nav_entries();
-            let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
+        if is_conflict_resolver {
+            let nav_entries = self.conflict_nav_entries();
+            let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
             let can_nav_prev = Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
             let can_nav_next = Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
             controls = controls
                 .child(
-                    zed::Button::new("diff_inline", "Inline")
+                    zed::Button::new("conflict_prev", "Prev")
+                        .end_slot(diff_nav_hotkey_hint("F2"))
+                        .style(zed::ButtonStyle::Outlined)
+                        .disabled(!can_nav_prev)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_prev();
+                            cx.notify();
+                        }),
+                )
+                .child(
+                    zed::Button::new("conflict_next", "Next")
+                        .end_slot(diff_nav_hotkey_hint("F3"))
+                        .style(zed::ButtonStyle::Outlined)
+                        .disabled(!can_nav_next)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_next();
+                            cx.notify();
+                        }),
+                );
+
+            if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
+                let save_path = path.clone();
+                controls = controls
+                    .child(
+                        zed::Button::new("conflict_save", "Save")
+                            .style(zed::ButtonStyle::Outlined)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                let text = this
+                                    .conflict_resolver_input
+                                    .read_with(cx, |i, _| i.text().to_string());
+                                this.store.dispatch(Msg::SaveWorktreeFile {
+                                    repo_id,
+                                    path: save_path.clone(),
+                                    contents: text,
+                                    stage: false,
+                                });
+                            }),
+                    )
+                    .child({
+                        let save_path = path.clone();
+                        zed::Button::new("conflict_save_stage", "Save & stage")
+                            .style(zed::ButtonStyle::Filled)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                let text = this
+                                    .conflict_resolver_input
+                                    .read_with(cx, |i, _| i.text().to_string());
+                                this.store.dispatch(Msg::SaveWorktreeFile {
+                                    repo_id,
+                                    path: save_path.clone(),
+                                    contents: text,
+                                    stage: true,
+                                });
+                            })
+                    });
+            }
+        } else if !is_file_preview {
+            let nav_entries = self.diff_nav_entries();
+            let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
+            let can_nav_prev = Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_next = Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+
+                controls = controls
+                    .child(
+                        zed::Button::new("diff_inline", "Inline")
                         .style(if self.diff_view == DiffViewMode::Inline {
                             zed::ButtonStyle::Filled
                         } else {
@@ -353,6 +433,7 @@ impl GitGpuiView {
             .flex()
             .items_center()
             .justify_between()
+            .h(px(zed::CONTROL_HEIGHT_MD_PX))
             .child(
                 div()
                     .flex_1()
@@ -417,6 +498,395 @@ impl GitGpuiView {
                             )
                             .into_any_element()
                     }
+                }
+            }
+        } else if is_conflict_resolver {
+            match (repo, conflict_target_path) {
+                (None, _) => zed::empty_state(theme, "Resolve", "No repository.").into_any_element(),
+                (_, None) => zed::empty_state(theme, "Resolve", "No conflicted file selected.")
+                    .into_any_element(),
+                (Some(repo), Some(path)) => {
+                    let title: SharedString =
+                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
+
+                    match &repo.conflict_file {
+                        Loadable::NotLoaded | Loadable::Loading => {
+                            zed::empty_state(theme, title, "Loading conflict data…")
+                                .into_any_element()
+                        }
+                        Loadable::Error(e) => {
+                            zed::empty_state(theme, title, e.clone()).into_any_element()
+                        }
+                        Loadable::Ready(None) => {
+                            zed::empty_state(theme, title, "No conflict data.").into_any_element()
+                        }
+                        Loadable::Ready(Some(file)) => {
+                    let ours = file.ours.clone().unwrap_or_default();
+                    let theirs = file.theirs.clone().unwrap_or_default();
+                    let has_current = file.current.is_some();
+
+                    let mode = self.conflict_resolver.diff_mode;
+                    let diff_len = match mode {
+                        ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
+                        ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
+                    };
+
+                    let selection_empty = self.conflict_resolver_selection_is_empty();
+
+                    let toggle_mode_split = |this: &mut GitGpuiView,
+                                             _e: &ClickEvent,
+                                             _w: &mut Window,
+                                             cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+                    };
+                    let toggle_mode_inline = |this: &mut GitGpuiView,
+                                              _e: &ClickEvent,
+                                              _w: &mut Window,
+                                              cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                    };
+
+                    let clear_selection = |this: &mut GitGpuiView,
+                                           _e: &ClickEvent,
+                                           _w: &mut Window,
+                                           cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_clear_selection(cx);
+                    };
+
+                    let append_selection = |this: &mut GitGpuiView,
+                                            _e: &ClickEvent,
+                                            _w: &mut Window,
+                                            cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_append_selection_to_output(cx);
+                    };
+
+                    let ours_for_btn = ours.clone();
+                    let set_output_ours = move |this: &mut GitGpuiView,
+                                                _e: &ClickEvent,
+                                                _w: &mut Window,
+                                                cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
+                    };
+                    let theirs_for_btn = theirs.clone();
+                    let set_output_theirs = move |this: &mut GitGpuiView,
+                                                  _e: &ClickEvent,
+                                                  _w: &mut Window,
+                                                  cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
+                    };
+                    let reset_from_markers = |this: &mut GitGpuiView,
+                                              _e: &ClickEvent,
+                                              _w: &mut Window,
+                                              cx: &mut gpui::Context<Self>| {
+                        this.conflict_resolver_reset_output_from_markers(cx);
+                    };
+
+                    let mode_controls = div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            zed::Button::new("conflict_mode_split", "Split")
+                                .style(if mode == ConflictDiffMode::Split {
+                                    zed::ButtonStyle::Filled
+                                } else {
+                                    zed::ButtonStyle::Outlined
+                                })
+                                .on_click(theme, cx, toggle_mode_split),
+                        )
+                        .child(
+                            zed::Button::new("conflict_mode_inline", "Inline")
+                                .style(if mode == ConflictDiffMode::Inline {
+                                    zed::ButtonStyle::Filled
+                                } else {
+                                    zed::ButtonStyle::Outlined
+                                })
+                                .on_click(theme, cx, toggle_mode_inline),
+                        );
+
+                    let selection_controls = div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            zed::Button::new("conflict_append_selected", "Append selection")
+                                .style(zed::ButtonStyle::Outlined)
+                                .disabled(selection_empty)
+                                .on_click(theme, cx, append_selection),
+                        )
+                        .child(
+                            zed::Button::new("conflict_clear_selected", "Clear selection")
+                                .style(zed::ButtonStyle::Transparent)
+                                .disabled(selection_empty)
+                                .on_click(theme, cx, clear_selection),
+                        );
+
+                    let start_controls = div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            zed::Button::new("conflict_use_ours", "Use ours")
+                                .style(zed::ButtonStyle::Transparent)
+                                .disabled(file.ours.is_none())
+                                .on_click(theme, cx, set_output_ours),
+                        )
+                        .child(
+                            zed::Button::new("conflict_use_theirs", "Use theirs")
+                                .style(zed::ButtonStyle::Transparent)
+                                .disabled(file.theirs.is_none())
+                                .on_click(theme, cx, set_output_theirs),
+                        )
+                        .child(
+                            zed::Button::new("conflict_reset_markers", "Reset from markers")
+                                .style(zed::ButtonStyle::Transparent)
+                                .disabled(!has_current)
+                                .on_click(theme, cx, reset_from_markers),
+                        );
+
+                    let diff_header = div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Diff (ours ↔ theirs)"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(mode_controls)
+                                .child(selection_controls),
+                        );
+
+                    let diff_title_row = div()
+                        .h(px(22.0))
+                        .flex()
+                        .items_center()
+                        .when(mode == ConflictDiffMode::Split, |d| {
+                            d.child(
+                                div()
+                                    .flex_1()
+                                    .px_2()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Ours (index :2)"),
+                            )
+                            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .px_2()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Theirs (index :3)"),
+                            )
+                        })
+                        .when(mode == ConflictDiffMode::Inline, |d| d);
+
+                    let diff_body: AnyElement = if diff_len == 0 {
+                        zed::empty_state(theme, "Diff", "Ours/Theirs content not available.")
+                            .into_any_element()
+                    } else {
+                        let list = uniform_list(
+                            "conflict_resolver_diff_list",
+                            diff_len,
+                            cx.processor(Self::render_conflict_resolver_diff_rows),
+                        )
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+                        let scroll_handle = self
+                            .conflict_resolver_diff_scroll
+                            .0
+                            .borrow()
+                            .base_handle
+                            .clone();
+
+                        div()
+                            .id("conflict_resolver_diff_scroll")
+                            .relative()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .bg(theme.colors.window_bg)
+                            .child(list)
+                            .child(
+                                zed::Scrollbar::new(
+                                    "conflict_resolver_diff_scrollbar",
+                                    scroll_handle,
+                                )
+                                .render(theme),
+                            )
+                            .into_any_element()
+                    };
+
+                    let output_header = div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("Resolved output"),
+                        )
+                        .child(start_controls);
+
+                    use std::hash::{Hash, Hasher};
+                    let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+                    let output_text = self
+                        .conflict_resolver_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    output_text.hash(&mut output_hasher);
+                    let output_hash = output_hasher.finish();
+
+                    let should_clear_preview_cache = self.conflict_resolved_preview_path.as_ref()
+                        != Some(&path)
+                        || self.conflict_resolved_preview_source_hash != Some(output_hash);
+                    if should_clear_preview_cache {
+                        self.conflict_resolved_preview_path = Some(path.clone());
+                        self.conflict_resolved_preview_source_hash = Some(output_hash);
+                        self.conflict_resolved_preview_lines =
+                            output_text.split('\n').map(|s| s.to_string()).collect();
+                        if self.conflict_resolved_preview_lines.is_empty() {
+                            self.conflict_resolved_preview_lines.push(String::new());
+                        }
+                        self.conflict_resolved_preview_segments_cache.clear();
+                    }
+
+                    let preview_count = self.conflict_resolved_preview_lines.len();
+	                    let preview_body: AnyElement = if preview_count == 0 {
+	                        zed::empty_state(theme, "Preview", "Empty.").into_any_element()
+	                    } else {
+                        let list = uniform_list(
+                            "conflict_resolved_preview_list",
+                            preview_count,
+                            cx.processor(Self::render_conflict_resolved_preview_rows),
+                        )
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(self.conflict_resolved_preview_scroll.clone());
+                        let scroll_handle = self
+                            .conflict_resolved_preview_scroll
+                            .0
+                            .borrow()
+                            .base_handle
+                            .clone();
+
+                        div()
+                            .id("conflict_resolved_preview_scroll")
+                            .relative()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .bg(theme.colors.window_bg)
+                            .child(list)
+                            .child(
+                                zed::Scrollbar::new(
+                                    "conflict_resolved_preview_scrollbar",
+                                    scroll_handle,
+                                )
+                                .render(theme),
+                            )
+	                            .into_any_element()
+	                    };
+
+                        let output_columns_header =
+                            zed::split_columns_header(theme, "Resolved (editable)", "Preview");
+
+                    div()
+                        .id("conflict_resolver_panel")
+                        .flex()
+                        .flex_col()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .gap_2()
+                        .px_2()
+                        .py_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .child(title.clone()),
+                        )
+                        .child(div().border_t_1().border_color(theme.colors.border))
+                        .child(diff_header)
+                        .child(
+                            div()
+                                .h(px(240.0))
+                                .min_h(px(0.0))
+                                .border_1()
+                                .border_color(theme.colors.border)
+                                .rounded(px(theme.radii.row))
+                                .overflow_hidden()
+                                .flex()
+                                .flex_col()
+                                .child(diff_title_row)
+                                .child(div().border_t_1().border_color(theme.colors.border))
+                                .child(diff_body),
+                        )
+	                        .child(div().border_t_1().border_color(theme.colors.border))
+	                        .child(output_header)
+	                        .child(
+	                            div()
+	                                .id("conflict_resolver_output_split")
+	                                .relative()
+	                                .h_full()
+	                                .min_h(px(0.0))
+	                                .flex()
+	                                .flex_col()
+	                                .flex_1()
+	                                .min_h(px(0.0))
+	                                .border_1()
+	                                .border_color(theme.colors.border)
+	                                .rounded(px(theme.radii.row))
+	                                .overflow_hidden()
+	                                .bg(theme.colors.window_bg)
+	                                .child(output_columns_header)
+	                                .child(
+	                                    div()
+	                                        .flex_1()
+	                                        .min_h(px(0.0))
+	                                        .flex()
+	                                        .child(
+	                                            div()
+	                                                .flex_1()
+	                                                .min_w(px(0.0))
+	                                                .h_full()
+	                                                .overflow_hidden()
+	                                                .child(
+	                                                    div()
+	                                                        .id("conflict_resolver_output_scroll")
+	                                                        .h_full()
+	                                                        .min_h(px(0.0))
+	                                                        .overflow_y_scroll()
+	                                                        .child(
+	                                                            div()
+	                                                                .p_2()
+	                                                                .child(
+	                                                                    self.conflict_resolver_input.clone(),
+	                                                                ),
+	                                                        ),
+	                                                ),
+	                                        )
+	                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+	                                        .child(
+	                                            div()
+	                                                .flex_1()
+	                                                .min_w(px(0.0))
+	                                                .h_full()
+	                                                .overflow_hidden()
+	                                                .child(preview_body),
+	                                        ),
+	                                ),
+	                        )
+	                        .into_any_element()
+                }
+            }
                 }
             }
         } else {
@@ -893,6 +1363,7 @@ impl GitGpuiView {
                 if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
                 {
                     if let Some(repo_id) = this.active_repo_id() {
+                        this.status_multi_selection.remove(&repo_id);
                         this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                         handled = true;
                     }
@@ -997,15 +1468,33 @@ impl GitGpuiView {
                     .is_focused(window);
 
                 if mods.alt && !mods.control && !mods.platform && !mods.function {
+                    let conflict_active = this.active_repo().is_some_and(|repo| {
+                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                        else {
+                            return false;
+                        };
+                        if *area != DiffArea::Unstaged {
+                            return false;
+                        }
+                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
+                    });
                     match key {
                         "i" => {
-                            this.diff_view = DiffViewMode::Inline;
-                            this.diff_text_segments_cache.clear();
+                            if conflict_active {
+                                this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                            } else {
+                                this.diff_view = DiffViewMode::Inline;
+                                this.diff_text_segments_cache.clear();
+                            }
                             handled = true;
                         }
                         "s" => {
-                            this.diff_view = DiffViewMode::Split;
-                            this.diff_text_segments_cache.clear();
+                            if conflict_active {
+                                this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+                            } else {
+                                this.diff_view = DiffViewMode::Split;
+                                this.diff_text_segments_cache.clear();
+                            }
                             handled = true;
                         }
                         "h" => {
@@ -1041,10 +1530,28 @@ impl GitGpuiView {
                     && !mods.platform
                     && !mods.function
                 {
+                    let conflict_active = this.active_repo().is_some_and(|repo| {
+                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                        else {
+                            return false;
+                        };
+                        if *area != DiffArea::Unstaged {
+                            return false;
+                        }
+                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
+                    });
                     if mods.shift {
-                        this.diff_jump_prev();
+                        if conflict_active {
+                            this.conflict_jump_prev();
+                        } else {
+                            this.diff_jump_prev();
+                        }
                     } else {
-                        this.diff_jump_next();
+                        if conflict_active {
+                            this.conflict_jump_next();
+                        } else {
+                            this.diff_jump_next();
+                        }
                     }
                     handled = true;
                 }
@@ -1056,7 +1563,21 @@ impl GitGpuiView {
                     && !mods.platform
                     && !mods.function
                 {
-                    this.diff_jump_prev();
+                    let conflict_active = this.active_repo().is_some_and(|repo| {
+                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                        else {
+                            return false;
+                        };
+                        if *area != DiffArea::Unstaged {
+                            return false;
+                        }
+                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
+                    });
+                    if conflict_active {
+                        this.conflict_jump_prev();
+                    } else {
+                        this.diff_jump_prev();
+                    }
                     handled = true;
                 }
 
@@ -1067,7 +1588,21 @@ impl GitGpuiView {
                     && !mods.platform
                     && !mods.function
                 {
-                    this.diff_jump_next();
+                    let conflict_active = this.active_repo().is_some_and(|repo| {
+                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                        else {
+                            return false;
+                        };
+                        if *area != DiffArea::Unstaged {
+                            return false;
+                        }
+                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
+                    });
+                    if conflict_active {
+                        this.conflict_jump_next();
+                    } else {
+                        this.diff_jump_next();
+                    }
                     handled = true;
                 }
 

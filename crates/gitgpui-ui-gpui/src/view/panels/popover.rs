@@ -2,13 +2,14 @@ use super::*;
 
 mod context_menu;
 
-impl GitGpuiView {
-    pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
-        self.popover = None;
-        self.popover_anchor = None;
-        self.context_menu_selected_ix = None;
-        cx.notify();
-    }
+    impl GitGpuiView {
+        pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+            self.popover = None;
+            self.popover_anchor = None;
+            self.context_menu_selected_ix = None;
+            self.conflict_resolver = ConflictResolverUiState::default();
+            cx.notify();
+        }
 
     pub(in super::super) fn open_popover_at(
         &mut self,
@@ -331,16 +332,16 @@ impl GitGpuiView {
                 )
         };
 
-        let mut header = div()
-            .relative()
-            .flex()
-            .w_full()
-            .items_center()
-            .px_2()
-            .py_1()
-            .text_xs()
-            .font_weight(FontWeight::BOLD)
-            .text_color(theme.colors.text_muted)
+	        let mut header = div()
+	            .relative()
+	            .flex()
+	            .h(px(24.0))
+	            .w_full()
+	            .items_center()
+	            .px_2()
+	            .text_xs()
+	            .font_weight(FontWeight::BOLD)
+	            .text_color(theme.colors.text_muted)
             .child(
                 div()
                     .w(self.history_col_branch)
@@ -352,13 +353,14 @@ impl GitGpuiView {
                         div()
                             .id("history_scope_header")
                             .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_1()
-                            .py(px(1.0))
-                            .rounded(px(theme.radii.row))
-                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                            .cursor(CursorStyle::PointingHand)
+	                            .items_center()
+	                            .gap_1()
+	                            .px_1()
+	                            .h(px(18.0))
+	                            .line_height(px(18.0))
+	                            .rounded(px(theme.radii.row))
+	                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+	                            .cursor(CursorStyle::PointingHand)
                             .child(
                                 div()
                                     .min_w(px(0.0))
@@ -366,13 +368,14 @@ impl GitGpuiView {
                                     .whitespace_nowrap()
                                     .child(scope_label.clone()),
                             )
-                            .child(
-                                gpui::svg()
-                                    .path("icons/chevron_down.svg")
-                                    .w(px(12.0))
-                                    .h(px(12.0))
-                                    .text_color(theme.colors.text_muted),
-                            )
+	                            .child(
+	                                gpui::svg()
+	                                    .path("icons/chevron_down.svg")
+	                                    .w(px(12.0))
+	                                    .h(px(12.0))
+	                                    .text_color(theme.colors.text_muted)
+	                                    .flex_shrink_0(),
+	                            )
                             .when_some(scope_repo_id, |this, repo_id| {
                                 this.on_click(cx.listener(
                                     move |this, e: &ClickEvent, window, cx| {
@@ -574,15 +577,15 @@ impl GitGpuiView {
         rows
     }
 
-    pub(in super::super) fn popover_view(
-        &mut self,
-        kind: PopoverKind,
-        cx: &mut gpui::Context<Self>,
-    ) -> impl IntoElement {
-        let theme = self.theme;
-        let anchor = self
-            .popover_anchor
-            .unwrap_or_else(|| point(px(64.0), px(64.0)));
+	    pub(in super::super) fn popover_view(
+	        &mut self,
+	        kind: PopoverKind,
+	        cx: &mut gpui::Context<Self>,
+		    ) -> impl IntoElement {
+		        let theme = self.theme;
+		        let anchor = self
+		            .popover_anchor
+		            .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
 	        let anchor_corner = match &kind {
@@ -798,12 +801,349 @@ impl GitGpuiView {
                             d.child(div().px_2().pb_1().text_xs().text_color(theme.colors.text_muted).child("Choose a format:"))
                                 .child(dropdown)
                         }),
-                )
-            }
-            PopoverKind::BranchPicker => {
-                let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
+	                )
+	            }
+		            /* PopoverKind::ConflictResolver { repo_id, path } => {
+		                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+		                    let window_size = self.ui_window_size_last_seen;
+		                    let max_w = (window_size.width - px(96.0)).max(px(320.0));
+		                    let max_h = (window_size.height - px(120.0)).max(px(240.0));
+		
+		                    let title: SharedString =
+		                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
+		
+		                    match &repo.conflict_file {
+		                    Loadable::NotLoaded | Loadable::Loading => {
+		                        zed::empty_state(theme, title, "Loading…")
+		                    }
+		                    Loadable::Error(e) => zed::empty_state(theme, title, e.clone()),
+		                    Loadable::Ready(None) => zed::empty_state(theme, title, "No conflict data."),
+		                    Loadable::Ready(Some(file)) => {
+		                        let ours = file.ours.clone().unwrap_or_default();
+		                        let theirs = file.theirs.clone().unwrap_or_default();
+		                        let has_current = file.current.is_some();
 
-                if let Some(repo) = self.active_repo() {
+		                        let mode = self.conflict_resolver.diff_mode;
+		                        let diff_len = match mode {
+		                            ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
+		                            ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
+		                        };
+
+		                        let selection_empty = self.conflict_resolver_selection_is_empty();
+
+		                        let toggle_mode_split = |this: &mut GitGpuiView,
+		                                                 _e: &ClickEvent,
+		                                                 _w: &mut Window,
+		                                                 cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+		                        };
+		                        let toggle_mode_inline = |this: &mut GitGpuiView,
+		                                                  _e: &ClickEvent,
+		                                                  _w: &mut Window,
+		                                                  cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+		                        };
+		
+		                        let clear_selection = |this: &mut GitGpuiView,
+		                                               _e: &ClickEvent,
+		                                               _w: &mut Window,
+		                                               cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_clear_selection(cx);
+		                        };
+		
+		                        let append_selection = |this: &mut GitGpuiView,
+		                                               _e: &ClickEvent,
+		                                               _w: &mut Window,
+		                                               cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_append_selection_to_output(cx);
+		                        };
+		
+		                        let ours_for_btn = ours.clone();
+		                        let set_output_ours = move |this: &mut GitGpuiView,
+		                                                    _e: &ClickEvent,
+		                                                    _w: &mut Window,
+		                                                    cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
+		                        };
+		                        let theirs_for_btn = theirs.clone();
+		                        let set_output_theirs = move |this: &mut GitGpuiView,
+		                                                      _e: &ClickEvent,
+		                                                      _w: &mut Window,
+		                                                      cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
+		                        };
+		                        let reset_from_markers = |this: &mut GitGpuiView,
+		                                                  _e: &ClickEvent,
+		                                                  _w: &mut Window,
+		                                                  cx: &mut gpui::Context<Self>| {
+		                            this.conflict_resolver_reset_output_from_markers(cx);
+		                        };
+		
+		                        let save_path = path.clone();
+		                        let save_close = move |this: &mut GitGpuiView,
+		                                               _e: &ClickEvent,
+		                                               _w: &mut Window,
+		                                               cx: &mut gpui::Context<Self>| {
+		                            let text = this
+		                                .conflict_resolver_input
+		                                .read_with(cx, |i, _| i.text().to_string());
+		                            this.store.dispatch(Msg::SaveWorktreeFile {
+		                                repo_id,
+		                                path: save_path.clone(),
+		                                contents: text,
+		                                stage: false,
+		                            });
+		                            this.close_popover(cx);
+		                        };
+		                        let save_path = path.clone();
+		                        let save_stage_close = move |this: &mut GitGpuiView,
+		                                                     _e: &ClickEvent,
+		                                                     _w: &mut Window,
+		                                                     cx: &mut gpui::Context<Self>| {
+		                            let text = this
+		                                .conflict_resolver_input
+		                                .read_with(cx, |i, _| i.text().to_string());
+		                            this.store.dispatch(Msg::SaveWorktreeFile {
+		                                repo_id,
+		                                path: save_path.clone(),
+		                                contents: text,
+		                                stage: true,
+		                            });
+		                            this.close_popover(cx);
+		                        };
+
+		                        let mode_controls = div()
+		                            .flex()
+		                            .items_center()
+		                            .gap_1()
+		                            .child(
+		                                zed::Button::new("conflict_mode_split", "Split")
+		                                    .style(if mode == ConflictDiffMode::Split {
+		                                        zed::ButtonStyle::Filled
+		                                    } else {
+		                                        zed::ButtonStyle::Outlined
+		                                    })
+		                                    .on_click(theme, cx, toggle_mode_split),
+		                            )
+		                            .child(
+		                                zed::Button::new("conflict_mode_inline", "Inline")
+		                                    .style(if mode == ConflictDiffMode::Inline {
+		                                        zed::ButtonStyle::Filled
+		                                    } else {
+		                                        zed::ButtonStyle::Outlined
+		                                    })
+		                                    .on_click(theme, cx, toggle_mode_inline),
+		                            );
+
+		                        let selection_controls = div()
+		                            .flex()
+		                            .items_center()
+		                            .gap_1()
+		                            .child(
+		                                zed::Button::new("conflict_append_selected", "Append selection")
+		                                    .style(zed::ButtonStyle::Outlined)
+		                                    .disabled(selection_empty)
+		                                    .on_click(theme, cx, append_selection),
+		                            )
+		                            .child(
+		                                zed::Button::new("conflict_clear_selected", "Clear selection")
+		                                    .style(zed::ButtonStyle::Transparent)
+		                                    .disabled(selection_empty)
+		                                    .on_click(theme, cx, clear_selection),
+		                            );
+
+		                        let start_controls = div()
+		                            .flex()
+		                            .items_center()
+		                            .gap_1()
+		                            .child(
+		                                zed::Button::new("conflict_use_ours", "Use ours")
+		                                    .style(zed::ButtonStyle::Transparent)
+		                                    .disabled(file.ours.is_none())
+		                                    .on_click(theme, cx, set_output_ours),
+		                            )
+		                            .child(
+		                                zed::Button::new("conflict_use_theirs", "Use theirs")
+		                                    .style(zed::ButtonStyle::Transparent)
+		                                    .disabled(file.theirs.is_none())
+		                                    .on_click(theme, cx, set_output_theirs),
+		                            )
+		                            .child(
+		                                zed::Button::new("conflict_reset_markers", "Reset from markers")
+		                                    .style(zed::ButtonStyle::Transparent)
+		                                    .disabled(!has_current)
+		                                    .on_click(theme, cx, reset_from_markers),
+		                            );
+
+		                        let diff_header = div()
+		                            .flex()
+		                            .items_center()
+		                            .justify_between()
+		                            .child(
+		                                div()
+		                                    .text_xs()
+		                                    .text_color(theme.colors.text_muted)
+		                                    .child("Diff (ours ↔ theirs)"),
+		                            )
+		                            .child(div().flex().items_center().gap_2().child(mode_controls).child(selection_controls));
+
+		                        let diff_title_row = div()
+		                            .h(px(22.0))
+		                            .flex()
+		                            .items_center()
+		                            .when(mode == ConflictDiffMode::Split, |d| {
+		                                d.child(
+		                                    div()
+		                                        .flex_1()
+		                                        .px_2()
+		                                        .text_xs()
+		                                        .text_color(theme.colors.text_muted)
+		                                        .child("Ours (index :2)"),
+		                                )
+		                                .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+		                                .child(
+		                                    div()
+		                                        .flex_1()
+		                                        .px_2()
+		                                        .text_xs()
+		                                        .text_color(theme.colors.text_muted)
+		                                        .child("Theirs (index :3)"),
+		                                )
+		                            })
+		                            .when(mode == ConflictDiffMode::Inline, |d| d);
+
+		                        let diff_body: AnyElement = if diff_len == 0 {
+		                            zed::empty_state(theme, "Diff", "Ours/Theirs content not available.")
+		                                .into_any_element()
+		                        } else {
+		                            let list = uniform_list(
+		                                "conflict_resolver_diff_list",
+		                                diff_len,
+		                                cx.processor(Self::render_conflict_resolver_diff_rows),
+		                            )
+		                            .h_full()
+		                            .min_h(px(0.0))
+		                            .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+		                            let scroll_handle = self
+		                                .conflict_resolver_diff_scroll
+		                                .0
+		                                .borrow()
+		                                .base_handle
+		                                .clone();
+
+		                            div()
+		                                .id("conflict_resolver_diff_scroll")
+		                                .relative()
+		                                .h_full()
+		                                .min_h(px(0.0))
+		                                .child(list)
+		                                .child(
+		                                    zed::Scrollbar::new(
+		                                        "conflict_resolver_diff_scrollbar",
+		                                        scroll_handle,
+		                                    )
+		                                    .render(theme),
+		                                )
+		                                .into_any_element()
+		                        };
+
+		                        let output_header = div()
+		                            .flex()
+		                            .items_center()
+		                            .justify_between()
+		                            .child(
+		                                div()
+		                                    .text_xs()
+		                                    .text_color(theme.colors.text_muted)
+		                                    .child("Resolved output (editable)"),
+		                            )
+		                            .child(start_controls);
+
+		                        div()
+		                            .flex()
+		                            .flex_col()
+		                            .max_w(max_w)
+		                            .max_h(max_h)
+		                            .min_w(px(720.0))
+		                            .min_h(px(520.0))
+		                            .gap_2()
+		                            .child(
+		                                div()
+		                                    .flex()
+		                                    .items_center()
+		                                    .justify_between()
+		                                    .child(
+		                                        div()
+		                                            .text_sm()
+		                                            .font_weight(FontWeight::BOLD)
+		                                            .child(title.clone()),
+		                                    )
+		                                    .child(
+		                                        div()
+		                                            .flex()
+		                                            .items_center()
+		                                            .gap_1()
+			                                            .child(
+			                                                zed::Button::new("conflict_save_close", "Save & close")
+			                                                    .style(zed::ButtonStyle::Outlined)
+			                                                    .on_click(theme, cx, save_close),
+			                                            )
+			                                            .child(
+			                                                zed::Button::new("conflict_save_stage_close", "Save & stage & close")
+			                                                    .style(zed::ButtonStyle::Filled)
+			                                                    .on_click(theme, cx, save_stage_close),
+			                                            ),
+		                                    ),
+		                            )
+		                            .child(div().border_t_1().border_color(theme.colors.border))
+		                            .child(diff_header)
+		                            .child(
+		                                div()
+		                                    .h(px(240.0))
+		                                    .min_h(px(0.0))
+		                                    .border_1()
+		                                    .border_color(theme.colors.border)
+		                                    .rounded(px(theme.radii.row))
+		                                    .overflow_hidden()
+		                                    .flex()
+		                                    .flex_col()
+		                                    .child(diff_title_row)
+		                                    .child(div().border_t_1().border_color(theme.colors.border))
+		                                    .child(diff_body),
+		                            )
+		                            .child(div().border_t_1().border_color(theme.colors.border))
+		                            .child(output_header)
+		                            .child(
+		                                div()
+		                                    .flex()
+		                                    .flex_col()
+		                                    .flex_1()
+		                                    .min_h(px(0.0))
+		                                    .border_1()
+		                                    .border_color(theme.colors.border)
+		                                    .rounded(px(theme.radii.row))
+		                                    .overflow_hidden()
+		                                    .child(
+		                                        div()
+		                                            .id("conflict_resolver_output_scroll")
+		                                            .font_family("monospace")
+		                                            .h_full()
+		                                            .min_h(px(0.0))
+		                                            .overflow_y_scroll()
+		                                            .child(self.conflict_resolver_input.clone()),
+		                                    ),
+		                            )
+		                    }
+		                    }
+		                } else {
+		                    zed::empty_state(theme, "Conflicts", "Repository not found.")
+		                }
+		            } */
+	            PopoverKind::BranchPicker => {
+	                let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
+	
+	                if let Some(repo) = self.active_repo() {
                     match &repo.branches {
                         Loadable::Ready(branches) => {
                             if let Some(search) = self.branch_picker_search_input.clone() {
@@ -3506,6 +3846,262 @@ mod tests {
                 _ => false,
             });
             assert!(!has_other, "tag menu should only show tags on the clicked commit");
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitGpuiView::new(store, events, None, window, cx)
+        });
+
+        let repo_id = RepoId(3);
+        let workdir =
+            std::env::temp_dir().join(format!("gitgpui_ui_test_{}_status_menu", std::process::id()));
+
+        let a = std::path::PathBuf::from("a.txt");
+        let b = std::path::PathBuf::from("b.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![
+                        gitgpui_core::domain::FileStatus {
+                            path: a.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Modified,
+                        },
+                        gitgpui_core::domain::FileStatus {
+                            path: b.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Modified,
+                        },
+                    ],
+                });
+
+                this.state.active_repo = Some(repo_id);
+                this.state.repos = vec![repo];
+                this.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![a.clone(), b.clone()],
+                        unstaged_anchor: Some(a.clone()),
+                        staged: vec![],
+                        staged_anchor: None,
+                    },
+                );
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let this = view.read(app);
+            let model = this
+                .context_menu_model(&PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area: DiffArea::Unstaged,
+                    path: a.clone(),
+                })
+                .expect("expected status file context menu model");
+
+            let stage_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Stage (2)" =>
+                {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+
+            match stage_action {
+                Some(ContextMenuAction::StagePaths { repo_id: rid, paths }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(paths.len(), 2);
+                    assert!(paths.contains(&a));
+                    assert!(paths.contains(&b));
+                }
+                _ => panic!("expected Stage (2) to stage selected paths"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitGpuiView::new(store, events, None, window, cx)
+        });
+
+        let repo_id = RepoId(4);
+        let workdir = std::env::temp_dir()
+            .join(format!("gitgpui_ui_test_{}_status_menu_staged", std::process::id()));
+
+        let a = std::path::PathBuf::from("a.txt");
+        let b = std::path::PathBuf::from("b.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
+                    staged: vec![
+                        gitgpui_core::domain::FileStatus {
+                            path: a.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Modified,
+                        },
+                        gitgpui_core::domain::FileStatus {
+                            path: b.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Modified,
+                        },
+                    ],
+                    unstaged: vec![],
+                });
+
+                this.state.active_repo = Some(repo_id);
+                this.state.repos = vec![repo];
+                this.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![],
+                        unstaged_anchor: None,
+                        staged: vec![a.clone(), b.clone()],
+                        staged_anchor: Some(a.clone()),
+                    },
+                );
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let this = view.read(app);
+            let model = this
+                .context_menu_model(&PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area: DiffArea::Staged,
+                    path: a.clone(),
+                })
+                .expect("expected status file context menu model");
+
+            let unstage_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Unstage (2)" =>
+                {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+
+            match unstage_action {
+                Some(ContextMenuAction::UnstagePaths { repo_id: rid, paths }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(paths.len(), 2);
+                    assert!(paths.contains(&a));
+                    assert!(paths.contains(&b));
+                }
+                _ => panic!("expected Unstage (2) to unstage selected paths"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitGpuiView::new(store, events, None, window, cx)
+        });
+
+        let repo_id = RepoId(5);
+        let workdir = std::env::temp_dir()
+            .join(format!("gitgpui_ui_test_{}_status_menu_conflict", std::process::id()));
+        let path = std::path::PathBuf::from("conflict.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitgpui_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitgpui_core::domain::FileStatusKind::Conflicted,
+                    }],
+                });
+                this.state.active_repo = Some(repo_id);
+                this.state.repos = vec![repo];
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let this = view.read(app);
+            let model = this
+                .context_menu_model(&PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area: DiffArea::Unstaged,
+                    path: path.clone(),
+                })
+                .expect("expected status file context menu model");
+
+            let has_ours = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve using ours" =>
+                {
+                    matches!(
+                        action,
+                        ContextMenuAction::CheckoutConflictSide {
+                            repo_id: rid,
+                            paths,
+                            side: gitgpui_core::services::ConflictSide::Ours
+                        } if *rid == repo_id && paths == &vec![path.clone()]
+                    )
+                }
+                _ => false,
+            });
+            let has_theirs = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve using theirs" =>
+                {
+                    matches!(
+                        action,
+                        ContextMenuAction::CheckoutConflictSide {
+                            repo_id: rid,
+                            paths,
+                            side: gitgpui_core::services::ConflictSide::Theirs
+                        } if *rid == repo_id && paths == &vec![path.clone()]
+                    )
+                }
+                _ => false,
+            });
+            let has_manual = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve manually…" =>
+                {
+                    matches!(
+                        action,
+                        ContextMenuAction::SelectDiff {
+                            repo_id: rid,
+                            target: DiffTarget::WorkingTree { path: p, area: DiffArea::Unstaged }
+                        } if *rid == repo_id && p == &path
+                    )
+                }
+                _ => false,
+            });
+
+            assert!(has_ours);
+            assert!(has_theirs);
+            assert!(has_manual);
         });
     }
 }

@@ -29,6 +29,7 @@ pub enum RepoCommandKind {
         kind: RemoteUrlKind,
     },
     CheckoutConflict { path: PathBuf, side: ConflictSide },
+    SaveWorktreeFile { path: PathBuf, stage: bool },
     ExportPatch { commit_id: CommitId, dest: PathBuf },
     ApplyPatch { patch: PathBuf },
     AddWorktree {
@@ -81,6 +82,10 @@ pub enum Msg {
     },
     LoadStashes {
         repo_id: RepoId,
+    },
+    LoadConflictFile {
+        repo_id: RepoId,
+        path: PathBuf,
     },
     LoadReflog {
         repo_id: RepoId,
@@ -208,6 +213,12 @@ pub enum Msg {
     DiscardWorktreeChangesPaths {
         repo_id: RepoId,
         paths: Vec<PathBuf>,
+    },
+    SaveWorktreeFile {
+        repo_id: RepoId,
+        path: PathBuf,
+        contents: String,
+        stage: bool,
     },
     Commit {
         repo_id: RepoId,
@@ -373,6 +384,11 @@ pub enum Msg {
         rev: Option<String>,
         result: Result<Vec<gitgpui_core::services::BlameLine>, Error>,
     },
+    ConflictFileLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<Option<crate::model::ConflictFile>, Error>,
+    },
     WorktreesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Worktree>, Error>,
@@ -478,6 +494,11 @@ impl std::fmt::Debug for Msg {
             Msg::LoadStashes { repo_id } => f
                 .debug_struct("LoadStashes")
                 .field("repo_id", repo_id)
+                .finish(),
+            Msg::LoadConflictFile { repo_id, path } => f
+                .debug_struct("LoadConflictFile")
+                .field("repo_id", repo_id)
+                .field("path", path)
                 .finish(),
             Msg::LoadReflog { repo_id } => f
                 .debug_struct("LoadReflog")
@@ -652,6 +673,18 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("DiscardWorktreeChangesPaths")
                 .field("repo_id", repo_id)
                 .field("paths_len", &paths.len())
+                .finish(),
+            Msg::SaveWorktreeFile {
+                repo_id,
+                path,
+                contents,
+                stage,
+            } => f
+                .debug_struct("SaveWorktreeFile")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("contents_len", &contents.len())
+                .field("stage", stage)
                 .finish(),
             Msg::Commit { repo_id, message } => f
                 .debug_struct("Commit")
@@ -896,6 +929,16 @@ impl std::fmt::Debug for Msg {
                 .field("rev", rev)
                 .field("result", result)
                 .finish(),
+            Msg::ConflictFileLoaded {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("ConflictFileLoaded")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
             Msg::WorktreesLoaded { repo_id, result } => f
                 .debug_struct("WorktreesLoaded")
                 .field("repo_id", repo_id)
@@ -1050,6 +1093,16 @@ pub enum Effect {
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
+    },
+    LoadConflictFile {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    SaveWorktreeFile {
+        repo_id: RepoId,
+        path: PathBuf,
+        contents: String,
+        stage: bool,
     },
 
     CheckoutBranch {

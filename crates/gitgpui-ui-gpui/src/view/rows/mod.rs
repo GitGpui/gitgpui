@@ -31,6 +31,7 @@ mod diff;
 mod diff_canvas;
 mod diff_text;
 mod canvas;
+mod conflict_resolver;
 mod history;
 mod history_canvas;
 mod history_graph_paint;

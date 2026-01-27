@@ -1,6 +1,125 @@
 use super::*;
 
+const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
+
+fn status_selection_slices_mut(
+    selection: &mut StatusMultiSelection,
+    area: DiffArea,
+) -> (
+    &mut Vec<std::path::PathBuf>,
+    &mut Option<std::path::PathBuf>,
+    &mut Vec<std::path::PathBuf>,
+    &mut Option<std::path::PathBuf>,
+) {
+    match area {
+        DiffArea::Unstaged => (
+            &mut selection.unstaged,
+            &mut selection.unstaged_anchor,
+            &mut selection.staged,
+            &mut selection.staged_anchor,
+        ),
+        DiffArea::Staged => (
+            &mut selection.staged,
+            &mut selection.staged_anchor,
+            &mut selection.unstaged,
+            &mut selection.unstaged_anchor,
+        ),
+    }
+}
+
+fn apply_status_multi_selection_click(
+    selection: &mut StatusMultiSelection,
+    area: DiffArea,
+    clicked_path: std::path::PathBuf,
+    modifiers: gpui::Modifiers,
+    entries: Option<&[std::path::PathBuf]>,
+) {
+    let (selected, anchor, other_selected, other_anchor) = status_selection_slices_mut(selection, area);
+    other_selected.clear();
+    *other_anchor = None;
+
+    if modifiers.shift {
+        let Some(entries) = entries else {
+            *selected = vec![clicked_path.clone()];
+            *anchor = Some(clicked_path);
+            return;
+        };
+
+        let Some(clicked_ix) = entries.iter().position(|p| p == &clicked_path) else {
+            *selected = vec![clicked_path.clone()];
+            *anchor = Some(clicked_path);
+            return;
+        };
+
+        let anchor_path = anchor.clone().unwrap_or_else(|| clicked_path.clone());
+        let anchor_ix = entries
+            .iter()
+            .position(|p| p == &anchor_path)
+            .unwrap_or(clicked_ix);
+        let (a, b) = if anchor_ix <= clicked_ix {
+            (anchor_ix, clicked_ix)
+        } else {
+            (clicked_ix, anchor_ix)
+        };
+        *selected = entries[a..=b].to_vec();
+        *anchor = Some(anchor_path);
+        return;
+    }
+
+    if modifiers.secondary() || modifiers.control || modifiers.platform {
+        if let Some(ix) = selected.iter().position(|p| p == &clicked_path) {
+            selected.remove(ix);
+            if selected.is_empty() {
+                *anchor = None;
+            }
+        } else {
+            selected.push(clicked_path.clone());
+            *anchor = Some(clicked_path);
+        }
+        return;
+    }
+
+    *selected = vec![clicked_path.clone()];
+    *anchor = Some(clicked_path);
+}
+
 impl GitGpuiView {
+    fn clear_status_multi_selection(&mut self, repo_id: RepoId) {
+        self.status_multi_selection.remove(&repo_id);
+    }
+
+    fn status_multi_selection_for_repo_mut(&mut self, repo_id: RepoId) -> &mut StatusMultiSelection {
+        self.status_multi_selection.entry(repo_id).or_default()
+    }
+
+    fn status_selected_paths_for_area(&self, repo_id: RepoId, area: DiffArea) -> &[std::path::PathBuf] {
+        let Some(sel) = self.status_multi_selection.get(&repo_id) else {
+            return &[];
+        };
+        match area {
+            DiffArea::Unstaged => sel.unstaged.as_slice(),
+            DiffArea::Staged => sel.staged.as_slice(),
+        }
+    }
+
+    fn status_selection_contains(&self, repo_id: RepoId, area: DiffArea, path: &std::path::PathBuf) -> bool {
+        self.status_selected_paths_for_area(repo_id, area)
+            .iter()
+            .any(|p| p == path)
+    }
+
+    fn status_selection_apply_click(
+        &mut self,
+        repo_id: RepoId,
+        area: DiffArea,
+        clicked_path: std::path::PathBuf,
+        modifiers: gpui::Modifiers,
+        entries: Option<&[std::path::PathBuf]>,
+    ) {
+        let sel = self.status_multi_selection_for_repo_mut(repo_id);
+        apply_status_multi_selection_click(sel, area, clicked_path, modifiers, entries);
+    }
+
     pub(in super::super) fn render_unstaged_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -14,17 +133,26 @@ impl GitGpuiView {
             return Vec::new();
         };
         let selected = repo.diff_target.as_ref();
+        let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
+            .status_selected_paths_for_area(repo.id, DiffArea::Unstaged)
+            .iter()
+            .collect();
+        let multi_select_active = !selected_set.is_empty();
         let theme = this.theme;
         range
             .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let path_display = this.cached_path_display(&entry.path);
-                let is_selected = selected.is_some_and(|t| match t {
-                    DiffTarget::WorkingTree { path, area } => {
-                        *area == DiffArea::Unstaged && path == &entry.path
-                    }
-                    _ => false,
-                });
+                let is_selected = if multi_select_active {
+                    selected_set.contains(&entry.path)
+                } else {
+                    selected.is_some_and(|t| match t {
+                        DiffTarget::WorkingTree { path, area } => {
+                            *area == DiffArea::Unstaged && path == &entry.path
+                        }
+                        _ => false,
+                    })
+                };
                 status_row(
                     theme,
                     ix,
@@ -52,17 +180,26 @@ impl GitGpuiView {
             return Vec::new();
         };
         let selected = repo.diff_target.as_ref();
+        let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
+            .status_selected_paths_for_area(repo.id, DiffArea::Staged)
+            .iter()
+            .collect();
+        let multi_select_active = !selected_set.is_empty();
         let theme = this.theme;
         range
             .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let path_display = this.cached_path_display(&entry.path);
-                let is_selected = selected.is_some_and(|t| match t {
-                    DiffTarget::WorkingTree { path, area } => {
-                        *area == DiffArea::Staged && path == &entry.path
-                    }
-                    _ => false,
-                });
+                let is_selected = if multi_select_active {
+                    selected_set.contains(&entry.path)
+                } else {
+                    selected.is_some_and(|t| match t {
+                        DiffTarget::WorkingTree { path, area } => {
+                            *area == DiffArea::Staged && path == &entry.path
+                        }
+                        _ => false,
+                    })
+                };
                 status_row(
                     theme,
                     ix,
@@ -104,9 +241,14 @@ fn status_row(
     let path_for_stage = path.clone();
     let path_for_row = path.clone();
     let path_for_menu = path.clone();
-    let stage_label = match area {
-        DiffArea::Unstaged => "Stage",
-        DiffArea::Staged => "Unstage",
+    let is_conflicted = entry.kind == FileStatusKind::Conflicted;
+    let stage_label = if is_conflicted {
+        "Resolve…"
+    } else {
+        match area {
+            DiffArea::Unstaged => "Stage",
+            DiffArea::Staged => "Unstage",
+        }
     };
     let row_tooltip = path_display.clone();
     let stage_tooltip: SharedString = format!("{stage_label} file").into();
@@ -120,55 +262,42 @@ fn status_row(
 
     let stage_button = zed::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(zed::ButtonStyle::Outlined)
-        .on_click(theme, cx, move |this, _e, window, cx| {
+        .on_click(theme, cx, move |this, e, window, cx| {
             cx.stop_propagation();
             window.focus(&this.diff_panel_focus_handle);
 
-            let next_path_in_area = (|| {
-                let repo = this.active_repo()?;
-                let Loadable::Ready(status) = &repo.status else {
-                    return None;
-                };
-                let entries = match area {
-                    DiffArea::Unstaged => status.unstaged.as_slice(),
-                    DiffArea::Staged => status.staged.as_slice(),
-                };
-                let Some(current_ix) = entries.iter().position(|e| e.path == path_for_stage) else {
-                    return None;
-                };
-                if entries.len() <= 1 {
-                    return None;
-                }
-                let next_ix = if current_ix + 1 < entries.len() {
-                    current_ix + 1
-                } else {
-                    current_ix.saturating_sub(1)
-                };
-                entries.get(next_ix).map(|e| e.path.clone())
-            })();
+            if is_conflicted {
+                this.open_popover_at(
+                    PopoverKind::StatusFileMenu {
+                        repo_id,
+                        area,
+                        path: path_for_stage.clone(),
+                    },
+                    e.position(),
+                    window,
+                    cx,
+                );
+                return;
+            }
+
+            let paths = if this.status_selection_contains(repo_id, area, &path_for_stage)
+                && this.status_selected_paths_for_area(repo_id, area).len() > 1
+            {
+                this.status_selected_paths_for_area(repo_id, area)
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                vec![path_for_stage.clone()]
+            };
 
             match area {
-                DiffArea::Unstaged => this.store.dispatch(Msg::StagePath {
-                    repo_id,
-                    path: path_for_stage.clone(),
-                }),
-                DiffArea::Staged => this.store.dispatch(Msg::UnstagePath {
-                    repo_id,
-                    path: path_for_stage.clone(),
-                }),
+                DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths { repo_id, paths }),
+                DiffArea::Staged => this.store.dispatch(Msg::UnstagePaths { repo_id, paths }),
             }
 
-            if let Some(next_path) = next_path_in_area {
-                this.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: next_path,
-                        area,
-                    },
-                });
-            } else {
-                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            }
+            this.clear_status_multi_selection(repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
 
             this.rebuild_diff_cache();
             cx.notify();
@@ -195,7 +324,7 @@ fn status_row(
         .items_center()
         .gap_2()
         .px_2()
-        .py_1()
+        .h(px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .rounded(px(theme.radii.row))
         .when(selected, |s| s.bg(theme.colors.hover))
@@ -230,34 +359,25 @@ fn status_row(
         )
         .child(
             div()
+                .w(px(16.0))
                 .flex()
                 .items_center()
-                .gap_2()
-                .flex_1()
-                .min_w(px(0.0))
-                .pr(px(92.0))
-                .child(
-                    div()
-                        .w(px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(color)
-                                .child(icon),
-                        ),
-                )
+                .justify_center()
                 .child(
                     div()
                         .text_sm()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .line_clamp(1)
-                        .child(path_display_for_label.clone()),
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(color)
+                        .child(icon),
                 ),
+        )
+        .child(
+            div()
+                .text_sm()
+                .flex_1()
+                .min_w(px(0.0))
+                .line_clamp(1)
+                .child(path_display_for_label.clone()),
         )
         .child(
             div()
@@ -273,6 +393,27 @@ fn status_row(
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
             window.focus(&this.diff_panel_focus_handle);
+            let modifiers = _e.modifiers();
+            let entries = this
+                .active_repo()
+                .filter(|r| r.id == repo_id)
+                .and_then(|repo| match &repo.status {
+                    Loadable::Ready(status) => {
+                        let src = match area {
+                            DiffArea::Unstaged => status.unstaged.as_slice(),
+                            DiffArea::Staged => status.staged.as_slice(),
+                        };
+                        Some(src.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                    }
+                    _ => None,
+                });
+            this.status_selection_apply_click(
+                repo_id,
+                area,
+                path_for_row.clone(),
+                modifiers,
+                entries.as_deref(),
+            );
             this.store.dispatch(Msg::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {
@@ -284,4 +425,80 @@ fn status_row(
             cx.notify();
         }))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pb(s: &str) -> std::path::PathBuf {
+        std::path::PathBuf::from(s)
+    }
+
+    #[test]
+    fn status_selection_ctrl_click_toggles() {
+        let mut sel = StatusMultiSelection::default();
+        apply_status_multi_selection_click(
+            &mut sel,
+            DiffArea::Unstaged,
+            pb("a"),
+            gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            None,
+        );
+        assert_eq!(sel.unstaged, vec![pb("a")]);
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            DiffArea::Unstaged,
+            pb("b"),
+            gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            None,
+        );
+        assert_eq!(sel.unstaged, vec![pb("a"), pb("b")]);
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            DiffArea::Unstaged,
+            pb("a"),
+            gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            None,
+        );
+        assert_eq!(sel.unstaged, vec![pb("b")]);
+    }
+
+    #[test]
+    fn status_selection_shift_click_selects_range() {
+        let mut sel = StatusMultiSelection::default();
+        let entries = vec![pb("a"), pb("b"), pb("c"), pb("d")];
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            DiffArea::Unstaged,
+            pb("b"),
+            gpui::Modifiers::default(),
+            Some(&entries),
+        );
+        assert_eq!(sel.unstaged, vec![pb("b")]);
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            DiffArea::Unstaged,
+            pb("d"),
+            gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            Some(&entries),
+        );
+        assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
+    }
 }

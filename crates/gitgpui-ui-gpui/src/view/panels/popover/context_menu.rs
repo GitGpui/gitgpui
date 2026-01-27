@@ -236,21 +236,52 @@ impl GitGpuiView {
                 area,
                 path,
             } => {
+                let is_conflicted = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == *repo_id)
+                    .and_then(|r| match &r.status {
+                        Loadable::Ready(status) => {
+                            status
+                                .unstaged
+                                .iter()
+                                .chain(status.staged.iter())
+                                .find(|s| &s.path == path)
+                                .map(|s| s.kind == gitgpui_core::domain::FileStatusKind::Conflicted)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+
+                let selection = self
+                    .status_multi_selection
+                    .get(repo_id)
+                    .map(|s| match area {
+                        DiffArea::Unstaged => s.unstaged.as_slice(),
+                        DiffArea::Staged => s.staged.as_slice(),
+                    })
+                    .unwrap_or(&[]);
+                let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);
+                let selected_paths = if use_selection {
+                    selection.to_vec()
+                } else {
+                    vec![path.clone()]
+                };
+
                 let can_discard_worktree_changes = self
                     .state
                     .repos
                     .iter()
                     .find(|r| r.id == *repo_id)
                     .and_then(|r| match &r.status {
-                        Loadable::Ready(status) => Some(
-                            status
-                                .unstaged
-                                .iter()
-                                .any(|s| {
-                                    s.path == path.as_path()
-                                        && s.kind != gitgpui_core::domain::FileStatusKind::Untracked
-                                }),
-                        ),
+                        Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
+                            status.unstaged.iter().any(|s| {
+                                s.path == p.as_path()
+                                    && s.kind != gitgpui_core::domain::FileStatusKind::Untracked
+                                    && s.kind != gitgpui_core::domain::FileStatusKind::Conflicted
+                            })
+                        })),
                         _ => None,
                     })
                     .unwrap_or(false);
@@ -303,37 +334,132 @@ impl GitGpuiView {
                     },
                 });
 
-                match area {
-                    DiffArea::Unstaged => items.push(ContextMenuItem::Entry {
-                        label: "Stage".into(),
-                        icon: Some("+".into()),
-                        shortcut: Some("S".into()),
-                        disabled: false,
-                        action: ContextMenuAction::StagePath {
-                            repo_id: *repo_id,
-                            path: path.clone(),
+                if is_conflicted {
+                    items.push(ContextMenuItem::Separator);
+                    let n = selected_paths.len();
+                    items.push(ContextMenuItem::Entry {
+                        label: if use_selection {
+                            format!("Resolve selected using ours ({n})").into()
+                        } else {
+                            "Resolve using ours".into()
                         },
-                    }),
-                    DiffArea::Staged => items.push(ContextMenuItem::Entry {
-                        label: "Unstage".into(),
-                        icon: Some("−".into()),
-                        shortcut: Some("U".into()),
+                        icon: Some("⇤".into()),
+                        shortcut: Some("O".into()),
                         disabled: false,
-                        action: ContextMenuAction::UnstagePath {
+                        action: ContextMenuAction::CheckoutConflictSide {
                             repo_id: *repo_id,
-                            path: path.clone(),
+                            paths: selected_paths.clone(),
+                            side: gitgpui_core::services::ConflictSide::Ours,
                         },
-                    }),
-                };
+                    });
+                    items.push(ContextMenuItem::Entry {
+                        label: if use_selection {
+                            format!("Resolve selected using theirs ({n})").into()
+                        } else {
+                            "Resolve using theirs".into()
+                        },
+                        icon: Some("⇥".into()),
+                        shortcut: Some("T".into()),
+                        disabled: false,
+                        action: ContextMenuAction::CheckoutConflictSide {
+                            repo_id: *repo_id,
+                            paths: selected_paths.clone(),
+                            side: gitgpui_core::services::ConflictSide::Theirs,
+                        },
+                    });
+
+                    let can_manual = !use_selection || selected_paths.len() == 1;
+                    let manual_path = if use_selection {
+                        selected_paths
+                            .get(0)
+                            .cloned()
+                            .unwrap_or_else(|| path.clone())
+                    } else {
+                        path.clone()
+                    };
+                    items.push(ContextMenuItem::Entry {
+                        label: if can_manual {
+                            "Resolve manually…".into()
+                        } else {
+                            "Resolve manually… (select 1 file)".into()
+                        },
+                        icon: Some("✎".into()),
+                        shortcut: Some("M".into()),
+                        disabled: !can_manual,
+                        action: ContextMenuAction::SelectDiff {
+                            repo_id: *repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: manual_path,
+                                area: DiffArea::Unstaged,
+                            },
+                        },
+                    });
+                } else {
+                    match area {
+                        DiffArea::Unstaged => items.push(ContextMenuItem::Entry {
+                            label: if use_selection {
+                                format!("Stage ({})", selected_paths.len()).into()
+                            } else {
+                                "Stage".into()
+                            },
+                            icon: Some("+".into()),
+                            shortcut: Some("S".into()),
+                            disabled: false,
+                            action: if use_selection {
+                                ContextMenuAction::StagePaths {
+                                    repo_id: *repo_id,
+                                    paths: selected_paths.clone(),
+                                }
+                            } else {
+                                ContextMenuAction::StagePath {
+                                    repo_id: *repo_id,
+                                    path: path.clone(),
+                                }
+                            },
+                        }),
+                        DiffArea::Staged => items.push(ContextMenuItem::Entry {
+                            label: if use_selection {
+                                format!("Unstage ({})", selected_paths.len()).into()
+                            } else {
+                                "Unstage".into()
+                            },
+                            icon: Some("−".into()),
+                            shortcut: Some("U".into()),
+                            disabled: false,
+                            action: if use_selection {
+                                ContextMenuAction::UnstagePaths {
+                                    repo_id: *repo_id,
+                                    paths: selected_paths.clone(),
+                                }
+                            } else {
+                                ContextMenuAction::UnstagePath {
+                                    repo_id: *repo_id,
+                                    path: path.clone(),
+                                }
+                            },
+                        }),
+                    };
+                }
 
                 items.push(ContextMenuItem::Entry {
-                    label: "Discard changes".into(),
+                    label: if use_selection {
+                        format!("Discard ({})", selected_paths.len()).into()
+                    } else {
+                        "Discard changes".into()
+                    },
                     icon: Some("↺".into()),
                     shortcut: Some("D".into()),
                     disabled: !can_discard_worktree_changes,
-                    action: ContextMenuAction::DiscardWorktreeChangesPath {
-                        repo_id: *repo_id,
-                        path: path.clone(),
+                    action: if use_selection {
+                        ContextMenuAction::DiscardWorktreeChangesPaths {
+                            repo_id: *repo_id,
+                            paths: selected_paths.clone(),
+                        }
+                    } else {
+                        ContextMenuAction::DiscardWorktreeChangesPath {
+                            repo_id: *repo_id,
+                            path: path.clone(),
+                        }
                     },
                 });
 
@@ -680,6 +806,12 @@ impl GitGpuiView {
                 self.store.dispatch(Msg::StagePath { repo_id, path });
                 self.rebuild_diff_cache();
             }
+            ContextMenuAction::StagePaths { repo_id, paths } => {
+                self.status_multi_selection.remove(&repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store.dispatch(Msg::StagePaths { repo_id, paths });
+                self.rebuild_diff_cache();
+            }
             ContextMenuAction::UnstagePath { repo_id, path } => {
                 self.store.dispatch(Msg::SelectDiff {
                     repo_id,
@@ -689,6 +821,12 @@ impl GitGpuiView {
                     },
                 });
                 self.store.dispatch(Msg::UnstagePath { repo_id, path });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::UnstagePaths { repo_id, paths } => {
+                self.status_multi_selection.remove(&repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
@@ -701,6 +839,26 @@ impl GitGpuiView {
                 });
                 self.store
                     .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::DiscardWorktreeChangesPaths { repo_id, paths } => {
+                self.status_multi_selection.remove(&repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                self.store
+                    .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+                self.rebuild_diff_cache();
+            }
+            ContextMenuAction::CheckoutConflictSide {
+                repo_id,
+                paths,
+                side,
+            } => {
+                self.status_multi_selection.remove(&repo_id);
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                for path in paths {
+                    self.store
+                        .dispatch(Msg::CheckoutConflictSide { repo_id, path, side });
+                }
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::FetchAll { repo_id } => {

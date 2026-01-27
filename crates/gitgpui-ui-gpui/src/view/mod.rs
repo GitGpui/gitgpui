@@ -27,6 +27,7 @@ use std::time::Duration;
 
 mod chrome;
 mod branch_sidebar;
+mod conflict_resolver;
 mod date_time;
 mod diff_text_model;
 mod diff_text_selection;
@@ -39,6 +40,7 @@ pub(crate) mod rows;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
 use date_time::{DateTimeFormat, format_datetime_utc};
+use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
 use word_diff::word_diff_ranges;
 
 use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
@@ -205,6 +207,14 @@ struct CommitDetailsDelayState {
     show_loading: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct StatusMultiSelection {
+    unstaged: Vec<std::path::PathBuf>,
+    unstaged_anchor: Option<std::path::PathBuf>,
+    staged: Vec<std::path::PathBuf>,
+    staged_anchor: Option<std::path::PathBuf>,
+}
+
 #[derive(Clone, Debug)]
 struct HistoryCache {
     repo_id: RepoId,
@@ -217,6 +227,37 @@ struct HistoryCache {
 struct HistoryCacheRequest {
     repo_id: RepoId,
     log_fingerprint: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ConflictResolverUiState {
+    repo_id: Option<RepoId>,
+    path: Option<std::path::PathBuf>,
+    source_hash: Option<u64>,
+    current: Option<String>,
+    diff_rows: Vec<FileDiffRow>,
+    inline_rows: Vec<ConflictInlineRow>,
+    diff_mode: ConflictDiffMode,
+    nav_anchor: Option<usize>,
+    split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
+    inline_selected: std::collections::BTreeSet<usize>,
+}
+
+impl Default for ConflictResolverUiState {
+    fn default() -> Self {
+        Self {
+            repo_id: None,
+            path: None,
+            source_hash: None,
+            current: None,
+            diff_rows: Vec::new(),
+            inline_rows: Vec::new(),
+            diff_mode: ConflictDiffMode::Split,
+            nav_anchor: None,
+            split_selected: std::collections::BTreeSet::new(),
+            inline_selected: std::collections::BTreeSet::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -469,6 +510,12 @@ pub struct GitGpuiView {
     worktree_ref_input: Entity<zed::TextInput>,
     submodule_url_input: Entity<zed::TextInput>,
     submodule_path_input: Entity<zed::TextInput>,
+    conflict_resolver_input: Entity<zed::TextInput>,
+    conflict_resolver: ConflictResolverUiState,
+    conflict_resolved_preview_path: Option<std::path::PathBuf>,
+    conflict_resolved_preview_source_hash: Option<u64>,
+    conflict_resolved_preview_lines: Vec<String>,
+    conflict_resolved_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<Point<Pixels>>,
@@ -483,6 +530,8 @@ pub struct GitGpuiView {
     unstaged_scroll: UniformListScrollHandle,
     staged_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
+    conflict_resolver_diff_scroll: UniformListScrollHandle,
+    conflict_resolved_preview_scroll: UniformListScrollHandle,
     commit_files_scroll: UniformListScrollHandle,
     blame_scroll: UniformListScrollHandle,
     commit_scroll: ScrollHandle,
@@ -505,6 +554,8 @@ pub struct GitGpuiView {
     clone_progress_dest: Option<std::path::PathBuf>,
 
     hovered_repo_tab: Option<RepoId>,
+
+    status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
 
     commit_details_message_input: Entity<zed::TextInput>,
     error_banner_input: Entity<zed::TextInput>,
@@ -977,6 +1028,20 @@ impl GitGpuiView {
             )
         });
 
+        let conflict_resolver_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Resolve file contents…".into(),
+                    multiline: true,
+                    read_only: false,
+                    chromeless: true,
+                    soft_wrap: true,
+                },
+                window,
+                cx,
+            )
+        });
+
         let error_banner_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
@@ -1026,6 +1091,12 @@ impl GitGpuiView {
             diff_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
+            conflict_resolver_input,
+            conflict_resolver: ConflictResolverUiState::default(),
+            conflict_resolved_preview_path: None,
+            conflict_resolved_preview_source_hash: None,
+            conflict_resolved_preview_lines: Vec::new(),
+            conflict_resolved_preview_segments_cache: HashMap::new(),
             diff_visible_indices: Vec::new(),
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
@@ -1114,6 +1185,8 @@ impl GitGpuiView {
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
+            conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
             blame_scroll: UniformListScrollHandle::default(),
             commit_scroll: ScrollHandle::new(),
@@ -1138,6 +1211,7 @@ impl GitGpuiView {
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
             hovered_repo_tab: None,
+            status_multi_selection: HashMap::new(),
             commit_details_message_input,
             error_banner_input,
             commit_details_delay: None,
@@ -1192,6 +1266,8 @@ impl GitGpuiView {
         self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_raw_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.conflict_resolver_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_details_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -3215,6 +3291,41 @@ impl GitGpuiView {
 
         self.state = next;
 
+        self.sync_conflict_resolver(cx);
+
+        self.status_multi_selection.retain(|repo_id, selection| {
+            let Some(repo) = self.state.repos.iter().find(|r| r.id == *repo_id) else {
+                return false;
+            };
+            let Loadable::Ready(status) = &repo.status else {
+                return true;
+            };
+
+            let unstaged: std::collections::HashSet<&std::path::PathBuf> =
+                status.unstaged.iter().map(|e| &e.path).collect();
+            selection.unstaged.retain(|p| unstaged.contains(p));
+            if selection
+                .unstaged_anchor
+                .as_ref()
+                .is_some_and(|a| !unstaged.contains(a))
+            {
+                selection.unstaged_anchor = None;
+            }
+
+            let staged: std::collections::HashSet<&std::path::PathBuf> =
+                status.staged.iter().map(|e| &e.path).collect();
+            selection.staged.retain(|p| staged.contains(p));
+            if selection
+                .staged_anchor
+                .as_ref()
+                .is_some_and(|a| !staged.contains(a))
+            {
+                selection.staged_anchor = None;
+            }
+
+            !selection.unstaged.is_empty() || !selection.staged.is_empty()
+        });
+
         if prev_active_repo_id != next_repo_id {
             self.history_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
@@ -3890,12 +4001,81 @@ impl GitGpuiView {
             .collect()
     }
 
+    fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut in_block = false;
+        for (ix, row) in rows.iter().enumerate() {
+            let is_change = row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context;
+            if is_change && !in_block {
+                out.push(ix);
+                in_block = true;
+            } else if !is_change {
+                in_block = false;
+            }
+        }
+        out
+    }
+
+    fn conflict_nav_entries_for_inline(rows: &[ConflictInlineRow]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut in_block = false;
+        for (ix, row) in rows.iter().enumerate() {
+            let is_change = row.kind != gitgpui_core::domain::DiffLineKind::Context;
+            if is_change && !in_block {
+                out.push(ix);
+                in_block = true;
+            } else if !is_change {
+                in_block = false;
+            }
+        }
+        out
+    }
+
+    fn conflict_nav_entries(&self) -> Vec<usize> {
+        match self.conflict_resolver.diff_mode {
+            ConflictDiffMode::Split => Self::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows),
+            ConflictDiffMode::Inline => Self::conflict_nav_entries_for_inline(&self.conflict_resolver.inline_rows),
+        }
+    }
+
     fn diff_nav_prev_target(entries: &[usize], current: usize) -> Option<usize> {
         entries.iter().rev().find(|&&ix| ix < current).copied()
     }
 
     fn diff_nav_next_target(entries: &[usize], current: usize) -> Option<usize> {
         entries.iter().find(|&&ix| ix > current).copied()
+    }
+
+    fn conflict_jump_prev(&mut self) {
+        let entries = self.conflict_nav_entries();
+        if entries.is_empty() {
+            return;
+        }
+
+        let current = self.conflict_resolver.nav_anchor.unwrap_or(0);
+        let Some(target) = Self::diff_nav_prev_target(&entries, current) else {
+            return;
+        };
+
+        self.conflict_resolver_diff_scroll
+            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.conflict_resolver.nav_anchor = Some(target);
+    }
+
+    fn conflict_jump_next(&mut self) {
+        let entries = self.conflict_nav_entries();
+        if entries.is_empty() {
+            return;
+        }
+
+        let current = self.conflict_resolver.nav_anchor.unwrap_or(0);
+        let Some(target) = Self::diff_nav_next_target(&entries, current) else {
+            return;
+        };
+
+        self.conflict_resolver_diff_scroll
+            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.conflict_resolver.nav_anchor = Some(target);
     }
 
     fn diff_jump_prev(&mut self) {
@@ -4063,6 +4243,229 @@ impl GitGpuiView {
     #[cfg(test)]
     pub(crate) fn is_popover_open(&self) -> bool {
         self.popover.is_some()
+    }
+
+    fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            return;
+        };
+
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            return;
+        };
+
+        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            return;
+        };
+        if *area != DiffArea::Unstaged {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            return;
+        }
+
+        let is_conflicted = match &repo.status {
+            Loadable::Ready(status) => status.unstaged.iter().any(|e| {
+                e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+            }),
+            _ => false,
+        };
+        if !is_conflicted {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            return;
+        }
+
+        let path = path.clone();
+
+        let should_load = repo.conflict_file_path.as_ref() != Some(&path)
+            && !matches!(repo.conflict_file, Loadable::Loading);
+        if should_load {
+            self.conflict_resolver = ConflictResolverUiState::default();
+            let theme = self.theme;
+            self.conflict_resolver_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text("", cx);
+            });
+            self.store
+                .dispatch(Msg::LoadConflictFile { repo_id, path });
+            return;
+        }
+
+        let Loadable::Ready(Some(file)) = &repo.conflict_file else {
+            return;
+        };
+        if file.path != path {
+            return;
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        file.ours.hash(&mut hasher);
+        file.theirs.hash(&mut hasher);
+        file.current.hash(&mut hasher);
+        let source_hash = hasher.finish();
+
+        let needs_rebuild = self.conflict_resolver.repo_id != Some(repo_id)
+            || self.conflict_resolver.path.as_ref() != Some(&path)
+            || self.conflict_resolver.source_hash != Some(source_hash);
+
+        if !needs_rebuild {
+            return;
+        }
+
+        let resolved = if let Some(cur) = file.current.as_deref() {
+            let segments = conflict_resolver::parse_conflict_markers(cur);
+            if conflict_resolver::conflict_count(&segments) > 0 {
+                conflict_resolver::generate_resolved_text(&segments)
+            } else {
+                cur.to_string()
+            }
+        } else if let Some(ours) = file.ours.as_deref() {
+            ours.to_string()
+        } else if let Some(theirs) = file.theirs.as_deref() {
+            theirs.to_string()
+        } else {
+            String::new()
+        };
+        let diff_rows = match (file.ours.as_deref(), file.theirs.as_deref()) {
+            (Some(ours), Some(theirs)) => gitgpui_core::file_diff::side_by_side_rows(ours, theirs),
+            _ => Vec::new(),
+        };
+        let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+
+        let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.diff_mode
+        } else {
+            ConflictDiffMode::Split
+        };
+        let nav_anchor = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.nav_anchor
+        } else {
+            None
+        };
+
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(resolved, cx);
+        });
+
+        self.conflict_resolver = ConflictResolverUiState {
+            repo_id: Some(repo_id),
+            path: Some(path),
+            source_hash: Some(source_hash),
+            current: file.current.clone(),
+            diff_rows,
+            inline_rows,
+            diff_mode,
+            nav_anchor,
+            split_selected: std::collections::BTreeSet::new(),
+            inline_selected: std::collections::BTreeSet::new(),
+        };
+    }
+
+    fn conflict_resolver_set_mode(&mut self, mode: ConflictDiffMode, cx: &mut gpui::Context<Self>) {
+        if self.conflict_resolver.diff_mode == mode {
+            return;
+        }
+        self.conflict_resolver.diff_mode = mode;
+        self.conflict_resolver.nav_anchor = None;
+        self.conflict_resolver.split_selected.clear();
+        self.conflict_resolver.inline_selected.clear();
+        cx.notify();
+    }
+
+    fn conflict_resolver_selection_is_empty(&self) -> bool {
+        match self.conflict_resolver.diff_mode {
+            ConflictDiffMode::Split => self.conflict_resolver.split_selected.is_empty(),
+            ConflictDiffMode::Inline => self.conflict_resolver.inline_selected.is_empty(),
+        }
+    }
+
+    fn conflict_resolver_clear_selection(&mut self, cx: &mut gpui::Context<Self>) {
+        self.conflict_resolver.split_selected.clear();
+        self.conflict_resolver.inline_selected.clear();
+        cx.notify();
+    }
+
+    fn conflict_resolver_toggle_split_selected(
+        &mut self,
+        row_ix: usize,
+        side: ConflictPickSide,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.nav_anchor = Some(row_ix);
+        let key = (row_ix, side);
+        if self.conflict_resolver.split_selected.contains(&key) {
+            self.conflict_resolver.split_selected.remove(&key);
+        } else {
+            self.conflict_resolver.split_selected.insert(key);
+        }
+        cx.notify();
+    }
+
+    fn conflict_resolver_toggle_inline_selected(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.nav_anchor = Some(ix);
+        if self.conflict_resolver.inline_selected.contains(&ix) {
+            self.conflict_resolver.inline_selected.remove(&ix);
+        } else {
+            self.conflict_resolver.inline_selected.insert(ix);
+        }
+        cx.notify();
+    }
+
+    fn conflict_resolver_append_selection_to_output(&mut self, cx: &mut gpui::Context<Self>) {
+        let lines = match self.conflict_resolver.diff_mode {
+            ConflictDiffMode::Split => conflict_resolver::collect_split_selection(
+                &self.conflict_resolver.diff_rows,
+                &self.conflict_resolver.split_selected,
+            ),
+            ConflictDiffMode::Inline => conflict_resolver::collect_inline_selection(
+                &self.conflict_resolver.inline_rows,
+                &self.conflict_resolver.inline_selected,
+            ),
+        };
+        if lines.is_empty() {
+            return;
+        }
+
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let next = conflict_resolver::append_lines_to_output(&current, &lines);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    fn conflict_resolver_set_output(&mut self, text: String, cx: &mut gpui::Context<Self>) {
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(text, cx);
+        });
+    }
+
+    fn conflict_resolver_reset_output_from_markers(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(current) = self.conflict_resolver.current.as_deref() else {
+            return;
+        };
+        let segments = conflict_resolver::parse_conflict_markers(current);
+        if conflict_resolver::conflict_count(&segments) == 0 {
+            return;
+        }
+        let resolved = conflict_resolver::generate_resolved_text(&segments);
+        self.conflict_resolver_set_output(resolved, cx);
     }
 }
 
@@ -4782,6 +5185,97 @@ mod tests {
 
         assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 0), Some(10));
         assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 100), Some(30));
+    }
+
+    #[test]
+    fn conflict_nav_entries_group_contiguous_changes() {
+        use gitgpui_core::domain::DiffLineKind as DK;
+        use gitgpui_core::file_diff::FileDiffRowKind as K;
+
+        let split_rows = vec![
+            FileDiffRow {
+                kind: K::Context,
+                old_line: Some(1),
+                new_line: Some(1),
+                old: Some("a".into()),
+                new: Some("a".into()),
+            },
+            FileDiffRow {
+                kind: K::Remove,
+                old_line: Some(2),
+                new_line: None,
+                old: Some("b".into()),
+                new: None,
+            },
+            FileDiffRow {
+                kind: K::Add,
+                old_line: None,
+                new_line: Some(2),
+                old: None,
+                new: Some("b2".into()),
+            },
+            FileDiffRow {
+                kind: K::Context,
+                old_line: Some(3),
+                new_line: Some(3),
+                old: Some("c".into()),
+                new: Some("c".into()),
+            },
+            FileDiffRow {
+                kind: K::Modify,
+                old_line: Some(4),
+                new_line: Some(4),
+                old: Some("d".into()),
+                new: Some("d2".into()),
+            },
+            FileDiffRow {
+                kind: K::Context,
+                old_line: Some(5),
+                new_line: Some(5),
+                old: Some("e".into()),
+                new: Some("e".into()),
+            },
+        ];
+        assert_eq!(GitGpuiView::conflict_nav_entries_for_split(&split_rows), vec![1, 4]);
+
+        let inline_rows = vec![
+            ConflictInlineRow {
+                side: ConflictPickSide::Ours,
+                kind: DK::Context,
+                old_line: Some(1),
+                new_line: Some(1),
+                content: "a".into(),
+            },
+            ConflictInlineRow {
+                side: ConflictPickSide::Ours,
+                kind: DK::Remove,
+                old_line: Some(2),
+                new_line: None,
+                content: "b".into(),
+            },
+            ConflictInlineRow {
+                side: ConflictPickSide::Theirs,
+                kind: DK::Add,
+                old_line: None,
+                new_line: Some(2),
+                content: "b2".into(),
+            },
+            ConflictInlineRow {
+                side: ConflictPickSide::Ours,
+                kind: DK::Context,
+                old_line: Some(3),
+                new_line: Some(3),
+                content: "c".into(),
+            },
+            ConflictInlineRow {
+                side: ConflictPickSide::Theirs,
+                kind: DK::Add,
+                old_line: None,
+                new_line: Some(4),
+                content: "d2".into(),
+            },
+        ];
+        assert_eq!(GitGpuiView::conflict_nav_entries_for_inline(&inline_rows), vec![1, 4]);
     }
 
     #[test]

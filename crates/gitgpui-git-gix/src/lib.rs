@@ -802,11 +802,33 @@ impl GitRepository for GixRepo {
                 let path_str = path.to_string_lossy();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = git_show_path_utf8_optional(
+                        let old = match git_show_path_utf8_optional(
                             &self.spec.workdir,
                             ":",
                             path_str.as_ref(),
-                        )?;
+                        ) {
+                            Ok(old) => old,
+                            Err(e)
+                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            {
+                                let ours = git_show_path_utf8_optional(
+                                    &self.spec.workdir,
+                                    ":2:",
+                                    path_str.as_ref(),
+                                )?;
+                                let theirs = git_show_path_utf8_optional(
+                                    &self.spec.workdir,
+                                    ":3:",
+                                    path_str.as_ref(),
+                                )?;
+                                return Ok(Some(FileDiffText {
+                                    path: path.clone(),
+                                    old: ours,
+                                    new: theirs,
+                                }));
+                            }
+                            Err(e) => return Err(e),
+                        };
                         let new = read_worktree_file_utf8_optional(&self.spec.workdir, path)?;
                         (old, new)
                     }
@@ -816,11 +838,32 @@ impl GitRepository for GixRepo {
                             "HEAD:",
                             path_str.as_ref(),
                         )?;
-                        let new = git_show_path_utf8_optional(
+                        let new = match git_show_path_utf8_optional(
                             &self.spec.workdir,
                             ":",
                             path_str.as_ref(),
-                        )?;
+                        ) {
+                            Ok(new) => new,
+                            Err(e)
+                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            {
+                                git_show_path_utf8_optional(
+                                    &self.spec.workdir,
+                                    ":2:",
+                                    path_str.as_ref(),
+                                )?
+                                .or_else(|| {
+                                    git_show_path_utf8_optional(
+                                        &self.spec.workdir,
+                                        ":3:",
+                                        path_str.as_ref(),
+                                    )
+                                    .ok()
+                                    .flatten()
+                                })
+                            }
+                            Err(e) => return Err(e),
+                        };
                         (old, new)
                     }
                 };
@@ -868,11 +911,33 @@ impl GitRepository for GixRepo {
                 let path_str = path.to_string_lossy();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = git_show_path_bytes_optional(
+                        let old = match git_show_path_bytes_optional(
                             &self.spec.workdir,
                             ":",
                             path_str.as_ref(),
-                        )?;
+                        ) {
+                            Ok(old) => old,
+                            Err(e)
+                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            {
+                                let ours = git_show_path_bytes_optional(
+                                    &self.spec.workdir,
+                                    ":2:",
+                                    path_str.as_ref(),
+                                )?;
+                                let theirs = git_show_path_bytes_optional(
+                                    &self.spec.workdir,
+                                    ":3:",
+                                    path_str.as_ref(),
+                                )?;
+                                return Ok(Some(FileDiffImage {
+                                    path: path.clone(),
+                                    old: ours,
+                                    new: theirs,
+                                }));
+                            }
+                            Err(e) => return Err(e),
+                        };
                         let new = read_worktree_file_bytes_optional(&self.spec.workdir, path)?;
                         (old, new)
                     }
@@ -882,11 +947,28 @@ impl GitRepository for GixRepo {
                             "HEAD:",
                             path_str.as_ref(),
                         )?;
-                        let new = git_show_path_bytes_optional(
+                        let new = match git_show_path_bytes_optional(
                             &self.spec.workdir,
                             ":",
                             path_str.as_ref(),
-                        )?;
+                        ) {
+                            Ok(new) => new,
+                            Err(e)
+                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            {
+                                git_show_path_bytes_optional(&self.spec.workdir, ":2:", path_str.as_ref())?
+                                    .or_else(|| {
+                                        git_show_path_bytes_optional(
+                                            &self.spec.workdir,
+                                            ":3:",
+                                            path_str.as_ref(),
+                                        )
+                                        .ok()
+                                        .flatten()
+                                    })
+                            }
+                            Err(e) => return Err(e),
+                        };
                         (old, new)
                     }
                 };
@@ -1332,7 +1414,9 @@ impl GitRepository for GixRepo {
             .arg("-c")
             .arg("alias.tag=")
             .arg("-c")
-            .arg("tag.gpgSign=false")
+            .arg("tag.gpgsign=false")
+            .arg("-c")
+            .arg("tag.forcesignannotated=false")
             .arg("tag")
             .arg("-m")
             .arg(name)
@@ -1443,18 +1527,40 @@ impl GitRepository for GixRepo {
     }
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("checkout");
+        let mut checkout = Command::new("git");
+        checkout
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("checkout");
         match side {
             ConflictSide::Ours => {
-                cmd.arg("--ours");
+                checkout.arg("--ours");
             }
             ConflictSide::Theirs => {
-                cmd.arg("--theirs");
+                checkout.arg("--theirs");
             }
         }
-        cmd.arg("--").arg(path);
-        run_git_with_output(cmd, "git checkout --ours/--theirs")
+        checkout.arg("--").arg(path);
+        let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
+
+        let mut add = Command::new("git");
+        add.arg("-C").arg(&self.spec.workdir).arg("add").arg("--").arg(path);
+        let add_out = run_git_with_output(add, "git add --")?;
+
+        Ok(CommandOutput {
+            command: checkout_out.command,
+            stdout: [checkout_out.stdout, add_out.stdout]
+                .into_iter()
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            stderr: [checkout_out.stderr, add_out.stderr]
+                .into_iter()
+                .filter(|s| !s.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            exit_code: add_out.exit_code.or(checkout_out.exit_code),
+        })
     }
 
     fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {
@@ -1712,6 +1818,12 @@ fn git_show_path_utf8_optional(
         "git show failed: {}",
         stderr.trim()
     ))))
+}
+
+fn git_show_unmerged_stage0(stderr: &str) -> bool {
+    let s = stderr;
+    s.contains("is in the index, but not at stage 0")
+        || (s.contains("Did you mean ':1:") && s.contains("is in the index"))
 }
 
 fn git_show_path_bytes_optional(

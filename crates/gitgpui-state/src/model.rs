@@ -3,6 +3,14 @@ use gitgpui_core::services::BlameLine;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConflictFile {
+    pub path: PathBuf,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+    pub current: Option<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub repos: Vec<RepoState>,
@@ -72,6 +80,9 @@ pub struct RepoState {
     pub diff_file: Loadable<Option<FileDiffText>>,
     pub diff_file_image: Loadable<Option<FileDiffImage>>,
 
+    pub conflict_file_path: Option<PathBuf>,
+    pub conflict_file: Loadable<Option<ConflictFile>>,
+
     pub last_error: Option<String>,
     pub diagnostics: Vec<DiagnosticEntry>,
 
@@ -112,6 +123,8 @@ impl RepoState {
             diff_file_rev: 0,
             diff_file: Loadable::NotLoaded,
             diff_file_image: Loadable::NotLoaded,
+            conflict_file_path: None,
+            conflict_file: Loadable::NotLoaded,
             last_error: None,
             diagnostics: Vec::new(),
             command_log: Vec::new(),

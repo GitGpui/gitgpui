@@ -41,13 +41,30 @@ enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    StagePaths {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+    },
     UnstagePath {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    UnstagePaths {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+    },
     DiscardWorktreeChangesPath {
         repo_id: RepoId,
         path: std::path::PathBuf,
+    },
+    DiscardWorktreeChangesPaths {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+    },
+    CheckoutConflictSide {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        side: gitgpui_core::services::ConflictSide,
     },
     FetchAll {
         repo_id: RepoId,

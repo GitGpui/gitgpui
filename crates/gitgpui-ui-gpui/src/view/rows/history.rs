@@ -215,6 +215,9 @@ impl GitGpuiView {
 
 }
 
+const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
+const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
+
 #[derive(Clone, Debug)]
 struct CommitRefsParts {
     branches: String,
@@ -271,13 +274,15 @@ fn history_table_row(
         let commit_id_for_tag_menu = commit_id_for_tag_menu.clone();
         div()
             .px(px(6.0))
-            .py(px(2.0))
+            .h(px(HISTORY_TAG_CHIP_HEIGHT_PX))
+            .line_height(px(HISTORY_TAG_CHIP_HEIGHT_PX))
             .rounded(px(theme.radii.pill))
             .border_1()
             .border_color(with_alpha(theme.colors.accent, 0.35))
             .bg(with_alpha(theme.colors.accent, 0.12))
-            .text_xs()
+            .text_size(gpui::rems(0.7))
             .text_color(theme.colors.accent)
+            .flex_shrink_0()
             .whitespace_nowrap()
             .child(name)
             .on_mouse_down(
@@ -324,7 +329,7 @@ fn history_table_row(
     let mut row = div()
         .id(ix)
         .relative()
-        .h(px(24.0))
+        .h(px(HISTORY_ROW_HEIGHT_PX))
         .w_full()
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
@@ -461,7 +466,7 @@ fn working_tree_summary_history_row(
 
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
-        .h(px(24.0))
+        .h(px(HISTORY_ROW_HEIGHT_PX))
         .flex()
         .w_full()
         .items_center()
@@ -486,7 +491,7 @@ fn working_tree_summary_history_row(
                 .overflow_hidden()
                 .child(circle),
         )
-        .child(div().flex_1().min_w(px(0.0)).flex().items_center().child({
+        .child({
             let mut summary = div().flex_1().min_w(px(0.0)).flex().items_center().gap_2();
             summary = summary.child(
                 div()
@@ -501,7 +506,7 @@ fn working_tree_summary_history_row(
                 summary = summary.child(div().flex().items_center().gap_2().children(parts));
             }
             summary
-        }))
+        })
         .when(show_date, |row| {
             row.child(
                 div()

@@ -160,12 +160,83 @@ pub(super) fn schedule_effect(
             }
         }
 
+        Effect::LoadConflictFile { repo_id, path } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let ours_theirs = repo.diff_file_text(&gitgpui_core::domain::DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: gitgpui_core::domain::DiffArea::Unstaged,
+                    });
+
+                    let current = std::fs::read(repo.spec().workdir.join(&path))
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok());
+
+                    let result = ours_theirs.map(|opt| {
+                        opt.map(|d| crate::model::ConflictFile {
+                            path: d.path,
+                            ours: d.old,
+                            theirs: d.new,
+                            current,
+                        })
+                    });
+
+                    let _ = msg_tx.send(Msg::ConflictFileLoaded {
+                        repo_id,
+                        path,
+                        result,
+                    });
+                });
+            }
+        }
+
         Effect::LoadReflog { repo_id, limit } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
                     let _ = msg_tx.send(Msg::ReflogLoaded {
                         repo_id,
                         result: repo.reflog_head(limit),
+                    });
+                });
+            }
+        }
+
+        Effect::SaveWorktreeFile {
+            repo_id,
+            path,
+            contents,
+            stage,
+        } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let full = repo.spec().workdir.join(&path);
+                    let result = (|| -> Result<CommandOutput, Error> {
+                        if let Some(parent) = full.parent() {
+                            std::fs::create_dir_all(parent)
+                                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                        }
+                        std::fs::write(&full, contents.as_bytes())
+                            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                        if stage {
+                            let path_ref: &Path = &path;
+                            repo.stage(&[path_ref])?;
+                        }
+                        Ok(CommandOutput {
+                            command: format!(
+                                "Save {}{}",
+                                path.display(),
+                                if stage { " (staged)" } else { "" }
+                            ),
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            exit_code: Some(0),
+                        })
+                    })();
+
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::SaveWorktreeFile { path, stage },
+                        result,
                     });
                 });
             }

@@ -250,6 +250,326 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 }
 
 #[test]
+fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        diff: gitgpui_core::domain::FileDiffText,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<gitgpui_core::domain::FileDiffText>> {
+            Ok(Some(self.diff.clone()))
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui-conflict-load-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("conflict.txt");
+    let current = "a\n<<<<<<<\nours\n=======\ntheirs\n>>>>>>>\nb\n";
+    std::fs::write(base.join(&rel), current.as_bytes()).unwrap();
+
+    let repo_id = RepoId(1);
+    let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+        spec: RepoSpec { workdir: base.clone() },
+        diff: gitgpui_core::domain::FileDiffText {
+            path: rel.clone(),
+            old: Some("ours\n".to_string()),
+            new: Some("theirs\n".to_string()),
+        },
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::from([(repo_id, repo)]);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadConflictFile {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
+            if let Msg::ConflictFileLoaded { repo_id: rid, path, result } = msg {
+                assert_eq!(rid, repo_id);
+                assert_eq!(path, rel);
+                let file = result.unwrap().unwrap();
+                assert_eq!(file.path, PathBuf::from("conflict.txt"));
+                assert_eq!(file.ours.as_deref(), Some("ours\n"));
+                assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
+                assert_eq!(file.current.as_deref(), Some(current));
+                return;
+            }
+        }
+    }
+    panic!("timed out waiting for ConflictFileLoaded");
+}
+
+#[test]
+fn save_worktree_file_effect_writes_and_can_stage() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        staged: std::sync::Mutex<Vec<PathBuf>>,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, paths: &[&Path]) -> Result<()> {
+            let mut staged = self.staged.lock().unwrap();
+            for p in paths {
+                staged.push(p.to_path_buf());
+            }
+            Ok(())
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui-save-worktree-file-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("dir/out.txt");
+    let contents = "hello\nworld\n";
+
+    let repo_id = RepoId(1);
+    let repo: Arc<Repo> = Arc::new(Repo {
+        spec: RepoSpec { workdir: base.clone() },
+        staged: std::sync::Mutex::new(Vec::new()),
+    });
+    let repo_trait: Arc<dyn GitRepository> = repo.clone();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::from([(repo_id, repo_trait)]);
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::SaveWorktreeFile {
+            repo_id,
+            path: rel.clone(),
+            contents: contents.to_string(),
+            stage: true,
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
+            if let Msg::RepoCommandFinished { repo_id: rid, command, result } = msg {
+                assert_eq!(rid, repo_id);
+                assert!(matches!(
+                    command,
+                    crate::msg::RepoCommandKind::SaveWorktreeFile { .. }
+                ));
+                assert!(result.is_ok());
+                let on_disk = std::fs::read_to_string(base.join(&rel)).unwrap();
+                assert_eq!(on_disk, contents);
+                let staged = repo.staged.lock().unwrap().clone();
+                assert_eq!(staged, vec![rel.clone()]);
+                return;
+            }
+        }
+    }
+    panic!("timed out waiting for RepoCommandFinished");
+}
+
+#[test]
 fn close_repo_removes_and_moves_active() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(10);

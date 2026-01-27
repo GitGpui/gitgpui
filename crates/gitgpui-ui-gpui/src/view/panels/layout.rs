@@ -22,18 +22,11 @@ impl GitGpuiView {
             row_count,
             cx.processor(Self::render_branch_sidebar_rows),
         )
-        .flex_1()
+        .h_full()
         .min_h(px(0.0))
         .track_scroll(self.branches_scroll.clone());
         let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
-        let list = div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .px(px(2.0))
-            .child(list)
-            .into_any_element();
+        let list = div().flex_1().min_h(px(0.0)).px(px(2.0)).child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
             .relative()
@@ -41,7 +34,7 @@ impl GitGpuiView {
             .flex_col()
             .flex_1()
             .h_full()
-            .child(list)
+            .child(list.into_any_element())
             .child(zed::Scrollbar::new("branch_sidebar_scrollbar", scroll_handle).render(theme))
             .into_any_element();
 
@@ -406,6 +399,12 @@ impl GitGpuiView {
             .unwrap_or((0, 0));
 
         let repo_id = self.active_repo_id();
+        let selected_unstaged = repo_id
+            .and_then(|rid| self.status_multi_selection.get(&rid).map(|s| s.unstaged.len()))
+            .unwrap_or(0);
+        let selected_staged = repo_id
+            .and_then(|rid| self.status_multi_selection.get(&rid).map(|s| s.staged.len()))
+            .unwrap_or(0);
 
         let stage_all = zed::Button::new("stage_all", "Stage all changes")
             .style(zed::ButtonStyle::Subtle)
@@ -413,10 +412,13 @@ impl GitGpuiView {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
+                this.status_multi_selection.remove(&repo_id);
+                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::StagePaths {
                     repo_id,
                     paths: Vec::new(),
                 });
+                this.rebuild_diff_cache();
                 cx.notify();
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
@@ -429,16 +431,68 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
+        let stage_selected = zed::Button::new(
+            "stage_selected",
+            format!("Stage ({selected_unstaged})"),
+        )
+        .style(zed::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            let paths = this
+                .status_multi_selection
+                .get(&repo_id)
+                .map(|s| s.unstaged.clone())
+                .unwrap_or_default();
+            if paths.is_empty() {
+                return;
+            }
+            this.status_multi_selection.remove(&repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store.dispatch(Msg::StagePaths { repo_id, paths });
+            this.rebuild_diff_cache();
+            cx.notify();
+        });
+
+        let discard_selected = zed::Button::new(
+            "discard_selected",
+            format!("Discard ({selected_unstaged})"),
+        )
+        .style(zed::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            let paths = this
+                .status_multi_selection
+                .get(&repo_id)
+                .map(|s| s.unstaged.clone())
+                .unwrap_or_default();
+            if paths.is_empty() {
+                return;
+            }
+            this.status_multi_selection.remove(&repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store
+                .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+            this.rebuild_diff_cache();
+            cx.notify();
+        });
+
         let unstage_all = zed::Button::new("unstage_all", "Unstage all changes")
             .style(zed::ButtonStyle::Subtle)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
+                this.status_multi_selection.remove(&repo_id);
+                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::UnstagePaths {
                     repo_id,
                     paths: Vec::new(),
                 });
+                this.rebuild_diff_cache();
                 cx.notify();
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
@@ -450,6 +504,30 @@ impl GitGpuiView {
                 }
                 cx.notify();
             }));
+
+        let unstage_selected = zed::Button::new(
+            "unstage_selected",
+            format!("Unstage ({selected_staged})"),
+        )
+        .style(zed::ButtonStyle::Outlined)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            let paths = this
+                .status_multi_selection
+                .get(&repo_id)
+                .map(|s| s.staged.clone())
+                .unwrap_or_default();
+            if paths.is_empty() {
+                return;
+            }
+            this.status_multi_selection.remove(&repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+            this.rebuild_diff_cache();
+            cx.notify();
+        });
 
         let section_header = |id: &'static str,
                               label: &'static str,
@@ -469,6 +547,22 @@ impl GitGpuiView {
                 .child(div().text_sm().font_weight(FontWeight::BOLD).child(label))
                 .when(show_action, |d| d.child(action))
                 .into_any_element()
+        };
+
+        let unstaged_actions = {
+            let mut actions = div().flex().items_center().gap_2();
+            if selected_unstaged > 0 {
+                actions = actions.child(stage_selected).child(discard_selected);
+            }
+            actions.child(stage_all).into_any_element()
+        };
+
+        let staged_actions = {
+            let mut actions = div().flex().items_center().gap_2();
+            if selected_staged > 0 {
+                actions = actions.child(unstage_selected);
+            }
+            actions.child(unstage_all).into_any_element()
         };
 
         let unstaged_body = if unstaged_count == 0 {
@@ -492,7 +586,7 @@ impl GitGpuiView {
                 "unstaged_header",
                 "Unstaged",
                 unstaged_count > 0,
-                stage_all.into_any_element(),
+                unstaged_actions,
             ))
             .child(
                 div()
@@ -512,7 +606,7 @@ impl GitGpuiView {
                 "staged_header",
                 "Staged",
                 staged_count > 0,
-                unstage_all.into_any_element(),
+                staged_actions,
             ))
             .child(
                 div()

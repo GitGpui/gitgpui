@@ -281,6 +281,25 @@ pub(super) fn reduce(
             Vec::new()
         }
 
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path,
+            result,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                && repo_state.conflict_file_path.as_ref() == Some(&path)
+            {
+                repo_state.conflict_file = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+            }
+            Vec::new()
+        }
+
         Msg::WorktreesLoaded { repo_id, result } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.worktrees = match result {
@@ -399,6 +418,15 @@ pub(super) fn reduce(
             };
             repo_state.stashes = Loadable::Loading;
             vec![Effect::LoadStashes { repo_id, limit: 50 }]
+        }
+
+        Msg::LoadConflictFile { repo_id, path } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.conflict_file_path = Some(path.clone());
+            repo_state.conflict_file = Loadable::Loading;
+            vec![Effect::LoadConflictFile { repo_id, path }]
         }
 
         Msg::LoadReflog { repo_id } => {
@@ -582,6 +610,18 @@ pub(super) fn reduce(
         Msg::DiscardWorktreeChangesPaths { repo_id, paths } => {
             vec![Effect::DiscardWorktreeChangesPaths { repo_id, paths }]
         }
+
+        Msg::SaveWorktreeFile {
+            repo_id,
+            path,
+            contents,
+            stage,
+        } => vec![Effect::SaveWorktreeFile {
+            repo_id,
+            path,
+            contents,
+            stage,
+        }],
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
         Msg::CommitAmend { repo_id, message } => vec![Effect::CommitAmend { repo_id, message }],
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
@@ -1290,6 +1330,7 @@ fn summarize_command(
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
             },
+            RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
                 "Worktree"
@@ -1380,6 +1421,13 @@ fn summarize_command(
             ConflictSide::Ours => "Resolved using ours".to_string(),
             ConflictSide::Theirs => "Resolved using theirs".to_string(),
         },
+        RepoCommandKind::SaveWorktreeFile { path, stage } => {
+            if *stage {
+                format!("Saved and staged → {}", path.display())
+            } else {
+                format!("Saved → {}", path.display())
+            }
+        }
         RepoCommandKind::Reset { mode, target } => {
             let mode = match mode {
                 gitgpui_core::services::ResetMode::Soft => "soft",

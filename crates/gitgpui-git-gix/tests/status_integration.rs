@@ -1,4 +1,5 @@
 use gitgpui_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitgpui_core::services::ConflictSide;
 use gitgpui_core::services::GitBackend;
 use gitgpui_git_gix::GixBackend;
 use std::fs;
@@ -13,6 +14,16 @@ fn run_git(repo: &Path, args: &[&str]) {
         .status()
         .expect("git command to run");
     assert!(status.success(), "git {:?} failed", args);
+}
+
+fn run_git_expect_failure(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .status()
+        .expect("git command to run");
+    assert!(!status.success(), "expected git {:?} to fail", args);
 }
 
 fn write(repo: &Path, rel: &str, contents: &str) -> PathBuf {
@@ -316,6 +327,115 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
         .expect("image diff for commit");
     assert_eq!(commit.old.as_deref(), Some(old_png.as_slice()));
     assert_eq!(commit.new.as_deref(), Some(new_png.as_slice()));
+}
+
+#[test]
+fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "ours\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    let status = opened.status().unwrap();
+    assert_eq!(status.unstaged.len(), 1);
+    assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
+    assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
+
+    let diff = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("file diff for conflicted changes");
+    assert_eq!(diff.old.as_deref(), Some("ours\n"));
+    assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+}
+
+#[test]
+fn checkout_conflict_side_stages_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "ours\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    opened
+        .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Theirs)
+        .unwrap();
+
+    let status = opened.status().unwrap();
+    assert!(status
+        .unstaged
+        .iter()
+        .all(|s| s.path != PathBuf::from("a.txt")));
+    assert!(status
+        .staged
+        .iter()
+        .any(|s| s.path == PathBuf::from("a.txt") && s.kind == FileStatusKind::Modified));
+
+    let on_disk = fs::read_to_string(repo.join("a.txt")).unwrap();
+    assert_eq!(on_disk, "theirs\n");
 }
 
 #[test]
