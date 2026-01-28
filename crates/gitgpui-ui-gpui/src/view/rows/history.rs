@@ -73,7 +73,7 @@ impl GitGpuiView {
     pub(in super::super) fn render_history_table_rows(
         this: &mut Self,
         range: Range<usize>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let Some(repo) = this.active_repo() else {
@@ -81,7 +81,6 @@ impl GitGpuiView {
         };
 
         let theme = this.theme;
-        let row_pad = window.rem_size() * 0.5;
         let col_branch = this.history_col_branch;
         let col_graph = this.history_col_graph;
         let col_date = this.history_col_date;
@@ -191,7 +190,6 @@ impl GitGpuiView {
 
                 Some(history_table_row(
                     theme,
-                    row_pad,
                     col_branch,
                     col_graph,
                     col_date,
@@ -216,7 +214,6 @@ impl GitGpuiView {
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
-const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 
 #[derive(Clone, Debug)]
 struct CommitRefsParts {
@@ -226,7 +223,6 @@ struct CommitRefsParts {
 
 fn history_table_row(
     theme: AppTheme,
-    row_pad: Pixels,
     col_branch: Pixels,
     col_graph: Pixels,
     col_date: Pixels,
@@ -248,7 +244,10 @@ fn history_table_row(
     let short = id.get(0..8).unwrap_or(id);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
+        cx.entity(),
         ix,
+        repo_id,
+        commit.id.clone(),
         col_branch,
         col_graph,
         col_date,
@@ -258,74 +257,14 @@ fn history_table_row(
         show_graph_color_marker,
         is_stash_node,
         graph_row.clone(),
-        SharedString::default(),
+        refs.tags.iter().cloned().map(Into::into).collect(),
+        refs.branches.clone().into(),
         commit.summary.clone().into(),
         when.clone().into(),
         short.to_string().into(),
     );
 
     let commit_id = commit.id.clone();
-    let commit_id_for_menu = commit.id.clone();
-    let commit_id_for_tag_menu = commit.id.clone();
-    let tag_names = refs.tags.clone();
-    let branches_text = refs.branches.clone();
-
-    let tag_chip = |name: String| {
-        let commit_id_for_tag_menu = commit_id_for_tag_menu.clone();
-        div()
-            .px(px(6.0))
-            .h(px(HISTORY_TAG_CHIP_HEIGHT_PX))
-            .line_height(px(HISTORY_TAG_CHIP_HEIGHT_PX))
-            .rounded(px(theme.radii.pill))
-            .border_1()
-            .border_color(with_alpha(theme.colors.accent, 0.35))
-            .bg(with_alpha(theme.colors.accent, 0.12))
-            .text_size(gpui::rems(0.7))
-            .text_color(theme.colors.accent)
-            .flex_shrink_0()
-            .whitespace_nowrap()
-            .child(name)
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.open_popover_at(
-                        PopoverKind::TagMenu {
-                            repo_id,
-                            commit_id: commit_id_for_tag_menu.clone(),
-                        },
-                        e.position,
-                        window,
-                        cx,
-                    );
-                }),
-            )
-    };
-
-    let refs_overlay = div()
-        .absolute()
-        .top_0()
-        .left(row_pad)
-        .h_full()
-        .w(col_branch.max(px(0.0)))
-        .flex()
-        .items_center()
-        .gap_1()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .children(tag_names.into_iter().map(tag_chip))
-        .when(!branches_text.trim().is_empty(), move |d| {
-            d.child(
-                div()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .line_clamp(1)
-                    .whitespace_nowrap()
-                    .child(branches_text.clone()),
-            )
-        });
     let mut row = div()
         .id(ix)
         .relative()
@@ -334,7 +273,6 @@ fn history_table_row(
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
-        .child(refs_overlay)
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
             let selection_changed =
                 this.active_repo().and_then(|r| r.selected_commit.as_ref()) != Some(&commit_id);
@@ -346,22 +284,7 @@ fn history_table_row(
                 commit_id: commit_id.clone(),
             });
             cx.notify();
-        }))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                this.open_popover_at(
-                    PopoverKind::CommitMenu {
-                        repo_id,
-                        commit_id: commit_id_for_menu.clone(),
-                    },
-                    e.position,
-                    window,
-                    cx,
-                );
-            }),
-        );
+        }));
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));

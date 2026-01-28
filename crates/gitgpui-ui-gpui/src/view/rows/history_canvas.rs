@@ -1,9 +1,44 @@
 use super::*;
-use gpui::{Bounds, ContentMask, fill, point, px, size};
+use gpui::{Bounds, ContentMask, DispatchPhase, MouseButton, fill, point, px, size};
+
+const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
+const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
+const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
+
+fn layout_chip_bounds(
+    branch_bounds: Bounds<Pixels>,
+    row_bounds: Bounds<Pixels>,
+    chip_height: Pixels,
+    gap: Pixels,
+    chip_widths: &[Pixels],
+) -> Vec<Bounds<Pixels>> {
+    let y = row_bounds.top() + (row_bounds.size.height - chip_height).max(px(0.0)) * 0.5;
+    let mut x = branch_bounds.left();
+    let mut out = Vec::new();
+    for w in chip_widths {
+        let w = (*w).max(px(0.0));
+        if x + w > branch_bounds.right() {
+            break;
+        }
+        out.push(Bounds::new(point(x, y), size(w, chip_height)));
+        x += w + gap;
+        if x >= branch_bounds.right() {
+            break;
+        }
+    }
+    out
+}
+
+fn hit_test_any(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> bool {
+    bounds.iter().any(|b| b.contains(&p))
+}
 
 pub(super) fn history_commit_row_canvas(
     theme: AppTheme,
+    view: Entity<GitGpuiView>,
     row_id: usize,
+    repo_id: RepoId,
+    commit_id: CommitId,
     col_branch: Pixels,
     col_graph: Pixels,
     col_date: Pixels,
@@ -13,7 +48,8 @@ pub(super) fn history_commit_row_canvas(
     show_graph_color_marker: bool,
     is_stash_node: bool,
     graph_row: history_graph::GraphRow,
-    refs: SharedString,
+    tag_names: Vec<SharedString>,
+    branches_text: SharedString,
     summary: SharedString,
     when: SharedString,
     short_sha: SharedString,
@@ -92,33 +128,113 @@ pub(super) fn history_commit_row_canvas(
                 );
             });
 
-            if !refs.as_ref().trim().is_empty() {
-                let mut style = base_style.clone();
-                style.color = theme.colors.text_muted.into();
-                let mut runs = vec![style.to_run(refs.len())];
-                let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
-                let truncated = wrapper.truncate_line(
-                    refs.clone(),
-                    branch_bounds.size.width.max(px(0.0)),
-                    "…",
-                    &mut runs,
-                );
-                let shaped = window
-                    .text_system()
-                    .shape_line(truncated, xs_font, &runs, None);
-                window.with_content_mask(
-                    Some(ContentMask {
-                        bounds: branch_bounds,
-                    }),
-                    |window| {
+            let chip_height = px(HISTORY_TAG_CHIP_HEIGHT_PX);
+            let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);
+            let chip_gap = px(HISTORY_TAG_CHIP_GAP_PX);
+
+            let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::new();
+            if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
+                window.with_content_mask(Some(ContentMask { bounds: branch_bounds }), |window| {
+                    let mut x = branch_bounds.left();
+                    let mut chip_widths: Vec<Pixels> = Vec::with_capacity(tag_names.len());
+                    let mut chip_texts: Vec<gpui::ShapedLine> = Vec::with_capacity(tag_names.len());
+
+                    for name in &tag_names {
+                        let remaining = (branch_bounds.right() - x).max(px(0.0));
+                        if remaining <= chip_pad_x * 2.0 {
+                            break;
+                        }
+
+                        let mut style = base_style.clone();
+                        style.color = theme.colors.accent.into();
+                        let mut runs = vec![style.to_run(name.len())];
+                        let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
+                        let truncated = wrapper.truncate_line(
+                            name.clone(),
+                            (remaining - chip_pad_x * 2.0).max(px(0.0)),
+                            "…",
+                            &mut runs,
+                        );
+                        let shaped = window
+                            .text_system()
+                            .shape_line(truncated, xs_font, &runs, None);
+
+                        let chip_w = (shaped.width + chip_pad_x * 2.0).min(remaining);
+                        chip_widths.push(chip_w);
+                        chip_texts.push(shaped);
+
+                        x += chip_w + chip_gap;
+                        if x >= branch_bounds.right() {
+                            break;
+                        }
+                    }
+
+                    tag_chip_bounds = layout_chip_bounds(
+                        branch_bounds,
+                        bounds,
+                        chip_height,
+                        chip_gap,
+                        &chip_widths,
+                    );
+
+                    for (shaped, chip_bounds) in chip_texts.iter().zip(tag_chip_bounds.iter()) {
+                        let border = with_alpha(theme.colors.accent, 0.35);
+                        let bg = with_alpha(theme.colors.accent, 0.12);
+                        let radius = px(theme.radii.pill);
+
+                        window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
+                        let inner = Bounds::new(
+                            point(chip_bounds.left() + px(1.0), chip_bounds.top() + px(1.0)),
+                            size(
+                                (chip_bounds.size.width - px(2.0)).max(px(0.0)),
+                                (chip_bounds.size.height - px(2.0)).max(px(0.0)),
+                            ),
+                        );
+                        window.paint_quad(
+                            fill(inner, bg)
+                                .corner_radii((radius - px(1.0)).max(px(0.0))),
+                        );
+
+                        let text_y = chip_bounds.top()
+                            + (chip_bounds.size.height - xs_line_height).max(px(0.0)) * 0.5;
                         let _ = shaped.paint(
-                            point(branch_bounds.left(), center_y(xs_line_height)),
+                            point(chip_bounds.left() + chip_pad_x, text_y),
                             xs_line_height,
                             window,
                             cx,
                         );
-                    },
-                );
+                    }
+
+                    let x = if let Some(last) = tag_chip_bounds.last() {
+                        (last.right() + chip_gap).min(branch_bounds.right())
+                    } else {
+                        branch_bounds.left()
+                    };
+
+                    if !branches_text.as_ref().trim().is_empty() && x < branch_bounds.right() {
+                        let remaining = (branch_bounds.right() - x).max(px(0.0));
+                        let mut style = base_style.clone();
+                        style.color = theme.colors.text_muted.into();
+                        let mut runs = vec![style.to_run(branches_text.len())];
+                        let mut wrapper =
+                            window.text_system().line_wrapper(style.font(), xs_font);
+                        let truncated = wrapper.truncate_line(
+                            branches_text.clone(),
+                            remaining,
+                            "…",
+                            &mut runs,
+                        );
+                        let shaped = window
+                            .text_system()
+                            .shape_line(truncated, xs_font, &runs, None);
+                        let _ = shaped.paint(
+                            point(x, center_y(xs_line_height)),
+                            xs_line_height,
+                            window,
+                            cx,
+                        );
+                    }
+                });
             }
 
             let node_color = graph_row
@@ -229,9 +345,73 @@ pub(super) fn history_commit_row_canvas(
                     },
                 );
             }
+
+            window.on_mouse_event({
+                let view = view.clone();
+                let commit_id = commit_id.clone();
+                move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble
+                        || event.button != MouseButton::Right
+                        || !bounds.contains(&event.position)
+                    {
+                        return;
+                    }
+
+                    let is_tag = hit_test_any(&tag_chip_bounds, event.position);
+                    view.update(cx, |this, cx| {
+                        let kind = if is_tag {
+                            PopoverKind::TagMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            }
+                        } else {
+                            PopoverKind::CommitMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            }
+                        };
+                        this.open_popover_at(kind, event.position, window, cx);
+                        cx.notify();
+                    });
+                }
+            });
         },
     )
     .h(px(24.0))
     .w_full()
     .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_chip_bounds_never_overflows_branch_column() {
+        let row = Bounds::new(point(px(0.0), px(0.0)), size(px(200.0), px(24.0)));
+        let branch = Bounds::new(point(px(10.0), px(0.0)), size(px(100.0), px(24.0)));
+        let chip_height = px(18.0);
+        let gap = px(4.0);
+        let chip_widths = vec![px(40.0), px(40.0), px(40.0)];
+
+        let chips = layout_chip_bounds(branch, row, chip_height, gap, &chip_widths);
+        assert!(!chips.is_empty());
+        for b in chips {
+            assert!(b.left() >= branch.left());
+            assert!(b.right() <= branch.right());
+            assert!(b.top() >= row.top());
+            assert!(b.bottom() <= row.bottom());
+        }
+    }
+
+    #[test]
+    fn hit_test_any_detects_points_inside_chips() {
+        let chips = vec![
+            Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0))),
+            Bounds::new(point(px(20.0), px(0.0)), size(px(10.0), px(10.0))),
+        ];
+        assert!(hit_test_any(&chips, point(px(5.0), px(5.0))));
+        assert!(hit_test_any(&chips, point(px(25.0), px(5.0))));
+        assert!(!hit_test_any(&chips, point(px(15.0), px(5.0))));
+    }
 }
