@@ -1,8 +1,9 @@
 use crate::model::{
     AppState, CloneOpState, CloneOpStatus, CommandLogEntry, DiagnosticEntry, DiagnosticKind,
-    Loadable, RepoId, RepoState,
+    Loadable, RepoId, RepoState, RepoLoadsInFlight,
 };
 use crate::msg::{Effect, Msg};
+use crate::msg::RepoExternalChange;
 use crate::session;
 use gitgpui_core::domain::{DiffTarget, RepoSpec};
 use gitgpui_core::error::Error;
@@ -31,6 +32,126 @@ fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
         } => is_supported_image_path(path),
         _ => false,
     }
+}
+
+fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {
+    let supports_file = matches!(
+        &target,
+        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+    );
+    let wants_image = diff_target_wants_image_preview(&target);
+
+    let mut effects = vec![Effect::LoadDiff {
+        repo_id,
+        target: target.clone(),
+    }];
+    if supports_file {
+        if wants_image {
+            effects.push(Effect::LoadDiffFileImage { repo_id, target });
+        } else {
+            effects.push(Effect::LoadDiffFile { repo_id, target });
+        }
+    }
+
+    effects
+}
+
+fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+    let repo_id = repo_state.id;
+    let mut effects = Vec::new();
+
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::HEAD_BRANCH) {
+        effects.push(Effect::LoadHeadBranch { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+    {
+        effects.push(Effect::LoadUpstreamDivergence { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REBASE_STATE) {
+        effects.push(Effect::LoadRebaseState { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+        effects.push(Effect::LoadStatus { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request_log(repo_state.history_scope, 200, None)
+    {
+        // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
+        // merges with different cursors.
+        repo_state.log_loading_more = false;
+        effects.push(Effect::LoadLog {
+            repo_id,
+            scope: repo_state.history_scope,
+            limit: 200,
+            cursor: None,
+        });
+    }
+
+    effects
+}
+
+fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
+    let repo_id = repo_state.id;
+    let mut effects = Vec::new();
+
+    // Keep ordering stable with historical `refresh_effects` to minimize behavioral churn and
+    // make the refresh fan-out predictable.
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::HEAD_BRANCH) {
+        effects.push(Effect::LoadHeadBranch { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+    {
+        effects.push(Effect::LoadUpstreamDivergence { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::BRANCHES) {
+        effects.push(Effect::LoadBranches { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+        effects.push(Effect::LoadTags { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REMOTES) {
+        effects.push(Effect::LoadRemotes { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+    {
+        effects.push(Effect::LoadRemoteBranches { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+        effects.push(Effect::LoadStatus { repo_id });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STASHES) {
+        effects.push(Effect::LoadStashes { repo_id, limit: 50 });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REFLOG) {
+        effects.push(Effect::LoadReflog {
+            repo_id,
+            limit: 200,
+        });
+    }
+    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REBASE_STATE) {
+        effects.push(Effect::LoadRebaseState { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request_log(repo_state.history_scope, 200, None)
+    {
+        repo_state.log_loading_more = false;
+        effects.push(Effect::LoadLog {
+            repo_id,
+            scope: repo_state.history_scope,
+            limit: 200,
+            cursor: None,
+        });
+    }
+
+    effects
 }
 
 pub(super) fn reduce(
@@ -116,14 +237,9 @@ pub(super) fn reduce(
         }
 
         Msg::SetActiveRepo { repo_id } => {
-            let Some((scope, diff_target)) = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| (r.history_scope, r.diff_target.clone()))
-            else {
+            if !state.repos.iter().any(|r| r.id == repo_id) {
                 return Vec::new();
-            };
+            }
 
             let changed = state.active_repo != Some(repo_id);
             state.active_repo = Some(repo_id);
@@ -131,8 +247,24 @@ pub(super) fn reduce(
                 let _ = session::persist_from_state(state);
             }
 
-            let mut effects = refresh_effects(repo_id, scope);
-            if let Some(target) = diff_target {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+
+            // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
+            // re-running the full refresh fan-out in that case: prioritize the minimum set that
+            // keeps the UI correct and responsive.
+            let mut effects = if changed {
+                refresh_full_effects(repo_state)
+            } else {
+                refresh_primary_effects(repo_state)
+            };
+
+            // Reload the selected diff when switching repos; steady-state refreshes rely on the
+            // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
+            if changed
+                && let Some(target) = repo_state.diff_target.clone()
+            {
                 let supports_file = matches!(
                     &target,
                     DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
@@ -179,7 +311,31 @@ pub(super) fn reduce(
             repo_state.selected_commit = None;
             repo_state.commit_details = Loadable::NotLoaded;
 
-            refresh_effects(repo_id, repo_state.history_scope)
+            refresh_full_effects(repo_state)
+        }
+
+        Msg::RepoExternallyChanged { repo_id, change } => {
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+
+            // Coalesce refreshes while a refresh is already in flight.
+            let mut effects = match change {
+                RepoExternalChange::Worktree => {
+                    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+                        vec![Effect::LoadStatus { repo_id }]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                RepoExternalChange::GitState | RepoExternalChange::Both => refresh_primary_effects(repo_state),
+            };
+
+            if let Some(target) = repo_state.diff_target.clone() {
+                effects.extend(diff_reload_effects(repo_id, target));
+            }
+
+            effects
         }
 
         Msg::SetHistoryScope { repo_id, scope } => {
@@ -195,12 +351,16 @@ pub(super) fn reduce(
             repo_state.log = Loadable::Loading;
             repo_state.log_loading_more = false;
 
-            vec![Effect::LoadLog {
-                repo_id,
-                scope,
-                limit: 200,
-                cursor: None,
-            }]
+            if repo_state.loads_in_flight.request_log(scope, 200, None) {
+                vec![Effect::LoadLog {
+                    repo_id,
+                    scope,
+                    limit: 200,
+                    cursor: None,
+                }]
+            } else {
+                Vec::new()
+            }
         }
 
         Msg::LoadMoreHistory { repo_id } => {
@@ -220,15 +380,23 @@ pub(super) fn reduce(
             };
 
             repo_state.log_loading_more = true;
-            vec![Effect::LoadLog {
-                repo_id,
-                scope: repo_state.history_scope,
-                limit: 200,
-                cursor: Some(cursor),
-            }]
+            if repo_state
+                .loads_in_flight
+                .request_log(repo_state.history_scope, 200, Some(cursor.clone()))
+            {
+                vec![Effect::LoadLog {
+                    repo_id,
+                    scope: repo_state.history_scope,
+                    limit: 200,
+                    cursor: Some(cursor),
+                }]
+            } else {
+                Vec::new()
+            }
         }
 
         Msg::RebaseStateLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.rebase_in_progress = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -237,8 +405,14 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::REBASE_STATE)
+                {
+                    effects.push(Effect::LoadRebaseState { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::FileHistoryLoaded {
@@ -250,7 +424,7 @@ pub(super) fn reduce(
                 && repo_state.file_history_path.as_ref() == Some(&path)
             {
                 repo_state.file_history = match result {
-                    Ok(v) => Loadable::Ready(v),
+                    Ok(v) => Loadable::Ready(Arc::new(v)),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
@@ -271,7 +445,7 @@ pub(super) fn reduce(
                 && repo_state.blame_rev == rev
             {
                 repo_state.blame = match result {
-                    Ok(v) => Loadable::Ready(v),
+                    Ok(v) => Loadable::Ready(Arc::new(v)),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
@@ -417,7 +591,11 @@ pub(super) fn reduce(
                 return Vec::new();
             };
             repo_state.stashes = Loadable::Loading;
-            vec![Effect::LoadStashes { repo_id, limit: 50 }]
+            if repo_state.loads_in_flight.request(RepoLoadsInFlight::STASHES) {
+                vec![Effect::LoadStashes { repo_id, limit: 50 }]
+            } else {
+                Vec::new()
+            }
         }
 
         Msg::LoadConflictFile { repo_id, path } => {
@@ -434,10 +612,14 @@ pub(super) fn reduce(
                 return Vec::new();
             };
             repo_state.reflog = Loadable::Loading;
-            vec![Effect::LoadReflog {
-                repo_id,
-                limit: 200,
-            }]
+            if repo_state.loads_in_flight.request(RepoLoadsInFlight::REFLOG) {
+                vec![Effect::LoadReflog {
+                    repo_id,
+                    limit: 200,
+                }]
+            } else {
+                Vec::new()
+            }
         }
 
         Msg::LoadFileHistory {
@@ -744,10 +926,10 @@ pub(super) fn reduce(
                 repo_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.last_error = None;
 
-                return refresh_effects(repo_id, repo_state.history_scope);
+                return refresh_full_effects(repo_state);
             }
 
-            refresh_effects(repo_id, gitgpui_core::domain::LogScope::CurrentBranch)
+            Vec::new()
         }
 
         Msg::RepoOpenedErr {
@@ -768,6 +950,7 @@ pub(super) fn reduce(
         }
 
         Msg::BranchesLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.branches = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -776,11 +959,15 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::BRANCHES) {
+                    effects.push(Effect::LoadBranches { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::RemotesLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.remotes = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -789,11 +976,15 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::REMOTES) {
+                    effects.push(Effect::LoadRemotes { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::RemoteBranchesLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.remote_branches = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -802,24 +993,35 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::REMOTE_BRANCHES)
+                {
+                    effects.push(Effect::LoadRemoteBranches { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::StatusLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.status = match result {
-                    Ok(v) => Loadable::Ready(v),
+                    Ok(v) => Loadable::Ready(Arc::new(v)),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS) {
+                    effects.push(Effect::LoadStatus { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::HeadBranchLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.head_branch = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -828,11 +1030,18 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::HEAD_BRANCH)
+                {
+                    effects.push(Effect::LoadHeadBranch { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::UpstreamDivergenceLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.upstream_divergence = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -841,44 +1050,79 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
+                {
+                    effects.push(Effect::LoadUpstreamDivergence { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::LogLoaded {
             repo_id,
             scope,
+            cursor,
             result,
         } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                let is_load_more = cursor.is_some();
+
                 if repo_state.history_scope != scope {
-                    repo_state.log_loading_more = false;
-                    return Vec::new();
+                    if is_load_more {
+                        repo_state.log_loading_more = false;
+                    }
+                    if let Some(next) = repo_state.loads_in_flight.finish_log() {
+                        repo_state.log_loading_more = next.cursor.is_some();
+                        effects.push(Effect::LoadLog {
+                            repo_id,
+                            scope: next.scope,
+                            limit: next.limit,
+                            cursor: next.cursor,
+                        });
+                    }
+                    return effects;
                 }
-                let loading_more = repo_state.log_loading_more;
-                repo_state.log_loading_more = false;
 
                 match result {
                     Ok(mut page) => {
-                        if loading_more && let Loadable::Ready(existing) = &mut repo_state.log {
+                        if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
+                            let existing = Arc::make_mut(existing);
                             existing.commits.extend(page.commits.drain(..));
                             existing.next_cursor = page.next_cursor;
                         } else {
-                            repo_state.log = Loadable::Ready(page);
+                            repo_state.log = Loadable::Ready(Arc::new(page));
                         }
                     }
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                        if !loading_more {
+                        if !is_load_more {
                             repo_state.log = Loadable::Error(e.to_string());
                         }
                     }
                 }
+
+                if is_load_more {
+                    repo_state.log_loading_more = false;
+                }
+
+                if let Some(next) = repo_state.loads_in_flight.finish_log() {
+                    repo_state.log_loading_more = next.cursor.is_some();
+                    effects.push(Effect::LoadLog {
+                        repo_id,
+                        scope: next.scope,
+                        limit: next.limit,
+                        cursor: next.cursor,
+                    });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::TagsLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.tags = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -891,11 +1135,15 @@ pub(super) fn reduce(
                         }
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::TAGS) {
+                    effects.push(Effect::LoadTags { repo_id });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::StashesLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.stashes = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -904,11 +1152,15 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STASHES) {
+                    effects.push(Effect::LoadStashes { repo_id, limit: 50 });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::ReflogLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.reflog = match result {
                     Ok(v) => Loadable::Ready(v),
@@ -917,8 +1169,14 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
+                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::REFLOG) {
+                    effects.push(Effect::LoadReflog {
+                        repo_id,
+                        limit: 200,
+                    });
+                }
             }
-            Vec::new()
+            effects
         }
 
         Msg::CommitDetailsLoaded {
@@ -930,7 +1188,7 @@ pub(super) fn reduce(
                 && repo_state.selected_commit.as_ref() == Some(&commit_id)
             {
                 repo_state.commit_details = match result {
-                    Ok(v) => Loadable::Ready(v),
+                    Ok(v) => Loadable::Ready(Arc::new(v)),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
@@ -950,7 +1208,7 @@ pub(super) fn reduce(
             {
                 repo_state.diff_rev = repo_state.diff_rev.wrapping_add(1);
                 repo_state.diff = match result {
-                    Ok(v) => Loadable::Ready(v),
+                    Ok(v) => Loadable::Ready(Arc::new(v)),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
@@ -1010,36 +1268,13 @@ pub(super) fn reduce(
                     }
                 }
             }
-            let scope = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| r.history_scope)
-                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            let diff_target = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.diff_target.clone());
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
 
-            let mut effects = refresh_effects(repo_id, scope);
-            if let Some(target) = diff_target {
-                let supports_file = matches!(
-                    &target,
-                    DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-                );
-                let wants_image = diff_target_wants_image_preview(&target);
-                effects.push(Effect::LoadDiff {
-                    repo_id,
-                    target: target.clone(),
-                });
-                if supports_file {
-                    if wants_image {
-                        effects.push(Effect::LoadDiffFileImage { repo_id, target });
-                    } else {
-                        effects.push(Effect::LoadDiffFile { repo_id, target });
-                    }
-                }
+            let mut effects = refresh_primary_effects(repo_state);
+            if let Some(target) = repo_state.diff_target.clone() {
+                effects.extend(diff_reload_effects(repo_id, target));
             }
             effects
         }
@@ -1074,14 +1309,10 @@ pub(super) fn reduce(
                     }
                 }
             }
-
-            let scope = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| r.history_scope)
-                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            refresh_effects(repo_id, scope)
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            refresh_primary_effects(repo_state)
         }
 
         Msg::CommitAmendFinished { repo_id, result } => {
@@ -1114,14 +1345,10 @@ pub(super) fn reduce(
                     }
                 }
             }
-
-            let scope = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| r.history_scope)
-                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            refresh_effects(repo_id, scope)
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            refresh_primary_effects(repo_state)
         }
 
         Msg::RepoCommandFinished {
@@ -1197,14 +1424,11 @@ pub(super) fn reduce(
                     }
                 }
             }
-
-            let scope = state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| r.history_scope)
-                .unwrap_or(gitgpui_core::domain::LogScope::CurrentBranch);
-            let mut effects = refresh_effects(repo_id, scope);
+            let mut effects = if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                refresh_full_effects(repo_state)
+            } else {
+                Vec::new()
+            };
             effects.extend(extra_effects);
             effects
         }
@@ -1486,26 +1710,5 @@ impl IfEmptyElse for String {
     }
 }
 
-fn refresh_effects(repo_id: RepoId, history_scope: gitgpui_core::domain::LogScope) -> Vec<Effect> {
-    vec![
-        Effect::LoadHeadBranch { repo_id },
-        Effect::LoadUpstreamDivergence { repo_id },
-        Effect::LoadBranches { repo_id },
-        Effect::LoadTags { repo_id },
-        Effect::LoadRemotes { repo_id },
-        Effect::LoadRemoteBranches { repo_id },
-        Effect::LoadStatus { repo_id },
-        Effect::LoadStashes { repo_id, limit: 50 },
-        Effect::LoadReflog {
-            repo_id,
-            limit: 200,
-        },
-        Effect::LoadRebaseState { repo_id },
-        Effect::LoadLog {
-            repo_id,
-            scope: history_scope,
-            limit: 200,
-            cursor: None,
-        },
-    ]
-}
+// Note: repo refresh scheduling is handled by `refresh_primary_effects` / `refresh_full_effects`
+// with coalescing/backpressure (`RepoLoadsInFlight`).

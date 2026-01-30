@@ -44,6 +44,13 @@ pub enum RepoCommandKind {
     UnstageHunk,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepoExternalChange {
+    Worktree,
+    GitState,
+    Both,
+}
+
 pub enum Msg {
     OpenRepo(PathBuf),
     RestoreSession {
@@ -58,6 +65,10 @@ pub enum Msg {
     },
     ReloadRepo {
         repo_id: RepoId,
+    },
+    RepoExternallyChanged {
+        repo_id: RepoId,
+        change: RepoExternalChange,
     },
     SetHistoryScope {
         repo_id: RepoId,
@@ -355,6 +366,7 @@ pub enum Msg {
     LogLoaded {
         repo_id: RepoId,
         scope: LogScope,
+        cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
     },
     TagsLoaded {
@@ -463,6 +475,11 @@ impl std::fmt::Debug for Msg {
             Msg::ReloadRepo { repo_id } => f
                 .debug_struct("ReloadRepo")
                 .field("repo_id", repo_id)
+                .finish(),
+            Msg::RepoExternallyChanged { repo_id, change } => f
+                .debug_struct("RepoExternallyChanged")
+                .field("repo_id", repo_id)
+                .field("change", change)
                 .finish(),
             Msg::SetHistoryScope { repo_id, scope } => f
                 .debug_struct("SetHistoryScope")
@@ -880,11 +897,13 @@ impl std::fmt::Debug for Msg {
             Msg::LogLoaded {
                 repo_id,
                 scope,
+                cursor,
                 result,
             } => f
                 .debug_struct("LogLoaded")
                 .field("repo_id", repo_id)
                 .field("scope", scope)
+                .field("cursor", cursor)
                 .field("result", result)
                 .finish(),
             Msg::TagsLoaded { repo_id, result } => f

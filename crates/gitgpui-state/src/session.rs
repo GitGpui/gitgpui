@@ -46,47 +46,19 @@ pub fn load() -> UiSession {
 }
 
 pub fn load_from_path(path: &Path) -> UiSession {
-    let Ok(contents) = fs::read_to_string(path) else {
+    let Some(file) = load_file_v2(path) else {
         return UiSession::default();
     };
 
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
-        return UiSession::default();
-    };
-
-    let version = value
-        .get("version")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(SESSION_FILE_VERSION_V1 as u64) as u32;
-
-    match version {
-        SESSION_FILE_VERSION_V1 => {
-            let Ok(file) = serde_json::from_value::<UiSessionFileV1>(value) else {
-                return UiSession::default();
-            };
-            let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
-            UiSession {
-                open_repos,
-                active_repo,
-                ..UiSession::default()
-            }
-        }
-        SESSION_FILE_VERSION_V2 => {
-            let Ok(file) = serde_json::from_value::<UiSessionFileV2>(value) else {
-                return UiSession::default();
-            };
-            let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
-            UiSession {
-                open_repos,
-                active_repo,
-                window_width: file.window_width,
-                window_height: file.window_height,
-                sidebar_width: file.sidebar_width,
-                details_width: file.details_width,
-                date_time_format: file.date_time_format,
-            }
-        }
-        _ => UiSession::default(),
+    let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
+    UiSession {
+        open_repos,
+        active_repo,
+        window_width: file.window_width,
+        window_height: file.window_height,
+        sidebar_width: file.sidebar_width,
+        details_width: file.details_width,
+        date_time_format: file.date_time_format,
     }
 }
 
@@ -352,6 +324,44 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.open_repos, vec![repo_a, repo_b.clone()]);
         assert_eq!(loaded.active_repo, Some(repo_b));
+    }
+
+    #[test]
+    fn load_from_path_migrates_v1_files() {
+        let dir = env::temp_dir().join(format!(
+            "gitgpui-session-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+        let _ = fs::create_dir_all(&repo_a);
+        let _ = fs::create_dir_all(&repo_b);
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV1 {
+                version: SESSION_FILE_VERSION_V1,
+                open_repos: vec![
+                    repo_a.to_string_lossy().to_string(),
+                    repo_b.to_string_lossy().to_string(),
+                ],
+                active_repo: Some(repo_b.to_string_lossy().to_string()),
+            },
+        )
+        .expect("persist succeeds");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.open_repos, vec![repo_a, repo_b.clone()]);
+        assert_eq!(loaded.active_repo, Some(repo_b));
+        assert_eq!(loaded.window_width, None);
+        assert_eq!(loaded.date_time_format, None);
     }
 
     #[test]

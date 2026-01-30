@@ -52,7 +52,8 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                     path: file_rel.clone(),
                     kind: gitgpui_core::domain::FileStatusKind::Untracked,
                 }],
-            });
+            }
+            .into());
             repo.diff_target = Some(gitgpui_core::domain::DiffTarget::WorkingTree {
                 path: file_rel.clone(),
                 area: gitgpui_core::domain::DiffArea::Unstaged,
@@ -141,10 +142,12 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
                     workdir: workdir.clone(),
                 },
             );
-            repo.status = gitgpui_state::model::Loadable::Ready(Default::default());
+            repo.status = gitgpui_state::model::Loadable::Ready(
+                gitgpui_core::domain::RepoStatus::default().into(),
+            );
             repo.diff_target = Some(target);
             repo.diff_rev = 1;
-            repo.diff = gitgpui_state::model::Loadable::Ready(diff);
+            repo.diff = gitgpui_state::model::Loadable::Ready(diff.into());
 
             this.state.active_repo = Some(repo_id);
             this.state.repos = vec![repo];

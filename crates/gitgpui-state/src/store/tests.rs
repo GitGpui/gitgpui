@@ -2,8 +2,8 @@ use super::*;
 use crate::model::{CloneOpStatus, DiagnosticKind, Loadable, RepoState};
 use crate::msg::Effect;
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, DiffTarget, LogCursor, LogPage, LogScope, ReflogEntry,
-    Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+    Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
+    ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{CommandOutput, PullMode, Result};
@@ -1758,6 +1758,374 @@ fn diagnostics_are_capped() {
 }
 
 #[test]
+fn external_worktree_change_refreshes_status_and_selected_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(gitgpui_core::domain::RepoStatus::default()),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        "expected status refresh"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id, .. } if *repo_id == RepoId(1))),
+        "expected diff refresh"
+    );
+    assert!(
+        effects.iter().any(|e| {
+            matches!(e, Effect::LoadDiffFile { repo_id, .. } if *repo_id == RepoId(1))
+        }),
+        "expected diff-file refresh"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::LoadLog { .. })),
+        "did not expect history refresh on pure worktree changes"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadHeadBranch { .. })),
+        "did not expect head-branch refresh on pure worktree changes"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. })),
+        "did not expect upstream divergence refresh on pure worktree changes"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRebaseState { .. })),
+        "did not expect rebase state refresh on pure worktree changes"
+    );
+}
+
+#[test]
+fn external_git_state_change_refreshes_history_and_selected_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::HeadBranchLoaded {
+            repo_id: RepoId(1),
+            result: Ok("main".to_string()),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UpstreamDivergenceLoaded {
+            repo_id: RepoId(1),
+            result: Ok(None),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RebaseStateLoaded {
+            repo_id: RepoId(1),
+            result: Ok(false),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(gitgpui_core::domain::RepoStatus::default()),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert!(
+        effects.iter().any(|e| {
+            matches!(e, Effect::LoadLog { repo_id, .. } if *repo_id == RepoId(1))
+        }),
+        "expected history refresh"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == RepoId(1))),
+        "expected status refresh"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id } if *repo_id == RepoId(1))),
+        "expected head-branch refresh"
+    );
+    assert!(
+        effects.iter().any(|e| {
+            matches!(e, Effect::LoadUpstreamDivergence { repo_id } if *repo_id == RepoId(1))
+        }),
+        "expected upstream divergence refresh"
+    );
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::LoadRebaseState { repo_id } if *repo_id == RepoId(1))),
+        "expected rebase state refresh"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id, .. } if *repo_id == RepoId(1))),
+        "expected diff refresh"
+    );
+}
+
+#[test]
+fn external_git_state_refresh_is_coalesced_and_replayed_once() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let effects1 = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadHeadBranch { .. })));
+    assert!(effects1
+        .iter()
+        .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. })));
+    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadRebaseState { .. })));
+    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadStatus { .. })));
+    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
+
+    // Second refresh request while the first one is in flight is coalesced into a single pending
+    // refresh per load kind (no immediate duplicate effects).
+    let effects2 = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(
+        effects2.is_empty(),
+        "expected coalescing/backpressure, got {effects2:?}"
+    );
+
+    // Completing each in-flight load replays exactly one more load for that kind.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::HeadBranchLoaded {
+            repo_id: RepoId(1),
+            result: Ok("main".to_string()),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadHeadBranch { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UpstreamDivergenceLoaded {
+            repo_id: RepoId(1),
+            result: Ok(None),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadUpstreamDivergence { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RebaseStateLoaded {
+            repo_id: RepoId(1),
+            result: Ok(false),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadRebaseState { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StatusLoaded {
+            repo_id: RepoId(1),
+            result: Ok(gitgpui_core::domain::RepoStatus::default()),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadStatus { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            }),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadLog {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            limit: 200,
+            cursor: None
+        }]
+    ));
+}
+
+#[test]
 fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(1);
@@ -1808,7 +2176,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
 
     let repo_state = &mut state.repos[0];
     repo_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(LogPage {
+    repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".to_string()),
             parent_ids: Vec::new(),
@@ -1819,7 +2187,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".to_string()),
         }),
-    });
+    }));
     repo_state.log_loading_more = false;
 
     let effects = reduce(
@@ -1857,10 +2225,10 @@ fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
 
     let repo_state = &mut state.repos[0];
     repo_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(LogPage {
+    repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![],
         next_cursor: None,
-    });
+    }));
 
     let effects = reduce(
         &mut repos,
@@ -1902,7 +2270,7 @@ fn load_more_history_noops_when_no_next_cursor() {
     state.active_repo = Some(RepoId(1));
 
     let repo_state = &mut state.repos[0];
-    repo_state.log = Loadable::Ready(LogPage {
+    repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".to_string()),
             parent_ids: Vec::new(),
@@ -1911,7 +2279,7 @@ fn load_more_history_noops_when_no_next_cursor() {
             time: SystemTime::UNIX_EPOCH,
         }],
         next_cursor: None,
-    });
+    }));
 
     let effects = reduce(
         &mut repos,
@@ -1940,7 +2308,7 @@ fn log_loaded_appends_when_loading_more() {
 
     let repo_state = &mut state.repos[0];
     repo_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(LogPage {
+    repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".to_string()),
             parent_ids: Vec::new(),
@@ -1951,7 +2319,7 @@ fn log_loaded_appends_when_loading_more() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".to_string()),
         }),
-    });
+    }));
     repo_state.log_loading_more = true;
 
     let _effects = reduce(
@@ -1961,6 +2329,9 @@ fn log_loaded_appends_when_loading_more() {
         Msg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            cursor: Some(LogCursor {
+                last_seen: CommitId("c1".to_string()),
+            }),
             result: Ok(LogPage {
                 commits: vec![Commit {
                     id: CommitId("c2".to_string()),

@@ -16,6 +16,111 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::{process::Command, str};
 
+struct CursorGate<'a> {
+    cursor: Option<&'a LogCursor>,
+    started: bool,
+}
+
+impl<'a> CursorGate<'a> {
+    fn new(cursor: Option<&'a LogCursor>) -> Self {
+        Self {
+            cursor,
+            started: cursor.is_none(),
+        }
+    }
+
+    fn should_skip(&mut self, id: &str) -> bool {
+        if self.started {
+            return false;
+        }
+
+        let Some(cursor) = self.cursor else {
+            self.started = true;
+            return false;
+        };
+
+        if cursor.last_seen.0 == id {
+            self.started = true;
+        }
+
+        true
+    }
+}
+
+fn commit_from_walk_info<'repo>(
+    info: &gix::revision::walk::Info<'repo>,
+    id: String,
+) -> Result<Commit> {
+    let commit_obj = info
+        .object()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
+
+    let summary = commit_obj
+        .message_raw_sloppy()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_str_lossy()
+        .into_owned();
+
+    let author = commit_obj
+        .author()
+        .map(|s| s.name.to_str_lossy().into_owned())
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let seconds = commit_obj.time().map(|t| t.seconds).unwrap_or(0);
+    let time = unix_seconds_to_system_time_or_epoch(seconds);
+
+    let parent_ids = info
+        .parent_ids()
+        .map(|parent_id| CommitId(parent_id.detach().to_string()))
+        .collect::<Vec<_>>();
+
+    Ok(Commit {
+        id: CommitId(id),
+        parent_ids,
+        summary,
+        author,
+        time,
+    })
+}
+
+fn log_page_from_walk<'repo, E>(
+    walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
+    limit: usize,
+    cursor: Option<&LogCursor>,
+) -> Result<LogPage>
+where
+    E: std::fmt::Display,
+{
+    let mut cursor_gate = CursorGate::new(cursor);
+    let mut commits = Vec::with_capacity(limit.min(2048));
+    let mut next_cursor: Option<LogCursor> = None;
+
+    for info in walk {
+        let info = info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+        let id = info.id().detach().to_string();
+
+        if cursor_gate.should_skip(&id) {
+            continue;
+        }
+
+        commits.push(commit_from_walk_info(&info, id)?);
+
+        if commits.len() >= limit {
+            next_cursor = commits.last().map(|c| LogCursor {
+                last_seen: c.id.clone(),
+            });
+            break;
+        }
+    }
+
+    Ok(LogPage {
+        commits,
+        next_cursor,
+    })
+}
+
 pub struct GixBackend;
 
 impl Default for GixBackend {
@@ -61,7 +166,7 @@ impl GitRepository for GixRepo {
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))?
             .detach();
 
-        let mut walk = repo
+        let walk = repo
             .rev_walk([head_id])
             .sorting(gix::revision::walk::Sorting::ByCommitTime(
                 CommitTimeOrder::NewestFirst,
@@ -69,74 +174,7 @@ impl GitRepository for GixRepo {
             .first_parent_only()
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-
-        let mut started = cursor.is_none();
-        let mut commits = Vec::with_capacity(limit.min(2048));
-        let mut next_cursor: Option<LogCursor> = None;
-
-        while let Some(info) = walk.next() {
-            let info =
-                info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
-            let id = info.id().detach().to_string();
-
-            if !started {
-                if let Some(c) = cursor {
-                    if c.last_seen.0 == id {
-                        started = true;
-                    }
-                }
-                continue;
-            }
-
-            let commit_obj = info
-                .object()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
-
-            let summary = commit_obj
-                .message_raw_sloppy()
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_str_lossy()
-                .into_owned();
-
-            let author = commit_obj
-                .author()
-                .map(|s| s.name.to_str_lossy().into_owned())
-                .unwrap_or_else(|_| "unknown".to_string());
-
-            let seconds = commit_obj.time().map(|t| t.seconds).unwrap_or(0);
-            let time = if seconds >= 0 {
-                SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64)
-            } else {
-                SystemTime::UNIX_EPOCH
-            };
-
-            let parent_ids = info
-                .parent_ids()
-                .map(|p| CommitId(p.detach().to_string()))
-                .collect::<Vec<_>>();
-
-            commits.push(Commit {
-                id: CommitId(id),
-                parent_ids,
-                summary,
-                author,
-                time,
-            });
-
-            if commits.len() >= limit {
-                next_cursor = commits.last().map(|c| LogCursor {
-                    last_seen: c.id.clone(),
-                });
-                break;
-            }
-        }
-
-        Ok(LogPage {
-            commits,
-            next_cursor,
-        })
+        log_page_from_walk(walk, limit, cursor)
     }
 
     fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
@@ -178,81 +216,14 @@ impl GitRepository for GixRepo {
             }
         }
 
-        let mut walk = repo
+        let walk = repo
             .rev_walk(tips)
             .sorting(gix::revision::walk::Sorting::ByCommitTime(
                 CommitTimeOrder::NewestFirst,
             ))
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-
-        let mut started = cursor.is_none();
-        let mut commits = Vec::with_capacity(limit.min(2048));
-        let mut next_cursor: Option<LogCursor> = None;
-
-        while let Some(info) = walk.next() {
-            let info =
-                info.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
-            let id = info.id().detach().to_string();
-
-            if !started {
-                if let Some(c) = cursor {
-                    if c.last_seen.0 == id {
-                        started = true;
-                    }
-                }
-                continue;
-            }
-
-            let commit_obj = info
-                .object()
-                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
-
-            let summary = commit_obj
-                .message_raw_sloppy()
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_str_lossy()
-                .into_owned();
-
-            let author = commit_obj
-                .author()
-                .map(|s| s.name.to_str_lossy().into_owned())
-                .unwrap_or_else(|_| "unknown".to_string());
-
-            let seconds = commit_obj.time().map(|t| t.seconds).unwrap_or(0);
-            let time = if seconds >= 0 {
-                SystemTime::UNIX_EPOCH + Duration::from_secs(seconds as u64)
-            } else {
-                SystemTime::UNIX_EPOCH
-            };
-
-            let parent_ids = info
-                .parent_ids()
-                .map(|p| CommitId(p.detach().to_string()))
-                .collect::<Vec<_>>();
-
-            commits.push(Commit {
-                id: CommitId(id),
-                parent_ids,
-                summary,
-                author,
-                time,
-            });
-
-            if commits.len() >= limit {
-                next_cursor = commits.last().map(|c| LogCursor {
-                    last_seen: c.id.clone(),
-                });
-                break;
-            }
-        }
-
-        Ok(LogPage {
-            commits,
-            next_cursor,
-        })
+        log_page_from_walk(walk, limit, cursor)
     }
 
     fn log_file_page(&self, path: &Path, limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
@@ -380,23 +351,15 @@ impl GitRepository for GixRepo {
     }
 
     fn current_branch(&self) -> Result<String> {
-        let output = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("rev-parse")
             .arg("--abbrev-ref")
-            .arg("HEAD")
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        if !output.status.success() {
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git rev-parse failed: {stderr}"
-            ))));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .arg("HEAD");
+        Ok(run_git_capture(cmd, "git rev-parse --abbrev-ref HEAD")?
+            .trim()
+            .to_string())
     }
 
     fn list_branches(&self) -> Result<Vec<Branch>> {
@@ -443,23 +406,14 @@ impl GitRepository for GixRepo {
             Some(UpstreamDivergence { ahead, behind })
         }
 
-        let output = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("for-each-ref")
             .arg("--format=%(refname:short)\t%(objectname)\t%(upstream:short)\t%(upstream:track)")
-            .arg("refs/heads")
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+            .arg("refs/heads");
+        let stdout = run_git_capture(cmd, "git for-each-ref refs/heads")?;
 
-        if !output.status.success() {
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git for-each-ref failed: {stderr}"
-            ))));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let mut branches = Vec::new();
         for line in stdout.lines() {
             let mut parts = line.split('\t');
@@ -537,25 +491,14 @@ impl GitRepository for GixRepo {
     }
 
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
-        let output = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("for-each-ref")
             .arg("--format=%(refname:strip=2)")
-            .arg("refs/remotes")
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        if !output.status.success() {
-            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git for-each-ref refs/remotes failed: {stderr}"
-            ))));
-        }
-
-        Ok(parse_remote_branches(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+            .arg("refs/remotes");
+        let output = run_git_capture(cmd, "git for-each-ref refs/remotes")?;
+        Ok(parse_remote_branches(&output))
     }
 
     fn status(&self) -> Result<RepoStatus> {
@@ -676,8 +619,8 @@ impl GitRepository for GixRepo {
 
     fn pull_branch_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
         let command_str = format!("git pull --no-rebase {remote} {branch}");
-        let output = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("-c")
             .arg("color.ui=false")
@@ -685,62 +628,22 @@ impl GitRepository for GixRepo {
             .arg("pull")
             .arg("--no-rebase")
             .arg(remote)
-            .arg(branch)
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let exit_code = output.status.code();
-        if !output.status.success() {
-            let msg = stderr.trim().to_string();
-            return Err(Error::new(ErrorKind::Backend(if msg.is_empty() {
-                "git pull failed".to_string()
-            } else {
-                format!("git pull failed: {msg}")
-            })));
-        }
-
-        Ok(CommandOutput {
-            command: command_str,
-            stdout,
-            stderr,
-            exit_code,
-        })
+            .arg(branch);
+        run_git_with_output(cmd, &command_str)
     }
 
     fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
         let command_str = format!("git merge --no-edit {reference}");
-        let output = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("-c")
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("merge")
             .arg("--no-edit")
-            .arg(reference)
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        let exit_code = output.status.code();
-        if !output.status.success() {
-            let msg = stderr.trim().to_string();
-            return Err(Error::new(ErrorKind::Backend(if msg.is_empty() {
-                "git merge failed".to_string()
-            } else {
-                format!("git merge failed: {msg}")
-            })));
-        }
-
-        Ok(CommandOutput {
-            command: command_str,
-            stdout,
-            stderr,
-            exit_code,
-        })
+            .arg(reference);
+        run_git_with_output(cmd, &command_str)
     }
 
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
@@ -1930,9 +1833,14 @@ fn run_git_with_output(mut cmd: Command, label: &str) -> Result<CommandOutput> {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if !output.status.success() {
+        let stderr_trimmed = stderr.trim();
         return Err(Error::new(ErrorKind::Backend(format!(
-            "{label} failed: {}",
-            stderr.trim()
+            "{}",
+            if stderr_trimmed.is_empty() {
+                format!("{label} failed")
+            } else {
+                format!("{label} failed: {stderr_trimmed}")
+            }
         ))));
     }
 
@@ -2209,6 +2117,10 @@ fn unix_seconds_to_system_time(seconds: i64) -> Option<SystemTime> {
     }
 }
 
+fn unix_seconds_to_system_time_or_epoch(seconds: i64) -> SystemTime {
+    unix_seconds_to_system_time(seconds).unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
 fn parse_reflog_index(selector: &str) -> Option<usize> {
     let start = selector.rfind("@{")? + 2;
     let end = selector[start..].find('}')? + start;
@@ -2254,6 +2166,28 @@ mod tests {
                     name: "feature/foo".to_string()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn cursor_gate_skips_until_after_last_seen() {
+        let cursor = LogCursor {
+            last_seen: CommitId("c2".to_string()),
+        };
+        let mut gate = CursorGate::new(Some(&cursor));
+
+        assert!(gate.should_skip("c1"));
+        assert!(gate.should_skip("c2"));
+        assert!(!gate.should_skip("c3"));
+        assert!(!gate.should_skip("c4"));
+    }
+
+    #[test]
+    fn unix_seconds_to_system_time_clamps_negative_to_epoch() {
+        assert_eq!(unix_seconds_to_system_time_or_epoch(-1), SystemTime::UNIX_EPOCH);
+        assert_eq!(
+            unix_seconds_to_system_time_or_epoch(1),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1)
         );
     }
 }

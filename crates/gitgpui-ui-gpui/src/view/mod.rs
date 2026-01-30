@@ -22,7 +22,7 @@ use gpui::{
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::time::Duration;
 
 mod chrome;
@@ -213,6 +213,47 @@ struct StatusMultiSelection {
     unstaged_anchor: Option<std::path::PathBuf>,
     staged: Vec<std::path::PathBuf>,
     staged_anchor: Option<std::path::PathBuf>,
+}
+
+fn status_entries_contain_path(entries: &[FileStatus], path: &std::path::PathBuf) -> bool {
+    entries.iter().any(|e| &e.path == path)
+}
+
+fn reconcile_status_multi_selection(selection: &mut StatusMultiSelection, status: &RepoStatus) {
+    selection
+        .unstaged
+        .retain(|p| status_entries_contain_path(&status.unstaged, p));
+    if selection
+        .unstaged_anchor
+        .as_ref()
+        .is_some_and(|a| !status_entries_contain_path(&status.unstaged, a))
+    {
+        selection.unstaged_anchor = None;
+    }
+
+    selection
+        .staged
+        .retain(|p| status_entries_contain_path(&status.staged, p));
+    if selection
+        .staged_anchor
+        .as_ref()
+        .is_some_and(|a| !status_entries_contain_path(&status.staged, a))
+    {
+        selection.staged_anchor = None;
+    }
+}
+
+const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
+const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
+
+fn capped_word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
+    {
+        return (Vec::new(), Vec::new());
+    }
+    word_diff_ranges(old, new)
 }
 
 #[derive(Clone, Debug)]
@@ -556,6 +597,7 @@ pub struct GitGpuiView {
     hovered_repo_tab: Option<RepoId>,
 
     status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
+    status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
 
     commit_details_message_input: Entity<zed::TextInput>,
     error_banner_input: Entity<zed::TextInput>,
@@ -729,7 +771,7 @@ impl GitGpuiView {
 
     pub fn new(
         store: AppStore,
-        events: mpsc::Receiver<StoreEvent>,
+        events: smol::channel::Receiver<StoreEvent>,
         initial_path: Option<std::path::PathBuf>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -1212,6 +1254,7 @@ impl GitGpuiView {
             clone_progress_dest: None,
             hovered_repo_tab: None,
             status_multi_selection: HashMap::new(),
+            status_multi_selection_last_status: HashMap::new(),
             commit_details_message_input,
             error_banner_input,
             commit_details_delay: None,
@@ -2732,7 +2775,7 @@ impl GitGpuiView {
                 if matches!(row.kind, gitgpui_core::file_diff::FileDiffRowKind::Modify) {
                     let old = row.old.as_deref().unwrap_or("");
                     let new = row.new.as_deref().unwrap_or("");
-                    let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
                     if !old_ranges.is_empty() {
                         split_word_highlights_old[row_ix] = Some(old_ranges);
                     }
@@ -2777,7 +2820,7 @@ impl GitGpuiView {
                     K::Modify => {
                         let old = row.old.as_deref().unwrap_or("");
                         let new = row.new.as_deref().unwrap_or("");
-                        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+                        let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
@@ -3293,37 +3336,38 @@ impl GitGpuiView {
 
         self.sync_conflict_resolver(cx);
 
+        let repos = &self.state.repos;
+        let last_status = &mut self.status_multi_selection_last_status;
         self.status_multi_selection.retain(|repo_id, selection| {
-            let Some(repo) = self.state.repos.iter().find(|r| r.id == *repo_id) else {
+            let Some(repo) = repos.iter().find(|r| r.id == *repo_id) else {
+                last_status.remove(repo_id);
                 return false;
             };
+
+            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+                last_status.remove(repo_id);
+                return false;
+            }
+
             let Loadable::Ready(status) = &repo.status else {
                 return true;
             };
 
-            let unstaged: std::collections::HashSet<&std::path::PathBuf> =
-                status.unstaged.iter().map(|e| &e.path).collect();
-            selection.unstaged.retain(|p| unstaged.contains(p));
-            if selection
-                .unstaged_anchor
-                .as_ref()
-                .is_some_and(|a| !unstaged.contains(a))
-            {
-                selection.unstaged_anchor = None;
+            let status_changed = match last_status.get(repo_id) {
+                Some(prev) => !Arc::ptr_eq(prev, status),
+                None => true,
+            };
+            if status_changed {
+                last_status.insert(*repo_id, Arc::clone(status));
+                reconcile_status_multi_selection(selection, status);
             }
 
-            let staged: std::collections::HashSet<&std::path::PathBuf> =
-                status.staged.iter().map(|e| &e.path).collect();
-            selection.staged.retain(|p| staged.contains(p));
-            if selection
-                .staged_anchor
-                .as_ref()
-                .is_some_and(|a| !staged.contains(a))
-            {
-                selection.staged_anchor = None;
+            if selection.unstaged.is_empty() && selection.staged.is_empty() {
+                last_status.remove(repo_id);
+                return false;
             }
 
-            !selection.unstaged.is_empty() || !selection.staged.is_empty()
+            true
         });
 
         if prev_active_repo_id != next_repo_id {
@@ -3689,7 +3733,7 @@ impl GitGpuiView {
             for i in 0..pairs {
                 let (old_ix, old_text) = removed[i];
                 let (new_ix, new_text) = added[i];
-                let (old_ranges, new_ranges) = word_diff_ranges(old_text, new_text);
+                let (old_ranges, new_ranges) = capped_word_diff_ranges(old_text, new_text);
                 if !old_ranges.is_empty() {
                     self.diff_word_highlights[old_ix] = Some(old_ranges);
                 }
@@ -5122,23 +5166,22 @@ struct Poller {
 impl Poller {
     fn start(
         store: Arc<AppStore>,
-        events: mpsc::Receiver<StoreEvent>,
+        events: smol::channel::Receiver<StoreEvent>,
         view: WeakEntity<GitGpuiView>,
         window: &mut Window,
         cx: &mut gpui::Context<GitGpuiView>,
     ) -> Poller {
         let task = window.spawn(cx, async move |cx| {
-            let events = events;
             loop {
-                match events.try_recv() {
-                    Ok(_) => while events.try_recv().is_ok() {},
-                    Err(mpsc::TryRecvError::Empty) => {
-                        Timer::after(Duration::from_millis(10)).await;
-                        continue;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => break,
+                if events.recv().await.is_err() {
+                    break;
                 }
+                while events.try_recv().is_ok() {}
 
+                // Avoid blocking the UI thread on cloning large state.
+                // This still does a full snapshot clone today, but now it happens only when the
+                // store reports state changes (no 10ms polling loop), and coalescing ensures
+                // we do at most one pending update.
                 let snapshot = cx
                     .background_spawn({
                         let store = Arc::clone(&store);
@@ -5171,6 +5214,35 @@ mod tests {
             toast_total_lifetime(ttl),
             ttl + Duration::from_millis(TOAST_FADE_IN_MS + TOAST_FADE_OUT_MS)
         );
+    }
+
+    #[test]
+    fn reconcile_status_multi_selection_prunes_missing_paths_and_anchors() {
+        let a = PathBuf::from("a.txt");
+        let b = PathBuf::from("b.txt");
+        let c = PathBuf::from("c.txt");
+
+        let status = RepoStatus {
+            staged: vec![],
+            unstaged: vec![FileStatus {
+                path: a.clone(),
+                kind: FileStatusKind::Modified,
+            }],
+        };
+
+        let mut selection = StatusMultiSelection {
+            unstaged: vec![a.clone(), b.clone()],
+            unstaged_anchor: Some(b),
+            staged: vec![c.clone()],
+            staged_anchor: Some(c),
+        };
+
+        reconcile_status_multi_selection(&mut selection, &status);
+
+        assert_eq!(selection.unstaged, vec![a]);
+        assert!(selection.unstaged_anchor.is_none());
+        assert!(selection.staged.is_empty());
+        assert!(selection.staged_anchor.is_none());
     }
 
     #[test]
@@ -5474,6 +5546,24 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["2"]
         );
+    }
+
+    #[test]
+    fn capped_word_diff_ranges_matches_word_diff_for_small_inputs() {
+        let (old, new) = ("let x = 1;", "let x = 2;");
+        let (a_old, a_new) = word_diff_ranges(old, new);
+        let (b_old, b_new) = capped_word_diff_ranges(old, new);
+        assert_eq!(a_old, b_old);
+        assert_eq!(a_new, b_new);
+    }
+
+    #[test]
+    fn capped_word_diff_ranges_skips_huge_inputs() {
+        let old = "a".repeat(WORD_DIFF_MAX_TOTAL_BYTES + 1);
+        let new = format!("{old}x");
+        let (old_ranges, new_ranges) = capped_word_diff_ranges(&old, &new);
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
     }
 
     #[test]

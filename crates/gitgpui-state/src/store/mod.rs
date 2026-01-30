@@ -3,15 +3,18 @@ use crate::msg::{Msg, StoreEvent};
 use gitgpui_core::services::{GitBackend, GitRepository};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, mpsc};
 use std::thread;
 
 mod effects;
 mod executor;
+mod repo_monitor;
 mod reducer;
 
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
+use repo_monitor::RepoMonitorManager;
 use reducer::reduce;
 
 pub struct AppStore {
@@ -29,10 +32,11 @@ impl Clone for AppStore {
 }
 
 impl AppStore {
-    pub fn new(backend: Arc<dyn GitBackend>) -> (Self, mpsc::Receiver<StoreEvent>) {
+    pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let state = Arc::new(RwLock::new(AppState::default()));
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
-        let (event_tx, event_rx) = mpsc::channel::<StoreEvent>();
+        // Coalesced "state changed" notifications: at most one pending.
+        let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
         let thread_state = Arc::clone(&state);
         let thread_msg_tx = msg_tx.clone();
@@ -40,16 +44,67 @@ impl AppStore {
         thread::spawn(move || {
             let executor = TaskExecutor::new(default_worker_threads());
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+            let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
+            let active_repo_id = Arc::new(AtomicU64::new(0));
 
             while let Ok(msg) = msg_rx.recv() {
+                match &msg {
+                    Msg::RestoreSession { .. } => repo_monitors.stop_all(),
+                    Msg::CloseRepo { repo_id } => repo_monitors.stop(*repo_id),
+                    _ => {}
+                }
+
                 let effects = {
                     let mut app_state = thread_state.write().expect("state lock poisoned (write)");
 
                     reduce(&mut repos, &id_alloc, &mut app_state, msg)
                 };
 
-                let _ = event_tx.send(StoreEvent::StateChanged);
+                let active_value = thread_state
+                    .read()
+                    .expect("state lock poisoned (read)")
+                    .active_repo
+                    .map(|id| id.0)
+                    .unwrap_or(0);
+                active_repo_id.store(active_value, Ordering::Relaxed);
+
+                let _ = event_tx.try_send(StoreEvent::StateChanged);
+
+                // Keep filesystem monitoring scoped to the active repository only, to minimize
+                // OS watcher load in large multi-repo sessions.
+                let (active_repo, active_workdir) = {
+                    let state = thread_state
+                        .read()
+                        .expect("state lock poisoned (read)");
+                    let active_repo = state.active_repo;
+                    let active_workdir = active_repo.and_then(|repo_id| {
+                        state
+                            .repos
+                            .iter()
+                            .find(|r| r.id == repo_id)
+                            .map(|r| r.spec.workdir.clone())
+                    });
+                    (active_repo, active_workdir)
+                };
+
+                for repo_id in repo_monitors.running_repo_ids() {
+                    if Some(repo_id) != active_repo {
+                        repo_monitors.stop(repo_id);
+                    }
+                }
+
+                if let Some(repo_id) = active_repo
+                    && let Some(workdir) = active_workdir
+                    && repos.contains_key(&repo_id)
+                {
+                    repo_monitors.start(
+                        repo_id,
+                        workdir,
+                        thread_msg_tx.clone(),
+                        Arc::clone(&active_repo_id),
+                    );
+                }
 
                 for effect in effects {
                     schedule_effect(&executor, &backend, &repos, thread_msg_tx.clone(), effect);

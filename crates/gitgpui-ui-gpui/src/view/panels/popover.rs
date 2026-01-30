@@ -3725,7 +3725,8 @@ mod tests {
                         time: SystemTime::UNIX_EPOCH,
                     }],
                     next_cursor: None,
-                });
+                }
+                .into());
                 repo.tags = Loadable::Ready(vec![]);
 
                 this.state.active_repo = Some(repo_id);
@@ -3791,7 +3792,8 @@ mod tests {
                         time: SystemTime::UNIX_EPOCH,
                     }],
                     next_cursor: None,
-                });
+                }
+                .into());
                 repo.tags = Loadable::Ready(vec![
                     gitgpui_core::domain::Tag {
                         name: "release".to_string(),
@@ -3883,7 +3885,8 @@ mod tests {
                             kind: gitgpui_core::domain::FileStatusKind::Modified,
                         },
                     ],
-                });
+                }
+                .into());
 
                 this.state.active_repo = Some(repo_id);
                 this.state.repos = vec![repo];
@@ -3964,7 +3967,8 @@ mod tests {
                         },
                     ],
                     unstaged: vec![],
-                });
+                }
+                .into());
 
                 this.state.active_repo = Some(repo_id);
                 this.state.repos = vec![repo];
@@ -4037,7 +4041,8 @@ mod tests {
                         path: path.clone(),
                         kind: gitgpui_core::domain::FileStatusKind::Conflicted,
                     }],
-                });
+                }
+                .into());
                 this.state.active_repo = Some(repo_id);
                 this.state.repos = vec![repo];
                 cx.notify();

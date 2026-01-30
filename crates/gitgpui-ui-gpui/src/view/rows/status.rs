@@ -129,9 +129,10 @@ impl GitGpuiView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let Loadable::Ready(RepoStatus { unstaged, .. }) = &repo.status else {
+        let Loadable::Ready(status) = &repo.status else {
             return Vec::new();
         };
+        let unstaged = &status.unstaged;
         let selected = repo.diff_target.as_ref();
         let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
             .status_selected_paths_for_area(repo.id, DiffArea::Unstaged)
@@ -176,9 +177,10 @@ impl GitGpuiView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let Loadable::Ready(RepoStatus { staged, .. }) = &repo.status else {
+        let Loadable::Ready(status) = &repo.status else {
             return Vec::new();
         };
+        let staged = &status.staged;
         let selected = repo.diff_target.as_ref();
         let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
             .status_selected_paths_for_area(repo.id, DiffArea::Staged)

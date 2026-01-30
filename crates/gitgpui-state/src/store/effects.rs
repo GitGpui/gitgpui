@@ -117,18 +117,22 @@ pub(super) fn schedule_effect(
         } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let cursor_ref = cursor.as_ref();
-                    let _ = msg_tx.send(Msg::LogLoaded {
-                        repo_id,
-                        scope,
-                        result: match scope {
+                    let result = {
+                        let cursor_ref = cursor.as_ref();
+                        match scope {
                             gitgpui_core::domain::LogScope::CurrentBranch => {
                                 repo.log_head_page(limit, cursor_ref)
                             }
                             gitgpui_core::domain::LogScope::AllBranches => {
                                 repo.log_all_branches_page(limit, cursor_ref)
                             }
-                        },
+                        }
+                    };
+                    let _ = msg_tx.send(Msg::LogLoaded {
+                        repo_id,
+                        scope,
+                        cursor,
+                        result,
                     });
                 });
             }
