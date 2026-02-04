@@ -2350,6 +2350,7 @@ name = "gitgpui-state"
 version = "0.1.0"
 dependencies = [
  "gitgpui-core",
+ "globset",
  "notify",
  "serde",
  "serde_json",

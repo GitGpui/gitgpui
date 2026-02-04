@@ -1,6 +1,8 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange};
+use globset::{Glob, GlobMatcher};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,6 +11,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+enum MonitorMsg {
+    Event(notify::Result<notify::Event>),
+    Stop,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DebouncedChange {
@@ -106,7 +113,7 @@ impl RepoMonitorManager {
         let Some(handle) = self.handles.remove(&repo_id) else {
             return;
         };
-        let _ = handle.stop_tx.send(());
+        let _ = handle.msg_tx.send(MonitorMsg::Stop);
         let _ = handle.join.join();
     }
 
@@ -124,35 +131,212 @@ impl RepoMonitorManager {
         if self.handles.contains_key(&repo_id) {
             return;
         }
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
+        let monitor_tx_for_notify = monitor_tx.clone();
         let join = thread::spawn(move || {
-            repo_monitor_thread(repo_id, workdir, msg_tx, stop_rx, active_repo_id)
+            repo_monitor_thread(
+                repo_id,
+                workdir,
+                msg_tx,
+                monitor_rx,
+                monitor_tx_for_notify,
+                active_repo_id,
+            )
         });
-        self.handles.insert(repo_id, RepoMonitorHandle { stop_tx, join });
+        self.handles.insert(
+            repo_id,
+            RepoMonitorHandle {
+                msg_tx: monitor_tx,
+                join,
+            },
+        );
     }
 }
 
 struct RepoMonitorHandle {
-    stop_tx: mpsc::Sender<()>,
+    msg_tx: mpsc::Sender<MonitorMsg>,
     join: thread::JoinHandle<()>,
+}
+
+#[derive(Clone)]
+struct GitignoreRule {
+    matcher: GlobMatcher,
+    negated: bool,
+    dir_self_only: bool,
+}
+
+#[derive(Clone, Default)]
+struct GitignoreRules {
+    rules: Vec<GitignoreRule>,
+}
+
+impl GitignoreRules {
+    fn load(workdir: &Path, git_dir: Option<&Path>) -> Self {
+        let mut rules = Vec::new();
+        load_gitignore_file_into(&mut rules, &workdir.join(".gitignore"), true);
+        if let Some(git_dir) = git_dir {
+            load_gitignore_file_into(&mut rules, &git_dir.join("info").join("exclude"), true);
+        }
+        Self { rules }
+    }
+
+    fn is_ignored_rel(&self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
+        let mut ignored = false;
+        for rule in &self.rules {
+            if rule.dir_self_only && is_dir_hint != Some(true) {
+                continue;
+            }
+            if rule.matcher.is_match(rel) {
+                ignored = !rule.negated;
+            }
+        }
+        ignored
+    }
+}
+
+fn load_gitignore_file_into(rules: &mut Vec<GitignoreRule>, path: &Path, base_is_repo_root: bool) {
+    if !base_is_repo_root {
+        return;
+    }
+    let Ok(contents) = fs::read_to_string(path) else {
+        return;
+    };
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        // Comments (unless escaped).
+        if line.starts_with('#') {
+            continue;
+        }
+
+        let (negated, pattern) = parse_gitignore_pattern(line);
+        let Some(pattern) = pattern else {
+            continue;
+        };
+        let (globs, dir_self_only_globs) = gitignore_pattern_to_globs(&pattern);
+        for glob in globs {
+            let Ok(glob) = Glob::new(&glob) else {
+                continue;
+            };
+            rules.push(GitignoreRule {
+                matcher: glob.compile_matcher(),
+                negated,
+                dir_self_only: false,
+            });
+        }
+        for glob in dir_self_only_globs {
+            let Ok(glob) = Glob::new(&glob) else {
+                continue;
+            };
+            rules.push(GitignoreRule {
+                matcher: glob.compile_matcher(),
+                negated,
+                dir_self_only: true,
+            });
+        }
+    }
+}
+
+fn parse_gitignore_pattern(line: &str) -> (bool, Option<String>) {
+    // Handle escaping of leading '!' and '#'.
+    if let Some(rest) = line.strip_prefix("\\!") {
+        return (false, Some(rest.to_string()));
+    }
+    if let Some(rest) = line.strip_prefix("\\#") {
+        return (false, Some(rest.to_string()));
+    }
+
+    let (negated, line) = if let Some(rest) = line.strip_prefix('!') {
+        (true, rest)
+    } else {
+        (false, line)
+    };
+
+    let line = line.trim();
+    if line.is_empty() {
+        return (negated, None);
+    }
+
+    // Ignore a bare "/" rule (special in gitignore); treat as unusable here.
+    if line == "/" {
+        return (negated, None);
+    }
+
+    // For the purposes of this watcher, we treat root `.gitignore` semantics:
+    // - Patterns containing '/' are anchored to the repo root.
+    // - Patterns without '/' match at any directory depth.
+    //
+    // This isn't a full implementation of gitignore semantics, but it covers the common cases
+    // that cause watcher churn (e.g. `target/`, `node_modules/`, `*.log`).
+    (negated, Some(line.to_string()))
+}
+
+fn gitignore_pattern_to_globs(pattern: &str) -> (Vec<String>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut dir_self_only = Vec::new();
+
+    // Strip leading "./" and leading "/" (repo-root anchoring).
+    let mut pat = pattern.trim_start_matches("./");
+    if let Some(stripped) = pat.strip_prefix('/') {
+        pat = stripped;
+    }
+
+    if pat.is_empty() {
+        return (out, dir_self_only);
+    }
+
+    let dir_only = pat.ends_with('/');
+    let pat = pat.trim_end_matches('/');
+    if pat.is_empty() {
+        return (out, dir_self_only);
+    }
+
+    let anchored = pat.contains('/');
+
+    let mut bases = Vec::new();
+    if anchored {
+        bases.push(pat.to_string());
+    } else {
+        bases.push(pat.to_string());
+        bases.push(format!("**/{pat}"));
+    }
+
+    for base in bases {
+        if dir_only {
+            out.push(format!("{base}/**"));
+            dir_self_only.push(base);
+        } else {
+            out.push(base.clone());
+            out.push(format!("{base}/**"));
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    dir_self_only.sort();
+    dir_self_only.dedup();
+    (out, dir_self_only)
 }
 
 fn repo_monitor_thread(
     repo_id: RepoId,
     workdir: PathBuf,
     msg_tx: mpsc::Sender<Msg>,
-    stop_rx: mpsc::Receiver<()>,
+    monitor_rx: mpsc::Receiver<MonitorMsg>,
+    monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
 ) {
     let workdir = workdir.canonicalize().unwrap_or(workdir);
     let git_dir = resolve_git_dir(&workdir);
-
-    let (event_tx, event_rx) = mpsc::channel::<notify::Result<notify::Event>>();
+    let mut gitignore = GitignoreRules::load(&workdir, git_dir.as_deref());
 
     let watcher = notify::recommended_watcher({
-        let event_tx = event_tx.clone();
+        let monitor_tx = monitor_tx.clone();
         move |res| {
-            let _ = event_tx.send(res);
+            let _ = monitor_tx.send(MonitorMsg::Event(res));
         }
     });
 
@@ -196,22 +380,22 @@ fn repo_monitor_thread(
     };
 
     loop {
-        if stop_rx.try_recv().is_ok() {
-            break;
-        }
-
         let now = Instant::now();
         let timeout = debouncer.next_timeout(now).unwrap_or(idle_tick);
 
-        match event_rx.recv_timeout(timeout) {
-            Ok(Ok(event)) => {
-                let change = classify_repo_change(&workdir, git_dir.as_deref(), &event);
-                let now = Instant::now();
-                if let Some(to_flush) = debouncer.push(change, now) {
-                    flush(to_flush);
+        match monitor_rx.recv_timeout(timeout) {
+            Ok(MonitorMsg::Stop) => break,
+            Ok(MonitorMsg::Event(Ok(event))) => {
+                if let Some(change) =
+                    classify_repo_event(&workdir, git_dir.as_deref(), &mut gitignore, &event)
+                {
+                    let now = Instant::now();
+                    if let Some(to_flush) = debouncer.push(change, now) {
+                        flush(to_flush);
+                    }
                 }
             }
-            Ok(Err(_)) => {
+            Ok(MonitorMsg::Event(Err(_))) => {
                 let now = Instant::now();
                 if let Some(to_flush) = debouncer.push(RepoExternalChange::Both, now) {
                     flush(to_flush);
@@ -263,33 +447,55 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
     }
 }
 
-fn classify_repo_change(
+fn classify_repo_event(
     workdir: &Path,
     git_dir: Option<&Path>,
+    gitignore: &mut GitignoreRules,
     event: &notify::Event,
-) -> RepoExternalChange {
+) -> Option<RepoExternalChange> {
+    if should_ignore_event_kind(event) {
+        return None;
+    }
+
+    // If notify indicates a rescan is needed, assume anything could have changed.
+    if event.need_rescan() {
+        return Some(RepoExternalChange::Both);
+    }
+
+    // Update ignore rules if the ignore config itself changes.
+    if event.paths.iter().any(|p| is_gitignore_config_path(workdir, git_dir, p)) {
+        *gitignore = GitignoreRules::load(workdir, git_dir);
+        return Some(RepoExternalChange::Worktree);
+    }
+
     if event.paths.is_empty() {
-        return RepoExternalChange::Both;
+        return Some(RepoExternalChange::Both);
     }
 
     let mut saw_worktree = false;
     let mut saw_git = false;
+    let is_dir_hint = path_dir_hint(event);
 
     for path in &event.paths {
         if is_git_related_path(workdir, git_dir, path) {
             saw_git = true;
         } else {
+            if is_ignored_worktree_path_with_hint(workdir, gitignore, path, is_dir_hint) {
+                continue;
+            }
             saw_worktree = true;
         }
         if saw_git && saw_worktree {
-            return RepoExternalChange::Both;
+            return Some(RepoExternalChange::Both);
         }
     }
 
     if saw_git {
-        RepoExternalChange::GitState
+        Some(RepoExternalChange::GitState)
+    } else if saw_worktree {
+        Some(RepoExternalChange::Worktree)
     } else {
-        RepoExternalChange::Worktree
+        None
     }
 }
 
@@ -301,11 +507,57 @@ fn is_git_related_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> b
     git_dir.is_some_and(|git_dir| path.starts_with(git_dir))
 }
 
+fn should_ignore_event_kind(event: &notify::Event) -> bool {
+    match &event.kind {
+        // Reading repo state should not cause a refresh loop; ignore access events except
+        // close-after-write which indicates a write has completed.
+        notify::EventKind::Access(AccessKind::Close(AccessMode::Write)) => false,
+        notify::EventKind::Access(_) => true,
+        _ => false,
+    }
+}
+
+fn is_gitignore_config_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
+    if path == &workdir.join(".gitignore") {
+        return true;
+    }
+    git_dir.is_some_and(|git_dir| path == &git_dir.join("info").join("exclude"))
+}
+
+fn is_ignored_worktree_path_with_hint(
+    workdir: &Path,
+    gitignore: &GitignoreRules,
+    path: &Path,
+    is_dir_hint: Option<bool>,
+) -> bool {
+    let Ok(rel) = path.strip_prefix(workdir) else {
+        return false;
+    };
+    gitignore.is_ignored_rel(rel, is_dir_hint)
+}
+
+fn path_dir_hint(event: &notify::Event) -> Option<bool> {
+    match &event.kind {
+        notify::EventKind::Create(kind) => match kind {
+            notify::event::CreateKind::Folder => Some(true),
+            notify::event::CreateKind::File => Some(false),
+            _ => None,
+        },
+        notify::EventKind::Remove(kind) => match kind {
+            notify::event::RemoveKind::Folder => Some(true),
+            notify::event::RemoveKind::File => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::SystemTime;
     use notify::EventKind;
+    use notify::event::{AccessKind, AccessMode, CreateKind};
 
     #[test]
     fn resolve_git_dir_handles_dot_git_directory() {
@@ -383,8 +635,13 @@ mod tests {
             attrs: Default::default(),
         };
         assert_eq!(
-            classify_repo_change(&workdir, Some(&workdir.join(".git")), &event),
-            RepoExternalChange::GitState
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            Some(RepoExternalChange::GitState)
         );
 
         let event = notify::Event {
@@ -393,8 +650,13 @@ mod tests {
             attrs: Default::default(),
         };
         assert_eq!(
-            classify_repo_change(&workdir, Some(&workdir.join(".git")), &event),
-            RepoExternalChange::Worktree
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            Some(RepoExternalChange::Worktree)
         );
 
         let event = notify::Event {
@@ -403,8 +665,13 @@ mod tests {
             attrs: Default::default(),
         };
         assert_eq!(
-            classify_repo_change(&workdir, Some(&workdir.join(".git")), &event),
-            RepoExternalChange::Both
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            Some(RepoExternalChange::Both)
         );
     }
 
@@ -443,5 +710,104 @@ mod tests {
             Some(RepoExternalChange::GitState)
         );
         assert!(!d.is_pending());
+    }
+
+    #[test]
+    fn access_events_do_not_trigger_refresh_loops() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitgpui-monitor-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let workdir = dir.join("repo");
+        let _ = fs::create_dir_all(workdir.join(".git"));
+
+        let event = notify::Event {
+            kind: EventKind::Access(AccessKind::Open(AccessMode::Read)),
+            paths: vec![workdir.join(".git").join("index")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            None
+        );
+
+        let event = notify::Event {
+            kind: EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            paths: vec![workdir.join("file.txt")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            None
+        );
+
+        let event = notify::Event {
+            kind: EventKind::Access(AccessKind::Close(AccessMode::Write)),
+            paths: vec![workdir.join("file.txt")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut GitignoreRules::default(),
+                &event
+            ),
+            Some(RepoExternalChange::Worktree)
+        );
+    }
+
+    #[test]
+    fn gitignore_rules_ignore_common_build_outputs() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitgpui-monitor-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let workdir = dir.join("repo");
+        let _ = fs::create_dir_all(&workdir);
+        fs::write(workdir.join(".gitignore"), "target/\n*.log\n!keep.log\n")
+            .expect("write .gitignore");
+
+        let rules = GitignoreRules::load(&workdir, None);
+        assert!(rules.is_ignored_rel(Path::new("target/debug/app"), None));
+        assert!(rules.is_ignored_rel(Path::new("foo.log"), None));
+        assert!(!rules.is_ignored_rel(Path::new("keep.log"), None));
+
+        // Ensure folder create events for ignored directories are treated as ignorable worktree
+        // changes.
+        let mut rules_for_event = rules.clone();
+        let event = notify::Event {
+            kind: EventKind::Create(CreateKind::Folder),
+            paths: vec![workdir.join("target")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(&workdir, None, &mut rules_for_event, &event),
+            None
+        );
+
+        // Slash-containing patterns are treated as anchored to the repo root.
+        fs::write(workdir.join(".gitignore"), "build/output\n").expect("write .gitignore");
+        let rules = GitignoreRules::load(&workdir, None);
+        assert!(rules.is_ignored_rel(Path::new("build/output"), None));
+        assert!(!rules.is_ignored_rel(Path::new("nested/build/output"), None));
     }
 }

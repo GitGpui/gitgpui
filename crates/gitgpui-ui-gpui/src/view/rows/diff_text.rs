@@ -136,6 +136,7 @@ mod tests {
             build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(styled.text.as_ref(), "a    b");
         assert!(styled.highlights.is_empty());
+        assert_eq!(styled.highlights_hash, 0);
     }
 
     #[test]
@@ -173,6 +174,13 @@ mod tests {
         assert_eq!(highlights[0].0, 3..6);
         assert_eq!(highlights[0].1.font_weight, Some(FontWeight::BOLD));
         assert_eq!(highlights[0].1.color, Some(theme.colors.accent.into()));
+
+        // Hashing highlights is used for caching shaped layouts; it should be stable for identical
+        // highlight sequences within a process.
+        let styled =
+            build_cached_diff_styled_text(theme, "abcdef", &[], "def", None, DiffSyntaxMode::Auto, None);
+        assert_eq!(styled.highlights.len(), 1);
+        assert_eq!(styled.highlights[0].0, 3..6);
     }
 
     #[test]
@@ -326,6 +334,7 @@ pub(super) fn build_cached_diff_styled_text(
         return CachedDiffStyledText {
             text: "".into(),
             highlights: empty_highlights(),
+            highlights_hash: 0,
         };
     }
 
@@ -336,12 +345,23 @@ pub(super) fn build_cached_diff_styled_text(
         return CachedDiffStyledText {
             text: expanded_text,
             highlights: empty_highlights(),
+            highlights_hash: 0,
         };
     }
+
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    for (range, style) in &highlights {
+        range.hash(&mut hasher);
+        style.hash(&mut hasher);
+    }
+    let highlights_hash = hasher.finish();
 
     CachedDiffStyledText {
         text: expanded_text,
         highlights: Arc::new(highlights),
+        highlights_hash,
     }
 }
 

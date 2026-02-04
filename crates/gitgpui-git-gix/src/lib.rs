@@ -586,8 +586,8 @@ impl GitRepository for GixRepo {
             }
         }
 
-        staged.sort_by(|a, b| a.path.cmp(&b.path));
-        unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+        staged.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+        unstaged.sort_unstable_by(|a, b| a.path.cmp(&b.path));
 
         Ok(RepoStatus { staged, unstaged })
     }

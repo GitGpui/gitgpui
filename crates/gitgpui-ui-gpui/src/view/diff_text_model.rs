@@ -12,6 +12,7 @@ pub(super) struct CachedDiffTextSegment {
 pub(super) struct CachedDiffStyledText {
     pub(super) text: SharedString,
     pub(super) highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    pub(super) highlights_hash: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

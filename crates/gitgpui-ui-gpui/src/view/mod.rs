@@ -74,6 +74,7 @@ const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
 
 const DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4000;
+const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 140;
 const TOAST_FADE_OUT_MS: u64 = 180;
 
@@ -671,7 +672,9 @@ impl GitGpuiView {
     }
 
     fn prune_diff_text_layout_cache(&mut self) {
-        if self.diff_text_layout_cache.len() <= DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+        if self.diff_text_layout_cache.len()
+            <= DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES + DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE
+        {
             return;
         }
 

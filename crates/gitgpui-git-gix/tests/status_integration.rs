@@ -148,6 +148,31 @@ fn status_separates_staged_and_unstaged() {
 }
 
 #[test]
+fn status_lists_untracked_files_in_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+
+    write(repo, "dir/a.txt", "one\n");
+    write(repo, "dir/b.txt", "two\n");
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    let status = opened.status().unwrap();
+
+    assert_eq!(status.unstaged.len(), 2);
+    assert!(status
+        .unstaged
+        .iter()
+        .any(|e| e.path == PathBuf::from("dir/a.txt") && e.kind == FileStatusKind::Untracked));
+    assert!(status
+        .unstaged
+        .iter()
+        .any(|e| e.path == PathBuf::from("dir/b.txt") && e.kind == FileStatusKind::Untracked));
+}
+
+#[test]
 fn diff_unified_works_for_staged_and_unstaged() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
