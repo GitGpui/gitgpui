@@ -1043,6 +1043,7 @@ mod context_menu;
 		                                        "conflict_resolver_diff_scrollbar",
 		                                        scroll_handle,
 		                                    )
+		                                    .always_visible()
 		                                    .render(theme),
 		                                )
 		                                .into_any_element()

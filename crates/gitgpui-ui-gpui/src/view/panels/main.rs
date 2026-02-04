@@ -720,6 +720,7 @@ impl GitGpuiView {
                                     "conflict_resolver_diff_scrollbar",
                                     scroll_handle,
                                 )
+                                .always_visible()
                                 .render(theme),
                             )
                             .into_any_element()
@@ -1127,6 +1128,7 @@ impl GitGpuiView {
                                                                 scroll_handle,
                                                             )
                                                             .markers(markers)
+                                                            .always_visible()
                                                             .render(theme),
                                                         )
                                                         .into_any_element()
@@ -1201,6 +1203,7 @@ impl GitGpuiView {
                                                                 scroll_handle,
                                                             )
                                                             .markers(markers)
+                                                            .always_visible()
                                                             .render(theme),
                                                         )
                                                         .into_any_element()
@@ -1254,6 +1257,7 @@ impl GitGpuiView {
                                                     scroll_handle,
                                                 )
                                                 .markers(markers)
+                                                .always_visible()
                                                 .render(theme),
                                             )
                                             .into_any_element()
@@ -1324,6 +1328,7 @@ impl GitGpuiView {
                                                     scroll_handle,
                                                 )
                                                 .markers(markers)
+                                                .always_visible()
                                                 .render(theme),
                                             )
                                             .into_any_element()

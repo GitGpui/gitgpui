@@ -28,6 +28,7 @@ pub struct Scrollbar {
     id: ElementId,
     handle: ScrollHandle,
     markers: Vec<ScrollbarMarker>,
+    always_visible: bool,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
 }
@@ -67,6 +68,7 @@ impl Scrollbar {
             id: id.into(),
             handle,
             markers: Vec::new(),
+            always_visible: false,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -74,6 +76,11 @@ impl Scrollbar {
 
     pub fn markers(mut self, markers: Vec<ScrollbarMarker>) -> Self {
         self.markers = markers;
+        self
+    }
+
+    pub fn always_visible(mut self) -> Self {
+        self.always_visible = true;
         self
     }
 
@@ -87,6 +94,7 @@ impl Scrollbar {
         let handle = self.handle.clone();
         let markers = self.markers;
         let id = self.id.clone();
+        let always_visible = self.always_visible;
 
         let prepaint_handle = handle.clone();
         let paint = canvas(
@@ -209,9 +217,13 @@ impl Scrollbar {
 
                 // Zed-style autohide: show on hover/drag, then hide after a delay.
                 let state = interaction.read(cx);
-                let show = hovered || is_dragging || state.showing;
+                let show = always_visible || hovered || is_dragging || state.showing;
                 let should_schedule_hide =
-                    !hovered && !is_dragging && state.showing && state.hide_task.is_none();
+                    !always_visible
+                        && !hovered
+                        && !is_dragging
+                        && state.showing
+                        && state.hide_task.is_none();
                 let _ = state;
 
                 if hovered || is_dragging {
