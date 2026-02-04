@@ -405,7 +405,7 @@ version = "0.2.2"
 package = "gpui_util_macros"
 
 [dependencies.uuid]
-version = "1.19.0"
+version = "1.20.0"
 features = [
     "v4",
     "v5",
@@ -485,7 +485,7 @@ version = "0.4.1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.cosmic-text]
-version = "0.16.0"
+version = "0.17.1"
 optional = true
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.filedescriptor]
@@ -625,7 +625,7 @@ version = "0.25"
 version = "21"
 
 [target.'cfg(target_os = "macos")'.dependencies.core-video]
-version = "0.4.3"
+version = "0.5.2"
 features = ["metal"]
 
 [target.'cfg(target_os = "macos")'.dependencies.font-kit]
