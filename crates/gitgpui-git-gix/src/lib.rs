@@ -1652,17 +1652,104 @@ impl GitRepository for GixRepo {
             return Ok(());
         }
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("checkout")
-            .arg("--");
-        for path in paths {
-            cmd.arg(path);
+        let mut checkout_paths = Vec::new();
+        let mut remove_paths = Vec::new();
+
+        for &path in paths {
+            if worktree_differs_from_index(&self.spec.workdir, path)? {
+                checkout_paths.push(path);
+                continue;
+            }
+
+            if !path_exists_in_head(&self.spec.workdir, path)? {
+                remove_paths.push(path);
+            } else {
+                checkout_paths.push(path);
+            }
         }
 
-        run_git_simple(cmd, "git checkout --")
+        if !remove_paths.is_empty() {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(&self.spec.workdir).arg("rm").arg("-f").arg("--");
+            for path in remove_paths {
+                cmd.arg(path);
+            }
+            run_git_simple(cmd, "git rm -f")?;
+        }
+
+        if !checkout_paths.is_empty() {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("checkout")
+                .arg("--");
+            for path in checkout_paths {
+                cmd.arg(path);
+            }
+            run_git_simple(cmd, "git checkout --")?;
+        }
+
+        Ok(())
     }
+}
+
+fn worktree_differs_from_index(workdir: &Path, path: &Path) -> Result<bool> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("diff")
+        .arg("--quiet")
+        .arg("--")
+        .arg(path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => {
+            let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+            Err(Error::new(ErrorKind::Backend(format!(
+                "git diff --quiet failed: {}",
+                stderr.trim()
+            ))))
+        }
+    }
+}
+
+fn path_exists_in_head(workdir: &Path, path: &Path) -> Result<bool> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("ls-tree")
+        .arg("--name-only")
+        .arg("HEAD")
+        .arg("--")
+        .arg(path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        return Ok(!output.stdout.is_empty());
+    }
+
+    let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+    if stderr.contains("Not a valid object name")
+        || stderr.contains("unknown revision")
+        || stderr.contains("bad revision")
+        || stderr.contains("bad object")
+    {
+        return Ok(false);
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git ls-tree --name-only failed: {}",
+        stderr.trim()
+    ))))
 }
 
 fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {

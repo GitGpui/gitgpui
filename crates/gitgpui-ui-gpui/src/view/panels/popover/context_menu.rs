@@ -276,10 +276,17 @@ impl GitGpuiView {
                     .find(|r| r.id == *repo_id)
                     .and_then(|r| match &r.status {
                         Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
-                            status.unstaged.iter().any(|s| {
-                                s.path == p.as_path()
-                                    && s.kind != gitgpui_core::domain::FileStatusKind::Untracked
-                                    && s.kind != gitgpui_core::domain::FileStatusKind::Conflicted
+                            let path = p.as_path();
+                            if let Some(unstaged) = status.unstaged.iter().find(|s| s.path == path)
+                            {
+                                return unstaged.kind
+                                    != gitgpui_core::domain::FileStatusKind::Untracked
+                                    && unstaged.kind
+                                        != gitgpui_core::domain::FileStatusKind::Conflicted;
+                            }
+                            status.staged.iter().any(|s| {
+                                s.path == path
+                                    && s.kind == gitgpui_core::domain::FileStatusKind::Added
                             })
                         })),
                         _ => None,

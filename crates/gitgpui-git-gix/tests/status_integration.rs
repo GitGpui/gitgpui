@@ -1424,6 +1424,45 @@ fn discard_worktree_changes_reverts_modified_file_to_head() {
 }
 
 #[test]
+fn discard_worktree_changes_removes_staged_new_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "new.txt", "new\n");
+    run_git(repo, &["add", "new.txt"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    opened
+        .discard_worktree_changes(&[Path::new("new.txt")])
+        .unwrap();
+
+    assert!(!repo.join("new.txt").exists());
+    let status = opened.status().unwrap();
+    assert!(!status
+        .staged
+        .iter()
+        .any(|e| e.path == PathBuf::from("new.txt")));
+    assert!(!status
+        .unstaged
+        .iter()
+        .any(|e| e.path == PathBuf::from("new.txt")));
+}
+
+#[test]
 fn stage_hunk_applies_only_part_of_a_file_to_index() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
