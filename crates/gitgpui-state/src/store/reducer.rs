@@ -1,9 +1,9 @@
 use crate::model::{
-    AppState, CloneOpState, CloneOpStatus, CommandLogEntry, DiagnosticEntry, DiagnosticKind,
-    Loadable, RepoId, RepoState, RepoLoadsInFlight,
+    AppNotification, AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CommandLogEntry,
+    DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
 };
-use crate::msg::{Effect, Msg};
 use crate::msg::RepoExternalChange;
+use crate::msg::{Effect, Msg};
 use crate::session;
 use gitgpui_core::domain::{DiffTarget, RepoSpec};
 use gitgpui_core::error::Error;
@@ -60,7 +60,10 @@ fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     let repo_id = repo_state.id;
     let mut effects = Vec::new();
 
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::HEAD_BRANCH) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::HEAD_BRANCH)
+    {
         effects.push(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
@@ -69,10 +72,16 @@ fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     {
         effects.push(Effect::LoadUpstreamDivergence { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REBASE_STATE) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REBASE_STATE)
+    {
         effects.push(Effect::LoadRebaseState { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STATUS)
+    {
         effects.push(Effect::LoadStatus { repo_id });
     }
     if repo_state
@@ -99,7 +108,10 @@ fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
 
     // Keep ordering stable with historical `refresh_effects` to minimize behavioral churn and
     // make the refresh fan-out predictable.
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::HEAD_BRANCH) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::HEAD_BRANCH)
+    {
         effects.push(Effect::LoadHeadBranch { repo_id });
     }
     if repo_state
@@ -108,13 +120,19 @@ fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     {
         effects.push(Effect::LoadUpstreamDivergence { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::BRANCHES) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::BRANCHES)
+    {
         effects.push(Effect::LoadBranches { repo_id });
     }
     if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
         effects.push(Effect::LoadTags { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REMOTES) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REMOTES)
+    {
         effects.push(Effect::LoadRemotes { repo_id });
     }
     if repo_state
@@ -123,19 +141,31 @@ fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     {
         effects.push(Effect::LoadRemoteBranches { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STATUS)
+    {
         effects.push(Effect::LoadStatus { repo_id });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STASHES) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STASHES)
+    {
         effects.push(Effect::LoadStashes { repo_id, limit: 50 });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REFLOG) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REFLOG)
+    {
         effects.push(Effect::LoadReflog {
             repo_id,
             limit: 200,
         });
     }
-    if repo_state.loads_in_flight.request(RepoLoadsInFlight::REBASE_STATE) {
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REBASE_STATE)
+    {
         effects.push(Effect::LoadRebaseState { repo_id });
     }
     if repo_state
@@ -163,6 +193,17 @@ pub(super) fn reduce(
     match msg {
         Msg::OpenRepo(path) => {
             let path = normalize_repo_path(path);
+            if let Some(repo_id) = state
+                .repos
+                .iter()
+                .find(|r| r.spec.workdir == path)
+                .map(|r| r.id)
+            {
+                state.active_repo = Some(repo_id);
+                let _ = session::persist_from_state(state);
+                return Vec::new();
+            }
+
             let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
             let spec = RepoSpec { workdir: path };
 
@@ -262,9 +303,7 @@ pub(super) fn reduce(
 
             // Reload the selected diff when switching repos; steady-state refreshes rely on the
             // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
-            if changed
-                && let Some(target) = repo_state.diff_target.clone()
-            {
+            if changed && let Some(target) = repo_state.diff_target.clone() {
                 let supports_file = matches!(
                     &target,
                     DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
@@ -322,13 +361,18 @@ pub(super) fn reduce(
             // Coalesce refreshes while a refresh is already in flight.
             let mut effects = match change {
                 RepoExternalChange::Worktree => {
-                    if repo_state.loads_in_flight.request(RepoLoadsInFlight::STATUS) {
+                    if repo_state
+                        .loads_in_flight
+                        .request(RepoLoadsInFlight::STATUS)
+                    {
                         vec![Effect::LoadStatus { repo_id }]
                     } else {
                         Vec::new()
                     }
                 }
-                RepoExternalChange::GitState | RepoExternalChange::Both => refresh_primary_effects(repo_state),
+                RepoExternalChange::GitState | RepoExternalChange::Both => {
+                    refresh_primary_effects(repo_state)
+                }
             };
 
             if let Some(target) = repo_state.diff_target.clone() {
@@ -380,10 +424,11 @@ pub(super) fn reduce(
             };
 
             repo_state.log_loading_more = true;
-            if repo_state
-                .loads_in_flight
-                .request_log(repo_state.history_scope, 200, Some(cursor.clone()))
-            {
+            if repo_state.loads_in_flight.request_log(
+                repo_state.history_scope,
+                200,
+                Some(cursor.clone()),
+            ) {
                 vec![Effect::LoadLog {
                     repo_id,
                     scope: repo_state.history_scope,
@@ -591,7 +636,10 @@ pub(super) fn reduce(
                 return Vec::new();
             };
             repo_state.stashes = Loadable::Loading;
-            if repo_state.loads_in_flight.request(RepoLoadsInFlight::STASHES) {
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::STASHES)
+            {
                 vec![Effect::LoadStashes { repo_id, limit: 50 }]
             } else {
                 Vec::new()
@@ -612,7 +660,10 @@ pub(super) fn reduce(
                 return Vec::new();
             };
             repo_state.reflog = Loadable::Loading;
-            if repo_state.loads_in_flight.request(RepoLoadsInFlight::REFLOG) {
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::REFLOG)
+            {
                 vec![Effect::LoadReflog {
                     repo_id,
                     limit: 200,
@@ -639,22 +690,14 @@ pub(super) fn reduce(
             }]
         }
 
-        Msg::LoadBlame {
-            repo_id,
-            path,
-            rev,
-        } => {
+        Msg::LoadBlame { repo_id, path, rev } => {
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
             };
             repo_state.blame_path = Some(path.clone());
             repo_state.blame_rev = rev.clone();
             repo_state.blame = Loadable::Loading;
-            vec![Effect::LoadBlame {
-                repo_id,
-                path,
-                rev,
-            }]
+            vec![Effect::LoadBlame { repo_id, path, rev }]
         }
 
         Msg::LoadWorktrees { repo_id } => {
@@ -727,11 +770,7 @@ pub(super) fn reduce(
             }
             Vec::new()
         }
-        Msg::CloneRepoFinished {
-            url,
-            dest,
-            result,
-        } => {
+        Msg::CloneRepoFinished { url, dest, result } => {
             if let Some(op) = state.clone.as_mut()
                 && op.dest == dest
             {
@@ -775,11 +814,9 @@ pub(super) fn reduce(
             reference,
         }],
         Msg::RemoveWorktree { repo_id, path } => vec![Effect::RemoveWorktree { repo_id, path }],
-        Msg::AddSubmodule { repo_id, url, path } => vec![Effect::AddSubmodule {
-            repo_id,
-            url,
-            path,
-        }],
+        Msg::AddSubmodule { repo_id, url, path } => {
+            vec![Effect::AddSubmodule { repo_id, url, path }]
+        }
         Msg::UpdateSubmodules { repo_id } => vec![Effect::UpdateSubmodules { repo_id }],
         Msg::RemoveSubmodule { repo_id, path } => vec![Effect::RemoveSubmodule { repo_id, path }],
         Msg::StagePath { repo_id, path } => vec![Effect::StagePath { repo_id, path }],
@@ -940,6 +977,29 @@ pub(super) fn reduce(
             let spec = RepoSpec {
                 workdir: normalize_repo_path(spec.workdir),
             };
+            if matches!(error.kind(), gitgpui_core::error::ErrorKind::NotARepository) {
+                push_notification(
+                    state,
+                    AppNotificationKind::Error,
+                    format!("Folder is not a git repository: {}", spec.workdir.display()),
+                );
+
+                repos.remove(&repo_id);
+                if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
+                    let was_active = state.active_repo == Some(repo_id);
+                    state.repos.remove(ix);
+                    if was_active {
+                        state.active_repo = if ix > 0 {
+                            state.repos.get(ix - 1).map(|r| r.id)
+                        } else {
+                            state.repos.get(ix).map(|r| r.id)
+                        };
+                    }
+                    let _ = session::persist_from_state(state);
+                }
+                return Vec::new();
+            }
+
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Error(error.to_string());
@@ -959,7 +1019,10 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
-                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::BRANCHES) {
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::BRANCHES)
+                {
                     effects.push(Effect::LoadBranches { repo_id });
                 }
             }
@@ -976,7 +1039,10 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
-                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::REMOTES) {
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::REMOTES)
+                {
                     effects.push(Effect::LoadRemotes { repo_id });
                 }
             }
@@ -1152,7 +1218,10 @@ pub(super) fn reduce(
                         Loadable::Error(e.to_string())
                     }
                 };
-                if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STASHES) {
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::STASHES)
+                {
                     effects.push(Effect::LoadStashes { repo_id, limit: 50 });
                 }
             }
@@ -1424,11 +1493,12 @@ pub(super) fn reduce(
                     }
                 }
             }
-            let mut effects = if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                refresh_full_effects(repo_state)
-            } else {
-                Vec::new()
-            };
+            let mut effects =
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    refresh_full_effects(repo_state)
+                } else {
+                    Vec::new()
+                };
             effects.extend(extra_effects);
             effects
         }
@@ -1456,6 +1526,19 @@ pub(super) fn normalize_repo_path(path: PathBuf) -> PathBuf {
     };
 
     std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
+    const MAX_NOTIFICATIONS: usize = 200;
+    state.notifications.push(AppNotification {
+        time: SystemTime::now(),
+        kind,
+        message,
+    });
+    if state.notifications.len() > MAX_NOTIFICATIONS {
+        let extra = state.notifications.len() - MAX_NOTIFICATIONS;
+        state.notifications.drain(0..extra);
+    }
 }
 
 pub(super) fn push_diagnostic(repo_state: &mut RepoState, kind: DiagnosticKind, message: String) {
@@ -1685,7 +1768,9 @@ fn summarize_command(
                 format!("Worktree added → {}", path.display())
             }
         }
-        RepoCommandKind::RemoveWorktree { path } => format!("Worktree removed → {}", path.display()),
+        RepoCommandKind::RemoveWorktree { path } => {
+            format!("Worktree removed → {}", path.display())
+        }
         RepoCommandKind::AddSubmodule { path, .. } => {
             format!("Submodule added → {}", path.display())
         }

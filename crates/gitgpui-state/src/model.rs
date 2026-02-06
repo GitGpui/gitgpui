@@ -63,9 +63,18 @@ impl RepoLoadsInFlight {
 
     /// For log loads: coalesce by keeping only the latest requested `(scope, cursor)` while a log
     /// load is already in flight.
-    pub fn request_log(&mut self, scope: LogScope, limit: usize, cursor: Option<LogCursor>) -> bool {
+    pub fn request_log(
+        &mut self,
+        scope: LogScope,
+        limit: usize,
+        cursor: Option<LogCursor>,
+    ) -> bool {
         if self.is_in_flight(Self::LOG) {
-            let next = PendingLogLoad { scope, limit, cursor };
+            let next = PendingLogLoad {
+                scope,
+                limit,
+                cursor,
+            };
             match &self.pending_log {
                 // Scope changes invalidate older pending requests (including pagination).
                 Some(existing) if existing.scope != next.scope => {
@@ -109,6 +118,22 @@ pub struct AppState {
     pub repos: Vec<RepoState>,
     pub active_repo: Option<RepoId>,
     pub clone: Option<CloneOpState>,
+    pub notifications: Vec<AppNotification>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppNotification {
+    pub time: SystemTime,
+    pub kind: AppNotificationKind,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppNotificationKind {
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

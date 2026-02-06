@@ -146,6 +146,48 @@ fn open_repo_sets_opening_and_emits_effect() {
 }
 
 #[test]
+fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == PathBuf::from("/tmp/repo1"))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(1);
@@ -196,7 +238,10 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     run_git(&src, &["config", "commit.gpgsign", "false"]);
     std::fs::write(src.join("a.txt"), "one\n").unwrap();
     run_git(&src, &["add", "a.txt"]);
-    run_git(&src, &["-c", "commit.gpgsign=false", "commit", "-m", "init"]);
+    run_git(
+        &src,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
@@ -294,7 +339,10 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
             unimplemented!()
         }
-        fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<gitgpui_core::domain::FileDiffText>> {
+        fn diff_file_text(
+            &self,
+            _target: &DiffTarget,
+        ) -> Result<Option<gitgpui_core::domain::FileDiffText>> {
             Ok(Some(self.diff.clone()))
         }
         fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
@@ -366,7 +414,9 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     let repo_id = RepoId(1);
     let repo: Arc<dyn GitRepository> = Arc::new(Repo {
-        spec: RepoSpec { workdir: base.clone() },
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
         diff: gitgpui_core::domain::FileDiffText {
             path: rel.clone(),
             old: Some("ours\n".to_string()),
@@ -393,7 +443,12 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
-            if let Msg::ConflictFileLoaded { repo_id: rid, path, result } = msg {
+            if let Msg::ConflictFileLoaded {
+                repo_id: rid,
+                path,
+                result,
+            } = msg
+            {
                 assert_eq!(rid, repo_id);
                 assert_eq!(path, rel);
                 let file = result.unwrap().unwrap();
@@ -525,7 +580,9 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 
     let repo_id = RepoId(1);
     let repo: Arc<Repo> = Arc::new(Repo {
-        spec: RepoSpec { workdir: base.clone() },
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
         staged: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
@@ -551,7 +608,12 @@ fn save_worktree_file_effect_writes_and_can_stage() {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
-            if let Msg::RepoCommandFinished { repo_id: rid, command, result } = msg {
+            if let Msg::RepoCommandFinished {
+                repo_id: rid,
+                command,
+                result,
+            } = msg
+            {
                 assert_eq!(rid, repo_id);
                 assert!(matches!(
                     command,
@@ -690,7 +752,10 @@ fn revert_commit_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RevertCommit { repo_id: RepoId(1), commit_id: _ }]
+        [Effect::RevertCommit {
+            repo_id: RepoId(1),
+            commit_id: _
+        }]
     ));
 }
 
@@ -927,7 +992,10 @@ fn apply_drop_and_pop_stash_emit_effects() {
     );
     assert!(matches!(
         apply.as_slice(),
-        [Effect::ApplyStash { repo_id: RepoId(1), index: 0 }]
+        [Effect::ApplyStash {
+            repo_id: RepoId(1),
+            index: 0
+        }]
     ));
 
     let drop = reduce(
@@ -941,7 +1009,10 @@ fn apply_drop_and_pop_stash_emit_effects() {
     );
     assert!(matches!(
         drop.as_slice(),
-        [Effect::DropStash { repo_id: RepoId(1), index: 0 }]
+        [Effect::DropStash {
+            repo_id: RepoId(1),
+            index: 0
+        }]
     ));
 
     let pop = reduce(
@@ -955,7 +1026,10 @@ fn apply_drop_and_pop_stash_emit_effects() {
     );
     assert!(matches!(
         pop.as_slice(),
-        [Effect::PopStash { repo_id: RepoId(1), index: 0 }]
+        [Effect::PopStash {
+            repo_id: RepoId(1),
+            index: 0
+        }]
     ));
 }
 
@@ -984,7 +1058,10 @@ fn checkout_commit_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CheckoutCommit { repo_id: RepoId(1), commit_id: _ }]
+        [Effect::CheckoutCommit {
+            repo_id: RepoId(1),
+            commit_id: _
+        }]
     ));
 }
 
@@ -1056,10 +1133,7 @@ fn pop_stash_effect_applies_then_drops() {
             unimplemented!()
         }
         fn stash_apply(&self, index: usize) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("apply {index}"));
+            self.calls.lock().unwrap().push(format!("apply {index}"));
             Ok(())
         }
         fn stash_drop(&self, index: usize) -> Result<()> {
@@ -1423,6 +1497,43 @@ fn repo_opened_err_records_diagnostic() {
 }
 
 #[test]
+fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+    );
+
+    let error = Error::new(ErrorKind::NotARepository);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/not-a-repo"),
+            },
+            error,
+        },
+    );
+
+    assert!(state.repos.is_empty());
+    assert_eq!(state.active_repo, None);
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("not a git repository"))
+    );
+}
+
+#[test]
 fn select_diff_sets_loading_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(2);
@@ -1530,7 +1641,10 @@ fn stage_hunk_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::StageHunk { repo_id: RepoId(1), patch: _ }]
+        [Effect::StageHunk {
+            repo_id: RepoId(1),
+            patch: _
+        }]
     ));
 }
 
@@ -1559,7 +1673,10 @@ fn unstage_hunk_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::UnstageHunk { repo_id: RepoId(1), patch: _ }]
+        [Effect::UnstageHunk {
+            repo_id: RepoId(1),
+            patch: _
+        }]
     ));
 }
 
@@ -1600,7 +1717,13 @@ fn stage_hunk_command_finished_reloads_current_diff() {
     assert!(effects.iter().any(|e| {
         matches!(e, Effect::LoadDiff { repo_id: RepoId(1), target: DiffTarget::WorkingTree { path, area: gitgpui_core::domain::DiffArea::Unstaged } } if path == &PathBuf::from("a.txt"))
     }));
-    assert!(effects.iter().any(|e| matches!(e, Effect::LoadDiffFile { repo_id: RepoId(1), target: _ })));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFile {
+            repo_id: RepoId(1),
+            target: _
+        }
+    )));
 }
 
 #[test]
@@ -1628,7 +1751,10 @@ fn discard_worktree_changes_path_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DiscardWorktreeChangesPath { repo_id: RepoId(1), path: _ }]
+        [Effect::DiscardWorktreeChangesPath {
+            repo_id: RepoId(1),
+            path: _
+        }]
     ));
 }
 
@@ -1961,9 +2087,9 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
     );
 
     assert!(
-        effects.iter().any(|e| {
-            matches!(e, Effect::LoadLog { repo_id, .. } if *repo_id == RepoId(1))
-        }),
+        effects
+            .iter()
+            .any(|e| { matches!(e, Effect::LoadLog { repo_id, .. } if *repo_id == RepoId(1)) }),
         "expected history refresh"
     );
     assert!(
@@ -1985,7 +2111,9 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         "expected upstream divergence refresh"
     );
     assert!(
-        effects.iter().any(|e| matches!(e, Effect::LoadRebaseState { repo_id } if *repo_id == RepoId(1))),
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRebaseState { repo_id } if *repo_id == RepoId(1))),
         "expected rebase state refresh"
     );
     assert!(
@@ -2019,12 +2147,26 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         },
     );
 
-    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadHeadBranch { .. })));
-    assert!(effects1
-        .iter()
-        .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. })));
-    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadRebaseState { .. })));
-    assert!(effects1.iter().any(|e| matches!(e, Effect::LoadStatus { .. })));
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadHeadBranch { .. }))
+    );
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadUpstreamDivergence { .. }))
+    );
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadRebaseState { .. }))
+    );
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { .. }))
+    );
     assert!(effects1.iter().any(|e| matches!(e, Effect::LoadLog { .. })));
 
     // Second refresh request while the first one is in flight is coalesced into a single pending

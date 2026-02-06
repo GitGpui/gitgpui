@@ -6,7 +6,9 @@ use gitgpui_core::domain::{
 };
 use gitgpui_core::file_diff::FileDiffRow;
 use gitgpui_core::services::{PullMode, RemoteUrlKind, ResetMode};
-use gitgpui_state::model::{AppState, CloneOpStatus, DiagnosticKind, Loadable, RepoId, RepoState};
+use gitgpui_state::model::{
+    AppNotificationKind, AppState, CloneOpStatus, DiagnosticKind, Loadable, RepoId, RepoState,
+};
 use gitgpui_state::msg::{Msg, StoreEvent};
 use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
@@ -15,9 +17,9 @@ use gpui::{
     Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations,
     Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
     IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling, Timer,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill, point, px,
-    relative, size, uniform_list,
+    Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
+    Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -25,8 +27,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod chrome;
 mod branch_sidebar;
+mod chrome;
 mod conflict_resolver;
 mod date_time;
 mod diff_text_model;
@@ -34,13 +36,13 @@ mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
 mod panels;
-mod word_diff;
 pub(crate) mod rows;
+mod word_diff;
 
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
-use date_time::{DateTimeFormat, format_datetime_utc};
 use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
+use date_time::{DateTimeFormat, format_datetime_utc};
 use word_diff::word_diff_ranges;
 
 use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
@@ -749,7 +751,8 @@ impl GitGpuiView {
             && self.file_image_diff_cache_rev == repo.diff_file_rev
             && self.file_image_diff_cache_target == repo.diff_target
             && self.file_image_diff_cache_path.is_some()
-            && (self.file_image_diff_cache_old.is_some() || self.file_image_diff_cache_new.is_some())
+            && (self.file_image_diff_cache_old.is_some()
+                || self.file_image_diff_cache_new.is_some())
     }
 
     fn handle_file_diff_row_click(&mut self, clicked_visible_ix: usize, shift: bool) {
@@ -2973,14 +2976,12 @@ impl GitGpuiView {
             };
 
             let format = Self::image_format_for_path(&file.path);
-            let old = file
-                .old
-                .as_ref()
-                .and_then(|bytes| format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone()))));
-            let new = file
-                .new
-                .as_ref()
-                .and_then(|bytes| format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone()))));
+            let old = file.old.as_ref().and_then(|bytes| {
+                format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone())))
+            });
+            let new = file.new.as_ref().and_then(|bytes| {
+                format.map(|format| Arc::new(gpui::Image::from_bytes(format, bytes.clone())))
+            });
 
             let workdir = &repo.spec.workdir;
             let file_path = Some(if file.path.is_absolute() {
@@ -3209,6 +3210,21 @@ impl GitGpuiView {
 
         let next_clone = next.clone.clone();
 
+        let old_notification_len = self.state.notifications.len();
+        let new_notifications = next
+            .notifications
+            .iter()
+            .skip(old_notification_len.min(next.notifications.len()))
+            .cloned()
+            .collect::<Vec<_>>();
+        for notification in new_notifications {
+            let kind = match notification.kind {
+                AppNotificationKind::Error | AppNotificationKind::Warning => zed::ToastKind::Error,
+                AppNotificationKind::Info | AppNotificationKind::Success => zed::ToastKind::Success,
+            };
+            self.push_toast(kind, notification.message, cx);
+        }
+
         for next_repo in &next.repos {
             let (old_diag_len, old_cmd_len) = self
                 .state
@@ -3262,11 +3278,7 @@ impl GitGpuiView {
 
                         let id = self.push_persistent_toast(
                             zed::ToastKind::Success,
-                            format!(
-                                "Cloning repository…\n{}\n→ {}",
-                                op.url,
-                                op.dest.display()
-                            ),
+                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display()),
                             cx,
                         );
                         self.clone_progress_toast_id = Some(id);
@@ -3279,11 +3291,7 @@ impl GitGpuiView {
                         let tail_lines = op.output_tail.iter().rev().take(12).rev().cloned();
                         let tail = tail_lines.collect::<Vec<_>>().join("\n");
                         let message = if tail.is_empty() {
-                            format!(
-                                "Cloning repository…\n{}\n→ {}",
-                                op.url,
-                                op.dest.display()
-                            )
+                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display())
                         } else {
                             format!(
                                 "Cloning repository…\n{}\n→ {}\n\n{}",
@@ -3541,12 +3549,7 @@ impl GitGpuiView {
         id
     }
 
-    fn update_toast_text(
-        &mut self,
-        id: u64,
-        message: String,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    fn update_toast_text(&mut self, id: u64, message: String, cx: &mut gpui::Context<Self>) {
         let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
             return;
         };
@@ -4080,8 +4083,12 @@ impl GitGpuiView {
 
     fn conflict_nav_entries(&self) -> Vec<usize> {
         match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => Self::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows),
-            ConflictDiffMode::Inline => Self::conflict_nav_entries_for_inline(&self.conflict_resolver.inline_rows),
+            ConflictDiffMode::Split => {
+                Self::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows)
+            }
+            ConflictDiffMode::Inline => {
+                Self::conflict_nav_entries_for_inline(&self.conflict_resolver.inline_rows)
+            }
         }
     }
 
@@ -4196,8 +4203,7 @@ impl GitGpuiView {
                 };
 
                 let cache_ok = self.history_cache.as_ref().is_some_and(|c| {
-                    c.repo_id == request.repo_id
-                        && c.log_fingerprint == request.log_fingerprint
+                    c.repo_id == request.repo_id && c.log_fingerprint == request.log_fingerprint
                 });
                 if cache_ok {
                     Next::CacheOk
@@ -4334,8 +4340,7 @@ impl GitGpuiView {
                 input.set_theme(theme, cx);
                 input.set_text("", cx);
             });
-            self.store
-                .dispatch(Msg::LoadConflictFile { repo_id, path });
+            self.store.dispatch(Msg::LoadConflictFile { repo_id, path });
             return;
         }
 
@@ -5311,7 +5316,10 @@ mod tests {
                 new: Some("e".into()),
             },
         ];
-        assert_eq!(GitGpuiView::conflict_nav_entries_for_split(&split_rows), vec![1, 4]);
+        assert_eq!(
+            GitGpuiView::conflict_nav_entries_for_split(&split_rows),
+            vec![1, 4]
+        );
 
         let inline_rows = vec![
             ConflictInlineRow {
@@ -5350,7 +5358,10 @@ mod tests {
                 content: "d2".into(),
             },
         ];
-        assert_eq!(GitGpuiView::conflict_nav_entries_for_inline(&inline_rows), vec![1, 4]);
+        assert_eq!(
+            GitGpuiView::conflict_nav_entries_for_inline(&inline_rows),
+            vec![1, 4]
+        );
     }
 
     #[test]

@@ -135,8 +135,11 @@ impl GitBackend for GixBackend {
             .canonicalize()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        let repo = gix::open(&workdir)
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix open: {e}"))))?;
+        let repo = gix::open(&workdir).map_err(|e| match e {
+            gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
+            gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
+            e => Error::new(ErrorKind::Backend(format!("gix open: {e}"))),
+        })?;
 
         Ok(Arc::new(GixRepo {
             spec: RepoSpec {
