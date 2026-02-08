@@ -232,6 +232,22 @@ impl GitGpuiView {
                 .h(px(14.0))
                 .text_color(color)
         };
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            gpui::svg()
+                .path("icons/spinner.svg")
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(color)
+                .with_animation(
+                    id,
+                    Animation::new(std::time::Duration::from_millis(850)).repeat(),
+                    |svg, delta| {
+                        svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
+        };
         let count_badge = |count: usize, color: gpui::Rgba| {
             div()
                 .text_xs()
@@ -263,6 +279,11 @@ impl GitGpuiView {
                 _ => None,
             })
             .unwrap_or((0, 0));
+        let (pull_loading, push_loading) = self
+            .active_repo()
+            .map(|r| (r.pull_in_flight > 0, r.push_in_flight > 0))
+            .unwrap_or((false, false));
+        let active_repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
 
         let can_stash = self
             .active_repo()
@@ -356,7 +377,11 @@ impl GitGpuiView {
             theme.colors.text
         };
         let mut pull_main = zed::Button::new("pull_main", "Pull")
-            .start_slot(icon("icons/arrow_down.svg", pull_color))
+            .start_slot(if pull_loading {
+                spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
+            } else {
+                icon("icons/arrow_down.svg", pull_color).into_any_element()
+            })
             .style(zed::ButtonStyle::Subtle);
         if pull_count > 0 {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
@@ -401,7 +426,11 @@ impl GitGpuiView {
             theme.colors.text
         };
         let mut push_main = zed::Button::new("push", "Push")
-            .start_slot(icon("icons/arrow_up.svg", push_color))
+            .start_slot(if push_loading {
+                spinner(("push_spinner", active_repo_key), push_color).into_any_element()
+            } else {
+                icon("icons/arrow_up.svg", push_color).into_any_element()
+            })
             .style(zed::ButtonStyle::Outlined);
         if push_count > 0 {
             push_main = push_main.end_slot(count_badge(push_count, push_color));

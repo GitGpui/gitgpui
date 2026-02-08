@@ -167,6 +167,8 @@ pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
     pub loads_in_flight: RepoLoadsInFlight,
+    pub pull_in_flight: u32,
+    pub push_in_flight: u32,
 
     pub open: Loadable<()>,
     pub history_scope: LogScope,
@@ -214,6 +216,8 @@ impl RepoState {
             id,
             spec,
             loads_in_flight: RepoLoadsInFlight::default(),
+            pull_in_flight: 0,
+            push_in_flight: 0,
             open: Loadable::Loading,
             history_scope: LogScope::CurrentBranch,
             head_branch: Loadable::NotLoaded,

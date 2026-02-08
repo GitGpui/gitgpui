@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, DiagnosticKind, Loadable, RepoState};
-use crate::msg::Effect;
+use crate::msg::{Effect, RepoCommandKind};
 use gitgpui_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
     ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
@@ -244,6 +244,92 @@ fn open_repo_allows_same_basename_in_different_folders() {
             .count(),
         1
     );
+}
+
+#[test]
+fn pull_and_push_mark_in_flight_until_command_finished() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    let workdir = PathBuf::from("/tmp/repo");
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: workdir.clone(),
+        },
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Default,
+        },
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+    assert_eq!(state.repos[0].push_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+            result: Ok(CommandOutput::empty_success("git pull")),
+        },
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Push,
+            result: Ok(CommandOutput::empty_success("git push")),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+#[test]
+fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Pull {
+            repo_id,
+            mode: PullMode::Default,
+        },
+    );
+    reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
+
+    assert_eq!(state.repos[0].pull_in_flight, 0);
+    assert_eq!(state.repos[0].push_in_flight, 0);
 }
 
 #[test]

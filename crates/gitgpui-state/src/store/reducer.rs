@@ -844,28 +844,63 @@ pub(super) fn reduce(
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
         Msg::CommitAmend { repo_id, message } => vec![Effect::CommitAmend { repo_id, message }],
         Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
-        Msg::Pull { repo_id, mode } => vec![Effect::Pull { repo_id, mode }],
+        Msg::Pull { repo_id, mode } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+            }
+            vec![Effect::Pull { repo_id, mode }]
+        }
         Msg::PullBranch {
             repo_id,
             remote,
             branch,
-        } => vec![Effect::PullBranch {
-            repo_id,
-            remote,
-            branch,
-        }],
+        } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+            }
+            vec![Effect::PullBranch {
+                repo_id,
+                remote,
+                branch,
+            }]
+        }
         Msg::MergeRef { repo_id, reference } => vec![Effect::MergeRef { repo_id, reference }],
-        Msg::Push { repo_id } => vec![Effect::Push { repo_id }],
-        Msg::ForcePush { repo_id } => vec![Effect::ForcePush { repo_id }],
+        Msg::Push { repo_id } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
+            }
+            vec![Effect::Push { repo_id }]
+        }
+        Msg::ForcePush { repo_id } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
+            }
+            vec![Effect::ForcePush { repo_id }]
+        }
         Msg::PushSetUpstream {
             repo_id,
             remote,
             branch,
-        } => vec![Effect::PushSetUpstream {
-            repo_id,
-            remote,
-            branch,
-        }],
+        } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
+            }
+            vec![Effect::PushSetUpstream {
+                repo_id,
+                remote,
+                branch,
+            }]
+        }
         Msg::Reset {
             repo_id,
             target,
@@ -1426,6 +1461,19 @@ pub(super) fn reduce(
             result,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                match &command {
+                    crate::msg::RepoCommandKind::Pull { .. }
+                    | crate::msg::RepoCommandKind::PullBranch { .. } => {
+                        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
+                    }
+                    crate::msg::RepoCommandKind::Push
+                    | crate::msg::RepoCommandKind::ForcePush
+                    | crate::msg::RepoCommandKind::PushSetUpstream { .. } => {
+                        repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+
                 match result {
                     Ok(output) => {
                         repo_state.last_error = None;
