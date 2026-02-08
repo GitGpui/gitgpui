@@ -188,6 +188,65 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
 }
 
 #[test]
+fn open_repo_allows_same_basename_in_different_folders() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = std::env::temp_dir().join(format!(
+        "gitgpui-open-repo-same-basename-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let repo_a = dir.join("a").join("repo");
+    let repo_b = dir.join("b").join("repo");
+    let _ = std::fs::create_dir_all(&repo_a);
+    let _ = std::fs::create_dir_all(&repo_b);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_a.clone()),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_b.clone()),
+    );
+
+    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+
+    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::OpenRepo(repo_a.clone()));
+    assert!(effects.is_empty());
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == super::reducer::normalize_repo_path(repo_a.clone()))
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == super::reducer::normalize_repo_path(repo_b.clone()))
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
     let id_alloc = AtomicU64::new(1);

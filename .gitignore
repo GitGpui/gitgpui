@@ -6,3 +6,4 @@
 .idea
 zed
 callgrind.out*
+*.orig

@@ -77,8 +77,9 @@ const MAIN_MIN_PX: f32 = 280.0;
 
 const DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4000;
 const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
-const TOAST_FADE_IN_MS: u64 = 140;
-const TOAST_FADE_OUT_MS: u64 = 180;
+const TOAST_FADE_IN_MS: u64 = 180;
+const TOAST_FADE_OUT_MS: u64 = 220;
+const TOAST_SLIDE_PX: f32 = 12.0;
 
 fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
@@ -3219,7 +3220,8 @@ impl GitGpuiView {
             .collect::<Vec<_>>();
         for notification in new_notifications {
             let kind = match notification.kind {
-                AppNotificationKind::Error | AppNotificationKind::Warning => zed::ToastKind::Error,
+                AppNotificationKind::Error => zed::ToastKind::Error,
+                AppNotificationKind::Warning => zed::ToastKind::Warning,
                 AppNotificationKind::Info | AppNotificationKind::Success => zed::ToastKind::Success,
             };
             self.push_toast(kind, notification.message, cx);
@@ -3481,6 +3483,7 @@ impl GitGpuiView {
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
         let ttl = match kind {
             zed::ToastKind::Error => Duration::from_secs(15),
+            zed::ToastKind::Warning => Duration::from_secs(10),
             zed::ToastKind::Success => Duration::from_secs(6),
         };
         self.push_toast_inner(kind, message, Some(ttl), cx);
@@ -4811,7 +4814,7 @@ impl Render for GitGpuiView {
         root = root.child(window_frame(theme, decorations, body.into_any_element()));
 
         if !self.toasts.is_empty() {
-            root = root.child(self.toast_layer());
+            root = root.child(self.toast_layer(cx));
         }
 
         if self.popover.is_some() {
@@ -5103,7 +5106,7 @@ impl GitGpuiView {
             .into_any_element()
     }
 
-    fn toast_layer(&self) -> AnyElement {
+    fn toast_layer(&self, cx: &gpui::Context<Self>) -> AnyElement {
         if self.toasts.is_empty() {
             return div().into_any_element();
         }
@@ -5137,7 +5140,35 @@ impl GitGpuiView {
                 None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
             };
 
-            zed::toast(theme, t.kind, t.input.clone()).with_animations(
+            let close = zed::Button::new(format!("toast_close_{}", t.id), "✕")
+                .style(zed::ButtonStyle::Transparent)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    this.remove_toast(t.id, cx);
+                })
+                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                    let text: SharedString = "Dismiss notification".into();
+                    let mut changed = false;
+                    if *hovering {
+                        changed |= this.set_tooltip_text_if_changed(Some(text));
+                    } else if this.tooltip_text.as_ref() == Some(&text) {
+                        changed |= this.set_tooltip_text_if_changed(None);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                }));
+
+            div()
+                .relative()
+                .child(zed::toast(theme, t.kind, t.input.clone()))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .right(px(8.0))
+                        .child(close),
+                )
+                .with_animations(
                 ("toast", t.id),
                 animations,
                 move |toast, animation_ix, delta| {
@@ -5147,7 +5178,15 @@ impl GitGpuiView {
                         2 => 1.0 - delta,
                         _ => 1.0,
                     };
-                    toast.opacity(opacity)
+                    let slide_x = match animation_ix {
+                        0 => (1.0 - delta) * TOAST_SLIDE_PX,
+                        2 => delta * TOAST_SLIDE_PX,
+                        _ => 0.0,
+                    };
+                    toast
+                        .opacity(opacity)
+                        .relative()
+                        .left(px(slide_x))
                 },
             )
         });
@@ -5157,11 +5196,11 @@ impl GitGpuiView {
             .absolute()
             .right_0()
             .bottom_0()
-            .p_2()
+            .p(px(16.0))
             .flex()
             .flex_col()
             .items_end()
-            .gap_2()
+            .gap(px(12.0))
             .children(children)
             .into_any_element()
     }
