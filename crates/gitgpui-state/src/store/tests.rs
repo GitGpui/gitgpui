@@ -273,8 +273,23 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
     );
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
+    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    assert_eq!(state.repos[0].pull_in_flight, 2);
+
     reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
     assert_eq!(state.repos[0].push_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+            result: Ok(CommandOutput::empty_success("git fetch --all")),
+        },
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 1);
 
     reduce(
         &mut repos,
@@ -326,6 +341,7 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
             mode: PullMode::Default,
         },
     );
+    reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
     reduce(&mut repos, &id_alloc, &mut state, Msg::Push { repo_id });
 
     assert_eq!(state.repos[0].pull_in_flight, 0);

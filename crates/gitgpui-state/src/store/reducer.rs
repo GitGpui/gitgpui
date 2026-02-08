@@ -843,7 +843,14 @@ pub(super) fn reduce(
         }],
         Msg::Commit { repo_id, message } => vec![Effect::Commit { repo_id, message }],
         Msg::CommitAmend { repo_id, message } => vec![Effect::CommitAmend { repo_id, message }],
-        Msg::FetchAll { repo_id } => vec![Effect::FetchAll { repo_id }],
+        Msg::FetchAll { repo_id } => {
+            if repos.contains_key(&repo_id)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+            }
+            vec![Effect::FetchAll { repo_id }]
+        }
         Msg::Pull { repo_id, mode } => {
             if repos.contains_key(&repo_id)
                 && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
@@ -1462,7 +1469,8 @@ pub(super) fn reduce(
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 match &command {
-                    crate::msg::RepoCommandKind::Pull { .. }
+                    crate::msg::RepoCommandKind::FetchAll
+                    | crate::msg::RepoCommandKind::Pull { .. }
                     | crate::msg::RepoCommandKind::PullBranch { .. } => {
                         repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
                     }
