@@ -2546,15 +2546,15 @@ impl GitGpuiView {
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
-                if *area != DiffArea::Staged {
-                    return None;
-                }
                 let status = match &repo.status {
                     Loadable::Ready(s) => s,
                     _ => return None,
                 };
-                let is_deleted = status
-                    .staged
+                let entries = match area {
+                    DiffArea::Unstaged => status.unstaged.as_slice(),
+                    DiffArea::Staged => status.staged.as_slice(),
+                };
+                let is_deleted = entries
                     .iter()
                     .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path);
                 if !is_deleted {
@@ -2565,6 +2565,26 @@ impl GitGpuiView {
                 } else {
                     workdir.join(path)
                 })
+            }
+            DiffTarget::Commit {
+                commit_id,
+                path: Some(path),
+            } => {
+                let details = match &repo.commit_details {
+                    Loadable::Ready(d) => d,
+                    _ => return None,
+                };
+                if &details.id != commit_id {
+                    return None;
+                }
+                let is_deleted = details
+                    .files
+                    .iter()
+                    .any(|f| f.kind == FileStatusKind::Deleted && &f.path == path);
+                if !is_deleted {
+                    return None;
+                }
+                Some(workdir.join(path))
             }
             _ => None,
         }
@@ -2669,19 +2689,28 @@ impl GitGpuiView {
             };
 
             let prefer_old = match repo.diff_target.as_ref()? {
-                DiffTarget::WorkingTree { path, area } => {
-                    if *area != DiffArea::Staged {
-                        false
-                    } else {
-                        match &repo.status {
-                            Loadable::Ready(status) => status
-                                .staged
-                                .iter()
-                                .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path),
-                            _ => false,
-                        }
+                DiffTarget::WorkingTree { path, area } => match &repo.status {
+                    Loadable::Ready(status) => {
+                        let entries = match area {
+                            DiffArea::Unstaged => status.unstaged.as_slice(),
+                            DiffArea::Staged => status.staged.as_slice(),
+                        };
+                        entries
+                            .iter()
+                            .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path)
                     }
-                }
+                    _ => false,
+                },
+                DiffTarget::Commit {
+                    commit_id,
+                    path: Some(path),
+                } => match &repo.commit_details {
+                    Loadable::Ready(details) if &details.id == commit_id => details
+                        .files
+                        .iter()
+                        .any(|f| f.kind == FileStatusKind::Deleted && &f.path == path),
+                    _ => false,
+                },
                 _ => false,
             };
 
