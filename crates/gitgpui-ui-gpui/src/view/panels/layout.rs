@@ -1,51 +1,6 @@
 use super::*;
 
 impl GitGpuiView {
-    pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let theme = self.theme;
-        let Some(rows) = self.branch_sidebar_rows_cached() else {
-            return div()
-                .flex()
-                .flex_col()
-                .h_full()
-                .min_h(px(0.0))
-                .child(zed::empty_state(
-                    theme,
-                    "Branches",
-                    "No repository selected.",
-                ));
-        };
-
-        let row_count = rows.len();
-        let list = uniform_list(
-            "branch_sidebar",
-            row_count,
-            cx.processor(Self::render_branch_sidebar_rows),
-        )
-        .h_full()
-        .min_h(px(0.0))
-        .track_scroll(self.branches_scroll.clone());
-        let scroll_handle = self.branches_scroll.0.borrow().base_handle.clone();
-        let list = div().flex_1().min_h(px(0.0)).px(px(2.0)).child(list);
-        let panel_body: AnyElement = div()
-            .id("branch_sidebar_scroll_container")
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .child(list.into_any_element())
-            .child(zed::Scrollbar::new("branch_sidebar_scrollbar", scroll_handle).render(theme))
-            .into_any_element();
-
-        div()
-            .flex()
-            .flex_col()
-            .h_full()
-            .min_h(px(0.0))
-            .child(panel_body)
-    }
-
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,

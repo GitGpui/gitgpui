@@ -1,6 +1,6 @@
 use super::*;
 
-impl GitGpuiView {
+impl SidebarPaneView {
     pub(in super::super) fn render_branch_sidebar_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -71,9 +71,10 @@ impl GitGpuiView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(tooltip.clone()));
-                            } else if this.tooltip_text.as_ref() == Some(&tooltip) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -122,9 +123,9 @@ impl GitGpuiView {
                         let text: SharedString = "Stashes (Apply / Drop)".into();
                         let mut changed = false;
                         if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text));
-                        } else if this.tooltip_text.as_ref() == Some(&text) {
-                            changed |= this.set_tooltip_text_if_changed(None);
+                            changed |= this.set_tooltip_text_if_changed(Some(text), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
                         }
                         if changed {
                             cx.notify();
@@ -164,10 +165,12 @@ impl GitGpuiView {
                             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 let mut changed = false;
                                 if *hovering {
-                                    changed |= this
-                                        .set_tooltip_text_if_changed(Some(apply_tooltip.clone()));
-                                } else if this.tooltip_text.as_ref() == Some(&apply_tooltip) {
-                                    changed |= this.set_tooltip_text_if_changed(None);
+                                    changed |= this.set_tooltip_text_if_changed(
+                                        Some(apply_tooltip.clone()),
+                                        cx,
+                                    );
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&apply_tooltip, cx);
                                 }
                                 if changed {
                                     cx.notify();
@@ -184,10 +187,10 @@ impl GitGpuiView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(pop_tooltip.clone()));
-                            } else if this.tooltip_text.as_ref() == Some(&pop_tooltip) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(pop_tooltip.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&pop_tooltip, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -205,10 +208,12 @@ impl GitGpuiView {
                             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 let mut changed = false;
                                 if *hovering {
-                                    changed |= this
-                                        .set_tooltip_text_if_changed(Some(drop_tooltip.clone()));
-                                } else if this.tooltip_text.as_ref() == Some(&drop_tooltip) {
-                                    changed |= this.set_tooltip_text_if_changed(None);
+                                    changed |= this.set_tooltip_text_if_changed(
+                                        Some(drop_tooltip.clone()),
+                                        cx,
+                                    );
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&drop_tooltip, cx);
                                 }
                                 if changed {
                                     cx.notify();
@@ -256,11 +261,10 @@ impl GitGpuiView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(tooltip.clone()));
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
                             } else {
-                                if this.tooltip_text.as_ref() == Some(&tooltip) {
-                                    changed |= this.set_tooltip_text_if_changed(None);
-                                }
+                                changed |= this.clear_tooltip_if_matches(&tooltip, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -448,7 +452,7 @@ impl GitGpuiView {
                                         repo_id,
                                         name: full_name_for_checkout.clone(),
                                     });
-                                    this.rebuild_diff_cache();
+                                    this.rebuild_diff_cache(cx);
                                     cx.notify();
                                 }
                                 BranchSection::Remote => {
@@ -460,7 +464,7 @@ impl GitGpuiView {
                                             remote: remote.to_string(),
                                             name: branch.to_string(),
                                         });
-                                        this.rebuild_diff_cache();
+                                        this.rebuild_diff_cache(cx);
                                         cx.notify();
                                     }
                                 }
@@ -485,10 +489,12 @@ impl GitGpuiView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |=
-                                    this.set_tooltip_text_if_changed(Some(branch_tooltip.clone()));
-                            } else if this.tooltip_text.as_ref() == Some(&branch_tooltip) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this.set_tooltip_text_if_changed(
+                                    Some(branch_tooltip.clone()),
+                                    cx,
+                                );
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&branch_tooltip, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -501,6 +507,9 @@ impl GitGpuiView {
             .collect()
     }
 
+}
+
+impl GitGpuiView {
     pub(in super::super) fn render_commit_file_rows(
         this: &mut Self,
         range: Range<usize>,

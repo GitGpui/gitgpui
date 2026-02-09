@@ -535,7 +535,6 @@ pub struct GitGpuiView {
     worktree_picker_search_input: Option<Entity<zed::TextInput>>,
     submodule_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
-    branch_sidebar_cache: Option<BranchSidebarCache>,
     history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     history_stash_ids_cache: Option<HistoryStashIdsCache>,
 
@@ -574,7 +573,6 @@ pub struct GitGpuiView {
     title_should_move: bool,
     hover_resize_edge: Option<ResizeEdge>,
 
-    branches_scroll: UniformListScrollHandle,
     history_scroll: UniformListScrollHandle,
     unstaged_scroll: UniformListScrollHandle,
     staged_scroll: UniformListScrollHandle,
@@ -828,7 +826,15 @@ impl GitGpuiView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
-        let sidebar_pane = cx.new(|_cx| SidebarPaneView::new(weak_view.clone()));
+        let sidebar_pane = cx.new(|cx| {
+            SidebarPaneView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                weak_view.clone(),
+                cx,
+            )
+        });
         let main_pane = cx.new(|_cx| MainPaneView::new(weak_view.clone()));
         let details_pane = cx.new(|_cx| DetailsPaneView::new(weak_view.clone()));
 
@@ -1232,7 +1238,6 @@ impl GitGpuiView {
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
             history_cache: None,
-            branch_sidebar_cache: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             date_time_format,
@@ -1260,7 +1265,6 @@ impl GitGpuiView {
             context_menu_selected_ix: None,
             title_should_move: false,
             hover_resize_edge: None,
-            branches_scroll: UniformListScrollHandle::default(),
             history_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
@@ -1311,6 +1315,7 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        let _ = self.sidebar_pane.update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();

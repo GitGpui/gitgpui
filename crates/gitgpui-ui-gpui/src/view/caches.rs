@@ -27,7 +27,7 @@ pub(super) struct HistoryCommitRowVm {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct BranchSidebarFingerprint {
+pub(super) struct BranchSidebarFingerprint {
     head_branch_rev: u64,
     branches_rev: u64,
     remotes_rev: u64,
@@ -36,7 +36,7 @@ struct BranchSidebarFingerprint {
 }
 
 impl BranchSidebarFingerprint {
-    fn from_repo(repo: &RepoState) -> Self {
+    pub(super) fn from_repo(repo: &RepoState) -> Self {
         Self {
             head_branch_rev: repo.head_branch_rev,
             branches_rev: repo.branches_rev,
@@ -49,9 +49,9 @@ impl BranchSidebarFingerprint {
 
 #[derive(Clone, Debug)]
 pub(super) struct BranchSidebarCache {
-    repo_id: RepoId,
-    fingerprint: BranchSidebarFingerprint,
-    rows: Arc<[BranchSidebarRow]>,
+    pub(super) repo_id: RepoId,
+    pub(super) fingerprint: BranchSidebarFingerprint,
+    pub(super) rows: Arc<[BranchSidebarRow]>,
 }
 
 #[derive(Clone, Debug)]
@@ -73,35 +73,9 @@ impl GitGpuiView {
     pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
         branch_sidebar::branch_sidebar_rows(repo)
     }
+}
 
-    pub(super) fn branch_sidebar_rows_cached(&mut self) -> Option<Arc<[BranchSidebarRow]>> {
-        if self.active_repo().is_none() {
-            self.branch_sidebar_cache = None;
-            return None;
-        }
-
-        let (repo_id, fingerprint, rows) = {
-            let repo = self.active_repo()?;
-            let fingerprint = BranchSidebarFingerprint::from_repo(repo);
-            if let Some(cache) = &self.branch_sidebar_cache
-                && cache.repo_id == repo.id
-                && cache.fingerprint == fingerprint
-            {
-                return Some(Arc::clone(&cache.rows));
-            }
-
-            let rows: Arc<[BranchSidebarRow]> = Self::branch_sidebar_rows(repo).into();
-            (repo.id, fingerprint, rows)
-        };
-
-        self.branch_sidebar_cache = Some(BranchSidebarCache {
-            repo_id,
-            fingerprint,
-            rows: Arc::clone(&rows),
-        });
-        Some(rows)
-    }
-
+impl GitGpuiView {
     pub(super) fn ensure_history_worktree_summary_cache(
         &mut self,
     ) -> (bool, (usize, usize, usize)) {
