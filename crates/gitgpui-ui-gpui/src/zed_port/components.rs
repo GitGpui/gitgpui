@@ -8,10 +8,10 @@ use gpui::prelude::*;
 use gpui::{Div, FontWeight, SharedString, div, px};
 
 #[cfg(test)]
-use gpui::IntoElement;
-#[cfg(test)]
 use super::CONTROL_HEIGHT_MD_PX;
 use super::CONTROL_HEIGHT_PX;
+#[cfg(test)]
+use gpui::IntoElement;
 
 #[cfg(test)]
 pub fn panel(

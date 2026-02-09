@@ -98,8 +98,7 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
         for k in (-(d as isize)..=(d as isize)).step_by(2) {
             let k_ix = (k + offset) as usize;
             let x = if k == -(d as isize)
-                || (k != d as isize
-                    && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
+                || (k != d as isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
             {
                 v[(k + 1 + offset) as usize]
             } else {
@@ -222,4 +221,3 @@ fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<R
     };
     (old_ranges, new_ranges)
 }
-

@@ -67,9 +67,7 @@ impl Tab {
         let hover_bg = theme.colors.hover;
         let active_bg = theme.colors.active;
 
-        let start_slot = div()
-            .flex_none()
-            .size(Self::START_TAB_SLOT_SIZE);
+        let start_slot = div().flex_none().size(Self::START_TAB_SLOT_SIZE);
 
         let end_slot = div()
             .flex_none()

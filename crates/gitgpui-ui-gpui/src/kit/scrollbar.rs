@@ -218,12 +218,11 @@ impl Scrollbar {
                 // Zed-style autohide: show on hover/drag, then hide after a delay.
                 let state = interaction.read(cx);
                 let show = always_visible || hovered || is_dragging || state.showing;
-                let should_schedule_hide =
-                    !always_visible
-                        && !hovered
-                        && !is_dragging
-                        && state.showing
-                        && state.hide_task.is_none();
+                let should_schedule_hide = !always_visible
+                    && !hovered
+                    && !is_dragging
+                    && state.showing
+                    && state.hide_task.is_none();
                 let _ = state;
 
                 if hovered || is_dragging {

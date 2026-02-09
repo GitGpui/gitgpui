@@ -1,8 +1,8 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange};
 use globset::{Glob, GlobMatcher};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify::event::{AccessKind, AccessMode};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -76,11 +76,7 @@ impl DebouncedChange {
             return None;
         }
         let timeout = self.next_timeout(now).unwrap_or(Duration::from_secs(0));
-        if timeout.is_zero() {
-            self.take()
-        } else {
-            None
-        }
+        if timeout.is_zero() { self.take() } else { None }
     }
 
     fn take(&mut self) -> Option<RepoExternalChange> {
@@ -463,7 +459,11 @@ fn classify_repo_event(
     }
 
     // Update ignore rules if the ignore config itself changes.
-    if event.paths.iter().any(|p| is_gitignore_config_path(workdir, git_dir, p)) {
+    if event
+        .paths
+        .iter()
+        .any(|p| is_gitignore_config_path(workdir, git_dir, p))
+    {
         *gitignore = GitignoreRules::load(workdir, git_dir);
         return Some(RepoExternalChange::Worktree);
     }
@@ -555,9 +555,9 @@ fn path_dir_hint(event: &notify::Event) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::SystemTime;
     use notify::EventKind;
     use notify::event::{AccessKind, AccessMode, CreateKind};
+    use std::time::SystemTime;
 
     #[test]
     fn resolve_git_dir_handles_dot_git_directory() {
@@ -590,8 +590,11 @@ mod tests {
         let _ = fs::create_dir_all(&workdir);
         let _ = fs::create_dir_all(&gitdir);
 
-        fs::write(workdir.join(".git"), format!("gitdir: {}\n", gitdir.display()))
-            .expect("write .git file");
+        fs::write(
+            workdir.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .expect("write .git file");
 
         assert_eq!(resolve_git_dir(&workdir), Some(gitdir));
     }
@@ -685,16 +688,16 @@ mod tests {
 
         // Another event resets debounce window.
         assert_eq!(
-            d.push(RepoExternalChange::Worktree, base + Duration::from_millis(50)),
+            d.push(
+                RepoExternalChange::Worktree,
+                base + Duration::from_millis(50)
+            ),
             None
         );
         assert!(d.next_timeout(base + Duration::from_millis(50)).is_some());
 
         // Not yet due at 149ms from base.
-        assert_eq!(
-            d.take_if_due(base + Duration::from_millis(149)),
-            None
-        );
+        assert_eq!(d.take_if_due(base + Duration::from_millis(149)), None);
 
         // Due by debounce at 150ms from base (last at 50ms + 100ms).
         assert_eq!(
@@ -706,7 +709,10 @@ mod tests {
         // Continuous events should flush by max_delay.
         assert_eq!(d.push(RepoExternalChange::GitState, base), None);
         assert_eq!(
-            d.push(RepoExternalChange::GitState, base + Duration::from_millis(300)),
+            d.push(
+                RepoExternalChange::GitState,
+                base + Duration::from_millis(300)
+            ),
             Some(RepoExternalChange::GitState)
         );
         assert!(!d.is_pending());

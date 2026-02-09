@@ -3,7 +3,7 @@ use super::*;
 impl GitGpuiView {
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let Some(repo) = self.active_repo() else {
+        let Some(rows) = self.branch_sidebar_rows_cached() else {
             return div()
                 .flex()
                 .flex_col()
@@ -16,7 +16,7 @@ impl GitGpuiView {
                 ));
         };
 
-        let row_count = Self::branch_sidebar_rows(repo).len();
+        let row_count = rows.len();
         let list = uniform_list(
             "branch_sidebar",
             row_count,
@@ -400,10 +400,18 @@ impl GitGpuiView {
 
         let repo_id = self.active_repo_id();
         let selected_unstaged = repo_id
-            .and_then(|rid| self.status_multi_selection.get(&rid).map(|s| s.unstaged.len()))
+            .and_then(|rid| {
+                self.status_multi_selection
+                    .get(&rid)
+                    .map(|s| s.unstaged.len())
+            })
             .unwrap_or(0);
         let selected_staged = repo_id
-            .and_then(|rid| self.status_multi_selection.get(&rid).map(|s| s.staged.len()))
+            .and_then(|rid| {
+                self.status_multi_selection
+                    .get(&rid)
+                    .map(|s| s.staged.len())
+            })
             .unwrap_or(0);
 
         let stage_all = zed::Button::new("stage_all", "Stage all changes")
@@ -431,54 +439,50 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
-        let stage_selected = zed::Button::new(
-            "stage_selected",
-            format!("Stage ({selected_unstaged})"),
-        )
-        .style(zed::ButtonStyle::Outlined)
-        .on_click(theme, cx, |this, _e, _w, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            let paths = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.unstaged.clone())
-                .unwrap_or_default();
-            if paths.is_empty() {
-                return;
-            }
-            this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::StagePaths { repo_id, paths });
-            this.rebuild_diff_cache();
-            cx.notify();
-        });
+        let stage_selected =
+            zed::Button::new("stage_selected", format!("Stage ({selected_unstaged})"))
+                .style(zed::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    let Some(repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    let paths = this
+                        .status_multi_selection
+                        .get(&repo_id)
+                        .map(|s| s.unstaged.clone())
+                        .unwrap_or_default();
+                    if paths.is_empty() {
+                        return;
+                    }
+                    this.status_multi_selection.remove(&repo_id);
+                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    this.store.dispatch(Msg::StagePaths { repo_id, paths });
+                    this.rebuild_diff_cache();
+                    cx.notify();
+                });
 
-        let discard_selected = zed::Button::new(
-            "discard_selected",
-            format!("Discard ({selected_unstaged})"),
-        )
-        .style(zed::ButtonStyle::Outlined)
-        .on_click(theme, cx, |this, _e, _w, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            let paths = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.unstaged.clone())
-                .unwrap_or_default();
-            if paths.is_empty() {
-                return;
-            }
-            this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store
-                .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
-            this.rebuild_diff_cache();
-            cx.notify();
-        });
+        let discard_selected =
+            zed::Button::new("discard_selected", format!("Discard ({selected_unstaged})"))
+                .style(zed::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    let Some(repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    let paths = this
+                        .status_multi_selection
+                        .get(&repo_id)
+                        .map(|s| s.unstaged.clone())
+                        .unwrap_or_default();
+                    if paths.is_empty() {
+                        return;
+                    }
+                    this.status_multi_selection.remove(&repo_id);
+                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    this.store
+                        .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+                    this.rebuild_diff_cache();
+                    cx.notify();
+                });
 
         let unstage_all = zed::Button::new("unstage_all", "Unstage all changes")
             .style(zed::ButtonStyle::Subtle)
@@ -505,29 +509,27 @@ impl GitGpuiView {
                 cx.notify();
             }));
 
-        let unstage_selected = zed::Button::new(
-            "unstage_selected",
-            format!("Unstage ({selected_staged})"),
-        )
-        .style(zed::ButtonStyle::Outlined)
-        .on_click(theme, cx, |this, _e, _w, cx| {
-            let Some(repo_id) = this.active_repo_id() else {
-                return;
-            };
-            let paths = this
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|s| s.staged.clone())
-                .unwrap_or_default();
-            if paths.is_empty() {
-                return;
-            }
-            this.status_multi_selection.remove(&repo_id);
-            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-            this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
-            this.rebuild_diff_cache();
-            cx.notify();
-        });
+        let unstage_selected =
+            zed::Button::new("unstage_selected", format!("Unstage ({selected_staged})"))
+                .style(zed::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    let Some(repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    let paths = this
+                        .status_multi_selection
+                        .get(&repo_id)
+                        .map(|s| s.staged.clone())
+                        .unwrap_or_default();
+                    if paths.is_empty() {
+                        return;
+                    }
+                    this.status_multi_selection.remove(&repo_id);
+                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
+                    this.rebuild_diff_cache();
+                    cx.notify();
+                });
 
         let section_header = |id: &'static str,
                               label: &'static str,
@@ -705,9 +707,9 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
-        let can_amend = self
-            .active_repo()
-            .is_some_and(|repo| matches!(&repo.log, Loadable::Ready(page) if !page.commits.is_empty()));
+        let can_amend = self.active_repo().is_some_and(
+            |repo| matches!(&repo.log, Loadable::Ready(page) if !page.commits.is_empty()),
+        );
         div()
             .flex()
             .flex_col()
@@ -743,8 +745,7 @@ impl GitGpuiView {
                                         if message.is_empty() {
                                             return;
                                         }
-                                        this.store
-                                            .dispatch(Msg::CommitAmend { repo_id, message });
+                                        this.store.dispatch(Msg::CommitAmend { repo_id, message });
                                         this.commit_message_input
                                             .update(cx, |i, cx| i.set_text(String::new(), cx));
                                         cx.notify();

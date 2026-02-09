@@ -7,21 +7,22 @@ impl GitGpuiView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(repo) = this.active_repo() else {
+        let Some(repo_id) = this.active_repo_id() else {
+            return Vec::new();
+        };
+        let Some(rows) = this.branch_sidebar_rows_cached() else {
             return Vec::new();
         };
         let theme = this.theme;
-        let repo_id = repo.id;
-        let rows = Self::branch_sidebar_rows(repo);
 
-	        let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
-	            gpui::svg()
-	                .path(path)
-	                .w(px(size_px))
-	                .h(px(size_px))
-	                .text_color(color)
-	                .flex_shrink_0()
-	        };
+        let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
+            gpui::svg()
+                .path(path)
+                .w(px(size_px))
+                .h(px(size_px))
+                .text_color(color)
+                .flex_shrink_0()
+        };
 
         fn indent_px(depth: usize) -> Pixels {
             px(6.0 + depth as f32 * 10.0)
@@ -153,42 +154,19 @@ impl GitGpuiView {
                     let row_group: SharedString = format!("stash_row_{}", index).into();
 
                     let apply_tooltip: SharedString = "Apply stash".into();
-                    let apply_button = zed::Button::new(
-                        format!("stash_sidebar_apply_{index}"),
-                        "Apply",
-                    )
-                    .style(zed::ButtonStyle::Outlined)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::ApplyStash { repo_id, index });
-                        cx.notify();
-                    })
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let mut changed = false;
-                        if *hovering {
-                            changed |=
-                                this.set_tooltip_text_if_changed(Some(apply_tooltip.clone()));
-                        } else if this.tooltip_text.as_ref() == Some(&apply_tooltip) {
-                            changed |= this.set_tooltip_text_if_changed(None);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
-
-                    let pop_tooltip: SharedString = "Pop stash".into();
-                    let pop_button =
-                        zed::Button::new(format!("stash_sidebar_pop_{index}"), "Pop")
-                            .style(zed::ButtonStyle::Filled)
+                    let apply_button =
+                        zed::Button::new(format!("stash_sidebar_apply_{index}"), "Apply")
+                            .style(zed::ButtonStyle::Outlined)
                             .on_click(theme, cx, move |this, _e, _w, cx| {
-                                this.store.dispatch(Msg::PopStash { repo_id, index });
+                                this.store.dispatch(Msg::ApplyStash { repo_id, index });
                                 cx.notify();
                             })
                             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 let mut changed = false;
                                 if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(pop_tooltip.clone()));
-                                } else if this.tooltip_text.as_ref() == Some(&pop_tooltip) {
+                                    changed |= this
+                                        .set_tooltip_text_if_changed(Some(apply_tooltip.clone()));
+                                } else if this.tooltip_text.as_ref() == Some(&apply_tooltip) {
                                     changed |= this.set_tooltip_text_if_changed(None);
                                 }
                                 if changed {
@@ -196,54 +174,73 @@ impl GitGpuiView {
                                 }
                             }));
 
-                    let drop_tooltip: SharedString = "Drop stash".into();
-                    let drop_button = zed::Button::new(
-                        format!("stash_sidebar_drop_{index}"),
-                        "Drop",
-                    )
-                    .style(zed::ButtonStyle::Danger)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.store.dispatch(Msg::DropStash { repo_id, index });
-                        cx.notify();
-                    })
-                    .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(drop_tooltip.clone()));
-                        } else if this.tooltip_text.as_ref() == Some(&drop_tooltip) {
-                            changed |= this.set_tooltip_text_if_changed(None);
-                        }
-                        if changed {
+                    let pop_tooltip: SharedString = "Pop stash".into();
+                    let pop_button = zed::Button::new(format!("stash_sidebar_pop_{index}"), "Pop")
+                        .style(zed::ButtonStyle::Filled)
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.store.dispatch(Msg::PopStash { repo_id, index });
                             cx.notify();
-                        }
-                    }));
+                        })
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let mut changed = false;
+                            if *hovering {
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(pop_tooltip.clone()));
+                            } else if this.tooltip_text.as_ref() == Some(&pop_tooltip) {
+                                changed |= this.set_tooltip_text_if_changed(None);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                        }));
 
-	                    div()
-	                        .id(("stash_sidebar_row", index))
-	                        .relative()
-	                        .group(row_group.clone())
-	                        .flex()
-	                        .items_center()
-	                        .gap_2()
-	                        .px_2()
-	                        .h(px(24.0))
-	                        .w_full()
-	                        .hover(move |s| s.bg(theme.colors.hover))
-	                        .active(move |s| s.bg(theme.colors.active))
-	                        .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
-	                        .child(
-	                            div()
-	                                .flex_1()
-	                                .min_w(px(0.0))
-	                                .pr(px(160.0))
-	                                .text_sm()
-	                                .line_clamp(1)
-	                                .whitespace_nowrap()
-	                                .child(message.clone()),
-	                        )
-	                        .child(
-	                            div()
-	                                .absolute()
+                    let drop_tooltip: SharedString = "Drop stash".into();
+                    let drop_button =
+                        zed::Button::new(format!("stash_sidebar_drop_{index}"), "Drop")
+                            .style(zed::ButtonStyle::Danger)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                this.store.dispatch(Msg::DropStash { repo_id, index });
+                                cx.notify();
+                            })
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |= this
+                                        .set_tooltip_text_if_changed(Some(drop_tooltip.clone()));
+                                } else if this.tooltip_text.as_ref() == Some(&drop_tooltip) {
+                                    changed |= this.set_tooltip_text_if_changed(None);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            }));
+
+                    div()
+                        .id(("stash_sidebar_row", index))
+                        .relative()
+                        .group(row_group.clone())
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .h(px(24.0))
+                        .w_full()
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .pr(px(160.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(message.clone()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
                                 .right(px(6.0))
                                 .top(px(2.0))
                                 .bottom(px(2.0))
@@ -488,8 +485,8 @@ impl GitGpuiView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(branch_tooltip.clone()));
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(branch_tooltip.clone()));
                             } else if this.tooltip_text.as_ref() == Some(&branch_tooltip) {
                                 changed |= this.set_tooltip_text_if_changed(None);
                             }
@@ -548,17 +545,17 @@ impl GitGpuiView {
                 let path_label = this.cached_path_display(&path);
                 let tooltip = path_label.clone();
 
-	                let mut row = div()
-	                    .id(("commit_file", ix))
-	                    .h(px(24.0))
-	                    .flex()
-	                    .items_center()
-	                    .gap_2()
-	                    .px_2()
-	                    .w_full()
-	                    .rounded(px(theme.radii.row))
-	                    .hover(move |s| s.bg(theme.colors.hover))
-	                    .active(move |s| s.bg(theme.colors.active))
+                let mut row = div()
+                    .id(("commit_file", ix))
+                    .h(px(24.0))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .w_full()
+                    .rounded(px(theme.radii.row))
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .child(
                         div()
                             .w(px(16.0))

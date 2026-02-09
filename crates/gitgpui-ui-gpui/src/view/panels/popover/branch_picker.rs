@@ -1,0 +1,78 @@
+use super::*;
+
+pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>) -> gpui::Div {
+    let theme = this.theme;
+    let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
+
+    if let Some(repo) = this.active_repo() {
+        match &repo.branches {
+            Loadable::Ready(branches) => {
+                if let Some(search) = this.branch_picker_search_input.clone() {
+                    let repo_id = repo.id;
+                    let branch_names = branches.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+                    let items = branch_names
+                        .iter()
+                        .map(|name| name.clone().into())
+                        .collect::<Vec<SharedString>>();
+
+                    menu = menu.child(
+                        zed::PickerPrompt::new(search)
+                            .items(items)
+                            .empty_text("No branches")
+                            .max_height(px(240.0))
+                            .render(theme, cx, move |this, ix, _e, _w, cx| {
+                                if let Some(name) = branch_names.get(ix).cloned() {
+                                    this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                                }
+                                this.popover = None;
+                                this.popover_anchor = None;
+                                cx.notify();
+                            }),
+                    );
+                } else {
+                    for (ix, branch) in branches.iter().enumerate() {
+                        let repo_id = repo.id;
+                        let name = branch.name.clone();
+                        let label: SharedString = name.clone().into();
+                        menu = menu.child(
+                            zed::context_menu_entry(
+                                ("branch_item", ix),
+                                theme,
+                                false,
+                                false,
+                                None,
+                                label,
+                                None,
+                                false,
+                            )
+                            .on_click(cx.listener(
+                                move |this, _e: &ClickEvent, _w, cx| {
+                                    this.store.dispatch(Msg::CheckoutBranch {
+                                        repo_id,
+                                        name: name.clone(),
+                                    });
+                                    this.popover = None;
+                                    this.popover_anchor = None;
+                                    cx.notify();
+                                },
+                            )),
+                        );
+                    }
+                }
+            }
+            Loadable::Loading => {
+                menu = menu.child(zed::context_menu_label(theme, "Loading"));
+            }
+            Loadable::Error(e) => {
+                menu = menu.child(zed::context_menu_label(theme, e.clone()));
+            }
+            Loadable::NotLoaded => {
+                menu = menu.child(zed::context_menu_label(theme, "Not loaded"));
+            }
+        }
+    }
+
+    zed::context_menu(theme, menu)
+        .min_w(px(240.0))
+        .max_w(px(420.0))
+}

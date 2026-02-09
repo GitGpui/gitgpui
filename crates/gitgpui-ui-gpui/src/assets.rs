@@ -18,9 +18,9 @@ impl GitGpuiAssets {
             "icons/arrow_up.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_up.svg"
             ))),
-            "icons/spinner.svg" => Some(Cow::Borrowed(include_bytes!(
-                "../assets/icons/spinner.svg"
-            ))),
+            "icons/spinner.svg" => {
+                Some(Cow::Borrowed(include_bytes!("../assets/icons/spinner.svg")))
+            }
             "icons/box.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/box.svg"))),
             "icons/chevron_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/chevron_down.svg"

@@ -1,7 +1,7 @@
 use crate::msg::{Effect, Msg};
 use gitgpui_core::domain::{Diff, RepoSpec};
-use gitgpui_core::services::CommandOutput;
 use gitgpui_core::error::{Error, ErrorKind};
+use gitgpui_core::services::CommandOutput;
 use gitgpui_core::services::{GitBackend, GitRepository};
 use std::collections::HashMap;
 use std::io::{BufRead as _, BufReader, Read as _};
@@ -167,10 +167,11 @@ pub(super) fn schedule_effect(
         Effect::LoadConflictFile { repo_id, path } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let ours_theirs = repo.diff_file_text(&gitgpui_core::domain::DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: gitgpui_core::domain::DiffArea::Unstaged,
-                    });
+                    let ours_theirs =
+                        repo.diff_file_text(&gitgpui_core::domain::DiffTarget::WorkingTree {
+                            path: path.clone(),
+                            area: gitgpui_core::domain::DiffArea::Unstaged,
+                        });
 
                     let current = std::fs::read(repo.spec().workdir.join(&path))
                         .ok()
@@ -262,11 +263,7 @@ pub(super) fn schedule_effect(
             }
         }
 
-        Effect::LoadBlame {
-            repo_id,
-            path,
-            rev,
-        } => {
+        Effect::LoadBlame { repo_id, path, rev } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
                     let result = repo.blame_file(&path, rev.as_deref());
@@ -472,11 +469,7 @@ pub(super) fn schedule_effect(
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
 
-                let command_str = format!(
-                    "git clone --progress {} {}",
-                    url,
-                    dest.display()
-                );
+                let command_str = format!("git clone --progress {} {}", url, dest.display());
 
                 let mut child = match cmd.spawn() {
                     Ok(child) => child,
@@ -642,7 +635,9 @@ pub(super) fn schedule_effect(
                 executor.spawn(move || {
                     let _ = msg_tx.send(Msg::RepoCommandFinished {
                         repo_id,
-                        command: crate::msg::RepoCommandKind::RemoveSubmodule { path: path.clone() },
+                        command: crate::msg::RepoCommandKind::RemoveSubmodule {
+                            path: path.clone(),
+                        },
                         result: repo.remove_submodule_with_output(&path),
                     });
                 });
@@ -1070,7 +1065,9 @@ pub(super) fn schedule_effect(
         Effect::PopStash { repo_id, index } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {
-                    let result = repo.stash_apply(index).and_then(|()| repo.stash_drop(index));
+                    let result = repo
+                        .stash_apply(index)
+                        .and_then(|()| repo.stash_drop(index));
                     let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
                 });
             }

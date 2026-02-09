@@ -177,8 +177,15 @@ mod tests {
 
         // Hashing highlights is used for caching shaped layouts; it should be stable for identical
         // highlight sequences within a process.
-        let styled =
-            build_cached_diff_styled_text(theme, "abcdef", &[], "def", None, DiffSyntaxMode::Auto, None);
+        let styled = build_cached_diff_styled_text(
+            theme,
+            "abcdef",
+            &[],
+            "def",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
         assert_eq!(styled.highlights.len(), 1);
         assert_eq!(styled.highlights[0].0, 3..6);
     }

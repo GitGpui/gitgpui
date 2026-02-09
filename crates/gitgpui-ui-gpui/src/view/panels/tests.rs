@@ -46,21 +46,26 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                     workdir: workdir.clone(),
                 },
             );
-            repo.status = gitgpui_state::model::Loadable::Ready(gitgpui_core::domain::RepoStatus {
-                staged: vec![],
-                unstaged: vec![gitgpui_core::domain::FileStatus {
-                    path: file_rel.clone(),
-                    kind: gitgpui_core::domain::FileStatusKind::Untracked,
-                }],
-            }
-            .into());
+            repo.status = gitgpui_state::model::Loadable::Ready(
+                gitgpui_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitgpui_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitgpui_core::domain::FileStatusKind::Untracked,
+                    }],
+                }
+                .into(),
+            );
             repo.diff_target = Some(gitgpui_core::domain::DiffTarget::WorkingTree {
                 path: file_rel.clone(),
                 area: gitgpui_core::domain::DiffArea::Unstaged,
             });
 
-            this.state.active_repo = Some(repo_id);
-            this.state.repos = vec![repo];
+            this.state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
 
             this.worktree_preview_path = Some(workdir.join(&file_rel));
             this.worktree_preview = gitgpui_state::model::Loadable::Ready(Arc::clone(&lines));
@@ -149,8 +154,11 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
             repo.diff_rev = 1;
             repo.diff = gitgpui_state::model::Loadable::Ready(diff.into());
 
-            this.state.active_repo = Some(repo_id);
-            this.state.repos = vec![repo];
+            this.state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
 
             // Ensure a clean render path.
             this.rebuild_diff_cache();

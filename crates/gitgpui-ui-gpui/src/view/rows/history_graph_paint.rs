@@ -141,7 +141,14 @@ pub(super) fn paint_history_graph(
     if is_stash_node {
         paint_stash_node(bounds.left() + node_x, y_center, node_color, black, window);
     } else {
-        paint_commit_node(bounds.left() + node_x, y_center, node_radius, node_color, black, window);
+        paint_commit_node(
+            bounds.left() + node_x,
+            y_center,
+            node_radius,
+            node_color,
+            black,
+            window,
+        );
     }
 }
 

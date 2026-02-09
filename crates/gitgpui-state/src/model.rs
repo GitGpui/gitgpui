@@ -173,15 +173,21 @@ pub struct RepoState {
     pub open: Loadable<()>,
     pub history_scope: LogScope,
     pub head_branch: Loadable<String>,
+    pub head_branch_rev: u64,
     pub upstream_divergence: Loadable<Option<UpstreamDivergence>>,
     pub branches: Loadable<Vec<Branch>>,
+    pub branches_rev: u64,
     pub tags: Loadable<Vec<Tag>>,
+    pub tags_rev: u64,
     pub remotes: Loadable<Vec<Remote>>,
+    pub remotes_rev: u64,
     pub remote_branches: Loadable<Vec<RemoteBranch>>,
+    pub remote_branches_rev: u64,
     pub status: Loadable<Shared<RepoStatus>>,
     pub log: Loadable<Shared<LogPage>>,
     pub log_loading_more: bool,
     pub stashes: Loadable<Vec<StashEntry>>,
+    pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
     pub rebase_in_progress: Loadable<bool>,
     pub file_history_path: Option<PathBuf>,
@@ -221,15 +227,21 @@ impl RepoState {
             open: Loadable::Loading,
             history_scope: LogScope::CurrentBranch,
             head_branch: Loadable::NotLoaded,
+            head_branch_rev: 0,
             upstream_divergence: Loadable::NotLoaded,
             branches: Loadable::NotLoaded,
+            branches_rev: 0,
             tags: Loadable::NotLoaded,
+            tags_rev: 0,
             remotes: Loadable::NotLoaded,
+            remotes_rev: 0,
             remote_branches: Loadable::NotLoaded,
+            remote_branches_rev: 0,
             status: Loadable::NotLoaded,
             log: Loadable::NotLoaded,
             log_loading_more: false,
             stashes: Loadable::NotLoaded,
+            stashes_rev: 0,
             reflog: Loadable::NotLoaded,
             rebase_in_progress: Loadable::NotLoaded,
             file_history_path: None,
@@ -253,6 +265,36 @@ impl RepoState {
             diagnostics: Vec::new(),
             command_log: Vec::new(),
         }
+    }
+
+    pub(crate) fn set_head_branch(&mut self, head_branch: Loadable<String>) {
+        self.head_branch = head_branch;
+        self.head_branch_rev = self.head_branch_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_branches(&mut self, branches: Loadable<Vec<Branch>>) {
+        self.branches = branches;
+        self.branches_rev = self.branches_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_tags(&mut self, tags: Loadable<Vec<Tag>>) {
+        self.tags = tags;
+        self.tags_rev = self.tags_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_remotes(&mut self, remotes: Loadable<Vec<Remote>>) {
+        self.remotes = remotes;
+        self.remotes_rev = self.remotes_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_remote_branches(&mut self, remote_branches: Loadable<Vec<RemoteBranch>>) {
+        self.remote_branches = remote_branches;
+        self.remote_branches_rev = self.remote_branches_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_stashes(&mut self, stashes: Loadable<Vec<StashEntry>>) {
+        self.stashes = stashes;
+        self.stashes_rev = self.stashes_rev.wrapping_add(1);
     }
 }
 

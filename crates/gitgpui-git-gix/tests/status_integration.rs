@@ -162,14 +162,18 @@ fn status_lists_untracked_files_in_directories() {
     let status = opened.status().unwrap();
 
     assert_eq!(status.unstaged.len(), 2);
-    assert!(status
-        .unstaged
-        .iter()
-        .any(|e| e.path == PathBuf::from("dir/a.txt") && e.kind == FileStatusKind::Untracked));
-    assert!(status
-        .unstaged
-        .iter()
-        .any(|e| e.path == PathBuf::from("dir/b.txt") && e.kind == FileStatusKind::Untracked));
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("dir/a.txt") && e.kind == FileStatusKind::Untracked)
+    );
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("dir/b.txt") && e.kind == FileStatusKind::Untracked)
+    );
 }
 
 #[test]
@@ -450,14 +454,18 @@ fn checkout_conflict_side_stages_resolution() {
         .unwrap();
 
     let status = opened.status().unwrap();
-    assert!(status
-        .unstaged
-        .iter()
-        .all(|s| s.path != PathBuf::from("a.txt")));
-    assert!(status
-        .staged
-        .iter()
-        .any(|s| s.path == PathBuf::from("a.txt") && s.kind == FileStatusKind::Modified));
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .all(|s| s.path != PathBuf::from("a.txt"))
+    );
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|s| s.path == PathBuf::from("a.txt") && s.kind == FileStatusKind::Modified)
+    );
 
     let on_disk = fs::read_to_string(repo.join("a.txt")).unwrap();
     assert_eq!(on_disk, "theirs\n");
@@ -499,14 +507,18 @@ fn stage_and_unstage_paths_update_status() {
     let status = opened.status().unwrap();
     assert!(status.staged.is_empty());
     assert_eq!(status.unstaged.len(), 2);
-    assert!(status
-        .unstaged
-        .iter()
-        .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified));
-    assert!(status
-        .unstaged
-        .iter()
-        .any(|e| e.path == PathBuf::from("b.txt") && e.kind == FileStatusKind::Untracked));
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified)
+    );
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("b.txt") && e.kind == FileStatusKind::Untracked)
+    );
 }
 
 #[test]
@@ -728,7 +740,9 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     let backend = GixBackend::default();
     let opened = backend.open(repo).unwrap();
 
-    opened.revert(&gitgpui_core::domain::CommitId(c2.clone())).unwrap();
+    opened
+        .revert(&gitgpui_core::domain::CommitId(c2.clone()))
+        .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
     let status = opened.status().unwrap();
@@ -758,7 +772,10 @@ fn amend_rewrites_head_commit_message_and_content() {
 
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "init"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
 
     let head_before = Command::new("git")
         .arg("-C")
@@ -787,7 +804,10 @@ fn amend_rewrites_head_commit_message_and_content() {
         .output()
         .expect("rev-parse head");
     assert!(head_after.status.success());
-    let head_after = String::from_utf8(head_after.stdout).unwrap().trim().to_string();
+    let head_after = String::from_utf8(head_after.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
     assert_ne!(head_after, head_before);
 
     let count = Command::new("git")
@@ -807,7 +827,10 @@ fn amend_rewrites_head_commit_message_and_content() {
         .expect("git log to run");
     assert!(msg.status.success());
     assert_eq!(String::from_utf8(msg.stdout).unwrap().trim(), "amended");
-    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\ntwo\n");
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "one\ntwo\n"
+    );
 
     let status = opened.status().unwrap();
     assert!(status.staged.is_empty());
@@ -826,7 +849,10 @@ fn merge_creates_merge_commit_when_branches_diverged() {
 
     write(repo, "a.txt", "base\n");
     run_git(repo, &["add", "a.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "base"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
 
     run_git(repo, &["checkout", "-b", "feature"]);
     write(repo, "b.txt", "feature\n");
@@ -839,7 +865,10 @@ fn merge_creates_merge_commit_when_branches_diverged() {
     run_git(repo, &["checkout", "-"]);
     write(repo, "c.txt", "main\n");
     run_git(repo, &["add", "c.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
 
     let backend = GixBackend::default();
     let opened = backend.open(repo).unwrap();
@@ -878,7 +907,10 @@ fn rebase_replays_commits_onto_target_branch() {
 
     write(repo, "a.txt", "base\n");
     run_git(repo, &["add", "a.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "base"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
 
     run_git(repo, &["checkout", "-b", "feature"]);
     write(repo, "b.txt", "feature\n");
@@ -891,7 +923,10 @@ fn rebase_replays_commits_onto_target_branch() {
     run_git(repo, &["checkout", "-"]);
     write(repo, "c.txt", "main\n");
     run_git(repo, &["add", "c.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "main"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
     let master_head = Command::new("git")
         .arg("-C")
         .arg(repo)
@@ -918,7 +953,10 @@ fn rebase_replays_commits_onto_target_branch() {
         .output()
         .expect("rev-parse parent");
     assert!(parent.status.success());
-    assert_eq!(String::from_utf8(parent.stdout).unwrap().trim(), master_head);
+    assert_eq!(
+        String::from_utf8(parent.stdout).unwrap().trim(),
+        master_head
+    );
 
     assert!(repo.join("b.txt").exists());
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
@@ -953,7 +991,10 @@ fn create_and_delete_local_branch() {
             &gitgpui_core::domain::CommitId("HEAD".to_string()),
         )
         .unwrap();
-    run_git(repo, &["show-ref", "--verify", "--quiet", "refs/heads/feature"]);
+    run_git(
+        repo,
+        &["show-ref", "--verify", "--quiet", "refs/heads/feature"],
+    );
 
     opened.delete_branch("feature").unwrap();
     let deleted = Command::new("git")
@@ -986,7 +1027,10 @@ fn create_and_delete_local_tag() {
     let opened = backend.open(repo).unwrap();
 
     opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
-    run_git(repo, &["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"]);
+    run_git(
+        repo,
+        &["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"],
+    );
 
     opened.delete_tag_with_output("v1.0.0").unwrap();
     let deleted = Command::new("git")
@@ -1021,12 +1065,7 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     run_git(&origin, &["init", "--bare"]);
     run_git(
         &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            origin.to_string_lossy().as_ref(),
-        ],
+        &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
     run_git(&repo, &["push", "-u", "origin", "master"]);
 
@@ -1078,12 +1117,7 @@ fn push_with_output_updates_remote_head() {
     run_git(&origin, &["init", "--bare"]);
     run_git(
         &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            origin.to_string_lossy().as_ref(),
-        ],
+        &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
     run_git(&repo, &["push", "-u", "origin", "master"]);
 
@@ -1100,7 +1134,10 @@ fn push_with_output_updates_remote_head() {
         .output()
         .expect("rev-parse HEAD");
     assert!(head_local.status.success());
-    let head_local = String::from_utf8(head_local.stdout).unwrap().trim().to_string();
+    let head_local = String::from_utf8(head_local.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
 
     let backend = GixBackend::default();
     let opened = backend.open(&repo).unwrap();
@@ -1113,7 +1150,10 @@ fn push_with_output_updates_remote_head() {
         .output()
         .expect("rev-parse origin/master");
     assert!(head_remote.status.success());
-    let head_remote = String::from_utf8(head_remote.stdout).unwrap().trim().to_string();
+    let head_remote = String::from_utf8(head_remote.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
     assert_eq!(head_remote, head_local);
 }
 
@@ -1140,12 +1180,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
     run_git(&origin, &["init", "--bare"]);
     run_git(
         &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            origin.to_string_lossy().as_ref(),
-        ],
+        &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
     run_git(&repo, &["push", "-u", "origin", "master"]);
 
@@ -1164,7 +1199,13 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
     run_git(&repo, &["add", "a.txt"]);
     run_git(
         &repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "second rewritten"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "second rewritten",
+        ],
     );
     let head_local = Command::new("git")
         .arg("-C")
@@ -1173,7 +1214,10 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
         .output()
         .expect("rev-parse HEAD");
     assert!(head_local.status.success());
-    let head_local = String::from_utf8(head_local.stdout).unwrap().trim().to_string();
+    let head_local = String::from_utf8(head_local.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
 
     let backend = GixBackend::default();
     let opened = backend.open(&repo).unwrap();
@@ -1186,7 +1230,10 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
         .output()
         .expect("rev-parse refs/heads/master");
     assert!(head_remote.status.success());
-    let head_remote = String::from_utf8(head_remote.stdout).unwrap().trim().to_string();
+    let head_remote = String::from_utf8(head_remote.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
     assert_eq!(head_remote, head_local);
 }
 
@@ -1213,12 +1260,7 @@ fn pull_with_output_fast_forwards_from_remote() {
     );
     run_git(
         &repo_a,
-        &[
-            "remote",
-            "add",
-            "origin",
-            origin.to_string_lossy().as_ref(),
-        ],
+        &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
     );
     run_git(&repo_a, &["push", "-u", "origin", "master"]);
 
@@ -1246,7 +1288,10 @@ fn pull_with_output_fast_forwards_from_remote() {
         .output()
         .expect("rev-parse origin");
     assert!(head_origin.status.success());
-    let head_origin = String::from_utf8(head_origin.stdout).unwrap().trim().to_string();
+    let head_origin = String::from_utf8(head_origin.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
 
     let backend = GixBackend::default();
     let opened_b = backend.open(&repo_b).unwrap();
@@ -1295,7 +1340,10 @@ fn stash_create_list_apply_and_drop_work() {
     assert!(stashes[0].message.contains("wip"));
 
     opened.stash_apply(0).unwrap();
-    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\ntwo\n");
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "one\ntwo\n"
+    );
 
     opened.stash_drop(0).unwrap();
     let stashes = opened.stash_list().unwrap();
@@ -1381,14 +1429,24 @@ fn discard_worktree_changes_reverts_to_index_version() {
         .discard_worktree_changes(&[Path::new("a.txt")])
         .unwrap();
 
-    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\ntwo\n");
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "one\ntwo\n"
+    );
 
     let status = opened.status().unwrap();
-    assert!(status
-        .staged
-        .iter()
-        .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified));
-    assert!(!status.unstaged.iter().any(|e| e.path == PathBuf::from("a.txt")));
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified)
+    );
+    assert!(
+        !status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("a.txt"))
+    );
 }
 
 #[test]
@@ -1452,14 +1510,18 @@ fn discard_worktree_changes_removes_staged_new_file() {
 
     assert!(!repo.join("new.txt").exists());
     let status = opened.status().unwrap();
-    assert!(!status
-        .staged
-        .iter()
-        .any(|e| e.path == PathBuf::from("new.txt")));
-    assert!(!status
-        .unstaged
-        .iter()
-        .any(|e| e.path == PathBuf::from("new.txt")));
+    assert!(
+        !status
+            .staged
+            .iter()
+            .any(|e| e.path == PathBuf::from("new.txt"))
+    );
+    assert!(
+        !status
+            .unstaged
+            .iter()
+            .any(|e| e.path == PathBuf::from("new.txt"))
+    );
 }
 
 #[test]
@@ -1501,7 +1563,10 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
         .lines()
         .filter(|l| l.starts_with("@@"))
         .count();
-    assert_eq!(hunk_count_before, 2, "expected two hunks:\n{unstaged_before}");
+    assert_eq!(
+        hunk_count_before, 2,
+        "expected two hunks:\n{unstaged_before}"
+    );
 
     let lines = unstaged_before.lines().collect::<Vec<_>>();
     let file_start = lines
@@ -1549,7 +1614,10 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
         })
         .unwrap();
     assert_eq!(
-        unstaged_after.lines().filter(|l| l.starts_with("@@")).count(),
+        unstaged_after
+            .lines()
+            .filter(|l| l.starts_with("@@"))
+            .count(),
         1,
         "expected one remaining unstaged hunk:\n{unstaged_after}"
     );
@@ -1594,7 +1662,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         })
         .unwrap();
     assert_eq!(
-        unstaged_before.lines().filter(|l| l.starts_with("@@")).count(),
+        unstaged_before
+            .lines()
+            .filter(|l| l.starts_with("@@"))
+            .count(),
         2,
         "expected two hunks:\n{unstaged_before}"
     );
@@ -1631,7 +1702,10 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         })
         .unwrap();
     assert_eq!(
-        staged_after_stage.lines().filter(|l| l.starts_with("@@")).count(),
+        staged_after_stage
+            .lines()
+            .filter(|l| l.starts_with("@@"))
+            .count(),
         1,
         "expected one staged hunk:\n{staged_after_stage}"
     );

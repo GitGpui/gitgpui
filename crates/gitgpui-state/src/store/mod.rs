@@ -9,13 +9,13 @@ use std::thread;
 
 mod effects;
 mod executor;
-mod repo_monitor;
 mod reducer;
+mod repo_monitor;
 
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
-use repo_monitor::RepoMonitorManager;
 use reducer::reduce;
+use repo_monitor::RepoMonitorManager;
 
 pub struct AppStore {
     state: Arc<RwLock<AppState>>,
@@ -74,9 +74,7 @@ impl AppStore {
                 // Keep filesystem monitoring scoped to the active repository only, to minimize
                 // OS watcher load in large multi-repo sessions.
                 let (active_repo, active_workdir) = {
-                    let state = thread_state
-                        .read()
-                        .expect("state lock poisoned (read)");
+                    let state = thread_state.read().expect("state lock poisoned (read)");
                     let active_repo = state.active_repo;
                     let active_workdir = active_repo.and_then(|repo_id| {
                         state

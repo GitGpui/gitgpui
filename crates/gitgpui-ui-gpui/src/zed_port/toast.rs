@@ -17,7 +17,10 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
                 theme.colors.surface_bg_elevated,
                 if theme.is_dark { 0.96 } else { 0.98 },
             ),
-            with_alpha(theme.colors.success, if theme.is_dark { 0.55 } else { 0.45 }),
+            with_alpha(
+                theme.colors.success,
+                if theme.is_dark { 0.55 } else { 0.45 },
+            ),
         ),
         ToastKind::Warning => (
             theme.colors.warning,
@@ -25,7 +28,10 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
                 theme.colors.surface_bg_elevated,
                 if theme.is_dark { 0.96 } else { 0.98 },
             ),
-            with_alpha(theme.colors.warning, if theme.is_dark { 0.55 } else { 0.45 }),
+            with_alpha(
+                theme.colors.warning,
+                if theme.is_dark { 0.55 } else { 0.45 },
+            ),
         ),
         ToastKind::Error => (
             theme.colors.danger,
@@ -52,12 +58,7 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
         .shadow_sm()
         .text_lg()
         .text_color(theme.colors.text)
-        .child(
-            div()
-                .w(px(5.0))
-                .bg(accent)
-                .flex_shrink_0(),
-        )
+        .child(div().w(px(5.0)).bg(accent).flex_shrink_0())
         .child(
             div()
                 .flex_1()

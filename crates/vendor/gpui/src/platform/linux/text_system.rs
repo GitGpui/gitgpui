@@ -379,7 +379,10 @@ impl CosmicTextSystemState {
         } else {
             let (weight, is_known_emoji_font) = {
                 let face = self.font_system.db().face(id).unwrap();
-                (face.weight, check_is_known_emoji_font(&face.post_script_name))
+                (
+                    face.weight,
+                    check_is_known_emoji_font(&face.post_script_name),
+                )
             };
             let font = self.font_system.get_font(id, weight).unwrap();
 

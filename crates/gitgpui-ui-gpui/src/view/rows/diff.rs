@@ -1,5 +1,5 @@
-use super::diff_text::*;
 use super::diff_canvas;
+use super::diff_text::*;
 use super::*;
 
 impl GitGpuiView {
@@ -924,20 +924,18 @@ fn diff_row(
     let new = line_number_string(line.new_line);
 
     match mode {
-        DiffViewMode::Inline => {
-            diff_canvas::inline_diff_line_row_canvas(
-                theme,
-                cx.entity(),
-                visible_ix,
-                selected,
-                old,
-                new,
-                bg,
-                fg,
-                gutter_fg,
-                styled,
-            )
-        }
+        DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
+            theme,
+            cx.entity(),
+            visible_ix,
+            selected,
+            old,
+            new,
+            bg,
+            fg,
+            gutter_fg,
+            styled,
+        ),
         DiffViewMode::Split => {
             let left_kind = match line.kind {
                 gitgpui_core::domain::DiffLineKind::Remove => {

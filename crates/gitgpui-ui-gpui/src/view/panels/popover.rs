@@ -1,15 +1,43 @@
 use super::*;
 
+mod app_menu;
+mod blame;
+mod branch_picker;
+mod clone_repo;
 mod context_menu;
+mod create_branch;
+mod create_tag_prompt;
+mod diff_hunks;
+mod file_history;
+mod force_push_confirm;
+mod push_set_upstream_prompt;
+mod rebase_prompt;
+mod remote_add_prompt;
+mod remote_edit_url_prompt;
+mod remote_remove_confirm;
+mod remote_remove_picker;
+mod remote_url_picker;
+mod repo_picker;
+mod reset_prompt;
+mod settings;
+mod stash_prompt;
+mod submodule_add_prompt;
+mod submodule_open_picker;
+mod submodule_remove_confirm;
+mod submodule_remove_picker;
+mod worktree_add_prompt;
+mod worktree_open_picker;
+mod worktree_remove_confirm;
+mod worktree_remove_picker;
 
-    impl GitGpuiView {
-        pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
-            self.popover = None;
-            self.popover_anchor = None;
-            self.context_menu_selected_ix = None;
-            self.conflict_resolver = ConflictResolverUiState::default();
-            cx.notify();
-        }
+impl GitGpuiView {
+    pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.popover = None;
+        self.popover_anchor = None;
+        self.context_menu_selected_ix = None;
+        self.conflict_resolver = ConflictResolverUiState::default();
+        cx.notify();
+    }
 
     pub(in super::super) fn open_popover_at(
         &mut self,
@@ -102,7 +130,9 @@ mod context_menu;
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    let focus = self.rebase_onto_input.read_with(cx, |i, _| i.focus_handle());
+                    let focus = self
+                        .rebase_onto_input
+                        .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
@@ -127,7 +157,9 @@ mod context_menu;
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    let focus = self.remote_name_input.read_with(cx, |i, _| i.focus_handle());
+                    let focus = self
+                        .remote_name_input
+                        .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
                 PopoverKind::RemoteEditUrlPrompt { .. } => {
@@ -160,13 +192,16 @@ mod context_menu;
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    let focus = self.worktree_path_input.read_with(cx, |i, _| i.focus_handle());
+                    let focus = self
+                        .worktree_path_input
+                        .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
                 PopoverKind::WorktreeOpenPicker { repo_id }
                 | PopoverKind::WorktreeRemovePicker { repo_id } => {
                     let _ = self.ensure_worktree_picker_search_input(window, cx);
-                    self.store.dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
+                    self.store
+                        .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
                 }
                 PopoverKind::SubmoduleAddPrompt { .. } => {
                     let theme = self.theme;
@@ -180,13 +215,16 @@ mod context_menu;
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    let focus = self.submodule_url_input.read_with(cx, |i, _| i.focus_handle());
+                    let focus = self
+                        .submodule_url_input
+                        .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
                 PopoverKind::SubmoduleOpenPicker { repo_id }
                 | PopoverKind::SubmoduleRemovePicker { repo_id } => {
                     let _ = self.ensure_submodule_picker_search_input(window, cx);
-                    self.store.dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
+                    self.store
+                        .dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
                 }
                 PopoverKind::FileHistory { repo_id, path } => {
                     self.ensure_file_history_search_input(window, cx);
@@ -332,16 +370,16 @@ mod context_menu;
                 )
         };
 
-	        let mut header = div()
-	            .relative()
-	            .flex()
-	            .h(px(24.0))
-	            .w_full()
-	            .items_center()
-	            .px_2()
-	            .text_xs()
-	            .font_weight(FontWeight::BOLD)
-	            .text_color(theme.colors.text_muted)
+        let mut header = div()
+            .relative()
+            .flex()
+            .h(px(24.0))
+            .w_full()
+            .items_center()
+            .px_2()
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.colors.text_muted)
             .child(
                 div()
                     .w(self.history_col_branch)
@@ -353,14 +391,14 @@ mod context_menu;
                         div()
                             .id("history_scope_header")
                             .flex()
-	                            .items_center()
-	                            .gap_1()
-	                            .px_1()
-	                            .h(px(18.0))
-	                            .line_height(px(18.0))
-	                            .rounded(px(theme.radii.row))
-	                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-	                            .cursor(CursorStyle::PointingHand)
+                            .items_center()
+                            .gap_1()
+                            .px_1()
+                            .h(px(18.0))
+                            .line_height(px(18.0))
+                            .rounded(px(theme.radii.row))
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                            .cursor(CursorStyle::PointingHand)
                             .child(
                                 div()
                                     .min_w(px(0.0))
@@ -368,14 +406,14 @@ mod context_menu;
                                     .whitespace_nowrap()
                                     .child(scope_label.clone()),
                             )
-	                            .child(
-	                                gpui::svg()
-	                                    .path("icons/chevron_down.svg")
-	                                    .w(px(12.0))
-	                                    .h(px(12.0))
-	                                    .text_color(theme.colors.text_muted)
-	                                    .flex_shrink_0(),
-	                            )
+                            .child(
+                                gpui::svg()
+                                    .path("icons/chevron_down.svg")
+                                    .w(px(12.0))
+                                    .h(px(12.0))
+                                    .text_color(theme.colors.text_muted)
+                                    .flex_shrink_0(),
+                            )
                             .when_some(scope_repo_id, |this, repo_id| {
                                 this.on_click(cx.listener(
                                     move |this, e: &ClickEvent, window, cx| {
@@ -577,2525 +615,456 @@ mod context_menu;
         rows
     }
 
-	    pub(in super::super) fn popover_view(
-	        &mut self,
-	        kind: PopoverKind,
-	        cx: &mut gpui::Context<Self>,
-		    ) -> impl IntoElement {
-		        let theme = self.theme;
-		        let anchor = self
-		            .popover_anchor
-		            .unwrap_or_else(|| point(px(64.0), px(64.0)));
+    pub(in super::super) fn popover_view(
+        &mut self,
+        kind: PopoverKind,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let anchor = self
+            .popover_anchor
+            .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
-	        let anchor_corner = match &kind {
-	            PopoverKind::PullPicker
-	            | PopoverKind::Settings
-	            | PopoverKind::PushPicker
-	            | PopoverKind::CreateBranch
-	            | PopoverKind::StashPrompt
-	            | PopoverKind::CloneRepo
-	            | PopoverKind::ResetPrompt { .. }
-	            | PopoverKind::RebasePrompt { .. }
-	            | PopoverKind::CreateTagPrompt { .. }
-	            | PopoverKind::RemoteAddPrompt { .. }
-	            | PopoverKind::RemoteUrlPicker { .. }
-	            | PopoverKind::RemoteRemovePicker { .. }
-	            | PopoverKind::RemoteEditUrlPrompt { .. }
-	            | PopoverKind::RemoteRemoveConfirm { .. }
-	            | PopoverKind::WorktreeAddPrompt { .. }
-	            | PopoverKind::WorktreeOpenPicker { .. }
-	            | PopoverKind::WorktreeRemovePicker { .. }
-	            | PopoverKind::WorktreeRemoveConfirm { .. }
-	            | PopoverKind::SubmoduleAddPrompt { .. }
-	            | PopoverKind::SubmoduleOpenPicker { .. }
-	            | PopoverKind::SubmoduleRemovePicker { .. }
-	            | PopoverKind::SubmoduleRemoveConfirm { .. }
-	            | PopoverKind::PushSetUpstreamPrompt { .. }
-	            | PopoverKind::ForcePushConfirm { .. }
-	            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
-	            _ => Corner::TopLeft,
-	        };
-
-        let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
+        let anchor_corner = match &kind {
+            PopoverKind::PullPicker
+            | PopoverKind::Settings
+            | PopoverKind::PushPicker
+            | PopoverKind::CreateBranch
+            | PopoverKind::StashPrompt
+            | PopoverKind::CloneRepo
+            | PopoverKind::ResetPrompt { .. }
+            | PopoverKind::RebasePrompt { .. }
+            | PopoverKind::CreateTagPrompt { .. }
+            | PopoverKind::RemoteAddPrompt { .. }
+            | PopoverKind::RemoteUrlPicker { .. }
+            | PopoverKind::RemoteRemovePicker { .. }
+            | PopoverKind::RemoteEditUrlPrompt { .. }
+            | PopoverKind::RemoteRemoveConfirm { .. }
+            | PopoverKind::WorktreeAddPrompt { .. }
+            | PopoverKind::WorktreeOpenPicker { .. }
+            | PopoverKind::WorktreeRemovePicker { .. }
+            | PopoverKind::WorktreeRemoveConfirm { .. }
+            | PopoverKind::SubmoduleAddPrompt { .. }
+            | PopoverKind::SubmoduleOpenPicker { .. }
+            | PopoverKind::SubmoduleRemovePicker { .. }
+            | PopoverKind::SubmoduleRemoveConfirm { .. }
+            | PopoverKind::PushSetUpstreamPrompt { .. }
+            | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
+            _ => Corner::TopLeft,
+        };
 
         let panel = match kind {
-            PopoverKind::RepoPicker => {
-                if let Some(search) = self.repo_picker_search_input.clone() {
-                    let repo_ids = self.state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
-                    let items = self
-                        .state
-                        .repos
-                        .iter()
-                        .map(|r| r.spec.workdir.display().to_string().into())
-                        .collect::<Vec<SharedString>>();
+            PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::Settings => settings::panel(self, cx),
+            /* PopoverKind::ConflictResolver { repo_id, path } => {
+                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                    let window_size = self.ui_window_size_last_seen;
+                    let max_w = (window_size.width - px(96.0)).max(px(320.0));
+                    let max_h = (window_size.height - px(120.0)).max(px(240.0));
 
-                    zed::context_menu(
-                        theme,
-                        zed::PickerPrompt::new(search)
-                            .items(items)
-                            .empty_text("No repositories")
-                            .max_height(px(260.0))
-                            .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                if let Some(&repo_id) = repo_ids.get(ix) {
-                                    this.store.dispatch(Msg::SetActiveRepo { repo_id });
-                                    this.rebuild_diff_cache();
-                                }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
-                            }),
-                    )
-                    .min_w(px(260.0))
-                    .max_w(px(420.0))
-                } else {
-                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
-                    for repo in self.state.repos.iter() {
-                        let id = repo.id;
-                        let label: SharedString = repo.spec.workdir.display().to_string().into();
-                        menu = menu.child(
-                            zed::context_menu_entry(
-                                ("repo_item", id.0),
-                                theme,
-                                false,
-                                false,
-                                None,
-                                label.clone(),
-                                None,
-                                false,
-                            )
-                            .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, _w, cx| {
-                                    this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    this.rebuild_diff_cache();
-                                    cx.notify();
-                                },
-                            )),
-                        );
+                    let title: SharedString =
+                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
+
+                    match &repo.conflict_file {
+                    Loadable::NotLoaded | Loadable::Loading => {
+                        zed::empty_state(theme, title, "Loading…")
                     }
-                    zed::context_menu(theme, menu)
-                }
-            }
-            PopoverKind::Settings => {
-                let current = self.date_time_format;
-                let preview_now = std::time::SystemTime::now();
+                    Loadable::Error(e) => zed::empty_state(theme, title, e.clone()),
+                    Loadable::Ready(None) => zed::empty_state(theme, title, "No conflict data."),
+                    Loadable::Ready(Some(file)) => {
+                        let ours = file.ours.clone().unwrap_or_default();
+                        let theirs = file.theirs.clone().unwrap_or_default();
+                        let has_current = file.current.is_some();
 
-                let row = |id: &'static str,
-                           label: &'static str,
-                           value: SharedString,
-                           open: bool| {
-                    div()
-                        .id(id)
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .rounded(px(theme.radii.row))
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
-                        .cursor(CursorStyle::PointingHand)
-                        .child(div().text_sm().child(label))
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .text_sm()
-                                .text_color(theme.colors.text_muted)
-                                .child(value)
-                                .child(div().font_family("monospace").child(if open { "▴" } else { "▾" })),
-                        )
-                };
+                        let mode = self.conflict_resolver.diff_mode;
+                        let diff_len = match mode {
+                            ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
+                            ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
+                        };
 
-                let mut dropdown = div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .px_2()
-                    .pb_2();
+                        let selection_empty = self.conflict_resolver_selection_is_empty();
 
-                if self.settings_date_format_open {
-                    for fmt in DateTimeFormat::all() {
-                        let selected = *fmt == current;
-                        let fmt_val = *fmt;
-                        let preview: SharedString =
-                            super::super::format_datetime_utc(preview_now, fmt_val).into();
-                        dropdown = dropdown.child(
-                            div()
-                                .id(("settings_date_format_item", *fmt as usize))
-                                .px_2()
-                                .py_1()
-                                .rounded(px(theme.radii.row))
-                                .when(!selected, |d| {
-                                    d.hover(move |s| s.bg(theme.colors.hover))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                })
-                                .when(selected, |d| d.bg(with_alpha(theme.colors.accent, 0.15)))
-                                .cursor(CursorStyle::PointingHand)
+                        let toggle_mode_split = |this: &mut GitGpuiView,
+                                                 _e: &ClickEvent,
+                                                 _w: &mut Window,
+                                                 cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+                        };
+                        let toggle_mode_inline = |this: &mut GitGpuiView,
+                                                  _e: &ClickEvent,
+                                                  _w: &mut Window,
+                                                  cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                        };
+
+                        let clear_selection = |this: &mut GitGpuiView,
+                                               _e: &ClickEvent,
+                                               _w: &mut Window,
+                                               cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_clear_selection(cx);
+                        };
+
+                        let append_selection = |this: &mut GitGpuiView,
+                                               _e: &ClickEvent,
+                                               _w: &mut Window,
+                                               cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_append_selection_to_output(cx);
+                        };
+
+                        let ours_for_btn = ours.clone();
+                        let set_output_ours = move |this: &mut GitGpuiView,
+                                                    _e: &ClickEvent,
+                                                    _w: &mut Window,
+                                                    cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
+                        };
+                        let theirs_for_btn = theirs.clone();
+                        let set_output_theirs = move |this: &mut GitGpuiView,
+                                                      _e: &ClickEvent,
+                                                      _w: &mut Window,
+                                                      cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
+                        };
+                        let reset_from_markers = |this: &mut GitGpuiView,
+                                                  _e: &ClickEvent,
+                                                  _w: &mut Window,
+                                                  cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_reset_output_from_markers(cx);
+                        };
+
+                        let save_path = path.clone();
+                        let save_close = move |this: &mut GitGpuiView,
+                                               _e: &ClickEvent,
+                                               _w: &mut Window,
+                                               cx: &mut gpui::Context<Self>| {
+                            let text = this
+                                .conflict_resolver_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: save_path.clone(),
+                                contents: text,
+                                stage: false,
+                            });
+                            this.close_popover(cx);
+                        };
+                        let save_path = path.clone();
+                        let save_stage_close = move |this: &mut GitGpuiView,
+                                                     _e: &ClickEvent,
+                                                     _w: &mut Window,
+                                                     cx: &mut gpui::Context<Self>| {
+                            let text = this
+                                .conflict_resolver_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: save_path.clone(),
+                                contents: text,
+                                stage: true,
+                            });
+                            this.close_popover(cx);
+                        };
+
+                        let mode_controls = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                zed::Button::new("conflict_mode_split", "Split")
+                                    .style(if mode == ConflictDiffMode::Split {
+                                        zed::ButtonStyle::Filled
+                                    } else {
+                                        zed::ButtonStyle::Outlined
+                                    })
+                                    .on_click(theme, cx, toggle_mode_split),
+                            )
+                            .child(
+                                zed::Button::new("conflict_mode_inline", "Inline")
+                                    .style(if mode == ConflictDiffMode::Inline {
+                                        zed::ButtonStyle::Filled
+                                    } else {
+                                        zed::ButtonStyle::Outlined
+                                    })
+                                    .on_click(theme, cx, toggle_mode_inline),
+                            );
+
+                        let selection_controls = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                zed::Button::new("conflict_append_selected", "Append selection")
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .disabled(selection_empty)
+                                    .on_click(theme, cx, append_selection),
+                            )
+                            .child(
+                                zed::Button::new("conflict_clear_selected", "Clear selection")
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .disabled(selection_empty)
+                                    .on_click(theme, cx, clear_selection),
+                            );
+
+                        let start_controls = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                zed::Button::new("conflict_use_ours", "Use ours")
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .disabled(file.ours.is_none())
+                                    .on_click(theme, cx, set_output_ours),
+                            )
+                            .child(
+                                zed::Button::new("conflict_use_theirs", "Use theirs")
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .disabled(file.theirs.is_none())
+                                    .on_click(theme, cx, set_output_theirs),
+                            )
+                            .child(
+                                zed::Button::new("conflict_reset_markers", "Reset from markers")
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .disabled(!has_current)
+                                    .on_click(theme, cx, reset_from_markers),
+                            );
+
+                        let diff_header = div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Diff (ours ↔ theirs)"),
+                            )
+                            .child(div().flex().items_center().gap_2().child(mode_controls).child(selection_controls));
+
+                        let diff_title_row = div()
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .when(mode == ConflictDiffMode::Split, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Ours (index :2)"),
+                                )
+                                .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                 .child(
                                     div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .gap_2()
-                                        .child(div().text_sm().child(fmt.label()))
-                                        .child(
-                                            div()
-                                                .font_family("monospace")
-                                                .text_xs()
-                                                .text_color(theme.colors.text_muted)
-                                                .child(preview),
-                                        ),
+                                        .flex_1()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Theirs (index :3)"),
                                 )
-                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                    this.date_time_format = fmt_val;
-                                    this.settings_date_format_open = false;
-                                    this.schedule_ui_settings_persist(cx);
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                }
+                            })
+                            .when(mode == ConflictDiffMode::Inline, |d| d);
 
-                let header = div()
-                    .px_2()
-                    .py_1()
-                    .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Settings");
-
-                let section_label = div()
-                    .px_2()
-                    .pt(px(6.0))
-                    .pb(px(4.0))
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .child("General");
-
-                let date_row = row(
-                    "settings_date_format",
-                    "Date format",
-                    current.label().into(),
-                    self.settings_date_format_open,
-                )
-                .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                    this.settings_date_format_open = !this.settings_date_format_open;
-                    cx.notify();
-                }));
-
-                zed::context_menu(
-                    theme,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(560.0))
-                        .max_w(px(720.0))
-                        .child(header)
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(section_label)
-                        .child(div().px_2().pb_1().child(date_row))
-                        .when(self.settings_date_format_open, |d| {
-                            d.child(div().px_2().pb_1().text_xs().text_color(theme.colors.text_muted).child("Choose a format:"))
-                                .child(dropdown)
-                        }),
-	                )
-	            }
-		            /* PopoverKind::ConflictResolver { repo_id, path } => {
-		                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-		                    let window_size = self.ui_window_size_last_seen;
-		                    let max_w = (window_size.width - px(96.0)).max(px(320.0));
-		                    let max_h = (window_size.height - px(120.0)).max(px(240.0));
-		
-		                    let title: SharedString =
-		                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
-		
-		                    match &repo.conflict_file {
-		                    Loadable::NotLoaded | Loadable::Loading => {
-		                        zed::empty_state(theme, title, "Loading…")
-		                    }
-		                    Loadable::Error(e) => zed::empty_state(theme, title, e.clone()),
-		                    Loadable::Ready(None) => zed::empty_state(theme, title, "No conflict data."),
-		                    Loadable::Ready(Some(file)) => {
-		                        let ours = file.ours.clone().unwrap_or_default();
-		                        let theirs = file.theirs.clone().unwrap_or_default();
-		                        let has_current = file.current.is_some();
-
-		                        let mode = self.conflict_resolver.diff_mode;
-		                        let diff_len = match mode {
-		                            ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
-		                            ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
-		                        };
-
-		                        let selection_empty = self.conflict_resolver_selection_is_empty();
-
-		                        let toggle_mode_split = |this: &mut GitGpuiView,
-		                                                 _e: &ClickEvent,
-		                                                 _w: &mut Window,
-		                                                 cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
-		                        };
-		                        let toggle_mode_inline = |this: &mut GitGpuiView,
-		                                                  _e: &ClickEvent,
-		                                                  _w: &mut Window,
-		                                                  cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
-		                        };
-		
-		                        let clear_selection = |this: &mut GitGpuiView,
-		                                               _e: &ClickEvent,
-		                                               _w: &mut Window,
-		                                               cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_clear_selection(cx);
-		                        };
-		
-		                        let append_selection = |this: &mut GitGpuiView,
-		                                               _e: &ClickEvent,
-		                                               _w: &mut Window,
-		                                               cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_append_selection_to_output(cx);
-		                        };
-		
-		                        let ours_for_btn = ours.clone();
-		                        let set_output_ours = move |this: &mut GitGpuiView,
-		                                                    _e: &ClickEvent,
-		                                                    _w: &mut Window,
-		                                                    cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
-		                        };
-		                        let theirs_for_btn = theirs.clone();
-		                        let set_output_theirs = move |this: &mut GitGpuiView,
-		                                                      _e: &ClickEvent,
-		                                                      _w: &mut Window,
-		                                                      cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
-		                        };
-		                        let reset_from_markers = |this: &mut GitGpuiView,
-		                                                  _e: &ClickEvent,
-		                                                  _w: &mut Window,
-		                                                  cx: &mut gpui::Context<Self>| {
-		                            this.conflict_resolver_reset_output_from_markers(cx);
-		                        };
-		
-		                        let save_path = path.clone();
-		                        let save_close = move |this: &mut GitGpuiView,
-		                                               _e: &ClickEvent,
-		                                               _w: &mut Window,
-		                                               cx: &mut gpui::Context<Self>| {
-		                            let text = this
-		                                .conflict_resolver_input
-		                                .read_with(cx, |i, _| i.text().to_string());
-		                            this.store.dispatch(Msg::SaveWorktreeFile {
-		                                repo_id,
-		                                path: save_path.clone(),
-		                                contents: text,
-		                                stage: false,
-		                            });
-		                            this.close_popover(cx);
-		                        };
-		                        let save_path = path.clone();
-		                        let save_stage_close = move |this: &mut GitGpuiView,
-		                                                     _e: &ClickEvent,
-		                                                     _w: &mut Window,
-		                                                     cx: &mut gpui::Context<Self>| {
-		                            let text = this
-		                                .conflict_resolver_input
-		                                .read_with(cx, |i, _| i.text().to_string());
-		                            this.store.dispatch(Msg::SaveWorktreeFile {
-		                                repo_id,
-		                                path: save_path.clone(),
-		                                contents: text,
-		                                stage: true,
-		                            });
-		                            this.close_popover(cx);
-		                        };
-
-		                        let mode_controls = div()
-		                            .flex()
-		                            .items_center()
-		                            .gap_1()
-		                            .child(
-		                                zed::Button::new("conflict_mode_split", "Split")
-		                                    .style(if mode == ConflictDiffMode::Split {
-		                                        zed::ButtonStyle::Filled
-		                                    } else {
-		                                        zed::ButtonStyle::Outlined
-		                                    })
-		                                    .on_click(theme, cx, toggle_mode_split),
-		                            )
-		                            .child(
-		                                zed::Button::new("conflict_mode_inline", "Inline")
-		                                    .style(if mode == ConflictDiffMode::Inline {
-		                                        zed::ButtonStyle::Filled
-		                                    } else {
-		                                        zed::ButtonStyle::Outlined
-		                                    })
-		                                    .on_click(theme, cx, toggle_mode_inline),
-		                            );
-
-		                        let selection_controls = div()
-		                            .flex()
-		                            .items_center()
-		                            .gap_1()
-		                            .child(
-		                                zed::Button::new("conflict_append_selected", "Append selection")
-		                                    .style(zed::ButtonStyle::Outlined)
-		                                    .disabled(selection_empty)
-		                                    .on_click(theme, cx, append_selection),
-		                            )
-		                            .child(
-		                                zed::Button::new("conflict_clear_selected", "Clear selection")
-		                                    .style(zed::ButtonStyle::Transparent)
-		                                    .disabled(selection_empty)
-		                                    .on_click(theme, cx, clear_selection),
-		                            );
-
-		                        let start_controls = div()
-		                            .flex()
-		                            .items_center()
-		                            .gap_1()
-		                            .child(
-		                                zed::Button::new("conflict_use_ours", "Use ours")
-		                                    .style(zed::ButtonStyle::Transparent)
-		                                    .disabled(file.ours.is_none())
-		                                    .on_click(theme, cx, set_output_ours),
-		                            )
-		                            .child(
-		                                zed::Button::new("conflict_use_theirs", "Use theirs")
-		                                    .style(zed::ButtonStyle::Transparent)
-		                                    .disabled(file.theirs.is_none())
-		                                    .on_click(theme, cx, set_output_theirs),
-		                            )
-		                            .child(
-		                                zed::Button::new("conflict_reset_markers", "Reset from markers")
-		                                    .style(zed::ButtonStyle::Transparent)
-		                                    .disabled(!has_current)
-		                                    .on_click(theme, cx, reset_from_markers),
-		                            );
-
-		                        let diff_header = div()
-		                            .flex()
-		                            .items_center()
-		                            .justify_between()
-		                            .child(
-		                                div()
-		                                    .text_xs()
-		                                    .text_color(theme.colors.text_muted)
-		                                    .child("Diff (ours ↔ theirs)"),
-		                            )
-		                            .child(div().flex().items_center().gap_2().child(mode_controls).child(selection_controls));
-
-		                        let diff_title_row = div()
-		                            .h(px(22.0))
-		                            .flex()
-		                            .items_center()
-		                            .when(mode == ConflictDiffMode::Split, |d| {
-		                                d.child(
-		                                    div()
-		                                        .flex_1()
-		                                        .px_2()
-		                                        .text_xs()
-		                                        .text_color(theme.colors.text_muted)
-		                                        .child("Ours (index :2)"),
-		                                )
-		                                .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-		                                .child(
-		                                    div()
-		                                        .flex_1()
-		                                        .px_2()
-		                                        .text_xs()
-		                                        .text_color(theme.colors.text_muted)
-		                                        .child("Theirs (index :3)"),
-		                                )
-		                            })
-		                            .when(mode == ConflictDiffMode::Inline, |d| d);
-
-		                        let diff_body: AnyElement = if diff_len == 0 {
-		                            zed::empty_state(theme, "Diff", "Ours/Theirs content not available.")
-		                                .into_any_element()
-		                        } else {
-		                            let list = uniform_list(
-		                                "conflict_resolver_diff_list",
-		                                diff_len,
-		                                cx.processor(Self::render_conflict_resolver_diff_rows),
-		                            )
-		                            .h_full()
-		                            .min_h(px(0.0))
-		                            .track_scroll(self.conflict_resolver_diff_scroll.clone());
-
-		                            let scroll_handle = self
-		                                .conflict_resolver_diff_scroll
-		                                .0
-		                                .borrow()
-		                                .base_handle
-		                                .clone();
-
-		                            div()
-		                                .id("conflict_resolver_diff_scroll")
-		                                .relative()
-		                                .h_full()
-		                                .min_h(px(0.0))
-		                                .child(list)
-		                                .child(
-		                                    zed::Scrollbar::new(
-		                                        "conflict_resolver_diff_scrollbar",
-		                                        scroll_handle,
-		                                    )
-		                                    .always_visible()
-		                                    .render(theme),
-		                                )
-		                                .into_any_element()
-		                        };
-
-		                        let output_header = div()
-		                            .flex()
-		                            .items_center()
-		                            .justify_between()
-		                            .child(
-		                                div()
-		                                    .text_xs()
-		                                    .text_color(theme.colors.text_muted)
-		                                    .child("Resolved output (editable)"),
-		                            )
-		                            .child(start_controls);
-
-		                        div()
-		                            .flex()
-		                            .flex_col()
-		                            .max_w(max_w)
-		                            .max_h(max_h)
-		                            .min_w(px(720.0))
-		                            .min_h(px(520.0))
-		                            .gap_2()
-		                            .child(
-		                                div()
-		                                    .flex()
-		                                    .items_center()
-		                                    .justify_between()
-		                                    .child(
-		                                        div()
-		                                            .text_sm()
-		                                            .font_weight(FontWeight::BOLD)
-		                                            .child(title.clone()),
-		                                    )
-		                                    .child(
-		                                        div()
-		                                            .flex()
-		                                            .items_center()
-		                                            .gap_1()
-			                                            .child(
-			                                                zed::Button::new("conflict_save_close", "Save & close")
-			                                                    .style(zed::ButtonStyle::Outlined)
-			                                                    .on_click(theme, cx, save_close),
-			                                            )
-			                                            .child(
-			                                                zed::Button::new("conflict_save_stage_close", "Save & stage & close")
-			                                                    .style(zed::ButtonStyle::Filled)
-			                                                    .on_click(theme, cx, save_stage_close),
-			                                            ),
-		                                    ),
-		                            )
-		                            .child(div().border_t_1().border_color(theme.colors.border))
-		                            .child(diff_header)
-		                            .child(
-		                                div()
-		                                    .h(px(240.0))
-		                                    .min_h(px(0.0))
-		                                    .border_1()
-		                                    .border_color(theme.colors.border)
-		                                    .rounded(px(theme.radii.row))
-		                                    .overflow_hidden()
-		                                    .flex()
-		                                    .flex_col()
-		                                    .child(diff_title_row)
-		                                    .child(div().border_t_1().border_color(theme.colors.border))
-		                                    .child(diff_body),
-		                            )
-		                            .child(div().border_t_1().border_color(theme.colors.border))
-		                            .child(output_header)
-		                            .child(
-		                                div()
-		                                    .flex()
-		                                    .flex_col()
-		                                    .flex_1()
-		                                    .min_h(px(0.0))
-		                                    .border_1()
-		                                    .border_color(theme.colors.border)
-		                                    .rounded(px(theme.radii.row))
-		                                    .overflow_hidden()
-		                                    .child(
-		                                        div()
-		                                            .id("conflict_resolver_output_scroll")
-		                                            .font_family("monospace")
-		                                            .h_full()
-		                                            .min_h(px(0.0))
-		                                            .overflow_y_scroll()
-		                                            .child(self.conflict_resolver_input.clone()),
-		                                    ),
-		                            )
-		                    }
-		                    }
-		                } else {
-		                    zed::empty_state(theme, "Conflicts", "Repository not found.")
-		                }
-		            } */
-	            PopoverKind::BranchPicker => {
-	                let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
-	
-	                if let Some(repo) = self.active_repo() {
-                    match &repo.branches {
-                        Loadable::Ready(branches) => {
-                            if let Some(search) = self.branch_picker_search_input.clone() {
-                                let repo_id = repo.id;
-                                let branch_names =
-                                    branches.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
-                                let items = branch_names
-                                    .iter()
-                                    .map(|name| name.clone().into())
-                                    .collect::<Vec<SharedString>>();
-
-                                menu = menu.child(
-                                    zed::PickerPrompt::new(search)
-                                        .items(items)
-                                        .empty_text("No branches")
-                                        .max_height(px(240.0))
-                                        .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                            if let Some(name) = branch_names.get(ix).cloned() {
-                                                this.store.dispatch(Msg::CheckoutBranch {
-                                                    repo_id,
-                                                    name,
-                                                });
-                                            }
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                );
-                            } else {
-                                for (ix, branch) in branches.iter().enumerate() {
-                                    let repo_id = repo.id;
-                                    let name = branch.name.clone();
-                                    let label: SharedString = name.clone().into();
-                                    menu = menu.child(
-                                        zed::context_menu_entry(
-                                            ("branch_item", ix),
-                                            theme,
-                                            false,
-                                            false,
-                                            None,
-                                            label,
-                                            None,
-                                            false,
-                                        )
-                                        .on_click(
-                                            cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                                this.store.dispatch(Msg::CheckoutBranch {
-                                                    repo_id,
-                                                    name: name.clone(),
-                                                });
-                                                this.popover = None;
-                                                this.popover_anchor = None;
-                                                cx.notify();
-                                            }),
-                                        ),
-                                    );
-                                }
-                            }
-                        }
-                        Loadable::Loading => {
-                            menu = menu.child(zed::context_menu_label(theme, "Loading"));
-                        }
-                        Loadable::Error(e) => {
-                            menu = menu.child(zed::context_menu_label(theme, e.clone()));
-                        }
-                        Loadable::NotLoaded => {
-                            menu = menu.child(zed::context_menu_label(theme, "Not loaded"));
-                        }
-                    }
-                }
-
-                zed::context_menu(theme, menu)
-                    .min_w(px(240.0))
-                    .max_w(px(420.0))
-            }
-            PopoverKind::CreateBranch => div()
-                .flex()
-                .flex_col()
-                .min_w(px(260.0))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .child("Create branch"),
-                )
-                .child(div().border_t_1().border_color(theme.colors.border))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .child(self.create_branch_input.clone()),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            zed::Button::new("create_branch_cancel", "Cancel")
-                                .style(zed::ButtonStyle::Outlined)
-                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        )
-                        .child(
-                            zed::Button::new("create_branch_go", "Create")
-                                .style(zed::ButtonStyle::Filled)
-                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                    let name = this
-                                        .create_branch_input
-                                        .read_with(cx, |i, _| i.text().trim().to_string());
-                                    if let Some(repo_id) = this.active_repo_id()
-                                        && !name.is_empty()
-                                    {
-                                        this.store.dispatch(Msg::CreateBranchAndCheckout {
-                                            repo_id,
-                                            name,
-                                        });
-                                    }
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        ),
-                ),
-            PopoverKind::StashPrompt => div()
-                .flex()
-                .flex_col()
-                .min_w(px(260.0))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .child("Create stash"),
-                )
-                .child(div().border_t_1().border_color(theme.colors.border))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .child(self.stash_message_input.clone()),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            zed::Button::new("stash_cancel", "Cancel")
-                                .style(zed::ButtonStyle::Outlined)
-                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        )
-                        .child(
-                            zed::Button::new("stash_go", "Stash")
-                                .style(zed::ButtonStyle::Filled)
-                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                    let message = this
-                                        .stash_message_input
-                                        .read_with(cx, |i, _| i.text().trim().to_string());
-                                    let message = if message.is_empty() {
-                                        "WIP".to_string()
-                                    } else {
-                                        message
-                                    };
-                                    if let Some(repo_id) = this.active_repo_id() {
-                                        this.store.dispatch(Msg::Stash {
-                                            repo_id,
-                                            message,
-                                            include_untracked: true,
-                                        });
-                                    }
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        ),
-                ),
-	            PopoverKind::CloneRepo => {
-	                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(420.0))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Clone repository"),
-                    )
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("Repository URL / Path"),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .pb_1()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .child(self.clone_repo_url_input.clone()),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("Destination parent folder"),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .pb_1()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().flex_1().min_w(px(0.0)).child(
-                                self.clone_repo_parent_dir_input.clone(),
-                            ))
-                            .child(
-                                zed::Button::new("clone_repo_browse", "Browse")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |_this, _e, window, cx| {
-                                        cx.stop_propagation();
-                                        let view = cx.weak_entity();
-                                        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-                                            files: false,
-                                            directories: true,
-                                            multiple: false,
-                                            prompt: Some("Clone into folder".into()),
-                                        });
-
-                                        window
-                                            .spawn(cx, async move |cx| {
-                                                let result = rx.await;
-                                                let paths = match result {
-                                                    Ok(Ok(Some(paths))) => paths,
-                                                    Ok(Ok(None)) => return,
-                                                    Ok(Err(_)) | Err(_) => return,
-                                                };
-                                                let Some(path) = paths.into_iter().next() else {
-                                                    return;
-                                                };
-                                                let _ = view.update(cx, |this, cx| {
-                                                    this.clone_repo_parent_dir_input.update(
-                                                        cx,
-                                                        |input, cx| {
-                                                            input.set_text(
-                                                                path.display().to_string(),
-                                                                cx,
-                                                            );
-                                                        },
-                                                    );
-                                                    cx.notify();
-                                                });
-                                            })
-                                            .detach();
-                                    }),
-                            ),
-                    )
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                zed::Button::new("clone_repo_cancel", "Cancel")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
+                        let diff_body: AnyElement = if diff_len == 0 {
+                            zed::empty_state(theme, "Diff", "Ours/Theirs content not available.")
+                                .into_any_element()
+                        } else {
+                            let list = uniform_list(
+                                "conflict_resolver_diff_list",
+                                diff_len,
+                                cx.processor(Self::render_conflict_resolver_diff_rows),
                             )
-                            .child(
-                                zed::Button::new("clone_repo_go", "Clone")
-                                    .style(zed::ButtonStyle::Filled)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        let url = this
-                                            .clone_repo_url_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        let parent = this
-                                            .clone_repo_parent_dir_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        if url.is_empty() || parent.is_empty() {
-                                            this.push_toast(
-                                                zed::ToastKind::Error,
-                                                "Clone: URL and destination are required"
-                                                    .to_string(),
-                                                cx,
-                                            );
-                                            return;
-                                        }
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(self.conflict_resolver_diff_scroll.clone());
 
-                                        let repo_name = clone_repo_name_from_url(&url);
-                                        let dest = std::path::PathBuf::from(parent).join(repo_name);
-                                        this.store.dispatch(Msg::CloneRepo { url, dest });
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            ),
-	                    )
-	            }
-		            PopoverKind::ResetPrompt {
-		                repo_id,
-		                target,
-		                mode,
-		            } => {
-	                let mode_label = match mode {
-	                    ResetMode::Soft => "--soft",
-	                    ResetMode::Mixed => "--mixed",
-	                    ResetMode::Hard => "--hard",
-	                };
+                            let scroll_handle = self
+                                .conflict_resolver_diff_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .clone();
 
-	                div()
-	                    .flex()
-	                    .flex_col()
-	                    .min_w(px(380.0))
-	                    .child(
-	                        div()
-	                            .px_2()
-	                            .py_1()
-	                            .text_sm()
-	                            .font_weight(FontWeight::BOLD)
-	                            .child("Reset"),
-	                    )
-	                    .child(div().border_t_1().border_color(theme.colors.border))
-	                    .child(
-	                        div()
-	                            .px_2()
-	                            .py_1()
-	                            .text_sm()
-	                            .text_color(theme.colors.text_muted)
-	                            .child(format!("{mode_label} → {target}")),
-	                    )
-	                    .child(
-	                        div()
-	                            .px_2()
-	                            .pb_1()
-	                            .text_xs()
-	                            .text_color(theme.colors.text_muted)
-	                            .child(match mode {
-	                                ResetMode::Hard => {
-	                                    "Hard reset updates index + working tree (destructive)."
-	                                }
-	                                ResetMode::Mixed => "Mixed reset updates index only.",
-	                                ResetMode::Soft => "Soft reset moves HEAD only.",
-	                            }),
-	                    )
-	                    .child(div().border_t_1().border_color(theme.colors.border))
-	                    .child(
-	                        div()
-	                            .px_2()
-	                            .py_1()
-	                            .flex()
-	                            .items_center()
-	                            .justify_between()
-	                            .child(
-	                                zed::Button::new("reset_cancel", "Cancel")
-	                                    .style(zed::ButtonStyle::Outlined)
-	                                    .on_click(theme, cx, |this, _e, _w, cx| {
-	                                        this.popover = None;
-	                                        this.popover_anchor = None;
-	                                        cx.notify();
-	                                    }),
-	                            )
-	                            .child(
-	                                zed::Button::new("reset_go", "Reset")
-	                                    .style(zed::ButtonStyle::Filled)
-	                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-	                                        this.store.dispatch(Msg::Reset {
-	                                            repo_id,
-	                                            target: target.clone(),
-	                                            mode,
-	                                        });
-	                                        this.popover = None;
-	                                        this.popover_anchor = None;
-	                                        cx.notify();
-	                                    }),
-	                            ),
-		                    )
-		            }
-		            PopoverKind::RebasePrompt { repo_id } => div()
-		                .flex()
-		                .flex_col()
-		                .min_w(px(420.0))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_sm()
-		                        .font_weight(FontWeight::BOLD)
-		                        .child("Rebase"),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_xs()
-		                        .text_color(theme.colors.text_muted)
-		                        .child("Rebase current branch onto"),
-		                )
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .pb_1()
-		                        .w_full()
-		                        .min_w(px(0.0))
-		                        .child(self.rebase_onto_input.clone()),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .flex()
-		                        .items_center()
-		                        .justify_between()
-		                        .child(
-		                            zed::Button::new("rebase_cancel", "Cancel")
-		                                .style(zed::ButtonStyle::Outlined)
-		                                .on_click(theme, cx, |this, _e, _w, cx| {
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        )
-		                        .child(
-		                            zed::Button::new("rebase_go", "Rebase")
-		                                .style(zed::ButtonStyle::Filled)
-		                                .on_click(theme, cx, move |this, _e, _w, cx| {
-		                                    let onto = this
-		                                        .rebase_onto_input
-		                                        .read_with(cx, |i, _| i.text().trim().to_string());
-		                                    if onto.is_empty() {
-		                                        this.push_toast(
-		                                            zed::ToastKind::Error,
-		                                            "Rebase: target is required".to_string(),
-		                                            cx,
-		                                        );
-		                                        return;
-		                                    }
-		                                    this.store.dispatch(Msg::Rebase { repo_id, onto });
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        ),
-		                ),
-		            PopoverKind::CreateTagPrompt { repo_id, target } => div()
-		                .flex()
-		                .flex_col()
-		                .min_w(px(420.0))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_sm()
-		                        .font_weight(FontWeight::BOLD)
-		                        .child("Create tag"),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_xs()
-		                        .text_color(theme.colors.text_muted)
-		                        .child(format!("Target: {target}")),
-		                )
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .pb_1()
-		                        .w_full()
-		                        .min_w(px(0.0))
-		                        .child(self.create_tag_input.clone()),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .flex()
-		                        .items_center()
-		                        .justify_between()
-		                        .child(
-		                            zed::Button::new("create_tag_cancel", "Cancel")
-		                                .style(zed::ButtonStyle::Outlined)
-		                                .on_click(theme, cx, |this, _e, _w, cx| {
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        )
-		                        .child(
-		                            zed::Button::new("create_tag_go", "Create")
-		                                .style(zed::ButtonStyle::Filled)
-		                                .on_click(theme, cx, move |this, _e, _w, cx| {
-		                                    let name = this
-		                                        .create_tag_input
-		                                        .read_with(cx, |i, _| i.text().trim().to_string());
-		                                    if name.is_empty() {
-		                                        this.push_toast(
-		                                            zed::ToastKind::Error,
-		                                            "Tag: name is required".to_string(),
-		                                            cx,
-		                                        );
-		                                        return;
-		                                    }
-		                                    this.store.dispatch(Msg::CreateTag {
-		                                        repo_id,
-		                                        name,
-		                                        target: target.clone(),
-		                                    });
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        ),
-		                ),
-		            PopoverKind::RemoteAddPrompt { repo_id } => div()
-		                .flex()
-		                .flex_col()
-		                .min_w(px(420.0))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_sm()
-		                        .font_weight(FontWeight::BOLD)
-		                        .child("Add remote"),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_xs()
-		                        .text_color(theme.colors.text_muted)
-		                        .child("Name"),
-		                )
-		                .child(div().px_2().pb_1().min_w(px(0.0)).child(
-		                    self.remote_name_input.clone(),
-		                ))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_xs()
-		                        .text_color(theme.colors.text_muted)
-		                        .child("URL"),
-		                )
-		                .child(div().px_2().pb_1().min_w(px(0.0)).child(
-		                    self.remote_url_input.clone(),
-		                ))
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .flex()
-		                        .items_center()
-		                        .justify_between()
-		                        .child(
-		                            zed::Button::new("add_remote_cancel", "Cancel")
-		                                .style(zed::ButtonStyle::Outlined)
-		                                .on_click(theme, cx, |this, _e, _w, cx| {
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        )
-		                        .child(
-		                            zed::Button::new("add_remote_go", "Add")
-		                                .style(zed::ButtonStyle::Filled)
-		                                .on_click(theme, cx, move |this, _e, _w, cx| {
-		                                    let name = this
-		                                        .remote_name_input
-		                                        .read_with(cx, |i, _| i.text().trim().to_string());
-		                                    let url = this
-		                                        .remote_url_input
-		                                        .read_with(cx, |i, _| i.text().trim().to_string());
-		                                    if name.is_empty() || url.is_empty() {
-		                                        this.push_toast(
-		                                            zed::ToastKind::Error,
-		                                            "Remote: name and URL are required".to_string(),
-		                                            cx,
-		                                        );
-		                                        return;
-		                                    }
-		                                    this.store.dispatch(Msg::AddRemote { repo_id, name, url });
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        ),
-		                ),
-		            PopoverKind::RemoteUrlPicker { repo_id, kind } => {
-		                let remotes = self
-		                    .active_repo()
-		                    .and_then(|r| match &r.remotes {
-		                        Loadable::Ready(remotes) => Some(remotes.clone()),
-		                        _ => None,
-		                    })
-		                    .unwrap_or_default();
-		                let items = remotes
-		                    .iter()
-		                    .map(|r| r.name.clone().into())
-		                    .collect::<Vec<_>>();
-		                let names = remotes.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
-		                if let Some(search) = self.remote_picker_search_input.clone() {
-		                    zed::context_menu(
-		                        theme,
-		                        zed::PickerPrompt::new(search)
-		                            .items(items)
-		                            .empty_text("No remotes")
-		                            .max_height(px(260.0))
-		                            .render(theme, cx, move |this, ix, e, window, cx| {
-		                                let Some(name) = names.get(ix).cloned() else {
-		                                    return;
-		                                };
-		                                let url = this
-		                                    .active_repo()
-		                                    .and_then(|r| match &r.remotes {
-		                                        Loadable::Ready(remotes) => remotes
-		                                            .iter()
-		                                            .find(|rr| rr.name == name)
-		                                            .and_then(|rr| rr.url.clone()),
-		                                        _ => None,
-		                                    })
-		                                    .unwrap_or_default();
-		                                this.remote_url_edit_input
-		                                    .update(cx, |i, cx| i.set_text(url, cx));
-		                                this.open_popover_at(
-		                                    PopoverKind::RemoteEditUrlPrompt { repo_id, name, kind },
-		                                    e.position(),
-		                                    window,
-		                                    cx,
-		                                );
-		                            }),
-		                    )
-		                    .min_w(px(260.0))
-		                    .max_w(px(420.0))
-		                } else {
-		                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
-		                    for (ix, item) in items.into_iter().enumerate() {
-		                        let name = names.get(ix).cloned().unwrap_or_default();
-		                        menu = menu.child(
-		                            div()
-		                                .id(("remote_url_item", ix))
-		                                .px_2()
-		                                .py_1()
-		                                .hover(move |s| s.bg(theme.colors.hover))
-		                                .child(div().text_sm().line_clamp(1).child(item))
-		                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-		                                    let url = this
-		                                        .active_repo()
-		                                        .and_then(|r| match &r.remotes {
-		                                            Loadable::Ready(remotes) => remotes
-		                                                .iter()
-		                                                .find(|rr| rr.name == name)
-		                                                .and_then(|rr| rr.url.clone()),
-		                                            _ => None,
-		                                        })
-		                                        .unwrap_or_default();
-		                                    this.remote_url_edit_input
-		                                        .update(cx, |i, cx| i.set_text(url, cx));
-		                                    this.open_popover_at(
-		                                        PopoverKind::RemoteEditUrlPrompt {
-		                                            repo_id,
-		                                            name: name.clone(),
-		                                            kind,
-		                                        },
-		                                        e.position(),
-		                                        window,
-		                                        cx,
-		                                    );
-		                                })),
-		                        );
-		                    }
-		                    menu.child(
-		                        div()
-		                            .id("remote_url_close")
-		                            .px_2()
-		                            .py_1()
-		                            .hover(move |s| s.bg(theme.colors.hover))
-		                            .child("Close")
-		                            .on_click(close),
-		                    )
-		                }
-		            }
-		            PopoverKind::RemoteEditUrlPrompt {
-		                repo_id,
-		                name,
-		                kind,
-		            } => {
-		                let kind_label = match kind {
-		                    RemoteUrlKind::Fetch => "fetch",
-		                    RemoteUrlKind::Push => "push",
-		                };
-		                div()
-		                    .flex()
-		                    .flex_col()
-		                    .min_w(px(420.0))
-		                    .child(
-		                        div()
-		                            .px_2()
-		                            .py_1()
-		                            .text_sm()
-		                            .font_weight(FontWeight::BOLD)
-		                            .child(format!("Edit remote URL ({kind_label})")),
-		                    )
-		                    .child(div().border_t_1().border_color(theme.colors.border))
-		                    .child(
-		                        div()
-		                            .px_2()
-		                            .py_1()
-		                            .text_xs()
-		                            .text_color(theme.colors.text_muted)
-		                            .child(format!("Remote: {name}")),
-		                    )
-		                    .child(div().px_2().pb_1().min_w(px(0.0)).child(
-		                        self.remote_url_edit_input.clone(),
-		                    ))
-		                    .child(div().border_t_1().border_color(theme.colors.border))
-		                    .child(
-		                        div()
-		                            .px_2()
-		                            .py_1()
-		                            .flex()
-		                            .items_center()
-		                            .justify_between()
-		                            .child(
-		                                zed::Button::new("edit_remote_url_cancel", "Cancel")
-		                                    .style(zed::ButtonStyle::Outlined)
-		                                    .on_click(theme, cx, |this, _e, _w, cx| {
-		                                        this.popover = None;
-		                                        this.popover_anchor = None;
-		                                        cx.notify();
-		                                    }),
-		                            )
-		                            .child(
-		                                zed::Button::new("edit_remote_url_go", "Save")
-		                                    .style(zed::ButtonStyle::Filled)
-		                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-		                                        let url = this
-		                                            .remote_url_edit_input
-		                                            .read_with(cx, |i, _| i.text().trim().to_string());
-		                                        if url.is_empty() {
-		                                            this.push_toast(
-		                                                zed::ToastKind::Error,
-		                                                "Remote URL cannot be empty".to_string(),
-		                                                cx,
-		                                            );
-		                                            return;
-		                                        }
-		                                        this.store.dispatch(Msg::SetRemoteUrl {
-		                                            repo_id,
-		                                            name: name.clone(),
-		                                            url,
-		                                            kind,
-		                                        });
-		                                        this.popover = None;
-		                                        this.popover_anchor = None;
-		                                        cx.notify();
-		                                    }),
-		                            ),
-		                    )
-		            }
-		            PopoverKind::RemoteRemovePicker { repo_id } => {
-		                let remotes = self
-		                    .active_repo()
-		                    .and_then(|r| match &r.remotes {
-		                        Loadable::Ready(remotes) => Some(remotes.clone()),
-		                        _ => None,
-		                    })
-		                    .unwrap_or_default();
-		                let items = remotes
-		                    .iter()
-		                    .map(|r| r.name.clone().into())
-		                    .collect::<Vec<_>>();
-		                let names = remotes.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
-		                if let Some(search) = self.remote_picker_search_input.clone() {
-		                    zed::context_menu(
-		                        theme,
-		                        zed::PickerPrompt::new(search)
-		                            .items(items)
-		                            .empty_text("No remotes")
-		                            .max_height(px(260.0))
-		                            .render(theme, cx, move |this, ix, e, window, cx| {
-		                                let Some(name) = names.get(ix).cloned() else {
-		                                    return;
-		                                };
-		                                this.open_popover_at(
-		                                    PopoverKind::RemoteRemoveConfirm { repo_id, name },
-		                                    e.position(),
-		                                    window,
-		                                    cx,
-		                                );
-		                            }),
-		                    )
-		                    .min_w(px(260.0))
-		                    .max_w(px(420.0))
-		                } else {
-		                    let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
-		                    for (ix, item) in items.into_iter().enumerate() {
-		                        let name = names.get(ix).cloned().unwrap_or_default();
-		                        menu = menu.child(
-		                            div()
-		                                .id(("remote_remove_item", ix))
-		                                .px_2()
-		                                .py_1()
-		                                .hover(move |s| s.bg(theme.colors.hover))
-		                                .child(div().text_sm().line_clamp(1).child(item))
-		                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-		                                    this.open_popover_at(
-		                                        PopoverKind::RemoteRemoveConfirm {
-		                                            repo_id,
-		                                            name: name.clone(),
-		                                        },
-		                                        e.position(),
-		                                        window,
-		                                        cx,
-		                                    );
-		                                })),
-		                        );
-		                    }
-		                    menu.child(
-		                        div()
-		                            .id("remote_remove_close")
-		                            .px_2()
-		                            .py_1()
-		                            .hover(move |s| s.bg(theme.colors.hover))
-		                            .child("Close")
-		                            .on_click(close),
-		                    )
-		                }
-		            }
-		            PopoverKind::RemoteRemoveConfirm { repo_id, name } => div()
-		                .flex()
-		                .flex_col()
-		                .min_w(px(380.0))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_sm()
-		                        .font_weight(FontWeight::BOLD)
-		                        .child("Remove remote"),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .text_sm()
-		                        .text_color(theme.colors.text_muted)
-		                        .child(format!("Remote: {name}")),
-		                )
-		                .child(div().border_t_1().border_color(theme.colors.border))
-		                .child(
-		                    div()
-		                        .px_2()
-		                        .py_1()
-		                        .flex()
-		                        .items_center()
-		                        .justify_between()
-		                        .child(
-		                            zed::Button::new("remove_remote_cancel", "Cancel")
-		                                .style(zed::ButtonStyle::Outlined)
-		                                .on_click(theme, cx, |this, _e, _w, cx| {
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        )
-		                        .child(
-		                            zed::Button::new("remove_remote_go", "Remove")
-		                                .style(zed::ButtonStyle::Danger)
-		                                .on_click(theme, cx, move |this, _e, _w, cx| {
-		                                    this.store.dispatch(Msg::RemoveRemote {
-		                                        repo_id,
-		                                        name: name.clone(),
-		                                    });
-		                                    this.popover = None;
-		                                    this.popover_anchor = None;
-		                                    cx.notify();
-		                                }),
-		                        ),
-		                ),
-                    PopoverKind::WorktreeAddPrompt { repo_id } => div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(520.0))
-                        .child(
                             div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child("Add worktree"),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Worktree folder"),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(div().flex_1().min_w(px(0.0)).child(
-                                    self.worktree_path_input.clone(),
-                                ))
+                                .id("conflict_resolver_diff_scroll")
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .child(list)
                                 .child(
-                                    zed::Button::new("worktree_browse", "Browse")
-                                        .style(zed::ButtonStyle::Outlined)
-                                        .on_click(theme, cx, |_this, _e, window, cx| {
-                                            cx.stop_propagation();
-                                            let view = cx.weak_entity();
-                                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-                                                files: false,
-                                                directories: true,
-                                                multiple: false,
-                                                prompt: Some("Select worktree folder".into()),
-                                            });
-
-                                            window
-                                                .spawn(cx, async move |cx| {
-                                                    let result = rx.await;
-                                                    let paths = match result {
-                                                        Ok(Ok(Some(paths))) => paths,
-                                                        Ok(Ok(None)) => return,
-                                                        Ok(Err(_)) | Err(_) => return,
-                                                    };
-                                                    let Some(path) = paths.into_iter().next()
-                                                    else {
-                                                        return;
-                                                    };
-                                                    let _ = view.update(cx, |this, cx| {
-                                                        this.worktree_path_input.update(
-                                                            cx,
-                                                            |input, cx| {
-                                                                input.set_text(
-                                                                    path.display().to_string(),
-                                                                    cx,
-                                                                );
-                                                            },
-                                                        );
-                                                        cx.notify();
-                                                    });
-                                                })
-                                                .detach();
-                                        }),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Branch / commit (optional)"),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .child(self.worktree_ref_input.clone()),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    zed::Button::new("worktree_add_cancel", "Cancel")
-                                        .style(zed::ButtonStyle::Outlined)
-                                        .on_click(theme, cx, |this, _e, _w, cx| {
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                )
-                                .child(
-                                    zed::Button::new("worktree_add_go", "Add")
-                                        .style(zed::ButtonStyle::Filled)
-                                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                                            let folder = this.worktree_path_input.read_with(
-                                                cx,
-                                                |i, _| i.text().trim().to_string(),
-                                            );
-                                            if folder.is_empty() {
-                                                this.push_toast(
-                                                    zed::ToastKind::Error,
-                                                    "Worktree folder is required".to_string(),
-                                                    cx,
-                                                );
-                                                return;
-                                            }
-                                            let reference = this.worktree_ref_input.read_with(
-                                                cx,
-                                                |i, _| i.text().trim().to_string(),
-                                            );
-                                            let reference = (!reference.is_empty())
-                                                .then_some(reference);
-                                            this.store.dispatch(Msg::AddWorktree {
-                                                repo_id,
-                                                path: std::path::PathBuf::from(folder),
-                                                reference,
-                                            });
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                ),
-                        ),
-                    PopoverKind::WorktreeOpenPicker { repo_id } => {
-                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                            match &repo.worktrees {
-                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
-                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
-                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
-                                Loadable::Ready(worktrees) => {
-                                    let workdir = repo.spec.workdir.clone();
-                                    let items = worktrees
-                                        .iter()
-                                        .filter(|w| w.path != workdir)
-                                        .map(|w| {
-                                            let label = if let Some(branch) = &w.branch {
-                                                format!("{branch}  {}", w.path.display())
-                                            } else if w.detached {
-                                                format!("(detached)  {}", w.path.display())
-                                            } else {
-                                                w.path.display().to_string()
-                                            };
-                                            label.into()
-                                        })
-                                        .collect::<Vec<SharedString>>();
-                                    let paths = worktrees
-                                        .iter()
-                                        .filter(|w| w.path != workdir)
-                                        .map(|w| w.path.clone())
-                                        .collect::<Vec<_>>();
-
-                                    if let Some(search) = self.worktree_picker_search_input.clone() {
-                                        zed::context_menu(
-                                            theme,
-                                            zed::PickerPrompt::new(search)
-                                                .items(items)
-                                                .empty_text("No worktrees")
-                                                .max_height(px(260.0))
-                                                .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                                    let Some(path) = paths.get(ix).cloned() else {
-                                                        return;
-                                                    };
-                                                    this.store.dispatch(Msg::OpenRepo(path));
-                                                    this.popover = None;
-                                                    this.popover_anchor = None;
-                                                    cx.notify();
-                                                }),
-                                        )
-                                        .min_w(px(420.0))
-                                        .max_w(px(820.0))
-                                    } else {
-                                        zed::context_menu_label(
-                                            theme,
-                                            "Search input not initialized",
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            zed::context_menu_label(theme, "No repository")
-                        }
-                    }
-                    PopoverKind::WorktreeRemovePicker { repo_id } => {
-                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                            match &repo.worktrees {
-                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
-                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
-                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
-                                Loadable::Ready(worktrees) => {
-                                    let workdir = repo.spec.workdir.clone();
-                                    let items = worktrees
-                                        .iter()
-                                        .filter(|w| w.path != workdir)
-                                        .map(|w| w.path.display().to_string().into())
-                                        .collect::<Vec<SharedString>>();
-                                    let paths = worktrees
-                                        .iter()
-                                        .filter(|w| w.path != workdir)
-                                        .map(|w| w.path.clone())
-                                        .collect::<Vec<_>>();
-
-                                    if let Some(search) = self.worktree_picker_search_input.clone() {
-                                        zed::context_menu(
-                                            theme,
-                                            zed::PickerPrompt::new(search)
-                                                .items(items)
-                                                .empty_text("No worktrees")
-                                                .max_height(px(260.0))
-                                                .render(
-                                                    theme,
-                                                    cx,
-                                                    move |this, ix, e, window, cx| {
-                                                        let Some(path) =
-                                                            paths.get(ix).cloned() else {
-                                                                return;
-                                                            };
-                                                        this.open_popover_at(
-                                                            PopoverKind::WorktreeRemoveConfirm {
-                                                                repo_id,
-                                                                path,
-                                                            },
-                                                            e.position(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
-                                                ),
-                                        )
-                                        .min_w(px(420.0))
-                                        .max_w(px(820.0))
-                                    } else {
-                                        zed::context_menu_label(
-                                            theme,
-                                            "Search input not initialized",
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            zed::context_menu_label(theme, "No repository")
-                        }
-                    }
-                    PopoverKind::WorktreeRemoveConfirm { repo_id, path } => div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(420.0))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child("Remove worktree"),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .text_color(theme.colors.text_muted)
-                                .child(path.display().to_string()),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    zed::Button::new("worktree_remove_cancel", "Cancel")
-                                        .style(zed::ButtonStyle::Outlined)
-                                        .on_click(theme, cx, |this, _e, _w, cx| {
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                )
-                                .child(
-                                    zed::Button::new("worktree_remove_go", "Remove")
-                                        .style(zed::ButtonStyle::Danger)
-                                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                                            this.store.dispatch(Msg::RemoveWorktree { repo_id, path: path.clone() });
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                ),
-                        ),
-                    PopoverKind::SubmoduleAddPrompt { repo_id } => div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(520.0))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child("Add submodule"),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("URL"),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .child(self.submodule_url_input.clone()),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Path (relative)"),
-                        )
-                        .child(
-                            div()
-                                .px_2()
-                                .pb_1()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .child(self.submodule_path_input.clone()),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    zed::Button::new("submodule_add_cancel", "Cancel")
-                                        .style(zed::ButtonStyle::Outlined)
-                                        .on_click(theme, cx, |this, _e, _w, cx| {
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                )
-                                .child(
-                                    zed::Button::new("submodule_add_go", "Add")
-                                        .style(zed::ButtonStyle::Filled)
-                                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                                            let url = this.submodule_url_input.read_with(
-                                                cx,
-                                                |i, _| i.text().trim().to_string(),
-                                            );
-                                            let path_text = this.submodule_path_input.read_with(
-                                                cx,
-                                                |i, _| i.text().trim().to_string(),
-                                            );
-                                            if url.is_empty() || path_text.is_empty() {
-                                                this.push_toast(
-                                                    zed::ToastKind::Error,
-                                                    "Submodule URL and path are required".to_string(),
-                                                    cx,
-                                                );
-                                                return;
-                                            }
-                                            this.store.dispatch(Msg::AddSubmodule {
-                                                repo_id,
-                                                url,
-                                                path: std::path::PathBuf::from(path_text),
-                                            });
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                ),
-                        ),
-                    PopoverKind::SubmoduleOpenPicker { repo_id } => {
-                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                            match &repo.submodules {
-                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
-                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
-                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
-                                Loadable::Ready(subs) => {
-                                    let base = repo.spec.workdir.clone();
-                                    let items = subs
-                                        .iter()
-                                        .map(|s| s.path.display().to_string().into())
-                                        .collect::<Vec<SharedString>>();
-                                    let paths = subs
-                                        .iter()
-                                        .map(|s| base.join(&s.path))
-                                        .collect::<Vec<_>>();
-                                    if let Some(search) = self.submodule_picker_search_input.clone()
-                                    {
-                                        zed::context_menu(
-                                            theme,
-                                            zed::PickerPrompt::new(search)
-                                                .items(items)
-                                                .empty_text("No submodules")
-                                                .max_height(px(260.0))
-                                                .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                                    let Some(path) =
-                                                        paths.get(ix).cloned() else {
-                                                            return;
-                                                        };
-                                                    this.store.dispatch(Msg::OpenRepo(path));
-                                                    this.popover = None;
-                                                    this.popover_anchor = None;
-                                                    cx.notify();
-                                                }),
-                                        )
-                                        .min_w(px(420.0))
-                                        .max_w(px(820.0))
-                                    } else {
-                                        zed::context_menu_label(
-                                            theme,
-                                            "Search input not initialized",
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            zed::context_menu_label(theme, "No repository")
-                        }
-                    }
-                    PopoverKind::SubmoduleRemovePicker { repo_id } => {
-                        if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                            match &repo.submodules {
-                                Loadable::Loading => zed::context_menu_label(theme, "Loading"),
-                                Loadable::NotLoaded => zed::context_menu_label(theme, "Not loaded"),
-                                Loadable::Error(e) => zed::context_menu_label(theme, e.clone()),
-                                Loadable::Ready(subs) => {
-                                    let items = subs
-                                        .iter()
-                                        .map(|s| s.path.display().to_string().into())
-                                        .collect::<Vec<SharedString>>();
-                                    let paths =
-                                        subs.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
-                                    if let Some(search) = self.submodule_picker_search_input.clone()
-                                    {
-                                        zed::context_menu(
-                                            theme,
-                                            zed::PickerPrompt::new(search)
-                                                .items(items)
-                                                .empty_text("No submodules")
-                                                .max_height(px(260.0))
-                                                .render(
-                                                    theme,
-                                                    cx,
-                                                    move |this, ix, e, window, cx| {
-                                                        let Some(path) =
-                                                            paths.get(ix).cloned() else {
-                                                                return;
-                                                            };
-                                                        this.open_popover_at(
-                                                            PopoverKind::SubmoduleRemoveConfirm {
-                                                                repo_id,
-                                                                path,
-                                                            },
-                                                            e.position(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
-                                                ),
-                                        )
-                                        .min_w(px(420.0))
-                                        .max_w(px(820.0))
-                                    } else {
-                                        zed::context_menu_label(
-                                            theme,
-                                            "Search input not initialized",
-                                        )
-                                    }
-                                }
-                            }
-                        } else {
-                            zed::context_menu_label(theme, "No repository")
-                        }
-                    }
-                    PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => div()
-                        .flex()
-                        .flex_col()
-                        .min_w(px(420.0))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child("Remove submodule"),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .text_sm()
-                                .text_color(theme.colors.text_muted)
-                                .child(path.display().to_string()),
-                        )
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .px_2()
-                                .py_1()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    zed::Button::new("submodule_remove_cancel", "Cancel")
-                                        .style(zed::ButtonStyle::Outlined)
-                                        .on_click(theme, cx, |this, _e, _w, cx| {
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                )
-                                .child(
-                                    zed::Button::new("submodule_remove_go", "Remove")
-                                        .style(zed::ButtonStyle::Danger)
-                                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                                            this.store.dispatch(Msg::RemoveSubmodule { repo_id, path: path.clone() });
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        }),
-                                ),
-                        ),
-                    PopoverKind::FileHistory { repo_id, path } => {
-                        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
-                        let title: SharedString = path.display().to_string().into();
-
-                        let header = div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::BOLD)
-                                            .child("File history"),
+                                    zed::Scrollbar::new(
+                                        "conflict_resolver_diff_scrollbar",
+                                        scroll_handle,
                                     )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .line_clamp(1)
-                                            .whitespace_nowrap()
-                                            .child(title),
-                                    ),
-                            )
-                            .child(
-                                zed::Button::new("file_history_close", "Close")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            );
-
-                        let body: AnyElement = match repo.map(|r| &r.file_history) {
-                            None => zed::context_menu_label(theme, "No repository")
-                                .into_any_element(),
-                            Some(Loadable::Loading) => {
-                                zed::context_menu_label(theme, "Loading").into_any_element()
-                            }
-                            Some(Loadable::Error(e)) => {
-                                zed::context_menu_label(theme, e.clone()).into_any_element()
-                            }
-                            Some(Loadable::NotLoaded) => {
-                                zed::context_menu_label(theme, "Not loaded").into_any_element()
-                            }
-                            Some(Loadable::Ready(page)) => {
-                                let commit_ids = page
-                                    .commits
-                                    .iter()
-                                    .map(|c| c.id.clone())
-                                    .collect::<Vec<_>>();
-                                let items = page
-                                    .commits
-                                    .iter()
-                                    .map(|c| {
-                                        let sha = c.id.as_ref();
-                                        let short = sha.get(0..8).unwrap_or(sha);
-                                        format!("{short}  {}", c.summary).into()
-                                    })
-                                    .collect::<Vec<SharedString>>();
-
-                                if let Some(search) = self.file_history_search_input.clone() {
-                                    zed::PickerPrompt::new(search)
-                                        .items(items)
-                                        .empty_text("No commits")
-                                        .max_height(px(340.0))
-                                        .render(theme, cx, move |this, ix, _e, _w, cx| {
-                                            let Some(commit_id) =
-                                                commit_ids.get(ix).cloned() else {
-                                                    return;
-                                                };
-                                            this.store.dispatch(Msg::SelectCommit {
-                                                repo_id,
-                                                commit_id: commit_id.clone(),
-                                            });
-                                            this.store.dispatch(Msg::SelectDiff {
-                                                repo_id,
-                                                target: DiffTarget::Commit {
-                                                    commit_id,
-                                                    path: Some(path.clone()),
-                                                },
-                                            });
-                                            this.rebuild_diff_cache();
-                                            this.popover = None;
-                                            this.popover_anchor = None;
-                                            cx.notify();
-                                        })
-                                        .into_any_element()
-                                } else {
-                                    zed::context_menu_label(
-                                        theme,
-                                        "Search input not initialized",
-                                    )
-                                    .into_any_element()
-                                }
-                            }
+                                    .always_visible()
+                                    .render(theme),
+                                )
+                                .into_any_element()
                         };
 
-                        zed::context_menu(
-                            theme,
-                            div()
-                                .flex()
-                                .flex_col()
-                                .min_w(px(520.0))
-                                .max_w(px(820.0))
-                                .child(header)
-                                .child(div().border_t_1().border_color(theme.colors.border))
-                                .child(body),
-                        )
-                    }
-                    PopoverKind::Blame { repo_id, path, rev } => {
-                        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
-                        let title: SharedString = path.display().to_string().into();
-                        let subtitle: SharedString = rev
-                            .clone()
-                            .map(|r| format!("rev: {r}").into())
-                            .unwrap_or_else(|| "rev: HEAD".into());
-
-                        let header = div()
-                            .px_2()
-                            .py_1()
+                        let output_header = div()
                             .flex()
                             .items_center()
                             .justify_between()
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_col()
-                                    .min_w(px(0.0))
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_weight(FontWeight::BOLD)
-                                            .child("Blame"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .line_clamp(1)
-                                            .whitespace_nowrap()
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .line_clamp(1)
-                                            .whitespace_nowrap()
-                                            .child(subtitle),
-                                    ),
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Resolved output (editable)"),
                             )
-                            .child(
-                                zed::Button::new("blame_close", "Close")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            );
-
-                        let body: AnyElement = match repo.map(|r| &r.blame) {
-                            None => zed::context_menu_label(theme, "No repository")
-                                .into_any_element(),
-                            Some(Loadable::Loading) => {
-                                zed::context_menu_label(theme, "Loading").into_any_element()
-                            }
-                            Some(Loadable::Error(e)) => {
-                                zed::context_menu_label(theme, e.clone()).into_any_element()
-                            }
-                            Some(Loadable::NotLoaded) => {
-                                zed::context_menu_label(theme, "Not loaded").into_any_element()
-                            }
-                            Some(Loadable::Ready(lines)) => {
-                                let count = lines.len();
-                                let list = uniform_list(
-                                    "blame_popover",
-                                    count,
-                                    cx.processor(Self::render_blame_popover_rows),
-                                )
-                                .h(px(360.0))
-                                .track_scroll(self.blame_scroll.clone());
-                                let scroll_handle = {
-                                    let state = self.blame_scroll.0.borrow();
-                                    state.base_handle.clone()
-                                };
-
-                                div()
-                                    .relative()
-                                    .child(list)
-                                    .child(
-                                        zed::Scrollbar::new("blame_popover_scrollbar", scroll_handle)
-                                            .render(theme),
-                                    )
-                                    .into_any_element()
-                            }
-                        };
+                            .child(start_controls);
 
                         div()
                             .flex()
                             .flex_col()
+                            .max_w(max_w)
+                            .max_h(max_h)
                             .min_w(px(720.0))
-                            .max_w(px(980.0))
-                            .child(header)
-                            .child(div().border_t_1().border_color(theme.colors.border))
-                            .child(body)
-                    }
-		            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
-		                let remote = remote.clone();
-		                div()
-                    .flex()
-                    .flex_col()
-                    .min_w(px(320.0))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Set upstream and push"),
-                    )
-                    .child(div().border_t_1().border_color(theme.colors.border))
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .text_sm()
-                            .text_color(theme.colors.text_muted)
-                            .child(format!("Remote: {remote}")),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .child(self.push_upstream_branch_input.clone()),
-                    )
-                    .child(
-                        div()
-                            .px_2()
-                            .py_1()
-                            .flex()
-                            .items_center()
-                            .justify_between()
+                            .min_h(px(520.0))
+                            .gap_2()
                             .child(
-                                zed::Button::new("push_upstream_cancel", "Cancel")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(title.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                                .child(
+                                                    zed::Button::new("conflict_save_close", "Save & close")
+                                                        .style(zed::ButtonStyle::Outlined)
+                                                        .on_click(theme, cx, save_close),
+                                                )
+                                                .child(
+                                                    zed::Button::new("conflict_save_stage_close", "Save & stage & close")
+                                                        .style(zed::ButtonStyle::Filled)
+                                                        .on_click(theme, cx, save_stage_close),
+                                                ),
+                                    ),
                             )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(diff_header)
                             .child(
-                                zed::Button::new("push_upstream_go", "Push")
-                                    .style(zed::ButtonStyle::Filled)
-                                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                                        let branch = this
-                                            .push_upstream_branch_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        if branch.is_empty() {
-                                            return;
-                                        }
-                                        this.store.dispatch(Msg::PushSetUpstream {
-                                            repo_id,
-                                            remote: remote.clone(),
-                                            branch,
-                                        });
-                                        this.popover = None;
-                                        this.popover_anchor = None;
-                                        cx.notify();
-                                    }),
-                            ),
-                    )
+                                div()
+                                    .h(px(240.0))
+                                    .min_h(px(0.0))
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .rounded(px(theme.radii.row))
+                                    .overflow_hidden()
+                                    .flex()
+                                    .flex_col()
+                                    .child(diff_title_row)
+                                    .child(div().border_t_1().border_color(theme.colors.border))
+                                    .child(diff_body),
+                            )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(output_header)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .rounded(px(theme.radii.row))
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .id("conflict_resolver_output_scroll")
+                                            .font_family("monospace")
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .overflow_y_scroll()
+                                            .child(self.conflict_resolver_input.clone()),
+                                    ),
+                            )
+                    }
+                    }
+                } else {
+                    zed::empty_state(theme, "Conflicts", "Repository not found.")
+                }
+            } */
+            PopoverKind::BranchPicker => branch_picker::panel(self, cx),
+            PopoverKind::CreateBranch => create_branch::panel(self, cx),
+            PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
+            PopoverKind::CloneRepo => clone_repo::panel(self, cx),
+            PopoverKind::ResetPrompt {
+                repo_id,
+                target,
+                mode,
+            } => reset_prompt::panel(self, repo_id, target, mode, cx),
+            PopoverKind::RebasePrompt { repo_id } => rebase_prompt::panel(self, repo_id, cx),
+            PopoverKind::CreateTagPrompt { repo_id, target } => {
+                create_tag_prompt::panel(self, repo_id, target, cx)
             }
-            PopoverKind::ForcePushConfirm { repo_id } => div()
-                .flex()
-                .flex_col()
-                .min_w(px(420.0))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .child("Force push"),
-                )
-                .child(div().border_t_1().border_color(theme.colors.border))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .text_color(theme.colors.text_muted)
-                        .child("This will overwrite remote history if your branch has diverged."),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .text_xs()
-                        .font_family("monospace")
-                        .text_color(theme.colors.text_muted)
-                        .child("git push --force-with-lease"),
-                )
-                .child(div().border_t_1().border_color(theme.colors.border))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            zed::Button::new("force_push_cancel", "Cancel")
-                                .style(zed::ButtonStyle::Outlined)
-                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        )
-                        .child(
-                            zed::Button::new("force_push_go", "Force push")
-                                .style(zed::ButtonStyle::Danger)
-                                .on_click(theme, cx, move |this, _e, _w, cx| {
-                                    this.store.dispatch(Msg::ForcePush { repo_id });
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                }),
-                        ),
-                ),
+            PopoverKind::RemoteAddPrompt { repo_id } => remote_add_prompt::panel(self, repo_id, cx),
+            PopoverKind::RemoteUrlPicker { repo_id, kind } => {
+                remote_url_picker::panel(self, repo_id, kind, cx)
+            }
+            PopoverKind::RemoteEditUrlPrompt {
+                repo_id,
+                name,
+                kind,
+            } => remote_edit_url_prompt::panel(self, repo_id, name, kind, cx),
+            PopoverKind::RemoteRemovePicker { repo_id } => {
+                remote_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::RemoteRemoveConfirm { repo_id, name } => {
+                remote_remove_confirm::panel(self, repo_id, name, cx)
+            }
+            PopoverKind::WorktreeAddPrompt { repo_id } => {
+                worktree_add_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeOpenPicker { repo_id } => {
+                worktree_open_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeRemovePicker { repo_id } => {
+                worktree_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeRemoveConfirm { repo_id, path } => {
+                worktree_remove_confirm::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::SubmoduleAddPrompt { repo_id } => {
+                submodule_add_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleOpenPicker { repo_id } => {
+                submodule_open_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                submodule_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => {
+                submodule_remove_confirm::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::FileHistory { repo_id, path } => {
+                file_history::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::Blame { repo_id, path, rev } => blame::panel(self, repo_id, path, rev, cx),
+            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
+                push_set_upstream_prompt::panel(self, repo_id, remote, cx)
+            }
+            PopoverKind::ForcePushConfirm { repo_id } => {
+                force_push_confirm::panel(self, repo_id, cx)
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
-            PopoverKind::DiffHunks => {
-                let mut items: Vec<SharedString> = Vec::new();
-                let mut targets: Vec<usize> = Vec::new();
-                let mut current_file: Option<String> = None;
-
-                for (visible_ix, &ix) in self.diff_visible_indices.iter().enumerate() {
-                    let (src_ix, click_kind) = match self.diff_view {
-                        DiffViewMode::Inline => {
-                            let Some(line) = self.diff_cache.get(ix) else {
-                                continue;
-                            };
-                            let kind =
-                                if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-                                    DiffClickKind::HunkHeader
-                                } else if matches!(
-                                    line.kind,
-                                    gitgpui_core::domain::DiffLineKind::Header
-                                ) && line.text.starts_with("diff --git ")
-                                {
-                                    DiffClickKind::FileHeader
-                                } else {
-                                    DiffClickKind::Line
-                                };
-                            (ix, kind)
-                        }
-                        DiffViewMode::Split => {
-                            let Some(row) = self.diff_split_cache.get(ix) else {
-                                continue;
-                            };
-                            let PatchSplitRow::Raw { src_ix, click_kind } = row else {
-                                continue;
-                            };
-                            (*src_ix, *click_kind)
-                        }
-                    };
-
-                    let Some(line) = self.diff_cache.get(src_ix) else {
-                        continue;
-                    };
-
-                    if matches!(click_kind, DiffClickKind::FileHeader) {
-                        current_file = parse_diff_git_header_path(&line.text);
-                    }
-
-                    if !matches!(click_kind, DiffClickKind::HunkHeader) {
-                        continue;
-                    }
-
-                    let label =
-                        if let Some(parsed) = parse_unified_hunk_header_for_display(&line.text) {
-                            let file = current_file.as_deref().unwrap_or("<file>").to_string();
-                            let heading = parsed.heading.unwrap_or_default();
-                            if heading.is_empty() {
-                                format!("{file}: {} {}", parsed.old, parsed.new)
-                            } else {
-                                format!("{file}: {} {} {heading}", parsed.old, parsed.new)
-                            }
-                        } else {
-                            current_file.as_deref().unwrap_or("<file>").to_string()
-                        };
-
-                    items.push(label.into());
-                    targets.push(visible_ix);
-                }
-
-                if let Some(search) = self.diff_hunk_picker_search_input.clone() {
-                    zed::PickerPrompt::new(search)
-                        .items(items)
-                        .empty_text("No hunks")
-                        .max_height(px(260.0))
-                        .render(theme, cx, move |this, ix, _e, _w, cx| {
-                            let Some(&target) = targets.get(ix) else {
-                                return;
-                            };
-                            this.diff_scroll
-                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
-                            this.diff_selection_anchor = Some(target);
-                            this.diff_selection_range = Some((target, target));
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        })
-                        .min_w(px(520.0))
-                        .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(
-                            div()
-                                .id("diff_hunks_close")
-                                .px_2()
-                                .py_1()
-                                .hover(move |s| s.bg(theme.colors.hover))
-                                .child("Close")
-                                .on_click(close),
-                        )
-                } else {
-                    let mut menu = div().flex().flex_col().min_w(px(520.0));
-                    for (ix, label) in items.into_iter().enumerate() {
-                        let target = targets.get(ix).copied().unwrap_or(0);
-                        menu = menu.child(
-                            div()
-                                .id(("diff_hunk_item", ix))
-                                .px_2()
-                                .py_1()
-                                .hover(move |s| s.bg(theme.colors.hover))
-                                .child(div().text_sm().line_clamp(1).child(label))
-                                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                                    this.diff_scroll
-                                        .scroll_to_item(target, gpui::ScrollStrategy::Top);
-                                    this.diff_selection_anchor = Some(target);
-                                    this.diff_selection_range = Some((target, target));
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    menu.child(
-                        div()
-                            .id("diff_hunks_close")
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child("Close")
-                            .on_click(close),
-                    )
-                }
-            }
+            PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
@@ -3145,495 +1114,7 @@ mod context_menu;
                 },
                 cx,
             ),
-	            PopoverKind::AppMenu => {
-	                let active_repo = self.active_repo();
-	                let active_repo_id = active_repo.map(|r| r.id);
-	                let rebase_in_progress = active_repo
-	                    .and_then(|r| match &r.rebase_in_progress {
-	                        Loadable::Ready(v) => Some(*v),
-	                        _ => None,
-	                    })
-	                    .unwrap_or(false);
-                    let selected_commit = active_repo.and_then(|r| r.selected_commit.clone());
-                    let selected_short = selected_commit.as_ref().map(|id| {
-                        let sha = id.as_ref();
-                        sha.get(0..8).unwrap_or(sha).to_string()
-                    });
-
-	                let separator = || {
-	                    div()
-	                        .h(px(1.0))
-	                        .w_full()
-	                        .bg(theme.colors.border)
-	                        .my(px(4.0))
-	                };
-
-	                let section_label = |id: &'static str, text: &'static str| {
-	                    div()
-	                        .id(id)
-	                        .px_2()
-	                        .pt(px(6.0))
-	                        .pb(px(4.0))
-	                        .text_xs()
-	                        .text_color(theme.colors.text_muted)
-	                        .child(text)
-	                };
-
-	                let entry = |id: &'static str, label: SharedString, disabled: bool| {
-	                    div()
-	                        .id(id)
-	                        .debug_selector(move || id.to_string())
-	                        .px_2()
-	                        .py_1()
-	                        .when(!disabled, |d| {
-	                            d.hover(move |s| s.bg(theme.colors.hover))
-	                                .active(move |s| s.bg(theme.colors.active))
-	                        })
-	                        .when(disabled, |d| d.text_color(theme.colors.text_muted))
-	                        .child(label)
-	                };
-
-	                let mut install_desktop = div()
-	                    .id("app_menu_install_desktop")
-	                    .debug_selector(|| "app_menu_install_desktop".to_string())
-                    .px_2()
-                    .py_1()
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-                    .child("Install desktop integration");
-
-                #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                {
-                    install_desktop =
-                        install_desktop.on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                            this.install_linux_desktop_integration(cx);
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }));
-                }
-
-                #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-                {
-                    install_desktop = install_desktop.text_color(theme.colors.text_muted);
-	                }
-
-		                let menu = div()
-	                    .flex()
-	                    .flex_col()
-	                    .min_w(px(200.0))
-                        .child(section_label("app_menu_app_section", "Application"))
-                        .child(
-                            entry("app_menu_settings", "Settings…".into(), false).on_click(
-                                cx.listener(|this, e: &ClickEvent, _w, cx| {
-                                    this.popover = Some(PopoverKind::Settings);
-                                    this.popover_anchor = Some(e.position());
-                                    this.settings_date_format_open = false;
-                                    cx.notify();
-                                }),
-                            ),
-                        )
-                        .child(separator())
-	                    .child(section_label("app_menu_repo_section", "Repository"))
-	                    .child(
-	                        entry(
-	                            "app_menu_rebase",
-	                            "Rebase onto…".into(),
-	                            active_repo_id.is_none() || rebase_in_progress,
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            if rebase_in_progress {
-	                                return;
-	                            }
-	                            this.open_popover_at(
-	                                PopoverKind::RebasePrompt { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_rebase_continue",
-	                            "Rebase --continue".into(),
-	                            active_repo_id.is_none() || !rebase_in_progress,
-	                        )
-	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            if !rebase_in_progress {
-	                                return;
-	                            }
-	                            this.store.dispatch(Msg::RebaseContinue { repo_id });
-	                            this.popover = None;
-	                            this.popover_anchor = None;
-	                            cx.notify();
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_rebase_abort",
-	                            "Rebase --abort".into(),
-	                            active_repo_id.is_none() || !rebase_in_progress,
-	                        )
-	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            if !rebase_in_progress {
-	                                return;
-	                            }
-	                            this.store.dispatch(Msg::RebaseAbort { repo_id });
-	                            this.popover = None;
-	                            this.popover_anchor = None;
-	                            cx.notify();
-	                        })),
-	                    )
-	                    .child(separator())
-	                    .child(section_label("app_menu_remotes_section", "Remotes"))
-	                    .child(
-	                        entry(
-	                            "app_menu_add_remote",
-	                            "Add remote…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::RemoteAddPrompt { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_edit_remote_fetch_url",
-	                            "Edit remote fetch URL…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.ensure_remote_picker_search_input(window, cx);
-	                            this.open_popover_at(
-	                                PopoverKind::RemoteUrlPicker {
-	                                    repo_id,
-	                                    kind: RemoteUrlKind::Fetch,
-	                                },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_edit_remote_push_url",
-	                            "Edit remote push URL…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.ensure_remote_picker_search_input(window, cx);
-	                            this.open_popover_at(
-	                                PopoverKind::RemoteUrlPicker {
-	                                    repo_id,
-	                                    kind: RemoteUrlKind::Push,
-	                                },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_remove_remote",
-	                            "Remove remote…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.ensure_remote_picker_search_input(window, cx);
-	                            this.open_popover_at(
-	                                PopoverKind::RemoteRemovePicker { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(separator())
-	                    .child(section_label("app_menu_patches_section", "Patches"))
-	                    .child({
-	                        let disabled = active_repo_id.is_none() || selected_commit.is_none();
-	                        let label: SharedString = selected_short
-	                            .as_ref()
-	                            .map(|s| format!("Export patch for {s}…").into())
-	                            .unwrap_or_else(|| "Export patch…".into());
-	                        let selected_commit = selected_commit.clone();
-	                        let selected_short = selected_short.clone();
-	                        entry("app_menu_export_patch", label, disabled).on_click(cx.listener(
-	                            move |this, _e: &ClickEvent, window, cx| {
-	                                let Some(repo_id) = active_repo_id else {
-	                                    return;
-	                                };
-	                                let Some(commit_id) = selected_commit.clone() else {
-	                                    return;
-	                                };
-	                                cx.stop_propagation();
-	                                let view = cx.weak_entity();
-	                                let short = selected_short.clone().unwrap_or_else(|| {
-	                                    let sha = commit_id.as_ref();
-	                                    sha.get(0..8).unwrap_or(sha).to_string()
-	                                });
-	                                let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-	                                    files: false,
-	                                    directories: true,
-	                                    multiple: false,
-	                                    prompt: Some("Export patch to folder".into()),
-	                                });
-	                                window
-	                                    .spawn(cx, async move |cx| {
-	                                        let result = rx.await;
-	                                        let paths = match result {
-	                                            Ok(Ok(Some(paths))) => paths,
-	                                            Ok(Ok(None)) => return,
-	                                            Ok(Err(_)) | Err(_) => return,
-	                                        };
-	                                        let Some(folder) = paths.into_iter().next() else {
-	                                            return;
-	                                        };
-	                                        let dest =
-	                                            folder.join(format!("commit-{short}.patch"));
-	                                        let _ = view.update(cx, |this, cx| {
-	                                            this.store.dispatch(Msg::ExportPatch {
-	                                                repo_id,
-	                                                commit_id: commit_id.clone(),
-	                                                dest,
-	                                            });
-	                                            cx.notify();
-	                                        });
-	                                    })
-	                                    .detach();
-	                                this.popover = None;
-	                                this.popover_anchor = None;
-	                                cx.notify();
-	                            },
-	                        ))
-	                    })
-	                    .child(
-	                        entry(
-	                            "app_menu_apply_patch",
-	                            "Apply patch…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            cx.stop_propagation();
-	                            let view = cx.weak_entity();
-	                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-	                                files: true,
-	                                directories: false,
-	                                multiple: false,
-	                                prompt: Some("Select patch file".into()),
-	                            });
-	                            window
-	                                .spawn(cx, async move |cx| {
-	                                    let result = rx.await;
-	                                    let paths = match result {
-	                                        Ok(Ok(Some(paths))) => paths,
-	                                        Ok(Ok(None)) => return,
-	                                        Ok(Err(_)) | Err(_) => return,
-	                                    };
-	                                    let Some(patch) = paths.into_iter().next() else {
-	                                        return;
-	                                    };
-	                                    let _ = view.update(cx, |this, cx| {
-	                                        this.store.dispatch(Msg::ApplyPatch { repo_id, patch });
-	                                        cx.notify();
-	                                    });
-	                                })
-	                                .detach();
-	                            this.popover = None;
-	                            this.popover_anchor = None;
-	                            cx.notify();
-	                        })),
-	                    )
-	                    .child(separator())
-	                    .child(section_label("app_menu_worktrees_section", "Worktrees"))
-	                    .child(
-	                        entry(
-	                            "app_menu_add_worktree",
-	                            "Add worktree…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::WorktreeAddPrompt { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_open_worktree",
-	                            "Open worktree…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::WorktreeOpenPicker { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_remove_worktree",
-	                            "Remove worktree…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::WorktreeRemovePicker { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(separator())
-	                    .child(section_label("app_menu_submodules_section", "Submodules"))
-	                    .child(
-	                        entry(
-	                            "app_menu_add_submodule",
-	                            "Add submodule…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::SubmoduleAddPrompt { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_update_submodules",
-	                            "Update submodules".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.store.dispatch(Msg::UpdateSubmodules { repo_id });
-	                            this.popover = None;
-	                            this.popover_anchor = None;
-	                            cx.notify();
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_open_submodule",
-	                            "Open submodule…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::SubmoduleOpenPicker { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(
-	                        entry(
-	                            "app_menu_remove_submodule",
-	                            "Remove submodule…".into(),
-	                            active_repo_id.is_none(),
-	                        )
-	                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-	                            let Some(repo_id) = active_repo_id else {
-	                                return;
-	                            };
-	                            this.open_popover_at(
-	                                PopoverKind::SubmoduleRemovePicker { repo_id },
-	                                e.position(),
-	                                window,
-	                                cx,
-	                            );
-	                        })),
-	                    )
-	                    .child(separator())
-	                    .child(install_desktop)
-	                    .child(
-	                        div()
-                            .id("app_menu_quit")
-                            .debug_selector(|| "app_menu_quit".to_string())
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-                            .child("Quit")
-                            .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
-                                cx.quit();
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("app_menu_close")
-                            .debug_selector(|| "app_menu_close".to_string())
-                            .px_2()
-                            .py_1()
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .active(move |s| s.bg(theme.colors.active))
-	                            .child("Close")
-	                            .on_click(close),
-	                    )
-	                    ;
-
-	                menu
-	            }
+            PopoverKind::AppMenu => app_menu::panel(self, cx),
         };
 
         let offset_y = if is_app_menu {
@@ -3702,12 +1183,15 @@ mod tests {
     #[gpui::test]
     fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) = cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(1);
         let commit_id = CommitId("deadbeefdeadbeef".to_string());
-        let workdir = std::env::temp_dir()
-            .join(format!("gitgpui_ui_test_{}_commit_menu_tag", std::process::id()));
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_commit_menu_tag",
+            std::process::id()
+        ));
 
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
@@ -3717,21 +1201,26 @@ mod tests {
                         workdir: workdir.clone(),
                     },
                 );
-                repo.log = Loadable::Ready(gitgpui_core::domain::LogPage {
-                    commits: vec![gitgpui_core::domain::Commit {
-                        id: commit_id.clone(),
-                        parent_ids: vec![],
-                        summary: "Hello".to_string(),
-                        author: "Alice".to_string(),
-                        time: SystemTime::UNIX_EPOCH,
-                    }],
-                    next_cursor: None,
-                }
-                .into());
+                repo.log = Loadable::Ready(
+                    gitgpui_core::domain::LogPage {
+                        commits: vec![gitgpui_core::domain::Commit {
+                            id: commit_id.clone(),
+                            parent_ids: vec![],
+                            summary: "Hello".to_string(),
+                            author: "Alice".to_string(),
+                            time: SystemTime::UNIX_EPOCH,
+                        }],
+                        next_cursor: None,
+                    }
+                    .into(),
+                );
                 repo.tags = Loadable::Ready(vec![]);
 
-                this.state.active_repo = Some(repo_id);
-                this.state.repos = vec![repo];
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
                 cx.notify();
             });
         });
@@ -3756,7 +1245,11 @@ mod tests {
                 panic!("expected Add tag… to open a popover");
             };
 
-            let PopoverKind::CreateTagPrompt { repo_id: rid, target } = kind else {
+            let PopoverKind::CreateTagPrompt {
+                repo_id: rid,
+                target,
+            } = kind
+            else {
                 panic!("expected Add tag… to open CreateTagPrompt");
             };
 
@@ -3768,7 +1261,8 @@ mod tests {
     #[gpui::test]
     fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) = cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(2);
         let commit_id = CommitId("0123456789abcdef".to_string());
@@ -3784,17 +1278,19 @@ mod tests {
                         workdir: workdir.clone(),
                     },
                 );
-                repo.log = Loadable::Ready(gitgpui_core::domain::LogPage {
-                    commits: vec![gitgpui_core::domain::Commit {
-                        id: commit_id.clone(),
-                        parent_ids: vec![],
-                        summary: "Hello".to_string(),
-                        author: "Alice".to_string(),
-                        time: SystemTime::UNIX_EPOCH,
-                    }],
-                    next_cursor: None,
-                }
-                .into());
+                repo.log = Loadable::Ready(
+                    gitgpui_core::domain::LogPage {
+                        commits: vec![gitgpui_core::domain::Commit {
+                            id: commit_id.clone(),
+                            parent_ids: vec![],
+                            summary: "Hello".to_string(),
+                            author: "Alice".to_string(),
+                            time: SystemTime::UNIX_EPOCH,
+                        }],
+                        next_cursor: None,
+                    }
+                    .into(),
+                );
                 repo.tags = Loadable::Ready(vec![
                     gitgpui_core::domain::Tag {
                         name: "release".to_string(),
@@ -3810,8 +1306,11 @@ mod tests {
                     },
                 ]);
 
-                this.state.active_repo = Some(repo_id);
-                this.state.repos = vec![repo];
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
                 cx.notify();
             });
         });
@@ -3836,7 +1335,10 @@ mod tests {
                     _ => None,
                 });
                 match delete_action {
-                    Some(ContextMenuAction::DeleteTag { repo_id: rid, name: n }) => {
+                    Some(ContextMenuAction::DeleteTag {
+                        repo_id: rid,
+                        name: n,
+                    }) => {
                         assert_eq!(rid, repo_id);
                         assert_eq!(n, name);
                     }
@@ -3848,20 +1350,24 @@ mod tests {
                 ContextMenuItem::Entry { label, .. } => label.as_ref() == "Delete tag other",
                 _ => false,
             });
-            assert!(!has_other, "tag menu should only show tags on the clicked commit");
+            assert!(
+                !has_other,
+                "tag menu should only show tags on the clicked commit"
+            );
         });
     }
 
     #[gpui::test]
     fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) = cx.add_window_view(|window, cx| {
-            GitGpuiView::new(store, events, None, window, cx)
-        });
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(3);
-        let workdir =
-            std::env::temp_dir().join(format!("gitgpui_ui_test_{}_status_menu", std::process::id()));
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_status_menu",
+            std::process::id()
+        ));
 
         let a = std::path::PathBuf::from("a.txt");
         let b = std::path::PathBuf::from("b.txt");
@@ -3874,23 +1380,28 @@ mod tests {
                         workdir: workdir.clone(),
                     },
                 );
-                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![
-                        gitgpui_core::domain::FileStatus {
-                            path: a.clone(),
-                            kind: gitgpui_core::domain::FileStatusKind::Modified,
-                        },
-                        gitgpui_core::domain::FileStatus {
-                            path: b.clone(),
-                            kind: gitgpui_core::domain::FileStatusKind::Modified,
-                        },
-                    ],
-                }
-                .into());
+                repo.status = Loadable::Ready(
+                    gitgpui_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![
+                            gitgpui_core::domain::FileStatus {
+                                path: a.clone(),
+                                kind: gitgpui_core::domain::FileStatusKind::Modified,
+                            },
+                            gitgpui_core::domain::FileStatus {
+                                path: b.clone(),
+                                kind: gitgpui_core::domain::FileStatusKind::Modified,
+                            },
+                        ],
+                    }
+                    .into(),
+                );
 
-                this.state.active_repo = Some(repo_id);
-                this.state.repos = vec![repo];
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
                 this.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
@@ -3915,15 +1426,17 @@ mod tests {
                 .expect("expected status file context menu model");
 
             let stage_action = model.items.iter().find_map(|item| match item {
-                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Stage (2)" =>
-                {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Stage (2)" => {
                     Some(action.clone())
                 }
                 _ => None,
             });
 
             match stage_action {
-                Some(ContextMenuAction::StagePaths { repo_id: rid, paths }) => {
+                Some(ContextMenuAction::StagePaths {
+                    repo_id: rid,
+                    paths,
+                }) => {
                     assert_eq!(rid, repo_id);
                     assert_eq!(paths.len(), 2);
                     assert!(paths.contains(&a));
@@ -3937,13 +1450,14 @@ mod tests {
     #[gpui::test]
     fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) = cx.add_window_view(|window, cx| {
-            GitGpuiView::new(store, events, None, window, cx)
-        });
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(4);
-        let workdir = std::env::temp_dir()
-            .join(format!("gitgpui_ui_test_{}_status_menu_staged", std::process::id()));
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_status_menu_staged",
+            std::process::id()
+        ));
 
         let a = std::path::PathBuf::from("a.txt");
         let b = std::path::PathBuf::from("b.txt");
@@ -3956,23 +1470,28 @@ mod tests {
                         workdir: workdir.clone(),
                     },
                 );
-                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
-                    staged: vec![
-                        gitgpui_core::domain::FileStatus {
-                            path: a.clone(),
-                            kind: gitgpui_core::domain::FileStatusKind::Modified,
-                        },
-                        gitgpui_core::domain::FileStatus {
-                            path: b.clone(),
-                            kind: gitgpui_core::domain::FileStatusKind::Modified,
-                        },
-                    ],
-                    unstaged: vec![],
-                }
-                .into());
+                repo.status = Loadable::Ready(
+                    gitgpui_core::domain::RepoStatus {
+                        staged: vec![
+                            gitgpui_core::domain::FileStatus {
+                                path: a.clone(),
+                                kind: gitgpui_core::domain::FileStatusKind::Modified,
+                            },
+                            gitgpui_core::domain::FileStatus {
+                                path: b.clone(),
+                                kind: gitgpui_core::domain::FileStatusKind::Modified,
+                            },
+                        ],
+                        unstaged: vec![],
+                    }
+                    .into(),
+                );
 
-                this.state.active_repo = Some(repo_id);
-                this.state.repos = vec![repo];
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
                 this.status_multi_selection.insert(
                     repo_id,
                     StatusMultiSelection {
@@ -3997,15 +1516,17 @@ mod tests {
                 .expect("expected status file context menu model");
 
             let unstage_action = model.items.iter().find_map(|item| match item {
-                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Unstage (2)" =>
-                {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Unstage (2)" => {
                     Some(action.clone())
                 }
                 _ => None,
             });
 
             match unstage_action {
-                Some(ContextMenuAction::UnstagePaths { repo_id: rid, paths }) => {
+                Some(ContextMenuAction::UnstagePaths {
+                    repo_id: rid,
+                    paths,
+                }) => {
                     assert_eq!(rid, repo_id);
                     assert_eq!(paths.len(), 2);
                     assert!(paths.contains(&a));
@@ -4019,13 +1540,14 @@ mod tests {
     #[gpui::test]
     fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppContext) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
-        let (view, cx) = cx.add_window_view(|window, cx| {
-            GitGpuiView::new(store, events, None, window, cx)
-        });
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
 
         let repo_id = RepoId(5);
-        let workdir = std::env::temp_dir()
-            .join(format!("gitgpui_ui_test_{}_status_menu_conflict", std::process::id()));
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_status_menu_conflict",
+            std::process::id()
+        ));
         let path = std::path::PathBuf::from("conflict.txt");
 
         cx.update(|_window, app| {
@@ -4036,16 +1558,21 @@ mod tests {
                         workdir: workdir.clone(),
                     },
                 );
-                repo.status = Loadable::Ready(gitgpui_core::domain::RepoStatus {
-                    staged: vec![],
-                    unstaged: vec![gitgpui_core::domain::FileStatus {
-                        path: path.clone(),
-                        kind: gitgpui_core::domain::FileStatusKind::Conflicted,
-                    }],
-                }
-                .into());
-                this.state.active_repo = Some(repo_id);
-                this.state.repos = vec![repo];
+                repo.status = Loadable::Ready(
+                    gitgpui_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitgpui_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Conflicted,
+                        }],
+                    }
+                    .into(),
+                );
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
                 cx.notify();
             });
         });

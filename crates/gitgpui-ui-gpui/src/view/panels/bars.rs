@@ -444,63 +444,63 @@ impl GitGpuiView {
             .child(
                 zed::SplitButton::new(
                     push_main.on_click(theme, cx, |this, e, window, cx| {
-                let Some(repo) = this.active_repo() else {
-                    return;
-                };
-                let repo_id = repo.id;
-                let head = match &repo.head_branch {
-                    Loadable::Ready(head) => head.clone(),
-                    _ => {
+                        let Some(repo) = this.active_repo() else {
+                            return;
+                        };
+                        let repo_id = repo.id;
+                        let head = match &repo.head_branch {
+                            Loadable::Ready(head) => head.clone(),
+                            _ => {
+                                this.store.dispatch(Msg::Push { repo_id });
+                                cx.notify();
+                                return;
+                            }
+                        };
+
+                        let upstream_missing = match &repo.branches {
+                            Loadable::Ready(branches) => branches
+                                .iter()
+                                .find(|b| b.name == head)
+                                .is_some_and(|b| b.upstream.is_none()),
+                            _ => false,
+                        };
+
+                        if upstream_missing {
+                            let remote = match &repo.remotes {
+                                Loadable::Ready(remotes) => {
+                                    if remotes.is_empty() {
+                                        None
+                                    } else if remotes.iter().any(|r| r.name == "origin") {
+                                        Some("origin".to_string())
+                                    } else {
+                                        Some(remotes[0].name.clone())
+                                    }
+                                }
+                                _ => Some("origin".to_string()),
+                            };
+
+                            if let Some(remote) = remote {
+                                this.push_upstream_branch_input
+                                    .update(cx, |i, cx| i.set_text(head, cx));
+                                this.open_popover_at(
+                                    PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                                return;
+                            }
+
+                            this.push_toast(
+                                zed::ToastKind::Error,
+                                "Cannot push: no remotes configured".to_string(),
+                                cx,
+                            );
+                            return;
+                        }
+
                         this.store.dispatch(Msg::Push { repo_id });
                         cx.notify();
-                        return;
-                    }
-                };
-
-                let upstream_missing = match &repo.branches {
-                    Loadable::Ready(branches) => branches
-                        .iter()
-                        .find(|b| b.name == head)
-                        .is_some_and(|b| b.upstream.is_none()),
-                    _ => false,
-                };
-
-                if upstream_missing {
-                    let remote = match &repo.remotes {
-                        Loadable::Ready(remotes) => {
-                            if remotes.is_empty() {
-                                None
-                            } else if remotes.iter().any(|r| r.name == "origin") {
-                                Some("origin".to_string())
-                            } else {
-                                Some(remotes[0].name.clone())
-                            }
-                        }
-                        _ => Some("origin".to_string()),
-                    };
-
-                    if let Some(remote) = remote {
-                        this.push_upstream_branch_input
-                            .update(cx, |i, cx| i.set_text(head, cx));
-                        this.open_popover_at(
-                            PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
-                            e.position(),
-                            window,
-                            cx,
-                        );
-                        return;
-                    }
-
-                    this.push_toast(
-                        zed::ToastKind::Error,
-                        "Cannot push: no remotes configured".to_string(),
-                        cx,
-                    );
-                    return;
-                }
-
-                this.store.dispatch(Msg::Push { repo_id });
-                cx.notify();
                     }),
                     push_menu.on_click(theme, cx, |this, e, window, cx| {
                         this.open_popover_at(PopoverKind::PushPicker, e.position(), window, cx);

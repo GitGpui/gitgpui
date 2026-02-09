@@ -329,15 +329,15 @@ pub(super) fn reduce(
                 return Vec::new();
             };
 
-            repo_state.head_branch = Loadable::Loading;
-            repo_state.branches = Loadable::Loading;
+            repo_state.set_head_branch(Loadable::Loading);
+            repo_state.set_branches(Loadable::Loading);
             repo_state.tags = Loadable::Loading;
-            repo_state.remotes = Loadable::Loading;
-            repo_state.remote_branches = Loadable::Loading;
+            repo_state.set_remotes(Loadable::Loading);
+            repo_state.set_remote_branches(Loadable::Loading);
             repo_state.status = Loadable::Loading;
             repo_state.log = Loadable::Loading;
             repo_state.log_loading_more = false;
-            repo_state.stashes = Loadable::Loading;
+            repo_state.set_stashes(Loadable::Loading);
             repo_state.reflog = Loadable::Loading;
             repo_state.rebase_in_progress = Loadable::Loading;
             repo_state.file_history_path = None;
@@ -635,7 +635,7 @@ pub(super) fn reduce(
             let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
                 return Vec::new();
             };
-            repo_state.stashes = Loadable::Loading;
+            repo_state.set_stashes(Loadable::Loading);
             if repo_state
                 .loads_in_flight
                 .request(RepoLoadsInFlight::STASHES)
@@ -978,16 +978,16 @@ pub(super) fn reduce(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.spec = spec;
                 repo_state.open = Loadable::Ready(());
-                repo_state.head_branch = Loadable::Loading;
+                repo_state.set_head_branch(Loadable::Loading);
                 repo_state.upstream_divergence = Loadable::Loading;
-                repo_state.branches = Loadable::Loading;
+                repo_state.set_branches(Loadable::Loading);
                 repo_state.tags = Loadable::Loading;
-                repo_state.remotes = Loadable::Loading;
-                repo_state.remote_branches = Loadable::Loading;
+                repo_state.set_remotes(Loadable::Loading);
+                repo_state.set_remote_branches(Loadable::Loading);
                 repo_state.status = Loadable::Loading;
                 repo_state.log = Loadable::Loading;
                 repo_state.log_loading_more = false;
-                repo_state.stashes = Loadable::Loading;
+                repo_state.set_stashes(Loadable::Loading);
                 repo_state.reflog = Loadable::Loading;
                 repo_state.rebase_in_progress = Loadable::Loading;
                 repo_state.file_history_path = None;
@@ -1054,13 +1054,14 @@ pub(super) fn reduce(
         Msg::BranchesLoaded { repo_id, result } => {
             let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.branches = match result {
+                let branches = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                repo_state.set_branches(branches);
                 if repo_state
                     .loads_in_flight
                     .finish(RepoLoadsInFlight::BRANCHES)
@@ -1074,13 +1075,14 @@ pub(super) fn reduce(
         Msg::RemotesLoaded { repo_id, result } => {
             let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.remotes = match result {
+                let remotes = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                repo_state.set_remotes(remotes);
                 if repo_state
                     .loads_in_flight
                     .finish(RepoLoadsInFlight::REMOTES)
@@ -1094,13 +1096,14 @@ pub(super) fn reduce(
         Msg::RemoteBranchesLoaded { repo_id, result } => {
             let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.remote_branches = match result {
+                let branches = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                repo_state.set_remote_branches(branches);
                 if repo_state
                     .loads_in_flight
                     .finish(RepoLoadsInFlight::REMOTE_BRANCHES)
@@ -1131,13 +1134,14 @@ pub(super) fn reduce(
         Msg::HeadBranchLoaded { repo_id, result } => {
             let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.head_branch = match result {
+                let head_branch = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                repo_state.set_head_branch(head_branch);
                 if repo_state
                     .loads_in_flight
                     .finish(RepoLoadsInFlight::HEAD_BRANCH)
@@ -1253,13 +1257,14 @@ pub(super) fn reduce(
         Msg::StashesLoaded { repo_id, result } => {
             let mut effects = Vec::new();
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.stashes = match result {
+                let stashes = match result {
                     Ok(v) => Loadable::Ready(v),
                     Err(e) => {
                         push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                         Loadable::Error(e.to_string())
                     }
                 };
+                repo_state.set_stashes(stashes);
                 if repo_state
                     .loads_in_flight
                     .finish(RepoLoadsInFlight::STASHES)

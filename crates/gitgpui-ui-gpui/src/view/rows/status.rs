@@ -34,7 +34,8 @@ fn apply_status_multi_selection_click(
     modifiers: gpui::Modifiers,
     entries: Option<&[std::path::PathBuf]>,
 ) {
-    let (selected, anchor, other_selected, other_anchor) = status_selection_slices_mut(selection, area);
+    let (selected, anchor, other_selected, other_anchor) =
+        status_selection_slices_mut(selection, area);
     other_selected.clear();
     *other_anchor = None;
 
@@ -88,11 +89,18 @@ impl GitGpuiView {
         self.status_multi_selection.remove(&repo_id);
     }
 
-    fn status_multi_selection_for_repo_mut(&mut self, repo_id: RepoId) -> &mut StatusMultiSelection {
+    fn status_multi_selection_for_repo_mut(
+        &mut self,
+        repo_id: RepoId,
+    ) -> &mut StatusMultiSelection {
         self.status_multi_selection.entry(repo_id).or_default()
     }
 
-    fn status_selected_paths_for_area(&self, repo_id: RepoId, area: DiffArea) -> &[std::path::PathBuf] {
+    fn status_selected_paths_for_area(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+    ) -> &[std::path::PathBuf] {
         let Some(sel) = self.status_multi_selection.get(&repo_id) else {
             return &[];
         };
@@ -102,7 +110,12 @@ impl GitGpuiView {
         }
     }
 
-    fn status_selection_contains(&self, repo_id: RepoId, area: DiffArea, path: &std::path::PathBuf) -> bool {
+    fn status_selection_contains(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+    ) -> bool {
         self.status_selected_paths_for_area(repo_id, area)
             .iter()
             .any(|p| p == path)
@@ -134,18 +147,15 @@ impl GitGpuiView {
         };
         let unstaged = &status.unstaged;
         let selected = repo.diff_target.as_ref();
-        let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
-            .status_selected_paths_for_area(repo.id, DiffArea::Unstaged)
-            .iter()
-            .collect();
-        let multi_select_active = !selected_set.is_empty();
+        let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Unstaged);
+        let multi_select_active = !selected_paths.is_empty();
         let theme = this.theme;
         range
             .filter_map(|ix| unstaged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let path_display = this.cached_path_display(&entry.path);
                 let is_selected = if multi_select_active {
-                    selected_set.contains(&entry.path)
+                    selected_paths.iter().any(|p| p == &entry.path)
                 } else {
                     selected.is_some_and(|t| match t {
                         DiffTarget::WorkingTree { path, area } => {
@@ -182,18 +192,15 @@ impl GitGpuiView {
         };
         let staged = &status.staged;
         let selected = repo.diff_target.as_ref();
-        let selected_set: std::collections::HashSet<&std::path::PathBuf> = this
-            .status_selected_paths_for_area(repo.id, DiffArea::Staged)
-            .iter()
-            .collect();
-        let multi_select_active = !selected_set.is_empty();
+        let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Staged);
+        let multi_select_active = !selected_paths.is_empty();
         let theme = this.theme;
         range
             .filter_map(|ix| staged.get(ix).map(|e| (ix, e)))
             .map(|(ix, entry)| {
                 let path_display = this.cached_path_display(&entry.path);
                 let is_selected = if multi_select_active {
-                    selected_set.contains(&entry.path)
+                    selected_paths.iter().any(|p| p == &entry.path)
                 } else {
                     selected.is_some_and(|t| match t {
                         DiffTarget::WorkingTree { path, area } => {
@@ -396,19 +403,19 @@ fn status_row(
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
             window.focus(&this.diff_panel_focus_handle);
             let modifiers = _e.modifiers();
-            let entries = this
-                .active_repo()
-                .filter(|r| r.id == repo_id)
-                .and_then(|repo| match &repo.status {
-                    Loadable::Ready(status) => {
-                        let src = match area {
-                            DiffArea::Unstaged => status.unstaged.as_slice(),
-                            DiffArea::Staged => status.staged.as_slice(),
-                        };
-                        Some(src.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                    }
-                    _ => None,
-                });
+            let entries =
+                this.active_repo()
+                    .filter(|r| r.id == repo_id)
+                    .and_then(|repo| match &repo.status {
+                        Loadable::Ready(status) => {
+                            let src = match area {
+                                DiffArea::Unstaged => status.unstaged.as_slice(),
+                                DiffArea::Staged => status.staged.as_slice(),
+                            };
+                            Some(src.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                        }
+                        _ => None,
+                    });
             this.status_selection_apply_click(
                 repo_id,
                 area,

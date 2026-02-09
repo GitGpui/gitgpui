@@ -1,5 +1,5 @@
-use super::diff_text::*;
 use super::diff_canvas;
+use super::diff_text::*;
 use super::history_canvas;
 use super::*;
 
@@ -76,6 +76,10 @@ impl GitGpuiView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let (show_working_tree_summary_row, worktree_counts) =
+            this.ensure_history_worktree_summary_cache();
+        let stash_ids = this.ensure_history_stash_ids_cache();
+
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
@@ -87,53 +91,18 @@ impl GitGpuiView {
         let col_sha = this.history_col_sha;
         let (show_date, show_sha) = this.history_visible_columns();
 
-        let (show_working_tree_summary_row, worktree_counts) = match &repo.status {
-            Loadable::Ready(status) => {
-                let count_for = |entries: &[FileStatus]| {
-                    let mut added = 0usize;
-                    let mut modified = 0usize;
-                    let mut deleted = 0usize;
-                    for e in entries {
-                        match e.kind {
-                            FileStatusKind::Untracked | FileStatusKind::Added => added += 1,
-                            FileStatusKind::Deleted => deleted += 1,
-                            FileStatusKind::Modified
-                            | FileStatusKind::Renamed
-                            | FileStatusKind::Conflicted => modified += 1,
-                        }
-                    }
-                    (added, modified, deleted)
-                };
-                let unstaged_counts = count_for(&status.unstaged);
-                let staged_counts = count_for(&status.staged);
-                (
-                    !status.unstaged.is_empty() || !status.staged.is_empty(),
-                    (
-                        unstaged_counts.0 + staged_counts.0,
-                        unstaged_counts.1 + staged_counts.1,
-                        unstaged_counts.2 + staged_counts.2,
-                    ),
-                )
-            }
-            _ => (false, (0, 0, 0)),
-        };
-
         let page = match &repo.log {
             Loadable::Ready(page) => Some(page),
             _ => None,
         };
-        let cache = this.history_cache.as_ref().filter(|c| c.repo_id == repo.id);
+        let cache = this
+            .history_cache
+            .as_ref()
+            .filter(|c| c.request.repo_id == repo.id);
         let worktree_node_color = cache
             .and_then(|c| c.graph_rows.first())
             .and_then(|row| row.lanes_now.get(row.node_col).map(|l| l.color))
             .unwrap_or(theme.colors.accent);
-
-        let stash_ids: Option<std::collections::HashSet<&str>> = match &repo.stashes {
-            Loadable::Ready(stashes) if !stashes.is_empty() => {
-                Some(stashes.iter().map(|s| s.id.as_ref()).collect())
-            }
-            _ => None,
-        };
 
         range
             .filter_map(|list_ix| {
@@ -164,6 +133,7 @@ impl GitGpuiView {
                 let commit_ix = cache.visible_indices.get(visible_ix).copied()?;
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
+                let row_vm = cache.commit_row_vms.get(visible_ix)?;
                 let mut graph_row_with_incoming;
                 let graph_row = if show_working_tree_summary_row && visible_ix == 0 {
                     graph_row_with_incoming = graph_row.clone();
@@ -179,14 +149,12 @@ impl GitGpuiView {
                 } else {
                     graph_row
                 };
-                let refs = commit_refs_parts(repo, commit);
-                let when = super::super::format_datetime_utc(commit.time, this.date_time_format);
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
                 let show_graph_color_marker =
                     repo.history_scope == gitgpui_core::domain::LogScope::AllBranches;
                 let is_stash_node = stash_ids
                     .as_ref()
-                    .is_some_and(|ids| ids.contains(commit.id.as_ref()));
+                    .is_some_and(|ids| ids.contains(&commit.id));
 
                 Some(history_table_row(
                     theme,
@@ -201,8 +169,10 @@ impl GitGpuiView {
                     repo.id,
                     commit,
                     graph_row,
-                    refs,
-                    when,
+                    Arc::clone(&row_vm.tag_names),
+                    row_vm.branches_text.clone(),
+                    row_vm.when.clone(),
+                    row_vm.short_sha.clone(),
                     selected,
                     is_stash_node,
                     cx,
@@ -210,16 +180,9 @@ impl GitGpuiView {
             })
             .collect()
     }
-
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
-
-#[derive(Clone, Debug)]
-struct CommitRefsParts {
-    branches: String,
-    tags: Vec<String>,
-}
 
 fn history_table_row(
     theme: AppTheme,
@@ -234,14 +197,14 @@ fn history_table_row(
     repo_id: RepoId,
     commit: &Commit,
     graph_row: &history_graph::GraphRow,
-    refs: CommitRefsParts,
-    when: String,
+    tag_names: Arc<[SharedString]>,
+    branches_text: SharedString,
+    when: SharedString,
+    short_sha: SharedString,
     selected: bool,
     is_stash_node: bool,
     cx: &mut gpui::Context<GitGpuiView>,
 ) -> AnyElement {
-    let id: &str = commit.id.as_ref();
-    let short = id.get(0..8).unwrap_or(id);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -257,11 +220,11 @@ fn history_table_row(
         show_graph_color_marker,
         is_stash_node,
         graph_row.clone(),
-        refs.tags.iter().cloned().map(Into::into).collect(),
-        refs.branches.clone().into(),
+        tag_names,
+        branches_text,
         commit.summary.clone().into(),
-        when.clone().into(),
-        short.to_string().into(),
+        when,
+        short_sha,
     );
 
     let commit_id = commit.id.clone();
@@ -456,59 +419,10 @@ fn working_tree_summary_history_row(
     row.into_any_element()
 }
 
-fn commit_refs_parts(repo: &RepoState, commit: &Commit) -> CommitRefsParts {
-    use std::collections::BTreeSet;
-
-    let mut branches: BTreeSet<String> = BTreeSet::new();
-    let mut tags: BTreeSet<String> = BTreeSet::new();
-    let mut head_branch_name: Option<String> = None;
-    let head_target = match (&repo.head_branch, &repo.branches) {
-        (Loadable::Ready(head_name), Loadable::Ready(repo_branches)) => {
-            head_branch_name = Some(head_name.clone());
-            repo_branches
-                .iter()
-                .find(|b| b.name == *head_name)
-                .map(|b| b.target.clone())
-        }
-        _ => None,
-    };
-    if head_target.as_ref() == Some(&commit.id)
-        && let Loadable::Ready(head) = &repo.head_branch
-    {
-        branches.insert(format!("HEAD → {head}"));
-    }
-
-    if let Loadable::Ready(repo_branches) = &repo.branches {
-        for branch in repo_branches {
-            if head_target.as_ref() == Some(&commit.id)
-                && head_branch_name.as_ref() == Some(&branch.name)
-            {
-                continue;
-            }
-            if branch.target == commit.id {
-                branches.insert(branch.name.clone());
-            }
-        }
-    }
-
-    if let Loadable::Ready(repo_tags) = &repo.tags {
-        for tag in repo_tags {
-            if tag.target == commit.id {
-                tags.insert(tag.name.clone());
-            }
-        }
-    }
-
-    CommitRefsParts {
-        branches: branches.into_iter().collect::<Vec<_>>().join(", "),
-        tags: tags.into_iter().collect::<Vec<_>>(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::super::format_datetime_utc;
     use super::super::super::DateTimeFormat;
+    use super::super::super::format_datetime_utc;
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
@@ -518,11 +432,17 @@ mod tests {
             "1970-01-01 00:00"
         );
         assert_eq!(
-            format_datetime_utc(UNIX_EPOCH + Duration::from_secs(86_400), DateTimeFormat::YmdHm),
+            format_datetime_utc(
+                UNIX_EPOCH + Duration::from_secs(86_400),
+                DateTimeFormat::YmdHm
+            ),
             "1970-01-02 00:00"
         );
         assert_eq!(
-            format_datetime_utc(UNIX_EPOCH - Duration::from_secs(86_400), DateTimeFormat::YmdHm),
+            format_datetime_utc(
+                UNIX_EPOCH - Duration::from_secs(86_400),
+                DateTimeFormat::YmdHm
+            ),
             "1969-12-31 00:00"
         );
 

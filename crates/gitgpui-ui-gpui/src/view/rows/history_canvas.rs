@@ -48,7 +48,7 @@ pub(super) fn history_commit_row_canvas(
     show_graph_color_marker: bool,
     is_stash_node: bool,
     graph_row: history_graph::GraphRow,
-    tag_names: Vec<SharedString>,
+    tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
     summary: SharedString,
     when: SharedString,
@@ -60,7 +60,10 @@ pub(super) fn history_commit_row_canvas(
             let pad = window.rem_size() * 0.5;
             let inner = Bounds::new(
                 point(bounds.left() + pad, bounds.top()),
-                size((bounds.size.width - pad * 2.0).max(px(0.0)), bounds.size.height),
+                size(
+                    (bounds.size.width - pad * 2.0).max(px(0.0)),
+                    bounds.size.height,
+                ),
             );
             (inner, pad)
         },
@@ -106,16 +109,26 @@ pub(super) fn history_commit_row_canvas(
                     size(col_sha.max(px(0.0)), bounds.size.height),
                 )
             } else {
-                Bounds::new(point(inner.right(), bounds.top()), size(px(0.0), bounds.size.height))
+                Bounds::new(
+                    point(inner.right(), bounds.top()),
+                    size(px(0.0), bounds.size.height),
+                )
             };
             let date_bounds = if show_date {
-                let right = if show_sha { sha_bounds.left() } else { inner.right() };
+                let right = if show_sha {
+                    sha_bounds.left()
+                } else {
+                    inner.right()
+                };
                 Bounds::new(
                     point(right - col_date, bounds.top()),
                     size(col_date.max(px(0.0)), bounds.size.height),
                 )
             } else {
-                Bounds::new(point(sha_bounds.left(), bounds.top()), size(px(0.0), bounds.size.height))
+                Bounds::new(
+                    point(sha_bounds.left(), bounds.top()),
+                    size(px(0.0), bounds.size.height),
+                )
             };
 
             window.paint_layer(graph_bounds, |window| {
@@ -134,107 +147,113 @@ pub(super) fn history_commit_row_canvas(
 
             let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::new();
             if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
-                window.with_content_mask(Some(ContentMask { bounds: branch_bounds }), |window| {
-                    let mut x = branch_bounds.left();
-                    let mut chip_widths: Vec<Pixels> = Vec::with_capacity(tag_names.len());
-                    let mut chip_texts: Vec<gpui::ShapedLine> = Vec::with_capacity(tag_names.len());
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: branch_bounds,
+                    }),
+                    |window| {
+                        let mut x = branch_bounds.left();
+                        let mut chip_widths: Vec<Pixels> = Vec::with_capacity(tag_names.len());
+                        let mut chip_texts: Vec<gpui::ShapedLine> =
+                            Vec::with_capacity(tag_names.len());
 
-                    for name in &tag_names {
-                        let remaining = (branch_bounds.right() - x).max(px(0.0));
-                        if remaining <= chip_pad_x * 2.0 {
-                            break;
+                        for name in tag_names.iter() {
+                            let remaining = (branch_bounds.right() - x).max(px(0.0));
+                            if remaining <= chip_pad_x * 2.0 {
+                                break;
+                            }
+
+                            let mut style = base_style.clone();
+                            style.color = theme.colors.accent.into();
+                            let mut runs = vec![style.to_run(name.len())];
+                            let mut wrapper =
+                                window.text_system().line_wrapper(style.font(), xs_font);
+                            let truncated = wrapper.truncate_line(
+                                name.clone(),
+                                (remaining - chip_pad_x * 2.0).max(px(0.0)),
+                                "…",
+                                &mut runs,
+                            );
+                            let shaped = window
+                                .text_system()
+                                .shape_line(truncated, xs_font, &runs, None);
+
+                            let chip_w = (shaped.width + chip_pad_x * 2.0).min(remaining);
+                            chip_widths.push(chip_w);
+                            chip_texts.push(shaped);
+
+                            x += chip_w + chip_gap;
+                            if x >= branch_bounds.right() {
+                                break;
+                            }
                         }
 
-                        let mut style = base_style.clone();
-                        style.color = theme.colors.accent.into();
-                        let mut runs = vec![style.to_run(name.len())];
-                        let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
-                        let truncated = wrapper.truncate_line(
-                            name.clone(),
-                            (remaining - chip_pad_x * 2.0).max(px(0.0)),
-                            "…",
-                            &mut runs,
+                        tag_chip_bounds = layout_chip_bounds(
+                            branch_bounds,
+                            bounds,
+                            chip_height,
+                            chip_gap,
+                            &chip_widths,
                         );
-                        let shaped = window
-                            .text_system()
-                            .shape_line(truncated, xs_font, &runs, None);
 
-                        let chip_w = (shaped.width + chip_pad_x * 2.0).min(remaining);
-                        chip_widths.push(chip_w);
-                        chip_texts.push(shaped);
+                        for (shaped, chip_bounds) in chip_texts.iter().zip(tag_chip_bounds.iter()) {
+                            let border = with_alpha(theme.colors.accent, 0.35);
+                            let bg = with_alpha(theme.colors.accent, 0.12);
+                            let radius = px(theme.radii.pill);
 
-                        x += chip_w + chip_gap;
-                        if x >= branch_bounds.right() {
-                            break;
+                            window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
+                            let inner = Bounds::new(
+                                point(chip_bounds.left() + px(1.0), chip_bounds.top() + px(1.0)),
+                                size(
+                                    (chip_bounds.size.width - px(2.0)).max(px(0.0)),
+                                    (chip_bounds.size.height - px(2.0)).max(px(0.0)),
+                                ),
+                            );
+                            window.paint_quad(
+                                fill(inner, bg).corner_radii((radius - px(1.0)).max(px(0.0))),
+                            );
+
+                            let text_y = chip_bounds.top()
+                                + (chip_bounds.size.height - xs_line_height).max(px(0.0)) * 0.5;
+                            let _ = shaped.paint(
+                                point(chip_bounds.left() + chip_pad_x, text_y),
+                                xs_line_height,
+                                window,
+                                cx,
+                            );
                         }
-                    }
 
-                    tag_chip_bounds = layout_chip_bounds(
-                        branch_bounds,
-                        bounds,
-                        chip_height,
-                        chip_gap,
-                        &chip_widths,
-                    );
+                        let x = if let Some(last) = tag_chip_bounds.last() {
+                            (last.right() + chip_gap).min(branch_bounds.right())
+                        } else {
+                            branch_bounds.left()
+                        };
 
-                    for (shaped, chip_bounds) in chip_texts.iter().zip(tag_chip_bounds.iter()) {
-                        let border = with_alpha(theme.colors.accent, 0.35);
-                        let bg = with_alpha(theme.colors.accent, 0.12);
-                        let radius = px(theme.radii.pill);
-
-                        window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
-                        let inner = Bounds::new(
-                            point(chip_bounds.left() + px(1.0), chip_bounds.top() + px(1.0)),
-                            size(
-                                (chip_bounds.size.width - px(2.0)).max(px(0.0)),
-                                (chip_bounds.size.height - px(2.0)).max(px(0.0)),
-                            ),
-                        );
-                        window.paint_quad(
-                            fill(inner, bg)
-                                .corner_radii((radius - px(1.0)).max(px(0.0))),
-                        );
-
-                        let text_y = chip_bounds.top()
-                            + (chip_bounds.size.height - xs_line_height).max(px(0.0)) * 0.5;
-                        let _ = shaped.paint(
-                            point(chip_bounds.left() + chip_pad_x, text_y),
-                            xs_line_height,
-                            window,
-                            cx,
-                        );
-                    }
-
-                    let x = if let Some(last) = tag_chip_bounds.last() {
-                        (last.right() + chip_gap).min(branch_bounds.right())
-                    } else {
-                        branch_bounds.left()
-                    };
-
-                    if !branches_text.as_ref().trim().is_empty() && x < branch_bounds.right() {
-                        let remaining = (branch_bounds.right() - x).max(px(0.0));
-                        let mut style = base_style.clone();
-                        style.color = theme.colors.text_muted.into();
-                        let mut runs = vec![style.to_run(branches_text.len())];
-                        let mut wrapper =
-                            window.text_system().line_wrapper(style.font(), xs_font);
-                        let truncated = wrapper.truncate_line(
-                            branches_text.clone(),
-                            remaining,
-                            "…",
-                            &mut runs,
-                        );
-                        let shaped = window
-                            .text_system()
-                            .shape_line(truncated, xs_font, &runs, None);
-                        let _ = shaped.paint(
-                            point(x, center_y(xs_line_height)),
-                            xs_line_height,
-                            window,
-                            cx,
-                        );
-                    }
-                });
+                        if !branches_text.as_ref().trim().is_empty() && x < branch_bounds.right() {
+                            let remaining = (branch_bounds.right() - x).max(px(0.0));
+                            let mut style = base_style.clone();
+                            style.color = theme.colors.text_muted.into();
+                            let mut runs = vec![style.to_run(branches_text.len())];
+                            let mut wrapper =
+                                window.text_system().line_wrapper(style.font(), xs_font);
+                            let truncated = wrapper.truncate_line(
+                                branches_text.clone(),
+                                remaining,
+                                "…",
+                                &mut runs,
+                            );
+                            let shaped = window
+                                .text_system()
+                                .shape_line(truncated, xs_font, &runs, None);
+                            let _ = shaped.paint(
+                                point(x, center_y(xs_line_height)),
+                                xs_line_height,
+                                window,
+                                cx,
+                            );
+                        }
+                    },
+                );
             }
 
             let node_color = graph_row
@@ -261,7 +280,10 @@ pub(super) fn history_commit_row_canvas(
 
             let summary_text_bounds = Bounds::new(
                 point(summary_bounds.left() + summary_left_offset, bounds.top()),
-                size((summary_bounds.size.width - summary_left_offset).max(px(0.0)), bounds.size.height),
+                size(
+                    (summary_bounds.size.width - summary_left_offset).max(px(0.0)),
+                    bounds.size.height,
+                ),
             );
             if !summary.as_ref().is_empty() {
                 let mut style = base_style.clone();
@@ -304,10 +326,14 @@ pub(super) fn history_commit_row_canvas(
                     "…",
                     &mut runs,
                 );
-                let shaped = window.text_system().shape_line(truncated, xs_font, &runs, None);
+                let shaped = window
+                    .text_system()
+                    .shape_line(truncated, xs_font, &runs, None);
                 let origin_x = (date_bounds.right() - shaped.width).max(date_bounds.left());
                 window.with_content_mask(
-                    Some(ContentMask { bounds: date_bounds }),
+                    Some(ContentMask {
+                        bounds: date_bounds,
+                    }),
                     |window| {
                         let _ = shaped.paint(
                             point(origin_x, center_y(xs_line_height)),
@@ -331,19 +357,18 @@ pub(super) fn history_commit_row_canvas(
                     "…",
                     &mut runs,
                 );
-                let shaped = window.text_system().shape_line(truncated, xs_font, &runs, None);
+                let shaped = window
+                    .text_system()
+                    .shape_line(truncated, xs_font, &runs, None);
                 let origin_x = (sha_bounds.right() - shaped.width).max(sha_bounds.left());
-                window.with_content_mask(
-                    Some(ContentMask { bounds: sha_bounds }),
-                    |window| {
-                        let _ = shaped.paint(
-                            point(origin_x, center_y(xs_line_height)),
-                            xs_line_height,
-                            window,
-                            cx,
-                        );
-                    },
-                );
+                window.with_content_mask(Some(ContentMask { bounds: sha_bounds }), |window| {
+                    let _ = shaped.paint(
+                        point(origin_x, center_y(xs_line_height)),
+                        xs_line_height,
+                        window,
+                        cx,
+                    );
+                });
             }
 
             window.on_mouse_event({

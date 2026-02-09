@@ -229,7 +229,12 @@ impl GitRepository for GixRepo {
         log_page_from_walk(walk, limit, cursor)
     }
 
-    fn log_file_page(&self, path: &Path, limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+    fn log_file_page(
+        &self,
+        path: &Path,
+        limit: usize,
+        _cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
@@ -714,8 +719,7 @@ impl GitRepository for GixRepo {
                             path_str.as_ref(),
                         ) {
                             Ok(old) => old,
-                            Err(e)
-                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
                             {
                                 let ours = git_show_path_utf8_optional(
                                     &self.spec.workdir,
@@ -750,9 +754,7 @@ impl GitRepository for GixRepo {
                             path_str.as_ref(),
                         ) {
                             Ok(new) => new,
-                            Err(e)
-                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
-                            {
+                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
                                 git_show_path_utf8_optional(
                                     &self.spec.workdir,
                                     ":2:",
@@ -809,7 +811,10 @@ impl GitRepository for GixRepo {
         }
     }
 
-    fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<gitgpui_core::domain::FileDiffImage>> {
+    fn diff_file_image(
+        &self,
+        target: &DiffTarget,
+    ) -> Result<Option<gitgpui_core::domain::FileDiffImage>> {
         use gitgpui_core::domain::FileDiffImage;
 
         match target {
@@ -823,8 +828,7 @@ impl GitRepository for GixRepo {
                             path_str.as_ref(),
                         ) {
                             Ok(old) => old,
-                            Err(e)
-                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
+                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
                             {
                                 let ours = git_show_path_bytes_optional(
                                     &self.spec.workdir,
@@ -859,19 +863,21 @@ impl GitRepository for GixRepo {
                             path_str.as_ref(),
                         ) {
                             Ok(new) => new,
-                            Err(e)
-                                if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
-                            {
-                                git_show_path_bytes_optional(&self.spec.workdir, ":2:", path_str.as_ref())?
-                                    .or_else(|| {
-                                        git_show_path_bytes_optional(
-                                            &self.spec.workdir,
-                                            ":3:",
-                                            path_str.as_ref(),
-                                        )
-                                        .ok()
-                                        .flatten()
-                                    })
+                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
+                                git_show_path_bytes_optional(
+                                    &self.spec.workdir,
+                                    ":2:",
+                                    path_str.as_ref(),
+                                )?
+                                .or_else(|| {
+                                    git_show_path_bytes_optional(
+                                        &self.spec.workdir,
+                                        ":3:",
+                                        path_str.as_ref(),
+                                    )
+                                    .ok()
+                                    .flatten()
+                                })
                             }
                             Err(e) => return Err(e),
                         };
@@ -1279,7 +1285,10 @@ impl GitRepository for GixRepo {
 
     fn rebase_with_output(&self, onto: &str) -> Result<CommandOutput> {
         let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("rebase").arg(onto);
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rebase")
+            .arg(onto);
         run_git_with_output(cmd, &format!("git rebase {onto}"))
     }
 
@@ -1434,10 +1443,7 @@ impl GitRepository for GixRepo {
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
         let mut checkout = Command::new("git");
-        checkout
-            .arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("checkout");
+        checkout.arg("-C").arg(&self.spec.workdir).arg("checkout");
         match side {
             ConflictSide::Ours => {
                 checkout.arg("--ours");
@@ -1450,7 +1456,11 @@ impl GitRepository for GixRepo {
         let checkout_out = run_git_with_output(checkout, "git checkout --ours/--theirs")?;
 
         let mut add = Command::new("git");
-        add.arg("-C").arg(&self.spec.workdir).arg("add").arg("--").arg(path);
+        add.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("add")
+            .arg("--")
+            .arg(path);
         let add_out = run_git_with_output(add, "git add --")?;
 
         Ok(CommandOutput {
@@ -1513,7 +1523,8 @@ impl GitRepository for GixRepo {
             "gitgpui-index-patch-{}-{nanos}.patch",
             std::process::id()
         ));
-        std::fs::write(&tmp_path, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        std::fs::write(&tmp_path, patch.as_bytes())
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -1621,7 +1632,8 @@ impl GitRepository for GixRepo {
             .arg("-f")
             .arg("--")
             .arg(path);
-        let out1 = run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
+        let out1 =
+            run_git_with_output(cmd1, &format!("git submodule deinit -f {}", path.display()))?;
 
         let mut cmd2 = Command::new("git");
         cmd2.arg("-C")
@@ -1673,7 +1685,11 @@ impl GitRepository for GixRepo {
 
         if !remove_paths.is_empty() {
             let mut cmd = Command::new("git");
-            cmd.arg("-C").arg(&self.spec.workdir).arg("rm").arg("-f").arg("--");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("rm")
+                .arg("-f")
+                .arg("--");
             for path in remove_paths {
                 cmd.arg(path);
             }
@@ -2040,7 +2056,11 @@ fn parse_git_log_pretty_records(output: &str) -> LogPage {
             continue;
         }
         let mut parts = record.split('\u{001f}');
-        let Some(id) = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+        let Some(id) = parts
+            .next()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        else {
             continue;
         };
         let parents = parts.next().unwrap_or_default();
@@ -2274,7 +2294,10 @@ mod tests {
 
     #[test]
     fn unix_seconds_to_system_time_clamps_negative_to_epoch() {
-        assert_eq!(unix_seconds_to_system_time_or_epoch(-1), SystemTime::UNIX_EPOCH);
+        assert_eq!(
+            unix_seconds_to_system_time_or_epoch(-1),
+            SystemTime::UNIX_EPOCH
+        );
         assert_eq!(
             unix_seconds_to_system_time_or_epoch(1),
             SystemTime::UNIX_EPOCH + Duration::from_secs(1)

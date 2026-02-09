@@ -4,18 +4,13 @@ impl GitGpuiView {
     pub(in super::super) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         self.ensure_history_cache(cx);
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
             .as_ref()
             .map(|c| c.visible_indices.len())
             .unwrap_or(0);
-        let show_working_tree_summary_row = repo
-            .and_then(|r| match &r.status {
-                Loadable::Ready(s) => Some(!s.unstaged.is_empty()),
-                _ => None,
-            })
-            .unwrap_or(false);
         let count = commits_count + usize::from(show_working_tree_summary_row);
 
         let bg = theme.colors.window_bg;
@@ -95,8 +90,8 @@ impl GitGpuiView {
             .active_repo()
             .and_then(|r| r.diff_target.as_ref())
             .map(|t| {
-                let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) =
-                    match t {
+                let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
+                {
                     DiffTarget::WorkingTree { path, area } => {
                         let kind = self.active_repo().and_then(|repo| match &repo.status {
                             Loadable::Ready(status) => {
@@ -284,9 +279,9 @@ impl GitGpuiView {
             let can_nav_prev = Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
             let can_nav_next = Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
-                controls = controls
-                    .child(
-                        zed::Button::new("diff_inline", "Inline")
+            controls = controls
+                .child(
+                    zed::Button::new("diff_inline", "Inline")
                         .style(if self.diff_view == DiffViewMode::Inline {
                             zed::ButtonStyle::Filled
                         } else {
@@ -502,7 +497,9 @@ impl GitGpuiView {
             }
         } else if is_conflict_resolver {
             match (repo, conflict_target_path) {
-                (None, _) => zed::empty_state(theme, "Resolve", "No repository.").into_any_element(),
+                (None, _) => {
+                    zed::empty_state(theme, "Resolve", "No repository.").into_any_element()
+                }
                 (_, None) => zed::empty_state(theme, "Resolve", "No conflicted file selected.")
                     .into_any_element(),
                 (Some(repo), Some(path)) => {
@@ -521,285 +518,312 @@ impl GitGpuiView {
                             zed::empty_state(theme, title, "No conflict data.").into_any_element()
                         }
                         Loadable::Ready(Some(file)) => {
-                    let ours = file.ours.clone().unwrap_or_default();
-                    let theirs = file.theirs.clone().unwrap_or_default();
-                    let has_current = file.current.is_some();
+                            let ours = file.ours.clone().unwrap_or_default();
+                            let theirs = file.theirs.clone().unwrap_or_default();
+                            let has_current = file.current.is_some();
 
-                    let mode = self.conflict_resolver.diff_mode;
-                    let diff_len = match mode {
-                        ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
-                        ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
-                    };
+                            let mode = self.conflict_resolver.diff_mode;
+                            let diff_len = match mode {
+                                ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
+                                ConflictDiffMode::Inline => {
+                                    self.conflict_resolver.inline_rows.len()
+                                }
+                            };
 
-                    let selection_empty = self.conflict_resolver_selection_is_empty();
+                            let selection_empty = self.conflict_resolver_selection_is_empty();
 
-                    let toggle_mode_split = |this: &mut GitGpuiView,
-                                             _e: &ClickEvent,
-                                             _w: &mut Window,
-                                             cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
-                    };
-                    let toggle_mode_inline = |this: &mut GitGpuiView,
-                                              _e: &ClickEvent,
-                                              _w: &mut Window,
-                                              cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
-                    };
+                            let toggle_mode_split =
+                                |this: &mut GitGpuiView,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+                                };
+                            let toggle_mode_inline =
+                                |this: &mut GitGpuiView,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                                };
 
-                    let clear_selection = |this: &mut GitGpuiView,
-                                           _e: &ClickEvent,
-                                           _w: &mut Window,
-                                           cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_clear_selection(cx);
-                    };
+                            let clear_selection =
+                                |this: &mut GitGpuiView,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_clear_selection(cx);
+                                };
 
-                    let append_selection = |this: &mut GitGpuiView,
-                                            _e: &ClickEvent,
-                                            _w: &mut Window,
-                                            cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_append_selection_to_output(cx);
-                    };
+                            let append_selection =
+                                |this: &mut GitGpuiView,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_append_selection_to_output(cx);
+                                };
 
-                    let ours_for_btn = ours.clone();
-                    let set_output_ours = move |this: &mut GitGpuiView,
+                            let ours_for_btn = ours.clone();
+                            let set_output_ours = move |this: &mut GitGpuiView,
                                                 _e: &ClickEvent,
                                                 _w: &mut Window,
                                                 cx: &mut gpui::Context<Self>| {
                         this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
                     };
-                    let theirs_for_btn = theirs.clone();
-                    let set_output_theirs = move |this: &mut GitGpuiView,
+                            let theirs_for_btn = theirs.clone();
+                            let set_output_theirs = move |this: &mut GitGpuiView,
                                                   _e: &ClickEvent,
                                                   _w: &mut Window,
                                                   cx: &mut gpui::Context<Self>| {
                         this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
                     };
-                    let reset_from_markers = |this: &mut GitGpuiView,
-                                              _e: &ClickEvent,
-                                              _w: &mut Window,
-                                              cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_reset_output_from_markers(cx);
-                    };
+                            let reset_from_markers =
+                                |this: &mut GitGpuiView,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_reset_output_from_markers(cx);
+                                };
 
-                    let mode_controls = div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            zed::Button::new("conflict_mode_split", "Split")
-                                .style(if mode == ConflictDiffMode::Split {
-                                    zed::ButtonStyle::Filled
-                                } else {
-                                    zed::ButtonStyle::Outlined
-                                })
-                                .on_click(theme, cx, toggle_mode_split),
-                        )
-                        .child(
-                            zed::Button::new("conflict_mode_inline", "Inline")
-                                .style(if mode == ConflictDiffMode::Inline {
-                                    zed::ButtonStyle::Filled
-                                } else {
-                                    zed::ButtonStyle::Outlined
-                                })
-                                .on_click(theme, cx, toggle_mode_inline),
-                        );
-
-                    let selection_controls = div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            zed::Button::new("conflict_append_selected", "Append selection")
-                                .style(zed::ButtonStyle::Outlined)
-                                .disabled(selection_empty)
-                                .on_click(theme, cx, append_selection),
-                        )
-                        .child(
-                            zed::Button::new("conflict_clear_selected", "Clear selection")
-                                .style(zed::ButtonStyle::Transparent)
-                                .disabled(selection_empty)
-                                .on_click(theme, cx, clear_selection),
-                        );
-
-                    let start_controls = div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            zed::Button::new("conflict_use_ours", "Use ours")
-                                .style(zed::ButtonStyle::Transparent)
-                                .disabled(file.ours.is_none())
-                                .on_click(theme, cx, set_output_ours),
-                        )
-                        .child(
-                            zed::Button::new("conflict_use_theirs", "Use theirs")
-                                .style(zed::ButtonStyle::Transparent)
-                                .disabled(file.theirs.is_none())
-                                .on_click(theme, cx, set_output_theirs),
-                        )
-                        .child(
-                            zed::Button::new("conflict_reset_markers", "Reset from markers")
-                                .style(zed::ButtonStyle::Transparent)
-                                .disabled(!has_current)
-                                .on_click(theme, cx, reset_from_markers),
-                        );
-
-                    let diff_header = div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Diff (ours ↔ theirs)"),
-                        )
-                        .child(
-                            div()
+                            let mode_controls = div()
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .child(mode_controls)
-                                .child(selection_controls),
-                        );
-
-                    let diff_title_row = div()
-                        .h(px(22.0))
-                        .flex()
-                        .items_center()
-                        .when(mode == ConflictDiffMode::Split, |d| {
-                            d.child(
-                                div()
-                                    .flex_1()
-                                    .px_2()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("Ours (index :2)"),
-                            )
-                            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .px_2()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("Theirs (index :3)"),
-                            )
-                        })
-                        .when(mode == ConflictDiffMode::Inline, |d| d);
-
-                    let diff_body: AnyElement = if diff_len == 0 {
-                        zed::empty_state(theme, "Diff", "Ours/Theirs content not available.")
-                            .into_any_element()
-                    } else {
-                        let list = uniform_list(
-                            "conflict_resolver_diff_list",
-                            diff_len,
-                            cx.processor(Self::render_conflict_resolver_diff_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
-
-                        let scroll_handle = self
-                            .conflict_resolver_diff_scroll
-                            .0
-                            .borrow()
-                            .base_handle
-                            .clone();
-
-                        div()
-                            .id("conflict_resolver_diff_scroll")
-                            .relative()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .bg(theme.colors.window_bg)
-                            .child(list)
-                            .child(
-                                zed::Scrollbar::new(
-                                    "conflict_resolver_diff_scrollbar",
-                                    scroll_handle,
+                                .gap_1()
+                                .child(
+                                    zed::Button::new("conflict_mode_split", "Split")
+                                        .style(if mode == ConflictDiffMode::Split {
+                                            zed::ButtonStyle::Filled
+                                        } else {
+                                            zed::ButtonStyle::Outlined
+                                        })
+                                        .on_click(theme, cx, toggle_mode_split),
                                 )
-                                .always_visible()
-                                .render(theme),
-                            )
-                            .into_any_element()
-                    };
+                                .child(
+                                    zed::Button::new("conflict_mode_inline", "Inline")
+                                        .style(if mode == ConflictDiffMode::Inline {
+                                            zed::ButtonStyle::Filled
+                                        } else {
+                                            zed::ButtonStyle::Outlined
+                                        })
+                                        .on_click(theme, cx, toggle_mode_inline),
+                                );
 
-                    let output_header = div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
+                            let selection_controls = div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    zed::Button::new(
+                                        "conflict_append_selected",
+                                        "Append selection",
+                                    )
+                                    .style(zed::ButtonStyle::Outlined)
+                                    .disabled(selection_empty)
+                                    .on_click(
+                                        theme,
+                                        cx,
+                                        append_selection,
+                                    ),
+                                )
+                                .child(
+                                    zed::Button::new("conflict_clear_selected", "Clear selection")
+                                        .style(zed::ButtonStyle::Transparent)
+                                        .disabled(selection_empty)
+                                        .on_click(theme, cx, clear_selection),
+                                );
+
+                            let start_controls = div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    zed::Button::new("conflict_use_ours", "Use ours")
+                                        .style(zed::ButtonStyle::Transparent)
+                                        .disabled(file.ours.is_none())
+                                        .on_click(theme, cx, set_output_ours),
+                                )
+                                .child(
+                                    zed::Button::new("conflict_use_theirs", "Use theirs")
+                                        .style(zed::ButtonStyle::Transparent)
+                                        .disabled(file.theirs.is_none())
+                                        .on_click(theme, cx, set_output_theirs),
+                                )
+                                .child(
+                                    zed::Button::new(
+                                        "conflict_reset_markers",
+                                        "Reset from markers",
+                                    )
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .disabled(!has_current)
+                                    .on_click(
+                                        theme,
+                                        cx,
+                                        reset_from_markers,
+                                    ),
+                                );
+
+                            let diff_header = div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Diff (ours ↔ theirs)"),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(mode_controls)
+                                        .child(selection_controls),
+                                );
+
+                            let diff_title_row = div()
+                                .h(px(22.0))
+                                .flex()
+                                .items_center()
+                                .when(mode == ConflictDiffMode::Split, |d| {
+                                    d.child(
+                                        div()
+                                            .flex_1()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .child("Ours (index :2)"),
+                                    )
+                                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .child("Theirs (index :3)"),
+                                    )
+                                })
+                                .when(mode == ConflictDiffMode::Inline, |d| d);
+
+                            let diff_body: AnyElement = if diff_len == 0 {
+                                zed::empty_state(
+                                    theme,
+                                    "Diff",
+                                    "Ours/Theirs content not available.",
+                                )
+                                .into_any_element()
+                            } else {
+                                let list = uniform_list(
+                                    "conflict_resolver_diff_list",
+                                    diff_len,
+                                    cx.processor(Self::render_conflict_resolver_diff_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+                                let scroll_handle = self
+                                    .conflict_resolver_diff_scroll
+                                    .0
+                                    .borrow()
+                                    .base_handle
+                                    .clone();
+
+                                div()
+                                    .id("conflict_resolver_diff_scroll")
+                                    .relative()
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .bg(theme.colors.window_bg)
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new(
+                                            "conflict_resolver_diff_scrollbar",
+                                            scroll_handle,
+                                        )
+                                        .always_visible()
+                                        .render(theme),
+                                    )
+                                    .into_any_element()
+                            };
+
+                            let output_header = div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Resolved output"),
+                                )
+                                .child(start_controls);
+
+                            use std::hash::{Hash, Hasher};
+                            let mut output_hasher =
+                                std::collections::hash_map::DefaultHasher::new();
+                            let output_text = self
+                                .conflict_resolver_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            output_text.hash(&mut output_hasher);
+                            let output_hash = output_hasher.finish();
+
+                            let should_clear_preview_cache =
+                                self.conflict_resolved_preview_path.as_ref() != Some(&path)
+                                    || self.conflict_resolved_preview_source_hash
+                                        != Some(output_hash);
+                            if should_clear_preview_cache {
+                                self.conflict_resolved_preview_path = Some(path.clone());
+                                self.conflict_resolved_preview_source_hash = Some(output_hash);
+                                self.conflict_resolved_preview_lines =
+                                    output_text.split('\n').map(|s| s.to_string()).collect();
+                                if self.conflict_resolved_preview_lines.is_empty() {
+                                    self.conflict_resolved_preview_lines.push(String::new());
+                                }
+                                self.conflict_resolved_preview_segments_cache.clear();
+                            }
+
+                            let preview_count = self.conflict_resolved_preview_lines.len();
+                            let preview_body: AnyElement = if preview_count == 0 {
+                                zed::empty_state(theme, "Preview", "Empty.").into_any_element()
+                            } else {
+                                let list = uniform_list(
+                                    "conflict_resolved_preview_list",
+                                    preview_count,
+                                    cx.processor(Self::render_conflict_resolved_preview_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.conflict_resolved_preview_scroll.clone());
+                                let scroll_handle = self
+                                    .conflict_resolved_preview_scroll
+                                    .0
+                                    .borrow()
+                                    .base_handle
+                                    .clone();
+
+                                div()
+                                    .id("conflict_resolved_preview_scroll")
+                                    .relative()
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .bg(theme.colors.window_bg)
+                                    .child(list)
+                                    .child(
+                                        zed::Scrollbar::new(
+                                            "conflict_resolved_preview_scrollbar",
+                                            scroll_handle,
+                                        )
+                                        .render(theme),
+                                    )
+                                    .into_any_element()
+                            };
+
+                            let output_columns_header =
+                                zed::split_columns_header(theme, "Resolved (editable)", "Preview");
+
                             div()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Resolved output"),
-                        )
-                        .child(start_controls);
-
-                    use std::hash::{Hash, Hasher};
-                    let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
-                    let output_text = self
-                        .conflict_resolver_input
-                        .read_with(cx, |i, _| i.text().to_string());
-                    output_text.hash(&mut output_hasher);
-                    let output_hash = output_hasher.finish();
-
-                    let should_clear_preview_cache = self.conflict_resolved_preview_path.as_ref()
-                        != Some(&path)
-                        || self.conflict_resolved_preview_source_hash != Some(output_hash);
-                    if should_clear_preview_cache {
-                        self.conflict_resolved_preview_path = Some(path.clone());
-                        self.conflict_resolved_preview_source_hash = Some(output_hash);
-                        self.conflict_resolved_preview_lines =
-                            output_text.split('\n').map(|s| s.to_string()).collect();
-                        if self.conflict_resolved_preview_lines.is_empty() {
-                            self.conflict_resolved_preview_lines.push(String::new());
-                        }
-                        self.conflict_resolved_preview_segments_cache.clear();
-                    }
-
-                    let preview_count = self.conflict_resolved_preview_lines.len();
-	                    let preview_body: AnyElement = if preview_count == 0 {
-	                        zed::empty_state(theme, "Preview", "Empty.").into_any_element()
-	                    } else {
-                        let list = uniform_list(
-                            "conflict_resolved_preview_list",
-                            preview_count,
-                            cx.processor(Self::render_conflict_resolved_preview_rows),
-                        )
-                        .h_full()
-                        .min_h(px(0.0))
-                        .track_scroll(self.conflict_resolved_preview_scroll.clone());
-                        let scroll_handle = self
-                            .conflict_resolved_preview_scroll
-                            .0
-                            .borrow()
-                            .base_handle
-                            .clone();
-
-                        div()
-                            .id("conflict_resolved_preview_scroll")
-                            .relative()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .bg(theme.colors.window_bg)
-                            .child(list)
-                            .child(
-                                zed::Scrollbar::new(
-                                    "conflict_resolved_preview_scrollbar",
-                                    scroll_handle,
-                                )
-                                .render(theme),
-                            )
-	                            .into_any_element()
-	                    };
-
-                        let output_columns_header =
-                            zed::split_columns_header(theme, "Resolved (editable)", "Preview");
-
-                    div()
                         .id("conflict_resolver_panel")
                         .flex()
                         .flex_col()
@@ -886,8 +910,8 @@ impl GitGpuiView {
 	                                ),
 	                        )
 	                        .into_any_element()
-                }
-            }
+                        }
+                    }
                 }
             }
         } else {
@@ -943,7 +967,8 @@ impl GitGpuiView {
                                             .into_any_element()
                                     }
                                     DiffFileImageState::Loading => {
-                                        zed::empty_state(theme, "Diff", "Loading").into_any_element()
+                                        zed::empty_state(theme, "Diff", "Loading")
+                                            .into_any_element()
                                     }
                                     DiffFileImageState::Error(e) => {
                                         self.diff_raw_input.update(cx, |input, cx| {
@@ -1034,185 +1059,197 @@ impl GitGpuiView {
                                     }
                                 }
                             } else {
-                            enum DiffFileState {
-                                NotLoaded,
-                                Loading,
-                                Error(String),
-                                Ready { has_file: bool },
-                            }
-
-                            let diff_file_state = match &repo.diff_file {
-                                Loadable::NotLoaded => DiffFileState::NotLoaded,
-                                Loadable::Loading => DiffFileState::Loading,
-                                Loadable::Error(e) => DiffFileState::Error(e.clone()),
-                                Loadable::Ready(file) => DiffFileState::Ready {
-                                    has_file: file.is_some(),
-                                },
-                            };
-
-                            self.ensure_file_diff_cache();
-                            match diff_file_state {
-                                DiffFileState::NotLoaded => {
-                                    zed::empty_state(theme, "Diff", "Select a file.")
-                                        .into_any_element()
+                                enum DiffFileState {
+                                    NotLoaded,
+                                    Loading,
+                                    Error(String),
+                                    Ready { has_file: bool },
                                 }
-                                DiffFileState::Loading => {
-                                    zed::empty_state(theme, "Diff", "Loading").into_any_element()
-                                }
-                                DiffFileState::Error(e) => {
-                                    self.diff_raw_input.update(cx, |input, cx| {
-                                        input.set_theme(theme, cx);
-                                        input.set_text(e, cx);
-                                        input.set_read_only(true, cx);
-                                    });
-                                    div()
-                                        .id("diff_file_error_scroll")
-                                        .font_family("monospace")
-                                        .bg(theme.colors.window_bg)
-                                        .flex()
-                                        .flex_col()
-                                        .flex_1()
-                                        .min_h(px(0.0))
-                                        .overflow_y_scroll()
-                                        .child(self.diff_raw_input.clone())
-                                        .into_any_element()
-                                }
-                                DiffFileState::Ready { has_file } => {
-                                    if !has_file || !self.is_file_diff_view_active() {
-                                        zed::empty_state(
-                                            theme,
-                                            "Diff",
-                                            "No file contents available.",
-                                        )
-                                        .into_any_element()
-                                    } else {
-                                        self.ensure_diff_visible_indices();
-                                        self.maybe_autoscroll_diff_to_first_change();
 
-                                        let total_len = match self.diff_view {
-                                            DiffViewMode::Inline => {
-                                                self.file_diff_inline_cache.len()
-                                            }
-                                            DiffViewMode::Split => self.file_diff_cache_rows.len(),
-                                        };
-                                        if total_len == 0 {
-                                            zed::empty_state(theme, "Diff", "Empty file.")
-                                                .into_any_element()
-                                        } else if self.diff_visible_indices.is_empty() {
-                                            zed::empty_state(theme, "Diff", "Nothing to render.")
-                                                .into_any_element()
+                                let diff_file_state = match &repo.diff_file {
+                                    Loadable::NotLoaded => DiffFileState::NotLoaded,
+                                    Loadable::Loading => DiffFileState::Loading,
+                                    Loadable::Error(e) => DiffFileState::Error(e.clone()),
+                                    Loadable::Ready(file) => DiffFileState::Ready {
+                                        has_file: file.is_some(),
+                                    },
+                                };
+
+                                self.ensure_file_diff_cache();
+                                match diff_file_state {
+                                    DiffFileState::NotLoaded => {
+                                        zed::empty_state(theme, "Diff", "Select a file.")
+                                            .into_any_element()
+                                    }
+                                    DiffFileState::Loading => {
+                                        zed::empty_state(theme, "Diff", "Loading")
+                                            .into_any_element()
+                                    }
+                                    DiffFileState::Error(e) => {
+                                        self.diff_raw_input.update(cx, |input, cx| {
+                                            input.set_theme(theme, cx);
+                                            input.set_text(e, cx);
+                                            input.set_read_only(true, cx);
+                                        });
+                                        div()
+                                            .id("diff_file_error_scroll")
+                                            .font_family("monospace")
+                                            .bg(theme.colors.window_bg)
+                                            .flex()
+                                            .flex_col()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .overflow_y_scroll()
+                                            .child(self.diff_raw_input.clone())
+                                            .into_any_element()
+                                    }
+                                    DiffFileState::Ready { has_file } => {
+                                        if !has_file || !self.is_file_diff_view_active() {
+                                            zed::empty_state(
+                                                theme,
+                                                "Diff",
+                                                "No file contents available.",
+                                            )
+                                            .into_any_element()
                                         } else {
-                                            let scroll_handle =
-                                                self.diff_scroll.0.borrow().base_handle.clone();
-                                            let markers = self.diff_scrollbar_markers_cache.clone();
-                                            match self.diff_view {
+                                            self.ensure_diff_visible_indices();
+                                            self.maybe_autoscroll_diff_to_first_change();
+
+                                            let total_len = match self.diff_view {
                                                 DiffViewMode::Inline => {
-                                                    let list = uniform_list(
-                                                        "diff",
-                                                        self.diff_visible_indices.len(),
-                                                        cx.processor(Self::render_diff_rows),
-                                                    )
-                                                    .h_full()
-                                                    .min_h(px(0.0))
-                                                    .track_scroll(self.diff_scroll.clone());
-                                                    div()
-                                                        .id("diff_scroll_container")
-                                                        .relative()
-                                                        .h_full()
-                                                        .min_h(px(0.0))
-                                                        .bg(theme.colors.window_bg)
-                                                        .child(list)
-                                                        .child(
-                                                            zed::Scrollbar::new(
-                                                                "diff_scrollbar",
-                                                                scroll_handle,
-                                                            )
-                                                            .markers(markers)
-                                                            .always_visible()
-                                                            .render(theme),
-                                                        )
-                                                        .into_any_element()
+                                                    self.file_diff_inline_cache.len()
                                                 }
                                                 DiffViewMode::Split => {
-                                                    let count = self.diff_visible_indices.len();
-                                                    let left = uniform_list(
-                                                        "diff_split_left",
-                                                        count,
-                                                        cx.processor(
-                                                            Self::render_diff_split_left_rows,
-                                                        ),
-                                                    )
-                                                    .h_full()
-                                                    .min_h(px(0.0))
-                                                    .track_scroll(self.diff_scroll.clone());
-                                                    let right = uniform_list(
-                                                        "diff_split_right",
-                                                        count,
-                                                        cx.processor(
-                                                            Self::render_diff_split_right_rows,
-                                                        ),
-                                                    )
-                                                    .h_full()
-                                                    .min_h(px(0.0))
-                                                    .track_scroll(self.diff_scroll.clone());
-
-                                                    let columns_header = zed::split_columns_header(
-                                                        theme,
-                                                        "A (local / before)",
-                                                        "B (remote / after)",
-                                                    );
-
-                                                    div()
-                                                        .id("diff_split_scroll_container")
-                                                        .relative()
+                                                    self.file_diff_cache_rows.len()
+                                                }
+                                            };
+                                            if total_len == 0 {
+                                                zed::empty_state(theme, "Diff", "Empty file.")
+                                                    .into_any_element()
+                                            } else if self.diff_visible_indices.is_empty() {
+                                                zed::empty_state(
+                                                    theme,
+                                                    "Diff",
+                                                    "Nothing to render.",
+                                                )
+                                                .into_any_element()
+                                            } else {
+                                                let scroll_handle =
+                                                    self.diff_scroll.0.borrow().base_handle.clone();
+                                                let markers =
+                                                    self.diff_scrollbar_markers_cache.clone();
+                                                match self.diff_view {
+                                                    DiffViewMode::Inline => {
+                                                        let list = uniform_list(
+                                                            "diff",
+                                                            self.diff_visible_indices.len(),
+                                                            cx.processor(Self::render_diff_rows),
+                                                        )
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .flex()
-                                                        .flex_col()
-                                                        .bg(theme.colors.window_bg)
-                                                        .child(columns_header)
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
-                                                                .min_h(px(0.0))
-                                                                .flex()
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .min_w(px(0.0))
-                                                                        .h_full()
-                                                                        .child(left),
+                                                        .track_scroll(self.diff_scroll.clone());
+                                                        div()
+                                                            .id("diff_scroll_container")
+                                                            .relative()
+                                                            .h_full()
+                                                            .min_h(px(0.0))
+                                                            .bg(theme.colors.window_bg)
+                                                            .child(list)
+                                                            .child(
+                                                                zed::Scrollbar::new(
+                                                                    "diff_scrollbar",
+                                                                    scroll_handle,
                                                                 )
-                                                                .child(
-                                                                    div()
-                                                                        .w(px(1.0))
-                                                                        .h_full()
-                                                                        .bg(theme.colors.border),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .flex_1()
-                                                                        .min_w(px(0.0))
-                                                                        .h_full()
-                                                                        .child(right),
-                                                                ),
-                                                        )
-                                                        .child(
-                                                            zed::Scrollbar::new(
-                                                                "diff_scrollbar",
-                                                                scroll_handle,
+                                                                .markers(markers)
+                                                                .always_visible()
+                                                                .render(theme),
                                                             )
-                                                            .markers(markers)
-                                                            .always_visible()
-                                                            .render(theme),
+                                                            .into_any_element()
+                                                    }
+                                                    DiffViewMode::Split => {
+                                                        let count = self.diff_visible_indices.len();
+                                                        let left = uniform_list(
+                                                            "diff_split_left",
+                                                            count,
+                                                            cx.processor(
+                                                                Self::render_diff_split_left_rows,
+                                                            ),
                                                         )
-                                                        .into_any_element()
+                                                        .h_full()
+                                                        .min_h(px(0.0))
+                                                        .track_scroll(self.diff_scroll.clone());
+                                                        let right = uniform_list(
+                                                            "diff_split_right",
+                                                            count,
+                                                            cx.processor(
+                                                                Self::render_diff_split_right_rows,
+                                                            ),
+                                                        )
+                                                        .h_full()
+                                                        .min_h(px(0.0))
+                                                        .track_scroll(self.diff_scroll.clone());
+
+                                                        let columns_header =
+                                                            zed::split_columns_header(
+                                                                theme,
+                                                                "A (local / before)",
+                                                                "B (remote / after)",
+                                                            );
+
+                                                        div()
+                                                            .id("diff_split_scroll_container")
+                                                            .relative()
+                                                            .h_full()
+                                                            .min_h(px(0.0))
+                                                            .flex()
+                                                            .flex_col()
+                                                            .bg(theme.colors.window_bg)
+                                                            .child(columns_header)
+                                                            .child(
+                                                                div()
+                                                                    .flex_1()
+                                                                    .min_h(px(0.0))
+                                                                    .flex()
+                                                                    .child(
+                                                                        div()
+                                                                            .flex_1()
+                                                                            .min_w(px(0.0))
+                                                                            .h_full()
+                                                                            .child(left),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .w(px(1.0))
+                                                                            .h_full()
+                                                                            .bg(theme
+                                                                                .colors
+                                                                                .border),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .flex_1()
+                                                                            .min_w(px(0.0))
+                                                                            .h_full()
+                                                                            .child(right),
+                                                                    ),
+                                                            )
+                                                            .child(
+                                                                zed::Scrollbar::new(
+                                                                    "diff_scrollbar",
+                                                                    scroll_handle,
+                                                                )
+                                                                .markers(markers)
+                                                                .always_visible()
+                                                                .render(theme),
+                                                            )
+                                                            .into_any_element()
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }};
+                            };
                             rendered
                         } else {
                             if self.diff_cache_repo_id != Some(repo.id)

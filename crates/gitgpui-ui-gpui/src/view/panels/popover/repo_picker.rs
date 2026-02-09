@@ -1,0 +1,60 @@
+use super::*;
+
+pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>) -> gpui::Div {
+    let theme = this.theme;
+
+    if let Some(search) = this.repo_picker_search_input.clone() {
+        let repo_ids = this.state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
+        let items = this
+            .state
+            .repos
+            .iter()
+            .map(|r| r.spec.workdir.display().to_string().into())
+            .collect::<Vec<SharedString>>();
+
+        zed::context_menu(
+            theme,
+            zed::PickerPrompt::new(search)
+                .items(items)
+                .empty_text("No repositories")
+                .max_height(px(260.0))
+                .render(theme, cx, move |this, ix, _e, _w, cx| {
+                    if let Some(&repo_id) = repo_ids.get(ix) {
+                        this.store.dispatch(Msg::SetActiveRepo { repo_id });
+                        this.rebuild_diff_cache();
+                    }
+                    this.popover = None;
+                    this.popover_anchor = None;
+                    cx.notify();
+                }),
+        )
+        .min_w(px(260.0))
+        .max_w(px(420.0))
+    } else {
+        let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+        for repo in this.state.repos.iter() {
+            let id = repo.id;
+            let label: SharedString = repo.spec.workdir.display().to_string().into();
+            menu = menu.child(
+                zed::context_menu_entry(
+                    ("repo_item", id.0),
+                    theme,
+                    false,
+                    false,
+                    None,
+                    label.clone(),
+                    None,
+                    false,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
+                    this.popover = None;
+                    this.popover_anchor = None;
+                    this.rebuild_diff_cache();
+                    cx.notify();
+                })),
+            );
+        }
+        zed::context_menu(theme, menu)
+    }
+}

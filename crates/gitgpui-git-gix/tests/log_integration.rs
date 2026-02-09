@@ -54,7 +54,10 @@ fn log_all_branches_includes_remote_tracking_branches() {
         dir.path(),
         &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
     );
-    run_git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    run_git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
     run_git(&repo, &["push", "-u", "origin", "feature"]);
 
     run_git(&repo, &["checkout", "main"]);
@@ -110,7 +113,11 @@ fn log_all_branches_includes_nonstandard_ref_namespaces() {
     run_git(repo, &["branch", "-D", "feature"]);
     run_git(
         repo,
-        &["update-ref", "refs/branch-heads/feature", feature_tip.as_str()],
+        &[
+            "update-ref",
+            "refs/branch-heads/feature",
+            feature_tip.as_str(),
+        ],
     );
 
     let backend = GixBackend::default();

@@ -33,13 +33,12 @@ impl GitGpuiView {
             return Vec::new();
         }
 
-        let syntax_mode = if this.conflict_resolved_preview_lines.len()
-            <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING
-        {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
+        let syntax_mode =
+            if this.conflict_resolved_preview_lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+                DiffSyntaxMode::Auto
+            } else {
+                DiffSyntaxMode::HeuristicOnly
+            };
         let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
 
         range
@@ -286,7 +285,10 @@ fn split_cell_bg(
     let base = match (kind, side) {
         (gitgpui_core::file_diff::FileDiffRowKind::Add, ConflictPickSide::Theirs)
         | (gitgpui_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Theirs) => {
-            with_alpha(theme.colors.success, if theme.is_dark { 0.10 } else { 0.08 })
+            with_alpha(
+                theme.colors.success,
+                if theme.is_dark { 0.10 } else { 0.08 },
+            )
         }
         (gitgpui_core::file_diff::FileDiffRowKind::Remove, ConflictPickSide::Ours)
         | (gitgpui_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => {
@@ -308,9 +310,10 @@ fn inline_row_bg(
     selected: bool,
 ) -> gpui::Rgba {
     let base = match (kind, side) {
-        (gitgpui_core::domain::DiffLineKind::Add, _) => {
-            with_alpha(theme.colors.success, if theme.is_dark { 0.10 } else { 0.08 })
-        }
+        (gitgpui_core::domain::DiffLineKind::Add, _) => with_alpha(
+            theme.colors.success,
+            if theme.is_dark { 0.10 } else { 0.08 },
+        ),
         (gitgpui_core::domain::DiffLineKind::Remove, _) => {
             with_alpha(theme.colors.danger, if theme.is_dark { 0.10 } else { 0.08 })
         }

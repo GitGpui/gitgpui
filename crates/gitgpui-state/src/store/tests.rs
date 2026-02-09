@@ -224,7 +224,12 @@ fn open_repo_allows_same_basename_in_different_folders() {
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(2)));
 
-    let effects = reduce(&mut repos, &id_alloc, &mut state, Msg::OpenRepo(repo_a.clone()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_a.clone()),
+    );
     assert!(effects.is_empty());
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(1)));

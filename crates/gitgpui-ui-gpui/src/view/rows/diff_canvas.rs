@@ -1,5 +1,5 @@
-use super::*;
 use super::canvas::keyed_canvas;
+use super::*;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
@@ -465,7 +465,11 @@ pub(super) fn patch_split_column_row_canvas(
                             let position = event.position;
                             view.update(cx, |this, cx| {
                                 if click_count >= 2 {
-                                    this.double_click_select_diff_text(visible_ix, region, DiffClickKind::Line);
+                                    this.double_click_select_diff_text(
+                                        visible_ix,
+                                        region,
+                                        DiffClickKind::Line,
+                                    );
                                 } else {
                                     this.begin_diff_text_selection(visible_ix, region, position);
                                 }
@@ -562,7 +566,10 @@ pub(super) fn worktree_preview_row_canvas(
             window.paint_quad(fill(bounds, theme.colors.surface_bg));
             if highlight_new_file && prepaint.bar_w > px(0.0) {
                 window.paint_quad(fill(
-                    Bounds::new(point(bounds.left(), bounds.top()), size(prepaint.bar_w, bounds.size.height)),
+                    Bounds::new(
+                        point(bounds.left(), bounds.top()),
+                        size(prepaint.bar_w, bounds.size.height),
+                    ),
                     theme.colors.success,
                 ));
             }
@@ -616,7 +623,11 @@ pub(super) fn worktree_preview_row_canvas(
                                     DiffClickKind::Line,
                                 );
                             } else {
-                                this.begin_diff_text_selection(ix, DiffTextRegion::Inline, position);
+                                this.begin_diff_text_selection(
+                                    ix,
+                                    DiffTextRegion::Inline,
+                                    position,
+                                );
                             }
                             cx.notify();
                         });
@@ -927,7 +938,12 @@ fn compute_runs(
         if ix < range.start {
             runs.push(default_style.clone().to_run(range.start - ix));
         }
-        runs.push(default_style.clone().highlight(highlight.clone()).to_run(range.len()));
+        runs.push(
+            default_style
+                .clone()
+                .highlight(highlight.clone())
+                .to_run(range.len()),
+        );
         ix = range.end;
     }
     if ix < text.len() {

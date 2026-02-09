@@ -1,7 +1,7 @@
 use crate::{theme::AppTheme, zed_port as zed};
 use gitgpui_core::diff::{AnnotatedDiffLine, annotate_unified};
 use gitgpui_core::domain::{
-    Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus,
+    Branch, Commit, CommitId, DiffArea, DiffTarget, FileStatus, FileStatusKind, RepoStatus, Tag,
     UpstreamDivergence,
 };
 use gitgpui_core::file_diff::FileDiffRow;
@@ -21,13 +21,15 @@ use gpui::{
     Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
     point, px, relative, size, uniform_list,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
+mod app_model;
 mod branch_sidebar;
+mod caches;
 mod chrome;
 mod conflict_resolver;
 mod date_time;
@@ -36,10 +38,17 @@ mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
 mod panels;
+mod panes;
 pub(crate) mod rows;
+mod state_apply;
 mod word_diff;
 
+use app_model::AppUiModel;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
+use caches::{
+    BranchSidebarCache, HistoryCache, HistoryCacheRequest, HistoryStashIdsCache,
+    HistoryWorktreeSummaryCache,
+};
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
 use date_time::{DateTimeFormat, format_datetime_utc};
@@ -52,6 +61,7 @@ use diff_utils::{
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags,
 };
+use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
 
 pub(crate) use chrome::window_frame;
 
@@ -261,20 +271,6 @@ fn capped_word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Rang
 }
 
 #[derive(Clone, Debug)]
-struct HistoryCache {
-    repo_id: RepoId,
-    log_fingerprint: u64,
-    visible_indices: Vec<usize>,
-    graph_rows: Vec<history_graph::GraphRow>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct HistoryCacheRequest {
-    repo_id: RepoId,
-    log_fingerprint: u64,
-}
-
-#[derive(Clone, Debug)]
 struct ConflictResolverUiState {
     repo_id: Option<RepoId>,
     path: Option<std::path::PathBuf>,
@@ -455,11 +451,16 @@ enum PatchSplitRow {
 
 pub struct GitGpuiView {
     store: Arc<AppStore>,
-    state: AppState,
+    state: Arc<AppState>,
+    _ui_model: Entity<AppUiModel>,
     _poller: Poller,
+    _ui_model_subscription: gpui::Subscription,
     _activation_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
     theme: AppTheme,
+    sidebar_pane: Entity<SidebarPaneView>,
+    main_pane: Entity<MainPaneView>,
+    details_pane: Entity<DetailsPaneView>,
 
     diff_view: DiffViewMode,
     diff_cache_repo_id: Option<RepoId>,
@@ -534,6 +535,9 @@ pub struct GitGpuiView {
     worktree_picker_search_input: Option<Entity<zed::TextInput>>,
     submodule_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
+    branch_sidebar_cache: Option<BranchSidebarCache>,
+    history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
+    history_stash_ids_cache: Option<HistoryStashIdsCache>,
 
     date_time_format: DateTimeFormat,
     settings_date_format_open: bool,
@@ -811,8 +815,21 @@ impl GitGpuiView {
             store.dispatch(Msg::OpenRepo(path));
         }
 
+        let initial_state = Arc::new(store.snapshot());
+        let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&initial_state)));
+
+        let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
+            let next = Arc::clone(&model.read(cx).state);
+            this.apply_state_snapshot(next, cx);
+            cx.notify();
+        });
+
         let weak_view = cx.weak_entity();
-        let poller = Poller::start(Arc::clone(&store), events, weak_view, window, cx);
+        let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
+
+        let sidebar_pane = cx.new(|_cx| SidebarPaneView::new(weak_view.clone()));
+        let main_pane = cx.new(|_cx| MainPaneView::new(weak_view.clone()));
+        let details_pane = cx.new(|_cx| DetailsPaneView::new(weak_view.clone()));
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
             if !window.is_window_active() {
@@ -1123,12 +1140,17 @@ impl GitGpuiView {
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let mut view = Self {
-            state: store.snapshot(),
+            state: Arc::clone(&initial_state),
+            _ui_model: ui_model,
             store,
             _poller: poller,
+            _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
+            sidebar_pane,
+            main_pane,
+            details_pane,
             diff_view: DiffViewMode::Split,
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -1204,6 +1226,9 @@ impl GitGpuiView {
             worktree_picker_search_input: None,
             submodule_picker_search_input: None,
             history_cache: None,
+            branch_sidebar_cache: None,
+            history_worktree_summary_cache: None,
+            history_stash_ids_cache: None,
             date_time_format,
             settings_date_format_open: false,
             open_repo_panel: false,
@@ -2387,10 +2412,6 @@ impl GitGpuiView {
         rows
     }
 
-    fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
-        branch_sidebar::branch_sidebar_rows(repo)
-    }
-
     fn prompt_open_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let store = Arc::clone(&self.store);
         let view = cx.weak_entity();
@@ -3188,298 +3209,6 @@ impl GitGpuiView {
         }
     }
 
-    fn apply_state_snapshot(&mut self, next: AppState, cx: &mut gpui::Context<Self>) {
-        let prev_active_repo_id = self.state.active_repo;
-        let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
-            self.state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.selected_commit.clone())
-        });
-
-        let next_repo_id = next.active_repo;
-        let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
-        let next_diff_target = next_repo.and_then(|r| r.diff_target.as_ref()).cloned();
-        let next_diff_rev = next_repo.map(|r| r.diff_rev).unwrap_or(0);
-        let next_selected_commit = next_repo.and_then(|r| r.selected_commit.clone());
-
-        let prev_diff_target = self
-            .active_repo()
-            .and_then(|r| r.diff_target.as_ref())
-            .cloned();
-
-        let next_clone = next.clone.clone();
-
-        let old_notification_len = self.state.notifications.len();
-        let new_notifications = next
-            .notifications
-            .iter()
-            .skip(old_notification_len.min(next.notifications.len()))
-            .cloned()
-            .collect::<Vec<_>>();
-        for notification in new_notifications {
-            let kind = match notification.kind {
-                AppNotificationKind::Error => zed::ToastKind::Error,
-                AppNotificationKind::Warning => zed::ToastKind::Warning,
-                AppNotificationKind::Info | AppNotificationKind::Success => zed::ToastKind::Success,
-            };
-            self.push_toast(kind, notification.message, cx);
-        }
-
-        for next_repo in &next.repos {
-            let (old_diag_len, old_cmd_len) = self
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == next_repo.id)
-                .map(|r| (r.diagnostics.len(), r.command_log.len()))
-                .unwrap_or((0, 0));
-
-            let new_diag_messages = next_repo
-                .diagnostics
-                .iter()
-                .skip(old_diag_len.min(next_repo.diagnostics.len()))
-                .filter(|d| d.kind == DiagnosticKind::Error)
-                .map(|d| d.message.clone())
-                .collect::<Vec<_>>();
-            for msg in new_diag_messages {
-                self.push_toast(zed::ToastKind::Error, msg, cx);
-            }
-
-            let new_command_summaries = next_repo
-                .command_log
-                .iter()
-                .skip(old_cmd_len.min(next_repo.command_log.len()))
-                .map(|e| (e.ok, e.summary.clone()))
-                .collect::<Vec<_>>();
-            for (ok, summary) in new_command_summaries {
-                self.push_toast(
-                    if ok {
-                        zed::ToastKind::Success
-                    } else {
-                        zed::ToastKind::Error
-                    },
-                    summary,
-                    cx,
-                );
-            }
-        }
-
-        match next_clone.as_ref() {
-            Some(op) => match &op.status {
-                CloneOpStatus::Running => {
-                    let needs_reset = self.clone_progress_toast_id.is_none()
-                        || self.clone_progress_dest.as_ref() != Some(&op.dest);
-                    if needs_reset {
-                        if let Some(id) = self.clone_progress_toast_id.take() {
-                            self.remove_toast(id, cx);
-                        }
-                        self.clone_progress_last_seq = 0;
-                        self.clone_progress_dest = Some(op.dest.clone());
-
-                        let id = self.push_persistent_toast(
-                            zed::ToastKind::Success,
-                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display()),
-                            cx,
-                        );
-                        self.clone_progress_toast_id = Some(id);
-                    }
-
-                    if let Some(id) = self.clone_progress_toast_id
-                        && self.clone_progress_last_seq != op.seq
-                    {
-                        self.clone_progress_last_seq = op.seq;
-                        let tail_lines = op.output_tail.iter().rev().take(12).rev().cloned();
-                        let tail = tail_lines.collect::<Vec<_>>().join("\n");
-                        let message = if tail.is_empty() {
-                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display())
-                        } else {
-                            format!(
-                                "Cloning repository…\n{}\n→ {}\n\n{}",
-                                op.url,
-                                op.dest.display(),
-                                tail
-                            )
-                        };
-                        self.update_toast_text(id, message, cx);
-                    }
-                }
-                CloneOpStatus::FinishedOk => {
-                    if self.clone_progress_last_seq != op.seq {
-                        if let Some(id) = self.clone_progress_toast_id.take() {
-                            self.remove_toast(id, cx);
-                        }
-                        self.clone_progress_dest = None;
-                        self.clone_progress_last_seq = op.seq;
-                        self.push_toast(
-                            zed::ToastKind::Success,
-                            format!("Clone finished: {}", op.dest.display()),
-                            cx,
-                        );
-                    }
-                }
-                CloneOpStatus::FinishedErr(err) => {
-                    if self.clone_progress_last_seq != op.seq {
-                        if let Some(id) = self.clone_progress_toast_id.take() {
-                            self.remove_toast(id, cx);
-                        }
-                        self.clone_progress_dest = None;
-                        self.clone_progress_last_seq = op.seq;
-                        self.push_toast(zed::ToastKind::Error, format!("Clone failed: {err}"), cx);
-                    }
-                }
-            },
-            None => {
-                if let Some(id) = self.clone_progress_toast_id.take() {
-                    self.remove_toast(id, cx);
-                }
-                self.clone_progress_last_seq = 0;
-                self.clone_progress_dest = None;
-            }
-        }
-
-        if prev_diff_target != next_diff_target {
-            self.diff_selection_anchor = None;
-            self.diff_selection_range = None;
-            self.diff_autoscroll_pending = next_diff_target.is_some();
-        }
-
-        self.state = next;
-
-        self.sync_conflict_resolver(cx);
-
-        let repos = &self.state.repos;
-        let last_status = &mut self.status_multi_selection_last_status;
-        self.status_multi_selection.retain(|repo_id, selection| {
-            let Some(repo) = repos.iter().find(|r| r.id == *repo_id) else {
-                last_status.remove(repo_id);
-                return false;
-            };
-
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
-                last_status.remove(repo_id);
-                return false;
-            }
-
-            let Loadable::Ready(status) = &repo.status else {
-                return true;
-            };
-
-            let status_changed = match last_status.get(repo_id) {
-                Some(prev) => !Arc::ptr_eq(prev, status),
-                None => true,
-            };
-            if status_changed {
-                last_status.insert(*repo_id, Arc::clone(status));
-                reconcile_status_multi_selection(selection, status);
-            }
-
-            if selection.unstaged.is_empty() && selection.staged.is_empty() {
-                last_status.remove(repo_id);
-                return false;
-            }
-
-            true
-        });
-
-        if prev_active_repo_id != next_repo_id {
-            self.history_scroll
-                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-            self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
-            self.commit_files_scroll
-                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-        } else if prev_selected_commit != next_selected_commit {
-            self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
-            self.commit_files_scroll
-                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-        }
-
-        self.update_commit_details_delay(cx);
-
-        let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
-            || self.diff_cache_rev != next_diff_rev
-            || self.diff_cache_target != next_diff_target;
-        if should_rebuild_diff_cache {
-            self.rebuild_diff_cache();
-        }
-    }
-
-    fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some((repo_id, selected_id, ready_for_selected, is_error)) = (|| {
-            let repo = self.active_repo()?;
-            let selected_id = repo.selected_commit.clone()?;
-            let ready_for_selected = matches!(
-                &repo.commit_details,
-                Loadable::Ready(details) if details.id == selected_id
-            );
-            let is_error = matches!(&repo.commit_details, Loadable::Error(_));
-            Some((repo.id, selected_id, ready_for_selected, is_error))
-        })() else {
-            self.commit_details_delay = None;
-            return;
-        };
-
-        if ready_for_selected || is_error {
-            self.commit_details_delay = None;
-            return;
-        }
-
-        let same_selection = self
-            .commit_details_delay
-            .as_ref()
-            .is_some_and(|s| s.repo_id == repo_id && s.commit_id == selected_id);
-        if same_selection {
-            return;
-        }
-
-        self.commit_details_delay_seq = self.commit_details_delay_seq.wrapping_add(1);
-        let seq = self.commit_details_delay_seq;
-        self.commit_details_delay = Some(CommitDetailsDelayState {
-            repo_id,
-            commit_id: selected_id.clone(),
-            show_loading: false,
-        });
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(100)).await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.commit_details_delay_seq != seq {
-                        return;
-                    }
-                    let Some(repo) = this.active_repo() else {
-                        return;
-                    };
-                    let Some(selected_id) = repo.selected_commit.clone() else {
-                        return;
-                    };
-                    if repo.id != repo_id {
-                        return;
-                    }
-
-                    let ready_for_selected = matches!(
-                        &repo.commit_details,
-                        Loadable::Ready(details) if details.id == selected_id
-                    );
-                    if ready_for_selected || matches!(&repo.commit_details, Loadable::Error(_)) {
-                        return;
-                    }
-
-                    if let Some(state) = this.commit_details_delay.as_mut()
-                        && state.repo_id == repo_id
-                        && state.commit_id == selected_id
-                        && !state.show_loading
-                    {
-                        state.show_loading = true;
-                        cx.notify();
-                    }
-                });
-            },
-        )
-        .detach();
-    }
-
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
         let ttl = match kind {
             zed::ToastKind::Error => Duration::from_secs(15),
@@ -4187,115 +3916,6 @@ impl GitGpuiView {
         self.diff_autoscroll_pending = false;
     }
 
-    fn ensure_history_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        enum Next {
-            Clear,
-            CacheOk,
-            Inflight,
-            Build {
-                request: HistoryCacheRequest,
-                commits: Vec<Commit>,
-            },
-        }
-
-        let next = if let Some(repo) = self.active_repo() {
-            if let Loadable::Ready(page) = &repo.log {
-                let request = HistoryCacheRequest {
-                    repo_id: repo.id,
-                    log_fingerprint: Self::log_fingerprint(&page.commits),
-                };
-
-                let cache_ok = self.history_cache.as_ref().is_some_and(|c| {
-                    c.repo_id == request.repo_id && c.log_fingerprint == request.log_fingerprint
-                });
-                if cache_ok {
-                    Next::CacheOk
-                } else if self.history_cache_inflight.as_ref() == Some(&request) {
-                    Next::Inflight
-                } else {
-                    Next::Build {
-                        request,
-                        commits: page.commits.clone(),
-                    }
-                }
-            } else {
-                Next::Clear
-            }
-        } else {
-            Next::Clear
-        };
-
-        let (request_for_task, commits) = match next {
-            Next::Clear => {
-                self.history_cache_inflight = None;
-                self.history_cache = None;
-                return;
-            }
-            Next::CacheOk => {
-                self.history_cache_inflight = None;
-                return;
-            }
-            Next::Inflight => {
-                return;
-            }
-            Next::Build { request, commits } => (request, commits),
-        };
-
-        self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
-        let seq = self.history_cache_seq;
-        self.history_cache_inflight = Some(request_for_task.clone());
-
-        let theme = self.theme;
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                let visible_indices = (0..commits.len()).collect::<Vec<_>>();
-
-                let visible_commits = visible_indices
-                    .iter()
-                    .filter_map(|ix| commits.get(*ix))
-                    .collect::<Vec<_>>();
-
-                let graph_rows = history_graph::compute_graph(&visible_commits, theme);
-                let max_lanes = graph_rows
-                    .iter()
-                    .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
-                    .max()
-                    .unwrap_or(1);
-
-                let _ = view.update(cx, |this, cx| {
-                    if this.history_cache_seq != seq {
-                        return;
-                    }
-                    if this.history_cache_inflight.as_ref() != Some(&request_for_task) {
-                        return;
-                    }
-                    if this.active_repo_id() != Some(request_for_task.repo_id) {
-                        return;
-                    }
-
-                    if this.history_col_graph_auto && this.history_col_resize.is_none() {
-                        let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                            + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32));
-                        this.history_col_graph = required
-                            .min(px(HISTORY_COL_GRAPH_MAX_PX))
-                            .max(px(HISTORY_COL_GRAPH_MIN_PX));
-                    }
-
-                    this.history_cache_inflight = None;
-                    this.history_cache = Some(HistoryCache {
-                        repo_id: request_for_task.repo_id,
-                        log_fingerprint: request_for_task.log_fingerprint,
-                        visible_indices,
-                        graph_rows,
-                    });
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
-    }
-
     #[cfg(test)]
     pub(crate) fn is_popover_open(&self) -> bool {
         self.popover.is_some()
@@ -4669,16 +4289,6 @@ impl Render for GitGpuiView {
             .map(cursor_style_for_resize_edge)
             .unwrap_or(CursorStyle::Arrow);
 
-        let show_diff = self
-            .active_repo()
-            .and_then(|r| r.diff_target.as_ref())
-            .is_some();
-        let main_view = if show_diff {
-            self.diff_view(cx)
-        } else {
-            self.history_view(cx)
-        };
-
         let mut body = div()
             .flex()
             .flex_col()
@@ -4706,7 +4316,7 @@ impl Render for GitGpuiView {
                                     .w(self.sidebar_width)
                                     .min_h(px(0.0))
                                     .bg(theme.colors.surface_bg)
-                                    .child(self.sidebar(cx)),
+                                    .child(self.sidebar_pane.clone()),
                             )
                             .child(self.pane_resize_handle(
                                 theme,
@@ -4719,7 +4329,7 @@ impl Render for GitGpuiView {
                                     .flex_1()
                                     .min_w(px(0.0))
                                     .min_h(px(0.0))
-                                    .child(main_view),
+                                    .child(self.main_pane.clone()),
                             )
                             .child(self.pane_resize_handle(
                                 theme,
@@ -4738,7 +4348,7 @@ impl Render for GitGpuiView {
                                         div()
                                             .flex_1()
                                             .min_h(px(0.0))
-                                            .child(self.commit_details_view(cx)),
+                                            .child(self.details_pane.clone()),
                                     ),
                             ),
                     ),
@@ -5161,34 +4771,25 @@ impl GitGpuiView {
             div()
                 .relative()
                 .child(zed::toast(theme, t.kind, t.input.clone()))
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(8.0))
-                        .right(px(8.0))
-                        .child(close),
-                )
+                .child(div().absolute().top(px(8.0)).right(px(8.0)).child(close))
                 .with_animations(
-                ("toast", t.id),
-                animations,
-                move |toast, animation_ix, delta| {
-                    let opacity = match animation_ix {
-                        0 => delta,
-                        1 => 1.0,
-                        2 => 1.0 - delta,
-                        _ => 1.0,
-                    };
-                    let slide_x = match animation_ix {
-                        0 => (1.0 - delta) * TOAST_SLIDE_PX,
-                        2 => delta * TOAST_SLIDE_PX,
-                        _ => 0.0,
-                    };
-                    toast
-                        .opacity(opacity)
-                        .relative()
-                        .left(px(slide_x))
-                },
-            )
+                    ("toast", t.id),
+                    animations,
+                    move |toast, animation_ix, delta| {
+                        let opacity = match animation_ix {
+                            0 => delta,
+                            1 => 1.0,
+                            2 => 1.0 - delta,
+                            _ => 1.0,
+                        };
+                        let slide_x = match animation_ix {
+                            0 => (1.0 - delta) * TOAST_SLIDE_PX,
+                            2 => delta * TOAST_SLIDE_PX,
+                            _ => 0.0,
+                        };
+                        toast.opacity(opacity).relative().left(px(slide_x))
+                    },
+                )
         });
 
         div()
@@ -5214,7 +4815,7 @@ impl Poller {
     fn start(
         store: Arc<AppStore>,
         events: smol::channel::Receiver<StoreEvent>,
-        view: WeakEntity<GitGpuiView>,
+        model: WeakEntity<AppUiModel>,
         window: &mut Window,
         cx: &mut gpui::Context<GitGpuiView>,
     ) -> Poller {
@@ -5236,10 +4837,7 @@ impl Poller {
                     })
                     .await;
 
-                let _ = view.update(cx, |view, cx| {
-                    view.apply_state_snapshot(snapshot, cx);
-                    cx.notify();
-                });
+                let _ = model.update(cx, |model, cx| model.set_state(Arc::new(snapshot), cx));
             }
         });
 
