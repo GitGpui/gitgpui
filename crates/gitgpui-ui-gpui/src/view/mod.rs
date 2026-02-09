@@ -9,7 +9,7 @@ use gitgpui_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitgpui_state::model::{
     AppNotificationKind, AppState, CloneOpStatus, DiagnosticKind, Loadable, RepoId, RepoState,
 };
-use gitgpui_state::msg::{Msg, StoreEvent};
+use gitgpui_state::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
@@ -836,8 +836,13 @@ impl GitGpuiView {
             if !window.is_window_active() {
                 return;
             }
-            if let Some(repo_id) = this.active_repo_id() {
-                this.store.dispatch(Msg::SetActiveRepo { repo_id });
+            if let Some(repo) = this.active_repo()
+                && matches!(repo.open, Loadable::Ready(_))
+            {
+                this.store.dispatch(Msg::RepoExternallyChanged {
+                    repo_id: repo.id,
+                    change: RepoExternalChange::GitState,
+                });
             }
         });
 
