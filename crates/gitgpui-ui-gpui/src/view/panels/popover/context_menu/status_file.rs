@@ -42,17 +42,16 @@ pub(super) fn model(
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-        .and_then(|r| match &r.status {
-            Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
-                let path = p.as_path();
-                if let Some(unstaged) = status.unstaged.iter().find(|s| s.path == path) {
-                    return unstaged.kind != gitgpui_core::domain::FileStatusKind::Untracked
-                        && unstaged.kind != gitgpui_core::domain::FileStatusKind::Conflicted;
-                }
-                status.staged.iter().any(|s| {
-                    s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Added
-                })
-            })),
+                .and_then(|r| match &r.status {
+                    Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
+                        let path = p.as_path();
+                        if let Some(unstaged) = status.unstaged.iter().find(|s| s.path == path) {
+                    return unstaged.kind != gitgpui_core::domain::FileStatusKind::Conflicted;
+                        }
+                        status.staged.iter().any(|s| {
+                            s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Added
+                        })
+                    })),
             _ => None,
         })
         .unwrap_or(false);

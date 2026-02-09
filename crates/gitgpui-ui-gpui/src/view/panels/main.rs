@@ -169,14 +169,17 @@ impl GitGpuiView {
 
         let untracked_preview_path = self.untracked_worktree_preview_path();
         let added_preview_path = self.added_file_preview_abs_path();
+        let deleted_preview_path = self.deleted_file_preview_abs_path();
 
         if let Some(path) = untracked_preview_path.clone() {
             self.ensure_worktree_preview_loaded(path, cx);
-        } else if let Some(path) = added_preview_path.clone() {
+        } else if let Some(path) = added_preview_path.clone().or(deleted_preview_path.clone()) {
             self.ensure_preview_loading(path);
         }
 
-        let is_file_preview = untracked_preview_path.is_some() || added_preview_path.is_some();
+        let is_file_preview = untracked_preview_path.is_some()
+            || added_preview_path.is_some()
+            || deleted_preview_path.is_some();
         let wants_file_diff = !is_file_preview
             && self
                 .active_repo()
@@ -441,7 +444,7 @@ impl GitGpuiView {
             .child(controls);
 
         let body: AnyElement = if is_file_preview {
-            if added_preview_path.is_some() {
+            if added_preview_path.is_some() || deleted_preview_path.is_some() {
                 self.try_populate_worktree_preview_from_diff_file();
             }
             match &self.worktree_preview {
@@ -1494,7 +1497,8 @@ impl GitGpuiView {
                 }
 
                 let is_file_preview = this.untracked_worktree_preview_path().is_some()
-                    || this.added_file_preview_abs_path().is_some();
+                    || this.added_file_preview_abs_path().is_some()
+                    || this.deleted_file_preview_abs_path().is_some();
                 if is_file_preview {
                     if handled {
                         cx.stop_propagation();
@@ -1541,7 +1545,8 @@ impl GitGpuiView {
                         }
                         "h" => {
                             let is_file_preview = this.untracked_worktree_preview_path().is_some()
-                                || this.added_file_preview_abs_path().is_some();
+                                || this.added_file_preview_abs_path().is_some()
+                                || this.deleted_file_preview_abs_path().is_some();
                             if !is_file_preview
                                 && !this.active_repo().is_some_and(|r| {
                                     Self::is_file_diff_target(r.diff_target.as_ref())

@@ -131,13 +131,42 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
-                self.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: path.clone(),
-                        area: DiffArea::Unstaged,
-                    },
-                });
+                let is_added_file = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|r| match &r.status {
+                        Loadable::Ready(status) => status
+                            .unstaged
+                            .iter()
+                            .chain(status.staged.iter())
+                            .find(|s| s.path == path)
+                            .map(|s| s.kind),
+                        _ => None,
+                    })
+                    .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
+
+                if is_added_file {
+                    let path_is_selected = self
+                        .active_repo()
+                        .filter(|r| r.id == repo_id)
+                        .and_then(|r| r.diff_target.as_ref())
+                        .is_some_and(|target| {
+                            matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
+                        });
+                    if path_is_selected {
+                        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    }
+                } else {
+                    self.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::WorkingTree {
+                            path: path.clone(),
+                            area: DiffArea::Unstaged,
+                        },
+                    });
+                }
                 self.store
                     .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
                 self.rebuild_diff_cache();

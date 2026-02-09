@@ -531,7 +531,7 @@ pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,
     view: Entity<GitGpuiView>,
     ix: usize,
-    highlight_new_file: bool,
+    bar_color: Option<gpui::Rgba>,
     line_no: SharedString,
     styled: &CachedDiffStyledText,
 ) -> AnyElement {
@@ -544,7 +544,7 @@ pub(super) fn worktree_preview_row_canvas(
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = gutter_cell_total_width(window, pad);
-            let bar_w = if highlight_new_file { px(3.0) } else { px(0.0) };
+            let bar_w = if bar_color.is_some() { px(3.0) } else { px(0.0) };
             let inner = Bounds::new(
                 point(bounds.left() + bar_w, bounds.top()),
                 size((bounds.size.width - bar_w).max(px(0.0)), bounds.size.height),
@@ -564,13 +564,15 @@ pub(super) fn worktree_preview_row_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.paint_quad(fill(bounds, theme.colors.surface_bg));
-            if highlight_new_file && prepaint.bar_w > px(0.0) {
+            if let Some(color) = bar_color
+                && prepaint.bar_w > px(0.0)
+            {
                 window.paint_quad(fill(
                     Bounds::new(
                         point(bounds.left(), bounds.top()),
                         size(prepaint.bar_w, bounds.size.height),
                     ),
-                    theme.colors.success,
+                    color,
                 ));
             }
 

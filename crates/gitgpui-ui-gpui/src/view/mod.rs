@@ -647,6 +647,7 @@ impl GitGpuiView {
     fn is_file_preview_active(&self) -> bool {
         self.untracked_worktree_preview_path().is_some()
             || self.added_file_preview_abs_path().is_some()
+            || self.deleted_file_preview_abs_path().is_some()
     }
 
     fn worktree_preview_line_count(&self) -> Option<usize> {
@@ -2538,6 +2539,37 @@ impl GitGpuiView {
         }
     }
 
+    fn deleted_file_preview_abs_path(&self) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        let workdir = repo.spec.workdir.clone();
+        let target = repo.diff_target.as_ref()?;
+
+        match target {
+            DiffTarget::WorkingTree { path, area } => {
+                if *area != DiffArea::Staged {
+                    return None;
+                }
+                let status = match &repo.status {
+                    Loadable::Ready(s) => s,
+                    _ => return None,
+                };
+                let is_deleted = status
+                    .staged
+                    .iter()
+                    .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path);
+                if !is_deleted {
+                    return None;
+                }
+                Some(if path.is_absolute() {
+                    path.clone()
+                } else {
+                    workdir.join(path)
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn ensure_preview_loading(&mut self, path: std::path::PathBuf) {
         let should_reset = match self.worktree_preview_path.as_ref() {
             Some(p) => p != &path,
@@ -2636,6 +2668,23 @@ impl GitGpuiView {
                 repo.spec.workdir.join(path_from_target)
             };
 
+            let prefer_old = match repo.diff_target.as_ref()? {
+                DiffTarget::WorkingTree { path, area } => {
+                    if *area != DiffArea::Staged {
+                        false
+                    } else {
+                        match &repo.status {
+                            Loadable::Ready(status) => status
+                                .staged
+                                .iter()
+                                .any(|e| e.kind == FileStatusKind::Deleted && &e.path == path),
+                            _ => false,
+                        }
+                    }
+                }
+                _ => false,
+            };
+
             let mut diff_file_error: Option<String> = None;
             let mut preview_result: Option<Result<Arc<Vec<String>>, String>> = match &repo.diff_file
             {
@@ -2645,7 +2694,12 @@ impl GitGpuiView {
                     None
                 }
                 Loadable::Ready(file) => file.as_ref().and_then(|file| {
-                    file.new.as_deref().map(|text| {
+                    let text = if prefer_old {
+                        file.old.as_deref()
+                    } else {
+                        file.new.as_deref()
+                    };
+                    text.map(|text| {
                         let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
                         Ok(Arc::new(lines))
                     })
@@ -2656,7 +2710,15 @@ impl GitGpuiView {
                 match &repo.diff {
                     Loadable::Ready(diff) => {
                         let annotated = annotate_unified(diff);
-                        if let Some((_abs_path, lines)) = build_new_file_preview_from_diff(
+                        if prefer_old {
+                            if let Some((_abs_path, lines)) = build_deleted_file_preview_from_diff(
+                                &annotated,
+                                &repo.spec.workdir,
+                                repo.diff_target.as_ref(),
+                            ) {
+                                preview_result = Some(Ok(Arc::new(lines)));
+                            }
+                        } else if let Some((_abs_path, lines)) = build_new_file_preview_from_diff(
                             &annotated,
                             &repo.spec.workdir,
                             repo.diff_target.as_ref(),
@@ -4679,6 +4741,58 @@ fn build_new_file_preview_from_diff(
         .iter()
         .filter(|l| matches!(l.kind, gitgpui_core::domain::DiffLineKind::Add))
         .map(|l| l.text.strip_prefix('+').unwrap_or(&l.text).to_string())
+        .collect::<Vec<_>>();
+
+    Some((abs_path, lines))
+}
+
+fn build_deleted_file_preview_from_diff(
+    diff: &[AnnotatedDiffLine],
+    workdir: &std::path::Path,
+    target: Option<&DiffTarget>,
+) -> Option<(std::path::PathBuf, Vec<String>)> {
+    let mut file_header_count = 0usize;
+    let mut is_deleted_file = false;
+    let mut has_add = false;
+
+    for line in diff {
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+            && line.text.starts_with("diff --git ")
+        {
+            file_header_count += 1;
+        }
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+            && (line.text.starts_with("deleted file mode ") || line.text == "+++ /dev/null")
+        {
+            is_deleted_file = true;
+        }
+        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Add) {
+            has_add = true;
+        }
+    }
+
+    if file_header_count != 1 || !is_deleted_file || has_add {
+        return None;
+    }
+
+    let rel_path = match target? {
+        DiffTarget::WorkingTree { path, .. } => path.clone(),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => path.clone(),
+        _ => return None,
+    };
+
+    let abs_path = if rel_path.is_absolute() {
+        rel_path
+    } else {
+        workdir.join(rel_path)
+    };
+
+    let lines = diff
+        .iter()
+        .filter(|l| matches!(l.kind, gitgpui_core::domain::DiffLineKind::Remove))
+        .map(|l| l.text.strip_prefix('-').unwrap_or(&l.text).to_string())
         .collect::<Vec<_>>();
 
     Some((abs_path, lines))

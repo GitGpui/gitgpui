@@ -34,9 +34,17 @@ impl GitGpuiView {
         };
         let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
 
+        let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();
         let highlight_new_file = this.untracked_worktree_preview_path().is_some()
             || this.added_file_preview_abs_path().is_some()
             || this.diff_preview_is_new_file;
+        let bar_color = if highlight_deleted_file {
+            Some(theme.colors.danger)
+        } else if highlight_new_file {
+            Some(theme.colors.success)
+        } else {
+            None
+        };
 
         range
             .map(|ix| {
@@ -62,7 +70,7 @@ impl GitGpuiView {
                     theme,
                     cx.entity(),
                     ix,
-                    highlight_new_file,
+                    bar_color,
                     line_no.into(),
                     styled,
                 )

@@ -184,3 +184,70 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
         );
     });
 }
+
+#[gpui::test]
+fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitgpui_state::model::RepoId(3);
+    let workdir =
+        std::env::temp_dir().join(format!("gitgpui_ui_test_{}_deleted", std::process::id()));
+    let file_rel = std::path::PathBuf::from("deleted.rs");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitgpui_state::model::RepoState::new_opening(
+                repo_id,
+                gitgpui_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+
+            repo.status = gitgpui_state::model::Loadable::Ready(
+                gitgpui_core::domain::RepoStatus {
+                    staged: vec![gitgpui_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitgpui_core::domain::FileStatusKind::Deleted,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_target = Some(gitgpui_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitgpui_core::domain::DiffArea::Staged,
+            });
+            repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(
+                gitgpui_core::domain::FileDiffText {
+                    path: file_rel.clone(),
+                    old: Some("one\ntwo\n".to_string()),
+                    new: None,
+                },
+            ));
+
+            this.state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this.try_populate_worktree_preview_from_diff_file();
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        assert_eq!(
+            this.deleted_file_preview_abs_path(),
+            Some(workdir.join(&file_rel))
+        );
+        let gitgpui_state::model::Loadable::Ready(lines) = &this.worktree_preview else {
+            panic!("expected worktree preview to be ready");
+        };
+        assert_eq!(lines.as_ref(), &vec!["one".to_string(), "two".to_string()]);
+    });
+}

@@ -69,7 +69,7 @@ impl GitGpuiView {
                     theme,
                     cx.entity(),
                     ix,
-                    false,
+                    None,
                     line_no.into(),
                     styled,
                 )
