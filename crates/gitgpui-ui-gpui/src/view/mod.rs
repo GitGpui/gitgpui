@@ -835,8 +835,27 @@ impl GitGpuiView {
                 cx,
             )
         });
-        let main_pane = cx.new(|_cx| MainPaneView::new(weak_view.clone()));
-        let details_pane = cx.new(|_cx| DetailsPaneView::new(weak_view.clone()));
+        let main_pane = cx.new(|cx| {
+            MainPaneView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                date_time_format,
+                weak_view.clone(),
+                window,
+                cx,
+            )
+        });
+        let details_pane = cx.new(|cx| {
+            DetailsPaneView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                weak_view.clone(),
+                window,
+                cx,
+            )
+        });
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
             if !window.is_window_active() {
@@ -1315,7 +1334,15 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        let _ = self.sidebar_pane.update(cx, |pane, cx| pane.set_theme(theme, cx));
+        let _ = self
+            .sidebar_pane
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        let _ = self
+            .main_pane
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        let _ = self
+            .details_pane
+            .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();

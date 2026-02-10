@@ -65,7 +65,7 @@ impl GitGpuiView {
         self.context_menu_selected_ix = None;
         if is_context_menu {
             self.context_menu_selected_ix = self
-                .context_menu_model(&kind)
+                .context_menu_model(&kind, cx)
                 .and_then(|m| m.first_selectable());
             window.focus(&self.context_menu_focus_handle);
         } else {
@@ -265,7 +265,9 @@ impl GitGpuiView {
         }
         cx.notify();
     }
+}
 
+impl MainPaneView {
     pub(super) fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let (show_date, show_sha) = self.history_visible_columns();
@@ -432,12 +434,16 @@ impl GitGpuiView {
                             .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 let text: SharedString =
                                     "History scope (Current branch / All branches)".into();
+                                let mut changed = false;
                                 if *hovering {
-                                    this.tooltip_text = Some(text);
-                                } else if this.tooltip_text.as_ref() == Some(&text) {
-                                    this.tooltip_text = None;
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
                                 }
-                                cx.notify();
+                                if changed {
+                                    cx.notify();
+                                }
                             })),
                     ),
             )
@@ -510,7 +516,9 @@ impl GitGpuiView {
 
         header_with_handles
     }
+}
 
+impl GitGpuiView {
     pub(in super::super) fn render_blame_popover_rows(
         this: &mut Self,
         range: std::ops::Range<usize>,
@@ -1226,11 +1234,15 @@ mod tests {
         });
 
         cx.update(|_window, app| {
-            let this = view.read(app);
-            let model = this
-                .context_menu_model(&PopoverKind::CommitMenu {
-                    repo_id,
-                    commit_id: commit_id.clone(),
+            let model = view
+                .update(app, |this, cx| {
+                    this.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
                 })
                 .expect("expected commit context menu model");
 
@@ -1316,11 +1328,15 @@ mod tests {
         });
 
         cx.update(|_window, app| {
-            let this = view.read(app);
-            let model = this
-                .context_menu_model(&PopoverKind::TagMenu {
-                    repo_id,
-                    commit_id: commit_id.clone(),
+            let model = view
+                .update(app, |this, cx| {
+                    this.context_menu_model(
+                        &PopoverKind::TagMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
                 })
                 .expect("expected tag context menu model");
 
@@ -1402,26 +1418,33 @@ mod tests {
                     active_repo: Some(repo_id),
                     ..Default::default()
                 });
-                this.status_multi_selection.insert(
-                    repo_id,
-                    StatusMultiSelection {
-                        unstaged: vec![a.clone(), b.clone()],
-                        unstaged_anchor: Some(a.clone()),
-                        staged: vec![],
-                        staged_anchor: None,
-                    },
-                );
+                let _ = this.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.insert(
+                        repo_id,
+                        StatusMultiSelection {
+                            unstaged: vec![a.clone(), b.clone()],
+                            unstaged_anchor: Some(a.clone()),
+                            staged: vec![],
+                            staged_anchor: None,
+                        },
+                    );
+                    cx.notify();
+                });
                 cx.notify();
             });
         });
 
         cx.update(|_window, app| {
-            let this = view.read(app);
-            let model = this
-                .context_menu_model(&PopoverKind::StatusFileMenu {
-                    repo_id,
-                    area: DiffArea::Unstaged,
-                    path: a.clone(),
+            let model = view
+                .update(app, |this, cx| {
+                    this.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: a.clone(),
+                        },
+                        cx,
+                    )
                 })
                 .expect("expected status file context menu model");
 
@@ -1492,26 +1515,33 @@ mod tests {
                     active_repo: Some(repo_id),
                     ..Default::default()
                 });
-                this.status_multi_selection.insert(
-                    repo_id,
-                    StatusMultiSelection {
-                        unstaged: vec![],
-                        unstaged_anchor: None,
-                        staged: vec![a.clone(), b.clone()],
-                        staged_anchor: Some(a.clone()),
-                    },
-                );
+                let _ = this.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.insert(
+                        repo_id,
+                        StatusMultiSelection {
+                            unstaged: vec![],
+                            unstaged_anchor: None,
+                            staged: vec![a.clone(), b.clone()],
+                            staged_anchor: Some(a.clone()),
+                        },
+                    );
+                    cx.notify();
+                });
                 cx.notify();
             });
         });
 
         cx.update(|_window, app| {
-            let this = view.read(app);
-            let model = this
-                .context_menu_model(&PopoverKind::StatusFileMenu {
-                    repo_id,
-                    area: DiffArea::Staged,
-                    path: a.clone(),
+            let model = view
+                .update(app, |this, cx| {
+                    this.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Staged,
+                            path: a.clone(),
+                        },
+                        cx,
+                    )
                 })
                 .expect("expected status file context menu model");
 
@@ -1578,12 +1608,16 @@ mod tests {
         });
 
         cx.update(|_window, app| {
-            let this = view.read(app);
-            let model = this
-                .context_menu_model(&PopoverKind::StatusFileMenu {
-                    repo_id,
-                    area: DiffArea::Unstaged,
-                    path: path.clone(),
+            let model = view
+                .update(app, |this, cx| {
+                    this.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
                 })
                 .expect("expected status file context menu model");
 
@@ -1597,7 +1631,7 @@ mod tests {
                             repo_id: rid,
                             paths,
                             side: gitgpui_core::services::ConflictSide::Ours
-                        } if *rid == repo_id && paths == &vec![path.clone()]
+                        } if rid.0 == repo_id.0 && paths.first() == Some(&path)
                     )
                 }
                 _ => false,
@@ -1612,7 +1646,7 @@ mod tests {
                             repo_id: rid,
                             paths,
                             side: gitgpui_core::services::ConflictSide::Theirs
-                        } if *rid == repo_id && paths == &vec![path.clone()]
+                        } if rid.0 == repo_id.0 && paths.first() == Some(&path)
                     )
                 }
                 _ => false,
@@ -1626,7 +1660,7 @@ mod tests {
                         ContextMenuAction::SelectDiff {
                             repo_id: rid,
                             target: DiffTarget::WorkingTree { path: p, area: DiffArea::Unstaged }
-                        } if *rid == repo_id && p == &path
+                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,

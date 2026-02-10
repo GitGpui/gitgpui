@@ -3,7 +3,7 @@ use super::diff_text::*;
 use super::history_canvas;
 use super::*;
 
-impl GitGpuiView {
+impl MainPaneView {
     pub(in super::super) fn render_worktree_preview_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -211,7 +211,7 @@ fn history_table_row(
     short_sha: SharedString,
     selected: bool,
     is_stash_node: bool,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
@@ -245,11 +245,6 @@ fn history_table_row(
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
         .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            let selection_changed =
-                this.active_repo().and_then(|r| r.selected_commit.as_ref()) != Some(&commit_id);
-            if selection_changed {
-                this.commit_scroll.set_offset(point(px(0.0), px(0.0)));
-            }
             this.store.dispatch(Msg::SelectCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
@@ -276,7 +271,7 @@ fn working_tree_summary_history_row(
     repo_id: RepoId,
     selected: bool,
     counts: (usize, usize, usize),
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let icon_count = |icon: &'static str, color: gpui::Rgba, count: usize| {
         div()

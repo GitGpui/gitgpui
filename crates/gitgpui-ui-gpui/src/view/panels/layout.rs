@@ -1,19 +1,15 @@
 use super::*;
 
-impl GitGpuiView {
+impl DetailsPaneView {
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let active_repo_id = self.active_repo_id();
-        let selected_id = active_repo_id.and_then(|repo_id| {
-            self.state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .and_then(|r| r.selected_commit.clone())
-        });
+        let selected_id = self
+            .active_repo()
+            .and_then(|repo| repo.selected_commit.clone());
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
             let show_delayed_loading = self.commit_details_delay.as_ref().is_some_and(|s| {
@@ -52,22 +48,19 @@ impl GitGpuiView {
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString = "Close commit details".into();
+                            let mut changed = false;
                             if *hovering {
-                                this.tooltip_text = Some(text);
-                            } else if this.tooltip_text.as_ref() == Some(&text) {
-                                this.tooltip_text = None;
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
                             }
-                            cx.notify();
+                            if changed {
+                                cx.notify();
+                            }
                         })),
                 );
 
-            let body: AnyElement = match self
-                .state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| &r.commit_details)
-            {
+            let body: AnyElement = match self.active_repo().map(|r| &r.commit_details) {
                 None => zed::empty_state(theme, "Commit", "No repository.").into_any_element(),
                 Some(Loadable::Loading) => {
                     if show_delayed_loading {
@@ -94,7 +87,7 @@ impl GitGpuiView {
                             let parent = details
                                 .parent_ids
                                 .first()
-                                .map(|p| p.as_ref().to_string())
+                                .map(|p: &CommitId| p.as_ref().to_string())
                                 .unwrap_or_else(|| "—".to_string());
 
                             let files = if details.files.is_empty() {
@@ -201,7 +194,7 @@ impl GitGpuiView {
                         let parent = details
                             .parent_ids
                             .first()
-                            .map(|p| p.as_ref().to_string())
+                            .map(|p: &CommitId| p.as_ref().to_string())
                             .unwrap_or_else(|| "—".to_string());
 
                         let files = if details.files.is_empty() {
@@ -381,17 +374,19 @@ impl GitGpuiView {
                     repo_id,
                     paths: Vec::new(),
                 });
-                this.rebuild_diff_cache();
                 cx.notify();
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                 let text: SharedString = "Stage all changes".into();
+                let mut changed = false;
                 if *hovering {
-                    this.tooltip_text = Some(text);
-                } else if this.tooltip_text.as_ref() == Some(&text) {
-                    this.tooltip_text = None;
+                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                } else {
+                    changed |= this.clear_tooltip_if_matches(&text, cx);
                 }
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             }));
 
         let stage_selected =
@@ -412,7 +407,6 @@ impl GitGpuiView {
                     this.status_multi_selection.remove(&repo_id);
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store.dispatch(Msg::StagePaths { repo_id, paths });
-                    this.rebuild_diff_cache();
                     cx.notify();
                 });
 
@@ -435,7 +429,6 @@ impl GitGpuiView {
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store
                         .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
-                    this.rebuild_diff_cache();
                     cx.notify();
                 });
 
@@ -451,17 +444,19 @@ impl GitGpuiView {
                     repo_id,
                     paths: Vec::new(),
                 });
-                this.rebuild_diff_cache();
                 cx.notify();
             })
             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                 let text: SharedString = "Unstage all changes".into();
+                let mut changed = false;
                 if *hovering {
-                    this.tooltip_text = Some(text);
-                } else if this.tooltip_text.as_ref() == Some(&text) {
-                    this.tooltip_text = None;
+                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                } else {
+                    changed |= this.clear_tooltip_if_matches(&text, cx);
                 }
-                cx.notify();
+                if changed {
+                    cx.notify();
+                }
             }));
 
         let unstage_selected =
@@ -482,7 +477,6 @@ impl GitGpuiView {
                     this.status_multi_selection.remove(&repo_id);
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
-                    this.rebuild_diff_cache();
                     cx.notify();
                 });
 
@@ -708,12 +702,18 @@ impl GitGpuiView {
                                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                                         let text: SharedString =
                                             "Amend last commit (message + staged changes)".into();
+                                        let mut changed = false;
                                         if *hovering {
-                                            this.tooltip_text = Some(text);
-                                        } else if this.tooltip_text.as_ref() == Some(&text) {
-                                            this.tooltip_text = None;
+                                            changed |= this.set_tooltip_text_if_changed(
+                                                Some(text.clone()),
+                                                cx,
+                                            );
+                                        } else {
+                                            changed |= this.clear_tooltip_if_matches(&text, cx);
                                         }
-                                        cx.notify();
+                                        if changed {
+                                            cx.notify();
+                                        }
                                     })),
                             )
                             .child(
@@ -737,12 +737,18 @@ impl GitGpuiView {
                                     })
                                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                                         let text: SharedString = "Commit staged changes".into();
+                                        let mut changed = false;
                                         if *hovering {
-                                            this.tooltip_text = Some(text);
-                                        } else if this.tooltip_text.as_ref() == Some(&text) {
-                                            this.tooltip_text = None;
+                                            changed |= this.set_tooltip_text_if_changed(
+                                                Some(text.clone()),
+                                                cx,
+                                            );
+                                        } else {
+                                            changed |= this.clear_tooltip_if_matches(&text, cx);
                                         }
-                                        cx.notify();
+                                        if changed {
+                                            cx.notify();
+                                        }
                                     })),
                             ),
                     ),

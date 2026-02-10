@@ -1,5 +1,5 @@
-use super::super::*;
 use super::super::caches::BranchSidebarFingerprint;
+use super::super::*;
 
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
@@ -50,7 +50,9 @@ impl SidebarPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(in super::super) fn branch_sidebar_rows_cached(&mut self) -> Option<Arc<[BranchSidebarRow]>> {
+    pub(in super::super) fn branch_sidebar_rows_cached(
+        &mut self,
+    ) -> Option<Arc<[BranchSidebarRow]>> {
         let repo = self.active_repo();
         if repo.is_none() {
             self.branch_sidebar_cache = None;

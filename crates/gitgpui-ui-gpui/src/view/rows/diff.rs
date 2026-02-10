@@ -2,7 +2,7 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
 
-impl GitGpuiView {
+impl MainPaneView {
     pub(in super::super) fn render_diff_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -800,7 +800,7 @@ fn diff_row(
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
     styled: Option<&CachedDiffStyledText>,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {
@@ -997,7 +997,7 @@ fn patch_split_column_row(
     selected: bool,
     row: &gitgpui_core::file_diff::FileDiffRow,
     styled: Option<&CachedDiffStyledText>,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let (ctx_bg, ctx_fg, ctx_gutter) =
         diff_line_colors(theme, gitgpui_core::domain::DiffLineKind::Context);
@@ -1047,7 +1047,7 @@ fn patch_split_header_row(
     selected: bool,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {
@@ -1200,7 +1200,7 @@ fn patch_split_meta_row(
     visible_ix: usize,
     selected: bool,
     line: &AnnotatedDiffLine,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
         if this.consume_suppress_click_after_drag() {

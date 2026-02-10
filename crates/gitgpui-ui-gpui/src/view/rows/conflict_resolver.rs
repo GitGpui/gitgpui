@@ -2,7 +2,7 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
 
-impl GitGpuiView {
+impl MainPaneView {
     pub(in super::super) fn render_conflict_resolver_diff_rows(
         this: &mut Self,
         range: Range<usize>,

@@ -12,7 +12,11 @@ mod status_file;
 mod tag;
 
 impl GitGpuiView {
-    pub(super) fn context_menu_model(&self, kind: &PopoverKind) -> Option<ContextMenuModel> {
+    pub(super) fn context_menu_model(
+        &self,
+        kind: &PopoverKind,
+        cx: &gpui::Context<Self>,
+    ) -> Option<ContextMenuModel> {
         match kind {
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
@@ -26,7 +30,19 @@ impl GitGpuiView {
                 repo_id,
                 area,
                 path,
-            } => Some(status_file::model(self, *repo_id, *area, path)),
+            } => {
+                let selection = self
+                    .details_pane
+                    .read(cx)
+                    .status_multi_selection
+                    .get(repo_id)
+                    .map(|s| match area {
+                        DiffArea::Unstaged => s.unstaged.as_slice(),
+                        DiffArea::Staged => s.staged.as_slice(),
+                    })
+                    .unwrap_or(&[]);
+                Some(status_file::model(self, selection, *repo_id, *area, path))
+            }
             PopoverKind::BranchMenu {
                 repo_id,
                 section,
@@ -108,7 +124,10 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::StagePaths { repo_id, paths } => {
-                self.status_multi_selection.remove(&repo_id);
+                let _ = self.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.remove(&repo_id);
+                    cx.notify();
+                });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 self.store.dispatch(Msg::StagePaths { repo_id, paths });
                 self.rebuild_diff_cache();
@@ -125,7 +144,10 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::UnstagePaths { repo_id, paths } => {
-                self.status_multi_selection.remove(&repo_id);
+                let _ = self.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.remove(&repo_id);
+                    cx.notify();
+                });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
                 self.rebuild_diff_cache();
@@ -145,7 +167,9 @@ impl GitGpuiView {
                             .map(|s| s.kind),
                         _ => None,
                     })
-                    .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
+                    .is_some_and(|kind| {
+                        matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added)
+                    });
 
                 if is_added_file {
                     let path_is_selected = self
@@ -172,7 +196,10 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::DiscardWorktreeChangesPaths { repo_id, paths } => {
-                self.status_multi_selection.remove(&repo_id);
+                let _ = self.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.remove(&repo_id);
+                    cx.notify();
+                });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 self.store
                     .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
@@ -183,7 +210,10 @@ impl GitGpuiView {
                 paths,
                 side,
             } => {
-                self.status_multi_selection.remove(&repo_id);
+                let _ = self.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.remove(&repo_id);
+                    cx.notify();
+                });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 for path in paths {
                     self.store.dispatch(Msg::CheckoutConflictSide {
@@ -312,7 +342,7 @@ impl GitGpuiView {
     ) -> gpui::Div {
         let theme = self.theme;
         let model = self
-            .context_menu_model(&kind)
+            .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
         let model_for_keys = model.clone();
 

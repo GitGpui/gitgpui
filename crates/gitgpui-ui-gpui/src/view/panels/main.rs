@@ -1,6 +1,6 @@
 use super::*;
 
-impl GitGpuiView {
+impl MainPaneView {
     pub(in super::super) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         self.ensure_history_cache(cx);
@@ -299,9 +299,9 @@ impl GitGpuiView {
                             let text: SharedString = "Inline diff view (Alt+I)".into();
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text));
-                            } else if this.tooltip_text.as_ref() == Some(&text) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -324,9 +324,9 @@ impl GitGpuiView {
                             let text: SharedString = "Split diff view (Alt+S)".into();
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text));
-                            } else if this.tooltip_text.as_ref() == Some(&text) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -347,9 +347,9 @@ impl GitGpuiView {
                                 "Previous change (F2 / Shift+F7 / Alt+Up)".into();
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text));
-                            } else if this.tooltip_text.as_ref() == Some(&text) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -369,9 +369,9 @@ impl GitGpuiView {
                             let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text));
-                            } else if this.tooltip_text.as_ref() == Some(&text) {
-                                changed |= this.set_tooltip_text_if_changed(None);
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
                             }
                             if changed {
                                 cx.notify();
@@ -383,18 +383,22 @@ impl GitGpuiView {
                         zed::Button::new("diff_hunks", "Hunks")
                             .style(zed::ButtonStyle::Outlined)
                             .on_click(theme, cx, |this, e, window, cx| {
-                                let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
-                                this.popover = Some(PopoverKind::DiffHunks);
-                                this.popover_anchor = Some(e.position());
+                                this.open_popover_at(
+                                    PopoverKind::DiffHunks,
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
                                 cx.notify();
                             })
                             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                                 let text: SharedString = "Jump to hunk (Alt+H)".into();
                                 let mut changed = false;
                                 if *hovering {
-                                    changed |= this.set_tooltip_text_if_changed(Some(text));
-                                } else if this.tooltip_text.as_ref() == Some(&text) {
-                                    changed |= this.set_tooltip_text_if_changed(None);
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
                                 }
                                 if changed {
                                     cx.notify();
@@ -416,9 +420,9 @@ impl GitGpuiView {
                         let text: SharedString = "Close diff".into();
                         let mut changed = false;
                         if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text));
-                        } else if this.tooltip_text.as_ref() == Some(&text) {
-                            changed |= this.set_tooltip_text_if_changed(None);
+                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&text, cx);
                         }
                         if changed {
                             cx.notify();
@@ -536,14 +540,14 @@ impl GitGpuiView {
                             let selection_empty = self.conflict_resolver_selection_is_empty();
 
                             let toggle_mode_split =
-                                |this: &mut GitGpuiView,
+                                |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                                 };
                             let toggle_mode_inline =
-                                |this: &mut GitGpuiView,
+                                |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
@@ -551,15 +555,15 @@ impl GitGpuiView {
                                 };
 
                             let clear_selection =
-                                |this: &mut GitGpuiView,
+                                |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_clear_selection(cx);
+                                    this.conflict_resolver_clear_selection(cx)
                                 };
 
                             let append_selection =
-                                |this: &mut GitGpuiView,
+                                |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
@@ -567,21 +571,21 @@ impl GitGpuiView {
                                 };
 
                             let ours_for_btn = ours.clone();
-                            let set_output_ours = move |this: &mut GitGpuiView,
-                                                _e: &ClickEvent,
-                                                _w: &mut Window,
-                                                cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
-                    };
+                            let set_output_ours = move |this: &mut Self,
+                                                        _e: &ClickEvent,
+                                                        _w: &mut Window,
+                                                        cx: &mut gpui::Context<Self>| {
+                                this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
+                            };
                             let theirs_for_btn = theirs.clone();
-                            let set_output_theirs = move |this: &mut GitGpuiView,
-                                                  _e: &ClickEvent,
-                                                  _w: &mut Window,
-                                                  cx: &mut gpui::Context<Self>| {
-                        this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
-                    };
+                            let set_output_theirs = move |this: &mut Self,
+                                                          _e: &ClickEvent,
+                                                          _w: &mut Window,
+                                                          cx: &mut gpui::Context<Self>| {
+                                this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
+                            };
                             let reset_from_markers =
-                                |this: &mut GitGpuiView,
+                                |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
@@ -1408,7 +1412,7 @@ impl GitGpuiView {
                 if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
                 {
                     if let Some(repo_id) = this.active_repo_id() {
-                        this.status_multi_selection.remove(&repo_id);
+                        this.clear_status_multi_selection(repo_id, cx);
                         this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                         handled = true;
                     }
@@ -1552,9 +1556,7 @@ impl GitGpuiView {
                                     Self::is_file_diff_target(r.diff_target.as_ref())
                                 })
                             {
-                                let _ = this.ensure_diff_hunk_picker_search_input(window, cx);
-                                this.popover = Some(PopoverKind::DiffHunks);
-                                this.popover_anchor = Some(this.last_mouse_pos);
+                                this.open_popover_at_cursor(PopoverKind::DiffHunks, window, cx);
                                 handled = true;
                             }
                         }

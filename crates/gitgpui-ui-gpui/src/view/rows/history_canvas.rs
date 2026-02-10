@@ -35,7 +35,7 @@ fn hit_test_any(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> bool {
 
 pub(super) fn history_commit_row_canvas(
     theme: AppTheme,
-    view: Entity<GitGpuiView>,
+    view: Entity<MainPaneView>,
     row_id: usize,
     repo_id: RepoId,
     commit_id: CommitId,

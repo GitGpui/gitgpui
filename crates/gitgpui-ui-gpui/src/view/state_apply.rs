@@ -220,10 +220,6 @@ impl GitGpuiView {
         if should_rebuild_diff_cache {
             self.rebuild_diff_cache();
         }
-
-        // Precompute derived data that would otherwise be recalculated in hot render paths.
-        let _ = self.ensure_history_worktree_summary_cache();
-        let _ = self.ensure_history_stash_ids_cache();
     }
 
     fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {

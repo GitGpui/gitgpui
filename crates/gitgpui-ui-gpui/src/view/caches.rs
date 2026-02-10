@@ -75,7 +75,7 @@ impl GitGpuiView {
     }
 }
 
-impl GitGpuiView {
+impl MainPaneView {
     pub(super) fn ensure_history_worktree_summary_cache(
         &mut self,
     ) -> (bool, (usize, usize, usize)) {
@@ -314,7 +314,7 @@ impl GitGpuiView {
         let theme = self.theme;
 
         cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let visible_indices = (0..commits.len()).collect::<Vec<_>>();
 
                 let visible_commits = visible_indices
@@ -451,5 +451,18 @@ impl GitGpuiView {
             },
         )
         .detach();
+    }
+
+    fn log_fingerprint(commits: &[Commit]) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        commits.len().hash(&mut hasher);
+        // This runs in the render path; keep it O(1) even for huge histories.
+        for id in commits.iter().take(3).map(|c| c.id.as_ref()) {
+            id.hash(&mut hasher);
+        }
+        for id in commits.iter().rev().take(3).map(|c| c.id.as_ref()) {
+            id.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 }

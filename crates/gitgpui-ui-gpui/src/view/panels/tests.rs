@@ -61,19 +61,28 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                 area: gitgpui_core::domain::DiffArea::Unstaged,
             });
 
-            this.state = Arc::new(AppState {
+            let next_state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
                 ..Default::default()
             });
 
-            this.worktree_preview_path = Some(workdir.join(&file_rel));
-            this.worktree_preview = gitgpui_state::model::Loadable::Ready(Arc::clone(&lines));
-            this.worktree_preview_segments_cache_path = None;
-            this.worktree_preview_segments_cache.clear();
-            this.worktree_preview_scroll
-                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-            cx.notify();
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+
+            let workdir = workdir.clone();
+            let file_rel = file_rel.clone();
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_preview_path = Some(workdir.join(&file_rel));
+                pane.worktree_preview = gitgpui_state::model::Loadable::Ready(lines);
+                pane.worktree_preview_segments_cache_path = None;
+                pane.worktree_preview_segments_cache.clear();
+                pane.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
         });
     });
 
@@ -82,8 +91,9 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
     });
 
     cx.update(|_window, app| {
-        let this = view.read(app);
-        let max_offset = this
+        let main_pane = view.read(app).main_pane.clone();
+        let pane = main_pane.read(app);
+        let max_offset = pane
             .worktree_preview_scroll
             .0
             .borrow()
@@ -95,7 +105,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
             "expected file preview to overflow and be scrollable"
         );
 
-        let Some(styled) = this.worktree_preview_segments_cache.get(&0) else {
+        let Some(styled) = pane.worktree_preview_segments_cache.get(&0) else {
             panic!("expected first visible preview row to populate segment cache");
         };
         assert!(
@@ -154,16 +164,15 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
             repo.diff_rev = 1;
             repo.diff = gitgpui_state::model::Loadable::Ready(diff.into());
 
-            this.state = Arc::new(AppState {
+            let next_state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
                 ..Default::default()
             });
 
-            // Ensure a clean render path.
-            this.rebuild_diff_cache();
-            this.diff_text_segments_cache.clear();
-            cx.notify();
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
         });
     });
 
@@ -172,8 +181,9 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
     });
 
     cx.update(|_window, app| {
-        let this = view.read(app);
-        let styled = this
+        let main_pane = view.read(app).main_pane.clone();
+        let pane = main_pane.read(app);
+        let styled = pane
             .diff_text_segments_cache
             .get(2)
             .and_then(|v| v.as_ref())
@@ -220,13 +230,12 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 path: file_rel.clone(),
                 area: gitgpui_core::domain::DiffArea::Staged,
             });
-            repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(
-                gitgpui_core::domain::FileDiffText {
+            repo.diff_file =
+                gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
                     path: file_rel.clone(),
                     old: Some("one\ntwo\n".to_string()),
                     new: None,
-                },
-            ));
+                }));
 
             this.state = Arc::new(AppState {
                 repos: vec![repo],

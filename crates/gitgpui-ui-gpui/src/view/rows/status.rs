@@ -84,7 +84,7 @@ fn apply_status_multi_selection_click(
     *anchor = Some(clicked_path);
 }
 
-impl GitGpuiView {
+impl DetailsPaneView {
     fn clear_status_multi_selection(&mut self, repo_id: RepoId) {
         self.status_multi_selection.remove(&repo_id);
     }
@@ -232,7 +232,7 @@ fn status_row(
     area: DiffArea,
     repo_id: RepoId,
     selected: bool,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
     let (icon, color) = match entry.kind {
         FileStatusKind::Untracked => match area {
@@ -273,7 +273,7 @@ fn status_row(
         .style(zed::ButtonStyle::Outlined)
         .on_click(theme, cx, move |this, e, window, cx| {
             cx.stop_propagation();
-            window.focus(&this.diff_panel_focus_handle);
+            this.focus_diff_panel(window, cx);
 
             if is_conflicted {
                 this.open_popover_at(
@@ -308,15 +308,14 @@ fn status_row(
             this.clear_status_multi_selection(repo_id);
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
 
-            this.rebuild_diff_cache();
             cx.notify();
         })
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
             let mut changed = false;
             if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(stage_tooltip.clone()));
-            } else if this.tooltip_text.as_ref() == Some(&stage_tooltip) {
-                changed |= this.set_tooltip_text_if_changed(None);
+                changed |= this.set_tooltip_text_if_changed(Some(stage_tooltip.clone()), cx);
+            } else {
+                changed |= this.clear_tooltip_if_matches(&stage_tooltip, cx);
             }
             if changed {
                 cx.notify();
@@ -342,9 +341,9 @@ fn status_row(
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
             let mut changed = false;
             if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()));
-            } else if this.tooltip_text.as_ref() == Some(&row_tooltip) {
-                changed |= this.set_tooltip_text_if_changed(None);
+                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()), cx);
+            } else {
+                changed |= this.clear_tooltip_if_matches(&row_tooltip, cx);
             }
             if changed {
                 cx.notify();
@@ -401,7 +400,7 @@ fn status_row(
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-            window.focus(&this.diff_panel_focus_handle);
+            this.focus_diff_panel(window, cx);
             let modifiers = _e.modifiers();
             let entries =
                 this.active_repo()
@@ -430,7 +429,6 @@ fn status_row(
                     area,
                 },
             });
-            this.rebuild_diff_cache();
             cx.notify();
         }))
         .into_any_element()

@@ -71,8 +71,8 @@ impl SidebarPaneView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
                             } else {
                                 changed |= this.clear_tooltip_if_matches(&tooltip, cx);
                             }
@@ -187,8 +187,8 @@ impl SidebarPaneView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this
-                                    .set_tooltip_text_if_changed(Some(pop_tooltip.clone()), cx);
+                                changed |=
+                                    this.set_tooltip_text_if_changed(Some(pop_tooltip.clone()), cx);
                             } else {
                                 changed |= this.clear_tooltip_if_matches(&pop_tooltip, cx);
                             }
@@ -489,10 +489,8 @@ impl SidebarPaneView {
                         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                             let mut changed = false;
                             if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(
-                                    Some(branch_tooltip.clone()),
-                                    cx,
-                                );
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(branch_tooltip.clone()), cx);
                             } else {
                                 changed |= this.clear_tooltip_if_matches(&branch_tooltip, cx);
                             }
@@ -506,10 +504,9 @@ impl SidebarPaneView {
             })
             .collect()
     }
-
 }
 
-impl GitGpuiView {
+impl DetailsPaneView {
     pub(in super::super) fn render_commit_file_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -598,15 +595,14 @@ impl GitGpuiView {
                                 path: Some(path_for_click.clone()),
                             },
                         });
-                        this.rebuild_diff_cache();
                         cx.notify();
                     }))
                     .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                         let mut changed = false;
                         if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(tooltip.clone()));
-                        } else if this.tooltip_text.as_ref() == Some(&tooltip) {
-                            changed |= this.set_tooltip_text_if_changed(None);
+                            changed |= this.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+                        } else {
+                            changed |= this.clear_tooltip_if_matches(&tooltip, cx);
                         }
                         if changed {
                             cx.notify();

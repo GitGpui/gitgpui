@@ -230,7 +230,7 @@ pub(super) fn selectable_cached_diff_text(
     base_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     fallback_text: SharedString,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let view = cx.entity();
     let (text, highlights) = if let Some(styled) = styled {

@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) struct DiffTextSelectionTracker {
-    pub(super) view: Entity<GitGpuiView>,
+    pub(super) view: Entity<MainPaneView>,
 }
 
 impl IntoElement for DiffTextSelectionTracker {
@@ -90,7 +90,7 @@ impl Element for DiffTextSelectionTracker {
 }
 
 pub(super) struct DiffTextSelectionOverlay {
-    pub(super) view: Entity<GitGpuiView>,
+    pub(super) view: Entity<MainPaneView>,
     pub(super) visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) text: SharedString,

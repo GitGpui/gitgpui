@@ -11,7 +11,7 @@ const DIFF_FONT_SCALE: f32 = 0.80;
 
 pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
-    view: Entity<GitGpuiView>,
+    view: Entity<MainPaneView>,
     visible_ix: usize,
     selected: bool,
     old: SharedString,
@@ -172,7 +172,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
 pub(super) fn split_diff_line_row_canvas(
     theme: AppTheme,
-    view: Entity<GitGpuiView>,
+    view: Entity<MainPaneView>,
     visible_ix: usize,
     selected: bool,
     old: SharedString,
@@ -374,7 +374,7 @@ pub(super) fn split_diff_line_row_canvas(
 
 pub(super) fn patch_split_column_row_canvas(
     theme: AppTheme,
-    view: Entity<GitGpuiView>,
+    view: Entity<MainPaneView>,
     column: super::diff::PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
@@ -529,7 +529,7 @@ pub(super) fn patch_split_column_row_canvas(
 
 pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,
-    view: Entity<GitGpuiView>,
+    view: Entity<MainPaneView>,
     ix: usize,
     bar_color: Option<gpui::Rgba>,
     line_no: SharedString,
@@ -544,7 +544,11 @@ pub(super) fn worktree_preview_row_canvas(
         move |bounds, window, _cx| {
             let pad = px_2(window);
             let gutter_total = gutter_cell_total_width(window, pad);
-            let bar_w = if bar_color.is_some() { px(3.0) } else { px(0.0) };
+            let bar_w = if bar_color.is_some() {
+                px(3.0)
+            } else {
+                px(0.0)
+            };
             let inner = Bounds::new(
                 point(bounds.left() + bar_w, bounds.top()),
                 size((bounds.size.width - bar_w).max(px(0.0)), bounds.size.height),
@@ -793,7 +797,7 @@ fn paint_gutter_text(
 }
 
 fn paint_selectable_diff_text(
-    view: &Entity<GitGpuiView>,
+    view: &Entity<MainPaneView>,
     visible_ix: usize,
     region: DiffTextRegion,
     bounds: Bounds<Pixels>,
@@ -887,7 +891,7 @@ fn diff_layout_base_key(
 }
 
 fn ensure_layout_cached(
-    view: &Entity<GitGpuiView>,
+    view: &Entity<MainPaneView>,
     text: &SharedString,
     base_style: &TextStyle,
     base_fg: gpui::Rgba,

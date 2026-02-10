@@ -2,6 +2,7 @@ use super::*;
 
 pub(super) fn model(
     this: &GitGpuiView,
+    selection: &[std::path::PathBuf],
     repo_id: RepoId,
     area: DiffArea,
     path: &std::path::PathBuf,
@@ -22,14 +23,6 @@ pub(super) fn model(
         })
         .unwrap_or(false);
 
-    let selection = this
-        .status_multi_selection
-        .get(&repo_id)
-        .map(|s| match area {
-            DiffArea::Unstaged => s.unstaged.as_slice(),
-            DiffArea::Staged => s.staged.as_slice(),
-        })
-        .unwrap_or(&[]);
     let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);
     let selected_paths = if use_selection {
         selection.to_vec()
@@ -42,16 +35,16 @@ pub(super) fn model(
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-                .and_then(|r| match &r.status {
-                    Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
-                        let path = p.as_path();
-                        if let Some(unstaged) = status.unstaged.iter().find(|s| s.path == path) {
+        .and_then(|r| match &r.status {
+            Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
+                let path = p.as_path();
+                if let Some(unstaged) = status.unstaged.iter().find(|s| s.path == path) {
                     return unstaged.kind != gitgpui_core::domain::FileStatusKind::Conflicted;
-                        }
-                        status.staged.iter().any(|s| {
-                            s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Added
-                        })
-                    })),
+                }
+                status.staged.iter().any(|s| {
+                    s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Added
+                })
+            })),
             _ => None,
         })
         .unwrap_or(false);
