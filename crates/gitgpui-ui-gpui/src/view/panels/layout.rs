@@ -98,16 +98,14 @@ impl DetailsPaneView {
                                     .into_any_element()
                             } else {
                                 let total_files = details.files.len();
-                                let list_h = px((total_files as f32 * 24.0)
-                                    .min(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX)
-                                    .max(24.0));
                                 let list = uniform_list(
                                     ("commit_details_files_list", repo_id.0),
                                     total_files,
                                     cx.processor(Self::render_commit_file_rows),
                                 )
                                 .w_full()
-                                .h(list_h)
+                                .flex_1()
+                                .min_h(px(0.0))
                                 .track_scroll(self.commit_files_scroll.clone());
                                 let scroll_handle =
                                     self.commit_files_scroll.0.borrow().base_handle.clone();
@@ -115,8 +113,12 @@ impl DetailsPaneView {
                                 div()
                                     .id(("commit_details_files_container", repo_id.0))
                                     .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .h_full()
+                                    .min_h(px(0.0))
                                     .w_full()
-                                    .h(list_h)
                                     .child(list)
                                     .child(
                                         zed::Scrollbar::new(
@@ -136,43 +138,72 @@ impl DetailsPaneView {
                                 });
                             }
 
+                            let message = div()
+                                .id(("commit_details_message_container", repo_id.0))
+                                .relative()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .child(
+                                    div()
+                                        .id(("commit_details_message_scroll_surface", repo_id.0))
+                                        .relative()
+                                        .w_full()
+                                        .min_w(px(0.0))
+                                        .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.commit_scroll)
+                                        .child(self.commit_details_message_input.clone()),
+                                )
+                                .child(
+                                    zed::Scrollbar::new(
+                                        ("commit_details_message_scrollbar", repo_id.0),
+                                        self.commit_scroll.clone(),
+                                    )
+                                    .render(theme),
+                                );
+
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .min_w(px(0.0))
-                                        .child(self.commit_details_message_input.clone()),
-                                )
-                                .child(zed::key_value(
-                                    theme,
-                                    "Commit SHA",
-                                    details.id.as_ref().to_string(),
-                                ))
-                                .child(zed::key_value(
-                                    theme,
-                                    "Commit date",
-                                    details.committed_at.clone(),
-                                ))
+                                .flex_1()
+                                .min_h(px(0.0))
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
-                                        .gap_1()
+                                        .gap_2()
+                                        .w_full()
+                                        .min_w(px(0.0))
+                                        .child(message)
+                                        .child(zed::key_value(
+                                            theme,
+                                            "Commit SHA",
+                                            details.id.as_ref().to_string(),
+                                        ))
+                                        .child(zed::key_value(
+                                            theme,
+                                            "Commit date",
+                                            details.committed_at.clone(),
+                                        ))
                                         .child(
                                             div()
-                                                .text_sm()
-                                                .text_color(theme.colors.text_muted)
-                                                .child("Parent commit SHA"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .whitespace_nowrap()
-                                                .line_clamp(1)
-                                                .child(parent),
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(theme.colors.text_muted)
+                                                        .child("Parent commit SHA"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .whitespace_nowrap()
+                                                        .line_clamp(1)
+                                                        .child(parent),
+                                                ),
                                         ),
                                 )
                                 .child(
@@ -180,6 +211,8 @@ impl DetailsPaneView {
                                         .flex()
                                         .flex_col()
                                         .gap_1()
+                                        .flex_1()
+                                        .min_h(px(0.0))
                                         .child(
                                             div()
                                                 .text_sm()
@@ -205,16 +238,14 @@ impl DetailsPaneView {
                                 .into_any_element()
                         } else {
                             let total_files = details.files.len();
-                            let list_h = px((total_files as f32 * 24.0)
-                                .min(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX)
-                                .max(24.0));
                             let list = uniform_list(
                                 ("commit_details_files_list", repo_id.0),
                                 total_files,
                                 cx.processor(Self::render_commit_file_rows),
                             )
                             .w_full()
-                            .h(list_h)
+                            .flex_1()
+                            .min_h(px(0.0))
                             .track_scroll(self.commit_files_scroll.clone());
                             let scroll_handle =
                                 self.commit_files_scroll.0.borrow().base_handle.clone();
@@ -222,8 +253,12 @@ impl DetailsPaneView {
                             div()
                                 .id(("commit_details_files_container", repo_id.0))
                                 .relative()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .h_full()
+                                .min_h(px(0.0))
                                 .w_full()
-                                .h(list_h)
                                 .child(list)
                                 .child(
                                     zed::Scrollbar::new(
@@ -243,43 +278,72 @@ impl DetailsPaneView {
                             });
                         }
 
+                        let message = div()
+                            .id(("commit_details_message_container", repo_id.0))
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .child(
+                                div()
+                                    .id(("commit_details_message_scroll_surface", repo_id.0))
+                                    .relative()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.commit_scroll)
+                                    .child(self.commit_details_message_input.clone()),
+                            )
+                            .child(
+                                zed::Scrollbar::new(
+                                    ("commit_details_message_scrollbar", repo_id.0),
+                                    self.commit_scroll.clone(),
+                                )
+                                .render(theme),
+                            );
+
                         div()
                             .flex()
                             .flex_col()
                             .gap_2()
-                            .child(
-                                div()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .child(self.commit_details_message_input.clone()),
-                            )
-                            .child(zed::key_value(
-                                theme,
-                                "Commit SHA",
-                                details.id.as_ref().to_string(),
-                            ))
-                            .child(zed::key_value(
-                                theme,
-                                "Commit date",
-                                details.committed_at.clone(),
-                            ))
+                            .flex_1()
+                            .min_h(px(0.0))
                             .child(
                                 div()
                                     .flex()
                                     .flex_col()
-                                    .gap_1()
+                                    .gap_2()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .child(message)
+                                    .child(zed::key_value(
+                                        theme,
+                                        "Commit SHA",
+                                        details.id.as_ref().to_string(),
+                                    ))
+                                    .child(zed::key_value(
+                                        theme,
+                                        "Commit date",
+                                        details.committed_at.clone(),
+                                    ))
                                     .child(
                                         div()
-                                            .text_sm()
-                                            .text_color(theme.colors.text_muted)
-                                            .child("Parent commit SHA"),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .whitespace_nowrap()
-                                            .line_clamp(1)
-                                            .child(parent),
+                                            .flex()
+                                            .flex_col()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child("Parent commit SHA"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .whitespace_nowrap()
+                                                    .line_clamp(1)
+                                                    .child(parent),
+                                            ),
                                     ),
                             )
                             .child(
@@ -287,6 +351,8 @@ impl DetailsPaneView {
                                     .flex()
                                     .flex_col()
                                     .gap_1()
+                                    .flex_1()
+                                    .min_h(px(0.0))
                                     .child(
                                         div()
                                             .text_sm()
@@ -309,32 +375,18 @@ impl DetailsPaneView {
                 .h_full()
                 .min_h(px(0.0))
                 .child(header)
-                .child({
-                    let scroll_surface = div()
-                        .id("commit_details_scroll_surface")
-                        .relative()
-                        .flex_1()
-                        .h_full()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.commit_scroll)
-                        .child(div().flex().flex_col().gap_2().p_2().w_full().child(body));
-
+                .child(
                     div()
                         .id("commit_details_body_container")
                         .relative()
+                        .flex()
+                        .flex_col()
                         .flex_1()
                         .h_full()
                         .min_h(px(0.0))
-                        .child(scroll_surface)
-                        .child(
-                            zed::Scrollbar::new(
-                                "commit_details_scrollbar",
-                                self.commit_scroll.clone(),
-                            )
-                            .render(theme),
-                        )
-                })
+                        .p_2()
+                        .child(body),
+                )
                 .into_any_element();
         }
 

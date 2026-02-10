@@ -398,6 +398,7 @@ enum PopoverKind {
         repo_id: RepoId,
         area: DiffArea,
         path: std::path::PathBuf,
+        selection: Vec<std::path::PathBuf>,
     },
     BranchMenu {
         repo_id: RepoId,

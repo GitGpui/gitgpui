@@ -594,8 +594,28 @@ impl GitRepository for GixRepo {
             }
         }
 
-        staged.sort_unstable_by(|a, b| a.path.cmp(&b.path));
-        unstaged.sort_unstable_by(|a, b| a.path.cmp(&b.path));
+        fn kind_priority(kind: FileStatusKind) -> u8 {
+            match kind {
+                FileStatusKind::Conflicted => 5,
+                FileStatusKind::Renamed => 4,
+                FileStatusKind::Deleted => 3,
+                FileStatusKind::Added => 2,
+                FileStatusKind::Modified => 1,
+                FileStatusKind::Untracked => 0,
+            }
+        }
+
+        fn sort_and_dedup(entries: &mut Vec<FileStatus>) {
+            entries.sort_unstable_by(|a, b| {
+                a.path
+                    .cmp(&b.path)
+                    .then_with(|| kind_priority(b.kind).cmp(&kind_priority(a.kind)))
+            });
+            entries.dedup_by(|a, b| a.path == b.path);
+        }
+
+        sort_and_dedup(&mut staged);
+        sort_and_dedup(&mut unstaged);
 
         Ok(RepoStatus { staged, unstaged })
     }
@@ -721,15 +741,17 @@ impl GitRepository for GixRepo {
                             Ok(old) => old,
                             Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
                             {
-                                let ours = git_show_path_utf8_optional(
+                                let ours = git_show_path_utf8_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":2:",
                                     path_str.as_ref(),
+                                    2,
                                 )?;
-                                let theirs = git_show_path_utf8_optional(
+                                let theirs = git_show_path_utf8_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":3:",
                                     path_str.as_ref(),
+                                    3,
                                 )?;
                                 return Ok(Some(FileDiffText {
                                     path: path.clone(),
@@ -755,16 +777,18 @@ impl GitRepository for GixRepo {
                         ) {
                             Ok(new) => new,
                             Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
-                                git_show_path_utf8_optional(
+                                git_show_path_utf8_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":2:",
                                     path_str.as_ref(),
+                                    2,
                                 )?
                                 .or_else(|| {
-                                    git_show_path_utf8_optional(
+                                    git_show_path_utf8_optional_unmerged_stage(
                                         &self.spec.workdir,
                                         ":3:",
                                         path_str.as_ref(),
+                                        3,
                                     )
                                     .ok()
                                     .flatten()
@@ -830,15 +854,17 @@ impl GitRepository for GixRepo {
                             Ok(old) => old,
                             Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
                             {
-                                let ours = git_show_path_bytes_optional(
+                                let ours = git_show_path_bytes_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":2:",
                                     path_str.as_ref(),
+                                    2,
                                 )?;
-                                let theirs = git_show_path_bytes_optional(
+                                let theirs = git_show_path_bytes_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":3:",
                                     path_str.as_ref(),
+                                    3,
                                 )?;
                                 return Ok(Some(FileDiffImage {
                                     path: path.clone(),
@@ -864,16 +890,18 @@ impl GitRepository for GixRepo {
                         ) {
                             Ok(new) => new,
                             Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
-                                git_show_path_bytes_optional(
+                                git_show_path_bytes_optional_unmerged_stage(
                                     &self.spec.workdir,
                                     ":2:",
                                     path_str.as_ref(),
+                                    2,
                                 )?
                                 .or_else(|| {
-                                    git_show_path_bytes_optional(
+                                    git_show_path_bytes_optional_unmerged_stage(
                                         &self.spec.workdir,
                                         ":3:",
                                         path_str.as_ref(),
+                                        3,
                                     )
                                     .ok()
                                     .flatten()
@@ -1442,6 +1470,49 @@ impl GitRepository for GixRepo {
     }
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
+        let desired_stage = match side {
+            ConflictSide::Ours => 2,
+            ConflictSide::Theirs => 3,
+        };
+
+        let mut ls = Command::new("git");
+        ls.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("ls-files")
+            .arg("-u")
+            .arg("--")
+            .arg(path);
+        let output = ls
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git ls-files -u failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stage_exists = stdout.lines().any(|line| {
+            let mut parts = line.split_whitespace();
+            let _mode = parts.next();
+            let _sha = parts.next();
+            let stage = parts.next().and_then(|s| s.parse::<u8>().ok());
+            stage == Some(desired_stage)
+        });
+
+        if !stage_exists {
+            let mut rm = Command::new("git");
+            rm.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("rm")
+                .arg("--")
+                .arg(path);
+            return run_git_with_output(rm, "git rm --");
+        }
+
         let mut checkout = Command::new("git");
         checkout.arg("-C").arg(&self.spec.workdir).arg("checkout");
         match side {
@@ -1877,6 +1948,32 @@ fn git_show_unmerged_stage0(stderr: &str) -> bool {
         || (s.contains("Did you mean ':1:") && s.contains("is in the index"))
 }
 
+fn git_show_unmerged_stage_missing(stderr: &str, stage: u8) -> bool {
+    let s = stderr;
+    match stage {
+        2 => s.contains("is in the index, but not at stage 2"),
+        3 => s.contains("is in the index, but not at stage 3"),
+        _ => false,
+    }
+}
+
+fn git_show_path_utf8_optional_unmerged_stage(
+    workdir: &Path,
+    rev_prefix: &str,
+    path: &str,
+    stage: u8,
+) -> Result<Option<String>> {
+    match git_show_path_utf8_optional(workdir, rev_prefix, path) {
+        Ok(value) => Ok(value),
+        Err(e)
+            if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn git_show_path_bytes_optional(
     workdir: &Path,
     rev_prefix: &str,
@@ -1911,6 +2008,23 @@ fn git_show_path_bytes_optional(
         "git show failed: {}",
         stderr.trim()
     ))))
+}
+
+fn git_show_path_bytes_optional_unmerged_stage(
+    workdir: &Path,
+    rev_prefix: &str,
+    path: &str,
+    stage: u8,
+) -> Result<Option<Vec<u8>>> {
+    match git_show_path_bytes_optional(workdir, rev_prefix, path) {
+        Ok(value) => Ok(value),
+        Err(e)
+            if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<String>> {

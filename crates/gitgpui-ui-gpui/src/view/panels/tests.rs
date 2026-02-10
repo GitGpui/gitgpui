@@ -7,9 +7,49 @@ use std::path::Path;
 use std::sync::Arc;
 
 #[test]
-fn commit_details_files_list_has_reasonable_max_height() {
-    assert!(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX > 0.0);
-    assert!(COMMIT_DETAILS_FILES_MAX_HEIGHT_PX <= 400.0);
+fn commit_details_message_has_reasonable_max_height() {
+    assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
+    assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX <= 400.0);
+}
+
+#[test]
+fn conflict_prefers_diff_view_for_modify_delete_conflict() {
+    let repo_id = gitgpui_state::model::RepoId(99);
+    let mut repo = gitgpui_state::model::RepoState::new_opening(
+        repo_id,
+        gitgpui_core::domain::RepoSpec {
+            workdir: std::env::temp_dir(),
+        },
+    );
+
+    let path = std::path::PathBuf::from("conflict.txt");
+    repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
+        path: path.clone(),
+        old: Some("local".into()),
+        new: None,
+    }));
+
+    assert!(MainPaneView::conflict_prefers_diff_view(&repo, &path));
+}
+
+#[test]
+fn conflict_prefers_diff_view_false_for_regular_text_conflict() {
+    let repo_id = gitgpui_state::model::RepoId(100);
+    let mut repo = gitgpui_state::model::RepoState::new_opening(
+        repo_id,
+        gitgpui_core::domain::RepoSpec {
+            workdir: std::env::temp_dir(),
+        },
+    );
+
+    let path = std::path::PathBuf::from("conflict.txt");
+    repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
+        path: path.clone(),
+        old: Some("ours".into()),
+        new: Some("theirs".into()),
+    }));
+
+    assert!(!MainPaneView::conflict_prefers_diff_view(&repo, &path));
 }
 
 struct TestBackend;

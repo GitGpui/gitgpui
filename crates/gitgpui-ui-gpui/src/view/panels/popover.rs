@@ -1087,11 +1087,13 @@ impl GitGpuiView {
                 repo_id,
                 area,
                 path,
+                selection,
             } => self.context_menu_view(
                 PopoverKind::StatusFileMenu {
                     repo_id,
                     area,
                     path,
+                    selection,
                 },
                 cx,
             ),
@@ -1442,6 +1444,7 @@ mod tests {
                             repo_id,
                             area: DiffArea::Unstaged,
                             path: a.clone(),
+                            selection: vec![a.clone(), b.clone()],
                         },
                         cx,
                     )
@@ -1539,6 +1542,7 @@ mod tests {
                             repo_id,
                             area: DiffArea::Staged,
                             path: a.clone(),
+                            selection: vec![a.clone(), b.clone()],
                         },
                         cx,
                     )
@@ -1615,6 +1619,7 @@ mod tests {
                             repo_id,
                             area: DiffArea::Unstaged,
                             path: path.clone(),
+                            selection: Vec::new(),
                         },
                         cx,
                     )
@@ -1669,6 +1674,67 @@ mod tests {
             assert!(has_ours);
             assert!(has_theirs);
             assert!(has_manual);
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(6);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_status_menu_reentrant",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("conflict.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitgpui_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitgpui_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Conflicted,
+                        }],
+                    }
+                    .into(),
+                );
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                cx.notify();
+            });
+        });
+
+        cx.update(|window, app| {
+            let details_pane = view.read(app).details_pane.clone();
+            let anchor = point(px(0.0), px(0.0));
+            let _ = details_pane.update(app, |pane, cx| {
+                pane.open_popover_at(
+                    PopoverKind::StatusFileMenu {
+                        repo_id,
+                        area: DiffArea::Unstaged,
+                        path: path.clone(),
+                        selection: Vec::new(),
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+            });
         });
     }
 }

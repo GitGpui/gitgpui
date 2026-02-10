@@ -412,6 +412,221 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
 }
 
 #[test]
+fn status_reports_single_conflict_for_modify_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_delete"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    let status = opened.status().unwrap();
+
+    let entries = status
+        .unstaged
+        .iter()
+        .filter(|e| e.path == PathBuf::from("a.txt"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one status entry for a.txt, got {:#?}",
+        status.unstaged
+    );
+    assert_eq!(entries[0].kind, FileStatusKind::Conflicted);
+}
+
+#[test]
+fn diff_file_text_handles_modify_delete_conflicts() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_delete"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    let diff = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap()
+        .expect("file diff for conflicted changes");
+    assert_eq!(diff.old, None);
+    assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+}
+
+#[test]
+fn checkout_conflict_side_resolves_modify_delete_using_ours() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_delete"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    opened
+        .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Ours)
+        .unwrap();
+
+    assert!(
+        !repo.join("a.txt").exists(),
+        "expected ours resolution to remove file from worktree"
+    );
+    let status = opened.status().unwrap();
+    assert!(
+        !status
+            .staged
+            .iter()
+            .chain(status.unstaged.iter())
+            .any(|e| e.path == PathBuf::from("a.txt")),
+        "expected ours resolution to clear status entries for a.txt, got {status:?}"
+    );
+}
+
+#[test]
+fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_delete"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    opened
+        .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Theirs)
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "theirs\n",
+        "expected theirs resolution to restore file contents"
+    );
+    let status = opened.status().unwrap();
+    assert_eq!(
+        status.unstaged,
+        Vec::new(),
+        "expected theirs resolution to clear unstaged entries"
+    );
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Added),
+        "expected theirs resolution to stage file as added, got {status:?}"
+    );
+}
+
+#[test]
 fn checkout_conflict_side_stages_resolution() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

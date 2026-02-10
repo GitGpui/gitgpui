@@ -15,7 +15,7 @@ impl GitGpuiView {
     pub(super) fn context_menu_model(
         &self,
         kind: &PopoverKind,
-        cx: &gpui::Context<Self>,
+        _cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
             PopoverKind::PullPicker => Some(pull::model(self)),
@@ -30,18 +30,15 @@ impl GitGpuiView {
                 repo_id,
                 area,
                 path,
+                selection,
             } => {
-                let selection = self
-                    .details_pane
-                    .read(cx)
-                    .status_multi_selection
-                    .get(repo_id)
-                    .map(|s| match area {
-                        DiffArea::Unstaged => s.unstaged.as_slice(),
-                        DiffArea::Staged => s.staged.as_slice(),
-                    })
-                    .unwrap_or(&[]);
-                Some(status_file::model(self, selection, *repo_id, *area, path))
+                Some(status_file::model(
+                    self,
+                    selection.as_slice(),
+                    *repo_id,
+                    *area,
+                    path,
+                ))
             }
             PopoverKind::BranchMenu {
                 repo_id,

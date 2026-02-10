@@ -80,6 +80,29 @@ impl MainPaneView {
             .child(div().flex_1().min_h(px(0.0)).child(body))
     }
 
+    pub(in super::super) fn conflict_prefers_diff_view(
+        repo: &RepoState,
+        conflict_path: &std::path::PathBuf,
+    ) -> bool {
+        if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
+            return true;
+        }
+
+        if let Loadable::Ready(Some(file)) = &repo.conflict_file {
+            if &file.path == conflict_path {
+                return file.ours.is_none() || file.theirs.is_none();
+            }
+        }
+
+        if let Loadable::Ready(Some(file)) = &repo.diff_file {
+            if &file.path == conflict_path {
+                return file.old.is_none() || file.new.is_none();
+            }
+        }
+
+        false
+    }
+
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let repo_id = self.active_repo_id();
@@ -202,7 +225,12 @@ impl MainPaneView {
                 _ => None,
             }
         });
-        let is_conflict_resolver = conflict_target_path.is_some();
+        let conflict_prefers_diff_view = repo.is_some_and(|repo| {
+            conflict_target_path
+                .as_ref()
+                .is_some_and(|path| Self::conflict_prefers_diff_view(repo, path))
+        });
+        let is_conflict_resolver = conflict_target_path.is_some() && !conflict_prefers_diff_view;
 
         let diff_nav_hotkey_hint = |label: &'static str| {
             div()
