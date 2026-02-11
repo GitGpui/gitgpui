@@ -1529,6 +1529,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.reflog.is_loading());
     assert!(repo_state.upstream_divergence.is_loading());
     assert!(repo_state.rebase_in_progress.is_loading());
+    assert!(repo_state.merge_commit_message.is_loading());
     assert!(matches!(repo_state.file_history, Loadable::NotLoaded));
     assert!(matches!(repo_state.blame, Loadable::NotLoaded));
     assert!(matches!(
@@ -1544,6 +1545,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
             Effect::LoadStashes { .. },
             Effect::LoadReflog { .. },
             Effect::LoadRebaseState { .. },
+            Effect::LoadMergeCommitMessage { .. },
             Effect::LoadLog { .. }
         ]
     ));
@@ -2222,6 +2224,15 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::MergeCommitMessageLoaded {
+            repo_id: RepoId(1),
+            result: Ok(None),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::StatusLoaded {
             repo_id: RepoId(1),
             result: Ok(gitgpui_core::domain::RepoStatus::default()),
@@ -2283,6 +2294,12 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         "expected rebase state refresh"
     );
     assert!(
+        effects.iter().any(|e| {
+            matches!(e, Effect::LoadMergeCommitMessage { repo_id } if *repo_id == RepoId(1))
+        }),
+        "expected merge commit message refresh"
+    );
+    assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadDiff { repo_id, .. } if *repo_id == RepoId(1))),
@@ -2327,6 +2344,11 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         effects1
             .iter()
             .any(|e| matches!(e, Effect::LoadRebaseState { .. }))
+    );
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadMergeCommitMessage { .. }))
     );
     assert!(
         effects1
@@ -2398,6 +2420,20 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::MergeCommitMessageLoaded {
+            repo_id: RepoId(1),
+            result: Ok(None),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadMergeCommitMessage { repo_id: RepoId(1) }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::StatusLoaded {
             repo_id: RepoId(1),
             result: Ok(gitgpui_core::domain::RepoStatus::default()),
@@ -2462,6 +2498,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.status.is_loading());
     assert!(repo_state.log.is_loading());
     assert!(!repo_state.log_loading_more);
+    assert!(repo_state.merge_commit_message.is_loading());
     assert!(
         effects
             .iter()

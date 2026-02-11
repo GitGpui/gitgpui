@@ -80,6 +80,12 @@ fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     }
     if repo_state
         .loads_in_flight
+        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+    {
+        effects.push(Effect::LoadMergeCommitMessage { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
         .request(RepoLoadsInFlight::STATUS)
     {
         effects.push(Effect::LoadStatus { repo_id });
@@ -167,6 +173,12 @@ fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
         .request(RepoLoadsInFlight::REBASE_STATE)
     {
         effects.push(Effect::LoadRebaseState { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+    {
+        effects.push(Effect::LoadMergeCommitMessage { repo_id });
     }
     if repo_state
         .loads_in_flight
@@ -340,6 +352,7 @@ pub(super) fn reduce(
             repo_state.set_stashes(Loadable::Loading);
             repo_state.reflog = Loadable::Loading;
             repo_state.rebase_in_progress = Loadable::Loading;
+            repo_state.merge_commit_message = Loadable::Loading;
             repo_state.file_history_path = None;
             repo_state.file_history = Loadable::NotLoaded;
             repo_state.blame_path = None;
@@ -455,6 +468,26 @@ pub(super) fn reduce(
                     .finish(RepoLoadsInFlight::REBASE_STATE)
                 {
                     effects.push(Effect::LoadRebaseState { repo_id });
+                }
+            }
+            effects
+        }
+
+        Msg::MergeCommitMessageLoaded { repo_id, result } => {
+            let mut effects = Vec::new();
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.merge_commit_message = match result {
+                    Ok(v) => Loadable::Ready(v),
+                    Err(e) => {
+                        push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                        Loadable::Error(e.to_string())
+                    }
+                };
+                if repo_state
+                    .loads_in_flight
+                    .finish(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
+                {
+                    effects.push(Effect::LoadMergeCommitMessage { repo_id });
                 }
             }
             effects
@@ -990,6 +1023,7 @@ pub(super) fn reduce(
                 repo_state.set_stashes(Loadable::Loading);
                 repo_state.reflog = Loadable::Loading;
                 repo_state.rebase_in_progress = Loadable::Loading;
+                repo_state.merge_commit_message = Loadable::Loading;
                 repo_state.file_history_path = None;
                 repo_state.file_history = Loadable::NotLoaded;
                 repo_state.blame_path = None;

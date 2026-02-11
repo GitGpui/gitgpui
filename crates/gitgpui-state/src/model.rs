@@ -32,6 +32,7 @@ impl RepoLoadsInFlight {
     pub const REFLOG: u32 = 1 << 8;
     pub const REBASE_STATE: u32 = 1 << 9;
     pub const LOG: u32 = 1 << 10;
+    pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 11;
 
     pub fn is_in_flight(&self, flag: u32) -> bool {
         (self.in_flight & flag) != 0
@@ -190,6 +191,7 @@ pub struct RepoState {
     pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
     pub rebase_in_progress: Loadable<bool>,
+    pub merge_commit_message: Loadable<Option<String>>,
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
     pub blame_path: Option<PathBuf>,
@@ -244,6 +246,7 @@ impl RepoState {
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
             rebase_in_progress: Loadable::NotLoaded,
+            merge_commit_message: Loadable::NotLoaded,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
             blame_path: None,

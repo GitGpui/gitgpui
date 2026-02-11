@@ -428,6 +428,10 @@ pub enum Msg {
         repo_id: RepoId,
         result: Result<bool, Error>,
     },
+    MergeCommitMessageLoaded {
+        repo_id: RepoId,
+        result: Result<Option<String>, Error>,
+    },
     FileHistoryLoaded {
         repo_id: RepoId,
         path: PathBuf,
@@ -969,6 +973,11 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            Msg::MergeCommitMessageLoaded { repo_id, result } => f
+                .debug_struct("MergeCommitMessageLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             Msg::FileHistoryLoaded {
                 repo_id,
                 path,
@@ -1138,6 +1147,9 @@ pub enum Effect {
         repo_id: RepoId,
     },
     LoadRebaseState {
+        repo_id: RepoId,
+    },
+    LoadMergeCommitMessage {
         repo_id: RepoId,
     },
     LoadCommitDetails {

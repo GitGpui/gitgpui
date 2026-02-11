@@ -310,6 +310,17 @@ pub(super) fn schedule_effect(
             }
         }
 
+        Effect::LoadMergeCommitMessage { repo_id } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::MergeCommitMessageLoaded {
+                        repo_id,
+                        result: repo.merge_commit_message(),
+                    });
+                });
+            }
+        }
+
         Effect::LoadCommitDetails { repo_id, commit_id } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {

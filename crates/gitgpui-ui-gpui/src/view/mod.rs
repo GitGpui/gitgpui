@@ -2676,6 +2676,9 @@ impl GitGpuiView {
             let path_for_task = path.clone();
             let task = cx.background_executor().spawn(async move {
                 let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
+                if meta.is_dir() {
+                    return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
+                }
                 if meta.len() > MAX_BYTES {
                     return Err(format!(
                         "File is too large to preview ({} bytes).",

@@ -287,6 +287,27 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 }
 
 #[test]
+fn diff_file_text_returns_none_for_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    write(repo, "dir/a.txt", "one\n");
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    let result = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("dir"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+
+    assert!(result.is_none());
+}
+
+#[test]
 fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -356,6 +377,27 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
         .expect("image diff for commit");
     assert_eq!(commit.old.as_deref(), Some(old_png.as_slice()));
     assert_eq!(commit.new.as_deref(), Some(new_png.as_slice()));
+}
+
+#[test]
+fn diff_file_image_returns_none_for_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    write(repo, "dir/a.png", "not really a png\n");
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    let result = opened
+        .diff_file_image(&DiffTarget::WorkingTree {
+            path: PathBuf::from("dir"),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+
+    assert!(result.is_none());
 }
 
 #[test]
@@ -1154,6 +1196,55 @@ fn merge_creates_merge_commit_when_branches_diverged() {
     assert!(repo.join("c.txt").exists());
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
     assert_eq!(fs::read_to_string(repo.join("c.txt")).unwrap(), "main\n");
+}
+
+#[test]
+fn merge_commit_message_is_available_during_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "feature\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "main\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    assert!(opened.merge_ref_with_output("feature").is_err());
+
+    let msg = opened
+        .merge_commit_message()
+        .unwrap()
+        .expect("merge commit message");
+    assert_eq!(msg.lines().next().unwrap_or_default(), "Merge branch 'feature'");
+    assert!(!msg.contains('#'), "expected message to be cleaned, got: {msg}");
+
+    run_git(repo, &["merge", "--abort"]);
+    assert!(opened.merge_commit_message().unwrap().is_none());
 }
 
 #[test]

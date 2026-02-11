@@ -754,6 +754,17 @@ impl GitRepository for GixRepo {
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         match target {
             DiffTarget::WorkingTree { path, area } => {
+                if matches!(area, DiffArea::Unstaged) {
+                    let full_path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        self.spec.workdir.join(path)
+                    };
+                    if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+                        return Ok(None);
+                    }
+                }
+
                 let path_str = path.to_string_lossy();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -867,6 +878,17 @@ impl GitRepository for GixRepo {
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
+                if matches!(area, DiffArea::Unstaged) {
+                    let full_path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        self.spec.workdir.join(path)
+                    };
+                    if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+                        return Ok(None);
+                    }
+                }
+
                 let path_str = path.to_string_lossy();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
@@ -1372,6 +1394,82 @@ impl GitRepository for GixRepo {
             .output()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         Ok(output.status.success())
+    }
+
+    fn merge_commit_message(&self) -> Result<Option<String>> {
+        let merge_head = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("MERGE_HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !merge_head.status.success() {
+            return Ok(None);
+        }
+
+        let merge_msg_path = Command::new("git")
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("rev-parse")
+            .arg("--git-path")
+            .arg("MERGE_MSG")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        if !merge_msg_path.status.success() {
+            let stderr = str::from_utf8(&merge_msg_path.stderr).unwrap_or("<non-utf8 stderr>");
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "git rev-parse --git-path MERGE_MSG failed: {}",
+                stderr.trim()
+            ))));
+        }
+
+        let merge_msg_path = String::from_utf8_lossy(&merge_msg_path.stdout);
+        let merge_msg_path = merge_msg_path.trim();
+        if merge_msg_path.is_empty() {
+            return Ok(None);
+        }
+
+        let merge_msg_path = std::path::PathBuf::from(merge_msg_path);
+        let merge_msg_path = if merge_msg_path.is_absolute() {
+            merge_msg_path
+        } else {
+            self.spec.workdir.join(merge_msg_path)
+        };
+
+        let contents = match std::fs::read_to_string(&merge_msg_path) {
+            Ok(v) => v,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        };
+
+        let mut lines: Vec<&str> = Vec::new();
+        for line in contents.lines() {
+            let line = line.trim_end();
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            lines.push(line);
+        }
+
+        let Some(start) = lines.iter().position(|l| !l.trim().is_empty()) else {
+            return Ok(None);
+        };
+        let end = lines
+            .iter()
+            .rposition(|l| !l.trim().is_empty())
+            .map(|ix| ix + 1)
+            .unwrap_or(start);
+
+        let message = lines[start..end].join("\n");
+        if message.trim().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(message))
+        }
     }
 
     fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {

@@ -1717,6 +1717,52 @@ impl MainPaneView {
                     handled = true;
                 }
 
+                if !handled
+                    && (key == "f1" || key == "f4")
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                    && let Some(repo_id) = this.active_repo_id()
+                    && let Some(repo) = this.active_repo()
+                    && let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.clone()
+                    && let Loadable::Ready(status) = &repo.status
+                {
+                    let entries = match area {
+                        DiffArea::Unstaged => status.unstaged.as_slice(),
+                        DiffArea::Staged => status.staged.as_slice(),
+                    };
+
+                    let target = (|| {
+                        let current_ix = entries.iter().position(|e| e.path == path)?;
+                        let target_ix = if key == "f1" {
+                            current_ix.checked_sub(1)?
+                        } else {
+                            let next_ix = current_ix + 1;
+                            if next_ix < entries.len() {
+                                next_ix
+                            } else {
+                                return None;
+                            }
+                        };
+                        Some((target_ix, entries.get(target_ix)?.path.clone()))
+                    })();
+
+                    if let Some((target_ix, target_path)) = target {
+                        this.clear_status_multi_selection(repo_id, cx);
+                        this.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: target_path,
+                                area,
+                            },
+                        });
+                        this.scroll_status_list_to_ix(area, target_ix, cx);
+
+                        handled = true;
+                    }
+                }
+
                 let is_file_preview = this.untracked_worktree_preview_path().is_some()
                     || this.added_file_preview_abs_path().is_some()
                     || this.deleted_file_preview_abs_path().is_some();

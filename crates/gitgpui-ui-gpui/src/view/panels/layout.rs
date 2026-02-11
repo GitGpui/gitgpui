@@ -712,6 +712,16 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
+        if let Some(message) = self.active_repo().and_then(|repo| match &repo.merge_commit_message {
+            Loadable::Ready(Some(msg)) => Some(msg.clone()),
+            _ => None,
+        }) {
+            let current = self.commit_message_input.read(cx).text();
+            if current.trim().is_empty() {
+                self.commit_message_input
+                    .update(cx, |i, cx| i.set_text(message, cx));
+            }
+        }
         let can_amend = self.active_repo().is_some_and(
             |repo| matches!(&repo.log, Loadable::Ready(page) if !page.commits.is_empty()),
         );

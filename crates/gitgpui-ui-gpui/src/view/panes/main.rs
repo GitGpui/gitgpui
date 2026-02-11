@@ -348,6 +348,29 @@ impl MainPaneView {
         });
     }
 
+    pub(in super::super) fn scroll_status_list_to_ix(
+        &mut self,
+        area: DiffArea,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            let _ = root
+                .details_pane
+                .update(cx, |pane: &mut DetailsPaneView, cx| {
+                    match area {
+                        DiffArea::Unstaged => pane
+                            .unstaged_scroll
+                            .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
+                        DiffArea::Staged => pane
+                            .staged_scroll
+                            .scroll_to_item_strict(ix, gpui::ScrollStrategy::Center),
+                    }
+                    cx.notify();
+                });
+        });
+    }
+
     pub(in super::super) fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,
@@ -637,6 +660,9 @@ impl MainPaneView {
             let path_for_task = path.clone();
             let task = cx.background_executor().spawn(async move {
                 let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
+                if meta.is_dir() {
+                    return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
+                }
                 if meta.len() > MAX_BYTES {
                     return Err(format!(
                         "File is too large to preview ({} bytes).",

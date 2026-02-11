@@ -156,6 +156,10 @@ pub trait GitRepository: Send + Sync {
         Ok(false)
     }
 
+    fn merge_commit_message(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
     fn create_tag_with_output(&self, _name: &str, _target: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git tag creation is not implemented for this backend",
