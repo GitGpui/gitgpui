@@ -224,6 +224,122 @@ impl MainPaneView {
                 .child(label)
         };
 
+        let file_nav_controls = (|| {
+            let repo_id = repo_id?;
+            let repo = self.active_repo()?;
+            let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+                return None;
+            };
+            let area = *area;
+
+            let (prev, next) = match &repo.status {
+                Loadable::Ready(status) => {
+                    let entries = match area {
+                        DiffArea::Unstaged => status.unstaged.as_slice(),
+                        DiffArea::Staged => status.staged.as_slice(),
+                    };
+                    if let Some(current_ix) = entries.iter().position(|e| e.path == *path) {
+                        let prev = current_ix
+                            .checked_sub(1)
+                            .and_then(|ix| entries.get(ix).map(|e| (ix, e.path.clone())));
+                        let next_ix = current_ix + 1;
+                        let next = (next_ix < entries.len())
+                            .then(|| (next_ix, entries[next_ix].path.clone()));
+                        (prev, next)
+                    } else {
+                        (None, None)
+                    }
+                }
+                _ => (None, None),
+            };
+
+            let prev_disabled = prev.is_none();
+            let next_disabled = next.is_none();
+
+            let prev_target = prev;
+            let next_target = next;
+
+            let prev_tooltip: SharedString = "Previous file (F1)".into();
+            let next_tooltip: SharedString = "Next file (F4)".into();
+
+            let prev_btn = zed::Button::new("diff_prev_file", "Prev file")
+                .end_slot(diff_nav_hotkey_hint("F1"))
+                .style(zed::ButtonStyle::Outlined)
+                .disabled(prev_disabled)
+                .on_click(theme, cx, move |this, _e, window, cx| {
+                    let Some((target_ix, target_path)) = prev_target.as_ref() else {
+                        return;
+                    };
+                    window.focus(&this.diff_panel_focus_handle);
+                    this.clear_status_multi_selection(repo_id, cx);
+                    this.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::WorkingTree {
+                            path: target_path.clone(),
+                            area,
+                        },
+                    });
+                    this.scroll_status_list_to_ix(area, *target_ix, cx);
+                    cx.notify();
+                })
+                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                    let mut changed = false;
+                    if *hovering {
+                        changed |= this
+                            .set_tooltip_text_if_changed(Some(prev_tooltip.clone()), cx);
+                    } else {
+                        changed |= this.clear_tooltip_if_matches(&prev_tooltip, cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                }));
+
+            let next_btn = zed::Button::new("diff_next_file", "Next file")
+                .end_slot(diff_nav_hotkey_hint("F4"))
+                .style(zed::ButtonStyle::Outlined)
+                .disabled(next_disabled)
+                .on_click(theme, cx, move |this, _e, window, cx| {
+                    let Some((target_ix, target_path)) = next_target.as_ref() else {
+                        return;
+                    };
+                    window.focus(&this.diff_panel_focus_handle);
+                    this.clear_status_multi_selection(repo_id, cx);
+                    this.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::WorkingTree {
+                            path: target_path.clone(),
+                            area,
+                        },
+                    });
+                    this.scroll_status_list_to_ix(area, *target_ix, cx);
+                    cx.notify();
+                })
+                .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                    let mut changed = false;
+                    if *hovering {
+                        changed |= this
+                            .set_tooltip_text_if_changed(Some(next_tooltip.clone()), cx);
+                    } else {
+                        changed |= this.clear_tooltip_if_matches(&next_tooltip, cx);
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                }));
+
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(prev_btn)
+                    .child(next_btn)
+                    .into_any_element(),
+            )
+        })();
+
         let mut controls = div().flex().items_center().gap_1();
         if is_conflict_resolver {
             let nav_entries = self.conflict_nav_entries();
@@ -509,9 +625,11 @@ impl MainPaneView {
                     .flex_1()
                     .flex()
                     .items_center()
+                    .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(title),
+                    .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(title))
+                    .when_some(file_nav_controls, |d, controls| d.child(controls)),
             )
             .child(controls);
 
