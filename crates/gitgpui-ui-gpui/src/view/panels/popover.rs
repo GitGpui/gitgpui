@@ -1405,10 +1405,12 @@ mod tests {
                             gitgpui_core::domain::FileStatus {
                                 path: a.clone(),
                                 kind: gitgpui_core::domain::FileStatusKind::Modified,
+                                conflict: None,
                             },
                             gitgpui_core::domain::FileStatus {
                                 path: b.clone(),
                                 kind: gitgpui_core::domain::FileStatusKind::Modified,
+                                conflict: None,
                             },
                         ],
                     }
@@ -1502,10 +1504,12 @@ mod tests {
                             gitgpui_core::domain::FileStatus {
                                 path: a.clone(),
                                 kind: gitgpui_core::domain::FileStatusKind::Modified,
+                                conflict: None,
                             },
                             gitgpui_core::domain::FileStatus {
                                 path: b.clone(),
                                 kind: gitgpui_core::domain::FileStatusKind::Modified,
+                                conflict: None,
                             },
                         ],
                         unstaged: vec![],
@@ -1598,6 +1602,7 @@ mod tests {
                         unstaged: vec![gitgpui_core::domain::FileStatus {
                             path: path.clone(),
                             kind: gitgpui_core::domain::FileStatusKind::Conflicted,
+                            conflict: None,
                         }],
                     }
                     .into(),
@@ -1706,6 +1711,7 @@ mod tests {
                         unstaged: vec![gitgpui_core::domain::FileStatus {
                             path: path.clone(),
                             kind: gitgpui_core::domain::FileStatusKind::Conflicted,
+                            conflict: None,
                         }],
                     }
                     .into(),

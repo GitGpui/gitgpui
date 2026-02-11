@@ -167,6 +167,7 @@ impl DetailsPaneView {
                                 .flex_col()
                                 .gap_2()
                                 .flex_1()
+                                .h_full()
                                 .min_h(px(0.0))
                                 .child(
                                     div()
@@ -212,6 +213,7 @@ impl DetailsPaneView {
                                         .flex_col()
                                         .gap_1()
                                         .flex_1()
+                                        .h_full()
                                         .min_h(px(0.0))
                                         .child(
                                             div()
@@ -307,6 +309,7 @@ impl DetailsPaneView {
                             .flex_col()
                             .gap_2()
                             .flex_1()
+                            .h_full()
                             .min_h(px(0.0))
                             .child(
                                 div()
@@ -352,6 +355,7 @@ impl DetailsPaneView {
                                     .flex_col()
                                     .gap_1()
                                     .flex_1()
+                                    .h_full()
                                     .min_h(px(0.0))
                                     .child(
                                         div()

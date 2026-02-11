@@ -1,7 +1,7 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileDiffText,
-    FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RepoSpec,
-    RepoStatus, Submodule, Tag, Upstream, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileConflictKind,
+    FileDiffText, FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch,
+    RepoSpec, RepoStatus, Submodule, Tag, Upstream, UpstreamDivergence, Worktree,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -532,8 +532,8 @@ impl GitRepository for GixRepo {
                         rela_path, status, ..
                     } => {
                         let path = PathBuf::from(rela_path.to_str_lossy().into_owned());
-                        let kind = map_entry_status(status);
-                        unstaged.push(FileStatus { path, kind });
+                        let (kind, conflict) = map_entry_status(status);
+                        unstaged.push(FileStatus { path, kind, conflict });
                     }
                     gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
                         let kind = match entry.status {
@@ -544,7 +544,11 @@ impl GitRepository for GixRepo {
                         };
 
                         let path = PathBuf::from(entry.rela_path.to_str_lossy().into_owned());
-                        unstaged.push(FileStatus { path, kind });
+                        unstaged.push(FileStatus {
+                            path,
+                            kind,
+                            conflict: None,
+                        });
                     }
                     gix::status::index_worktree::Item::Rewrite {
                         dirwalk_entry,
@@ -559,7 +563,11 @@ impl GitRepository for GixRepo {
 
                         let path =
                             PathBuf::from(dirwalk_entry.rela_path.to_str_lossy().into_owned());
-                        unstaged.push(FileStatus { path, kind });
+                        unstaged.push(FileStatus {
+                            path,
+                            kind,
+                            conflict: None,
+                        });
                     }
                 },
 
@@ -589,7 +597,11 @@ impl GitRepository for GixRepo {
                         ),
                     };
 
-                    staged.push(FileStatus { path, kind });
+                    staged.push(FileStatus {
+                        path,
+                        kind,
+                        conflict: None,
+                    });
                 }
             }
         }
@@ -616,6 +628,18 @@ impl GitRepository for GixRepo {
 
         sort_and_dedup(&mut staged);
         sort_and_dedup(&mut unstaged);
+
+        // gix may report unmerged entries (conflicts) as both Index/Worktree and Tree/Index
+        // changes, which causes the same path to show up in both sections in the UI. Mirror
+        // `git status` behavior by showing conflicted paths only once.
+        let conflicted: std::collections::HashSet<std::path::PathBuf> = unstaged
+            .iter()
+            .filter(|e| e.kind == FileStatusKind::Conflicted)
+            .map(|e| e.path.clone())
+            .collect();
+        if !conflicted.is_empty() {
+            staged.retain(|e| !conflicted.contains(&e.path));
+        }
 
         Ok(RepoStatus { staged, unstaged })
     }
@@ -2463,18 +2487,32 @@ mod tests {
 
 fn map_entry_status<T, U>(
     status: gix::status::plumbing::index_as_worktree::EntryStatus<T, U>,
-) -> FileStatusKind {
-    use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
+) -> (FileStatusKind, Option<FileConflictKind>) {
+    use gix::status::plumbing::index_as_worktree::{Change, Conflict, EntryStatus};
 
     match status {
-        EntryStatus::Conflict { .. } => FileStatusKind::Conflicted,
-        EntryStatus::IntentToAdd => FileStatusKind::Added,
-        EntryStatus::NeedsUpdate(_) => FileStatusKind::Modified,
-        EntryStatus::Change(change) => match change {
-            Change::Removed => FileStatusKind::Deleted,
-            Change::Type { .. } => FileStatusKind::Modified,
-            Change::Modification { .. } => FileStatusKind::Modified,
-            Change::SubmoduleModification(_) => FileStatusKind::Modified,
-        },
+        EntryStatus::Conflict { summary, .. } => (
+            FileStatusKind::Conflicted,
+            Some(match summary {
+                Conflict::BothDeleted => FileConflictKind::BothDeleted,
+                Conflict::AddedByUs => FileConflictKind::AddedByUs,
+                Conflict::DeletedByThem => FileConflictKind::DeletedByThem,
+                Conflict::AddedByThem => FileConflictKind::AddedByThem,
+                Conflict::DeletedByUs => FileConflictKind::DeletedByUs,
+                Conflict::BothAdded => FileConflictKind::BothAdded,
+                Conflict::BothModified => FileConflictKind::BothModified,
+            }),
+        ),
+        EntryStatus::IntentToAdd => (FileStatusKind::Added, None),
+        EntryStatus::NeedsUpdate(_) => (FileStatusKind::Modified, None),
+        EntryStatus::Change(change) => (
+            match change {
+                Change::Removed => FileStatusKind::Deleted,
+                Change::Type { .. } => FileStatusKind::Modified,
+                Change::Modification { .. } => FileStatusKind::Modified,
+                Change::SubmoduleModification(_) => FileStatusKind::Modified,
+            },
+            None,
+        ),
     }
 }

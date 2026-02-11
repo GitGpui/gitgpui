@@ -9,6 +9,12 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query = if this.diff_search_active {
+            this.diff_search_query.clone()
+        } else {
+            SharedString::default()
+        };
+
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let empty_ranges: &[Range<usize>] = &[];
@@ -79,7 +85,7 @@ impl MainPaneView {
                             theme,
                             diff_content_text(line),
                             word_ranges,
-                            "",
+                            query.as_ref(),
                             language,
                             syntax_mode,
                             word_color,
@@ -178,9 +184,9 @@ impl MainPaneView {
                     .and_then(|p| p.as_deref())
                     .and_then(diff_syntax_language_for_path);
 
-                if matches!(click_kind, DiffClickKind::Line)
-                    && this.diff_text_segments_cache_get(src_ix).is_none()
-                {
+                let should_style =
+                    matches!(click_kind, DiffClickKind::Line) || !query.as_ref().is_empty();
+                if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
                     let Some(line) = this.diff_cache.get(src_ix) else {
                         return div()
                             .id(("diff_oob", visible_ix))
@@ -193,37 +199,54 @@ impl MainPaneView {
                             .into_any_element();
                     };
 
-                    let word_color = match line.kind {
-                        gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                        gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
-                        _ => None,
-                    };
+                    let computed = if matches!(click_kind, DiffClickKind::Line) {
+                            let word_color = match line.kind {
+                                gitgpui_core::domain::DiffLineKind::Add => {
+                                    Some(theme.colors.success)
+                                }
+                                gitgpui_core::domain::DiffLineKind::Remove => {
+                                    Some(theme.colors.danger)
+                                }
+                                _ => None,
+                            };
 
-                    let language = matches!(
-                        line.kind,
-                        gitgpui_core::domain::DiffLineKind::Add
-                            | gitgpui_core::domain::DiffLineKind::Remove
-                            | gitgpui_core::domain::DiffLineKind::Context
-                    )
-                    .then_some(language)
-                    .flatten();
+                            let language = matches!(
+                                line.kind,
+                                gitgpui_core::domain::DiffLineKind::Add
+                                    | gitgpui_core::domain::DiffLineKind::Remove
+                                    | gitgpui_core::domain::DiffLineKind::Context
+                            )
+                            .then_some(language)
+                            .flatten();
 
-                    let computed = build_cached_diff_styled_text(
-                        theme,
-                        diff_content_text(line),
-                        word_ranges,
-                        "",
-                        language,
-                        syntax_mode,
-                        word_color,
-                    );
+                            build_cached_diff_styled_text(
+                                theme,
+                                diff_content_text(line),
+                                word_ranges,
+                                query.as_ref(),
+                                language,
+                                syntax_mode,
+                                word_color,
+                            )
+                        } else {
+                            let display =
+                                this.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                            build_cached_diff_styled_text(
+                                theme,
+                                display.as_ref(),
+                                &[] as &[Range<usize>],
+                                query.as_ref(),
+                                None,
+                                syntax_mode,
+                                None,
+                            )
+                        };
                     this.diff_text_segments_cache_set(src_ix, computed);
                 }
 
-                let styled: Option<&CachedDiffStyledText> =
-                    matches!(click_kind, DiffClickKind::Line)
-                        .then(|| this.diff_text_segments_cache_get(src_ix))
-                        .flatten();
+                let styled: Option<&CachedDiffStyledText> = should_style
+                    .then(|| this.diff_text_segments_cache_get(src_ix))
+                    .flatten();
 
                 let Some(line) = this.diff_cache.get(src_ix) else {
                     return div()
@@ -258,6 +281,12 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query = if this.diff_search_active {
+            this.diff_search_query.clone()
+        } else {
+            SharedString::default()
+        };
+
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let empty_ranges: &[Range<usize>] = &[];
@@ -321,7 +350,7 @@ impl MainPaneView {
                                 theme,
                                 text,
                                 word_ranges,
-                                "",
+                                query.as_ref(),
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -456,7 +485,7 @@ impl MainPaneView {
                                 theme,
                                 text,
                                 word_ranges,
-                                "",
+                                query.as_ref(),
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -493,7 +522,9 @@ impl MainPaneView {
                         )
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
-                        let Some(line) = this.diff_cache.get(*src_ix) else {
+                        let src_ix = *src_ix;
+                        let click_kind = *click_kind;
+                        if this.diff_cache.get(src_ix).is_none() {
                             return div()
                                 .id(("diff_split_left_src_oob", visible_ix))
                                 .h(px(20.0))
@@ -504,15 +535,45 @@ impl MainPaneView {
                                 .child("")
                                 .into_any_element();
                         };
-                        let file_stat = this.diff_file_stats.get(*src_ix).and_then(|s| *s);
+                        let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+                        let should_style = !query.as_ref().is_empty();
+                        if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
+                            let display =
+                                this.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                            let computed = build_cached_diff_styled_text(
+                                theme,
+                                display.as_ref(),
+                                &[],
+                                query.as_ref(),
+                                None,
+                                syntax_mode,
+                                None,
+                            );
+                            this.diff_text_segments_cache_set(src_ix, computed);
+                        }
+                        let styled = should_style
+                            .then(|| this.diff_text_segments_cache_get(src_ix))
+                            .flatten();
+                        let Some(line) = this.diff_cache.get(src_ix) else {
+                            return div()
+                                .id(("diff_split_left_src_oob", visible_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("")
+                                .into_any_element();
+                        };
                         patch_split_header_row(
                             theme,
                             PatchSplitColumn::Left,
                             visible_ix,
-                            *click_kind,
+                            click_kind,
                             selected,
                             line,
                             file_stat,
+                            styled,
                             cx,
                         )
                     }
@@ -527,6 +588,12 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query = if this.diff_search_active {
+            this.diff_search_query.clone()
+        } else {
+            SharedString::default()
+        };
+
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let empty_ranges: &[Range<usize>] = &[];
@@ -590,7 +657,7 @@ impl MainPaneView {
                                 theme,
                                 text,
                                 word_ranges,
-                                "",
+                                query.as_ref(),
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -725,7 +792,7 @@ impl MainPaneView {
                                 theme,
                                 text,
                                 word_ranges,
-                                "",
+                                query.as_ref(),
                                 language,
                                 syntax_mode,
                                 word_color,
@@ -762,7 +829,9 @@ impl MainPaneView {
                         )
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
-                        let Some(line) = this.diff_cache.get(*src_ix) else {
+                        let src_ix = *src_ix;
+                        let click_kind = *click_kind;
+                        if this.diff_cache.get(src_ix).is_none() {
                             return div()
                                 .id(("diff_split_right_src_oob", visible_ix))
                                 .h(px(20.0))
@@ -773,15 +842,47 @@ impl MainPaneView {
                                 .child("")
                                 .into_any_element();
                         };
-                        let file_stat = this.diff_file_stats.get(*src_ix).and_then(|s| *s);
+                        let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
+                        let should_style = !query.as_ref().is_empty();
+                        if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
+                            let display = this.diff_text_line_for_region(
+                                visible_ix,
+                                DiffTextRegion::SplitRight,
+                            );
+                            let computed = build_cached_diff_styled_text(
+                                theme,
+                                display.as_ref(),
+                                &[],
+                                query.as_ref(),
+                                None,
+                                syntax_mode,
+                                None,
+                            );
+                            this.diff_text_segments_cache_set(src_ix, computed);
+                        }
+                        let styled = should_style
+                            .then(|| this.diff_text_segments_cache_get(src_ix))
+                            .flatten();
+                        let Some(line) = this.diff_cache.get(src_ix) else {
+                            return div()
+                                .id(("diff_split_right_src_oob", visible_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .font_family("monospace")
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("")
+                                .into_any_element();
+                        };
                         patch_split_header_row(
                             theme,
                             PatchSplitColumn::Right,
                             visible_ix,
-                            *click_kind,
+                            click_kind,
                             selected,
                             line,
                             file_stat,
+                            styled,
                             cx,
                         )
                     }
@@ -1047,6 +1148,7 @@ fn patch_split_header_row(
     selected: bool,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
+    styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1089,7 +1191,7 @@ fn patch_split_header_row(
                     region,
                     DiffClickKind::FileHeader,
                     theme.colors.text,
-                    None,
+                    styled,
                     file.into(),
                     cx,
                 ))
@@ -1149,7 +1251,7 @@ fn patch_split_header_row(
                     region,
                     DiffClickKind::HunkHeader,
                     theme.colors.text_muted,
-                    None,
+                    styled,
                     display.into(),
                     cx,
                 ))

@@ -4131,10 +4131,9 @@ impl GitGpuiView {
         } else {
             String::new()
         };
-        let diff_rows = match (file.ours.as_deref(), file.theirs.as_deref()) {
-            (Some(ours), Some(theirs)) => gitgpui_core::file_diff::side_by_side_rows(ours, theirs),
-            _ => Vec::new(),
-        };
+        let ours_text = file.ours.as_deref().unwrap_or("");
+        let theirs_text = file.theirs.as_deref().unwrap_or("");
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
 
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
@@ -5053,6 +5052,7 @@ mod tests {
             unstaged: vec![FileStatus {
                 path: a.clone(),
                 kind: FileStatusKind::Modified,
+                conflict: None,
             }],
         };
 

@@ -13,43 +13,17 @@ fn commit_details_message_has_reasonable_max_height() {
 }
 
 #[test]
-fn conflict_prefers_diff_view_for_modify_delete_conflict() {
-    let repo_id = gitgpui_state::model::RepoId(99);
-    let mut repo = gitgpui_state::model::RepoState::new_opening(
-        repo_id,
-        gitgpui_core::domain::RepoSpec {
-            workdir: std::env::temp_dir(),
-        },
-    );
+fn conflict_requires_resolver_only_for_both_modified() {
+    use gitgpui_core::domain::FileConflictKind as K;
 
-    let path = std::path::PathBuf::from("conflict.txt");
-    repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
-        path: path.clone(),
-        old: Some("local".into()),
-        new: None,
-    }));
-
-    assert!(MainPaneView::conflict_prefers_diff_view(&repo, &path));
-}
-
-#[test]
-fn conflict_prefers_diff_view_false_for_regular_text_conflict() {
-    let repo_id = gitgpui_state::model::RepoId(100);
-    let mut repo = gitgpui_state::model::RepoState::new_opening(
-        repo_id,
-        gitgpui_core::domain::RepoSpec {
-            workdir: std::env::temp_dir(),
-        },
-    );
-
-    let path = std::path::PathBuf::from("conflict.txt");
-    repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
-        path: path.clone(),
-        old: Some("ours".into()),
-        new: Some("theirs".into()),
-    }));
-
-    assert!(!MainPaneView::conflict_prefers_diff_view(&repo, &path));
+    assert!(MainPaneView::conflict_requires_resolver(Some(K::BothModified)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::BothAdded)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::AddedByUs)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::AddedByThem)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::DeletedByUs)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::DeletedByThem)));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(K::BothDeleted)));
+    assert!(!MainPaneView::conflict_requires_resolver(None));
 }
 
 struct TestBackend;
@@ -92,6 +66,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                     unstaged: vec![gitgpui_core::domain::FileStatus {
                         path: file_rel.clone(),
                         kind: gitgpui_core::domain::FileStatusKind::Untracked,
+                        conflict: None,
                     }],
                 }
                 .into(),
@@ -261,6 +236,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                     staged: vec![gitgpui_core::domain::FileStatus {
                         path: file_rel.clone(),
                         kind: gitgpui_core::domain::FileStatusKind::Deleted,
+                        conflict: None,
                     }],
                     unstaged: vec![],
                 }

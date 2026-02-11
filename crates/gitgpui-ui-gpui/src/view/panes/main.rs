@@ -39,6 +39,12 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_text_layout_cache_epoch: u64,
     pub(in super::super) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
     pub(in super::super) diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
+    pub(in super::super) diff_search_active: bool,
+    pub(in super::super) diff_search_query: SharedString,
+    pub(in super::super) diff_search_matches: Vec<usize>,
+    pub(in super::super) diff_search_match_ix: Option<usize>,
+    pub(in super::super) diff_search_input: Entity<zed::TextInput>,
+    _diff_search_subscription: gpui::Subscription,
 
     pub(in super::super) file_diff_cache_repo_id: Option<RepoId>,
     pub(in super::super) file_diff_cache_rev: u64,
@@ -66,6 +72,9 @@ pub(in super::super) struct MainPaneView {
 
     pub(in super::super) conflict_resolver_input: Entity<zed::TextInput>,
     pub(in super::super) conflict_resolver: ConflictResolverUiState,
+    pub(in super::super) conflict_diff_segments_cache_split:
+        HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+    pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
     pub(in super::super) conflict_resolved_preview_path: Option<std::path::PathBuf>,
     pub(in super::super) conflict_resolved_preview_source_hash: Option<u64>,
     pub(in super::super) conflict_resolved_preview_lines: Vec<String>,
@@ -138,6 +147,33 @@ impl MainPaneView {
             )
         });
 
+        let diff_search_input = cx.new(|cx| {
+            zed::TextInput::new(
+                zed::TextInputOptions {
+                    placeholder: "Search diff".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+        let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
+            let next: SharedString = input.read(cx).text().to_string().into();
+            if this.diff_search_query != next {
+                this.diff_search_query = next;
+                this.diff_text_segments_cache.clear();
+                this.worktree_preview_segments_cache_path = None;
+                this.worktree_preview_segments_cache.clear();
+                this.conflict_diff_segments_cache_split.clear();
+                this.conflict_diff_segments_cache_inline.clear();
+                this.diff_search_recompute_matches();
+                cx.notify();
+            }
+        });
+
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let mut pane = Self {
@@ -177,6 +213,12 @@ impl MainPaneView {
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: HashMap::new(),
             diff_hunk_picker_search_input: None,
+            diff_search_active: false,
+            diff_search_query: "".into(),
+            diff_search_matches: Vec::new(),
+            diff_search_match_ix: None,
+            diff_search_input,
+            _diff_search_subscription: diff_search_subscription,
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
             file_diff_cache_target: None,
@@ -200,6 +242,8 @@ impl MainPaneView {
             diff_preview_new_file_lines: Arc::new(Vec::new()),
             conflict_resolver_input,
             conflict_resolver: ConflictResolverUiState::default(),
+            conflict_diff_segments_cache_split: HashMap::new(),
+            conflict_diff_segments_cache_inline: HashMap::new(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
             conflict_resolved_preview_lines: Vec::new(),
@@ -234,6 +278,8 @@ impl MainPaneView {
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.diff_raw_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.diff_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.conflict_resolver_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1072,7 +1118,11 @@ impl MainPaneView {
         Some(a..b)
     }
 
-    fn diff_text_line_for_region(&self, visible_ix: usize, region: DiffTextRegion) -> SharedString {
+    pub(in super::super) fn diff_text_line_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
         let fallback = SharedString::default();
         let expand_tabs = |s: &str| -> SharedString {
             if !s.contains('\t') {
@@ -2206,6 +2256,9 @@ impl MainPaneView {
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
+            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+                self.diff_search_recompute_matches_for_current_view();
+            }
             return;
         }
 
@@ -2240,6 +2293,10 @@ impl MainPaneView {
         }
 
         self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
+
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches_for_current_view();
+        }
     }
 
     pub(in super::super) fn handle_patch_row_click(
@@ -2583,6 +2640,10 @@ impl MainPaneView {
         if !self.diff_autoscroll_pending {
             return;
         }
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_autoscroll_pending = false;
+            return;
+        }
         if self.diff_visible_indices.is_empty() {
             return;
         }
@@ -2595,6 +2656,206 @@ impl MainPaneView {
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
         self.diff_autoscroll_pending = false;
+    }
+
+    fn active_conflict_target(
+        &self,
+    ) -> Option<(std::path::PathBuf, Option<gitgpui_core::domain::FileConflictKind>)> {
+        let repo = self.active_repo()?;
+        let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+            return None;
+        };
+        if *area != DiffArea::Unstaged {
+            return None;
+        }
+        let Loadable::Ready(status) = &repo.status else {
+            return None;
+        };
+        let conflict = status
+            .unstaged
+            .iter()
+            .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)?;
+
+        Some((path.clone(), conflict.conflict))
+    }
+
+    pub(in super::super) fn diff_search_recompute_matches(&mut self) {
+        if !self.diff_search_active {
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            return;
+        }
+
+        if !self.is_file_preview_active() && self.active_conflict_target().is_none() {
+            self.ensure_diff_visible_indices();
+        }
+
+        self.diff_search_recompute_matches_for_current_view();
+    }
+
+    fn diff_search_recompute_matches_for_current_view(&mut self) {
+        self.diff_search_matches.clear();
+        self.diff_search_match_ix = None;
+
+        let query = self.diff_search_query.as_ref().trim();
+        if query.is_empty() {
+            return;
+        }
+
+        if self.is_file_preview_active() {
+            let Loadable::Ready(lines) = &self.worktree_preview else {
+                return;
+            };
+            for (ix, line) in lines.iter().enumerate() {
+                if contains_ascii_case_insensitive(line, query) {
+                    self.diff_search_matches.push(ix);
+                }
+            }
+        } else if let Some((_path, conflict_kind)) = self.active_conflict_target() {
+            let is_conflict_resolver = Self::conflict_requires_resolver(conflict_kind);
+
+            match (is_conflict_resolver, self.diff_view) {
+                (true, _) => match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => {
+                        for (ix, row) in self.conflict_resolver.diff_rows.iter().enumerate() {
+                            if row
+                                .old
+                                .as_deref()
+                                .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                                || row
+                                    .new
+                                    .as_deref()
+                                    .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                            {
+                                self.diff_search_matches.push(ix);
+                            }
+                        }
+                    }
+                    ConflictDiffMode::Inline => {
+                        for (ix, row) in self.conflict_resolver.inline_rows.iter().enumerate() {
+                            if contains_ascii_case_insensitive(row.content.as_str(), query) {
+                                self.diff_search_matches.push(ix);
+                            }
+                        }
+                    }
+                },
+                (false, DiffViewMode::Split) => {
+                    for (ix, row) in self.conflict_resolver.diff_rows.iter().enumerate() {
+                        if row
+                            .old
+                            .as_deref()
+                            .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                            || row
+                                .new
+                                .as_deref()
+                                .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                        {
+                            self.diff_search_matches.push(ix);
+                        }
+                    }
+                }
+                (false, DiffViewMode::Inline) => {
+                    for (ix, row) in self.conflict_resolver.inline_rows.iter().enumerate() {
+                        if contains_ascii_case_insensitive(row.content.as_str(), query) {
+                            self.diff_search_matches.push(ix);
+                        }
+                    }
+                }
+            }
+        } else {
+            let total = self.diff_visible_indices.len();
+            for visible_ix in 0..total {
+                match self.diff_view {
+                    DiffViewMode::Inline => {
+                        let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                        if contains_ascii_case_insensitive(text.as_ref(), query) {
+                            self.diff_search_matches.push(visible_ix);
+                        }
+                    }
+                    DiffViewMode::Split => {
+                        let left =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                        let right =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                        if contains_ascii_case_insensitive(left.as_ref(), query)
+                            || contains_ascii_case_insensitive(right.as_ref(), query)
+                        {
+                            self.diff_search_matches.push(visible_ix);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !self.diff_search_matches.is_empty() {
+            self.diff_search_match_ix = Some(0);
+            let first = self.diff_search_matches[0];
+            self.diff_search_scroll_to_visible_ix(first);
+        }
+    }
+
+    pub(in super::super) fn diff_search_prev_match(&mut self) {
+        if !self.diff_search_active {
+            return;
+        }
+
+        if self.diff_search_matches.is_empty() {
+            self.diff_search_recompute_matches();
+        }
+        let len = self.diff_search_matches.len();
+        if len == 0 {
+            return;
+        }
+
+        let current = self.diff_search_match_ix.unwrap_or(0).min(len.saturating_sub(1));
+        let next_ix = if current == 0 { len - 1 } else { current - 1 };
+        self.diff_search_match_ix = Some(next_ix);
+        let target = self.diff_search_matches[next_ix];
+        self.diff_search_scroll_to_visible_ix(target);
+    }
+
+    pub(in super::super) fn diff_search_next_match(&mut self) {
+        if !self.diff_search_active {
+            return;
+        }
+
+        if self.diff_search_matches.is_empty() {
+            self.diff_search_recompute_matches();
+        }
+        let len = self.diff_search_matches.len();
+        if len == 0 {
+            return;
+        }
+
+        let current = self.diff_search_match_ix.unwrap_or(0).min(len.saturating_sub(1));
+        let next_ix = (current + 1) % len;
+        self.diff_search_match_ix = Some(next_ix);
+        let target = self.diff_search_matches[next_ix];
+        self.diff_search_scroll_to_visible_ix(target);
+    }
+
+    fn diff_search_scroll_to_visible_ix(&mut self, visible_ix: usize) {
+        if self.is_file_preview_active() {
+            self.worktree_preview_scroll
+                .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+            return;
+        }
+
+        if let Some((_path, conflict_kind)) = self.active_conflict_target() {
+            if Self::conflict_requires_resolver(conflict_kind) {
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+            } else {
+                self.diff_scroll
+                    .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+            }
+            return;
+        }
+
+        self.diff_scroll
+            .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+        self.diff_selection_anchor = Some(visible_ix);
+        self.diff_selection_range = Some((visible_ix, visible_ix));
     }
 
     fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2664,6 +2925,9 @@ impl MainPaneView {
             return;
         }
 
+        self.conflict_diff_segments_cache_split.clear();
+        self.conflict_diff_segments_cache_inline.clear();
+
         let resolved = if let Some(cur) = file.current.as_deref() {
             let segments = conflict_resolver::parse_conflict_markers(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
@@ -2678,10 +2942,9 @@ impl MainPaneView {
         } else {
             String::new()
         };
-        let diff_rows = match (file.ours.as_deref(), file.theirs.as_deref()) {
-            (Some(ours), Some(theirs)) => gitgpui_core::file_diff::side_by_side_rows(ours, theirs),
-            _ => Vec::new(),
-        };
+        let ours_text = file.ours.as_deref().unwrap_or("");
+        let theirs_text = file.theirs.as_deref().unwrap_or("");
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
 
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
@@ -2717,6 +2980,10 @@ impl MainPaneView {
             split_selected: std::collections::BTreeSet::new(),
             inline_selected: std::collections::BTreeSet::new(),
         };
+
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches();
+        }
     }
 
     pub(in super::super) fn conflict_resolver_set_mode(
@@ -2731,6 +2998,9 @@ impl MainPaneView {
         self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.split_selected.clear();
         self.conflict_resolver.inline_selected.clear();
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches();
+        }
         cx.notify();
     }
 
@@ -2851,4 +3121,28 @@ impl Render for MainPaneView {
             self.history_view(cx)
         }
     }
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.len() > haystack_bytes.len() {
+        return false;
+    }
+
+    'outer: for start in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
+            let haystack_byte = haystack_bytes[start + offset];
+            if !haystack_byte.eq_ignore_ascii_case(&needle_byte) {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+
+    false
 }

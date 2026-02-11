@@ -45,13 +45,13 @@ fn build_diff_text_segments(
         .map(|language| syntax::syntax_tokens_for_line(text, language, syntax_mode))
         .unwrap_or_default();
 
-    let query_range = (!query.is_empty())
-        .then(|| find_ascii_case_insensitive(text, query))
-        .flatten();
+    let query_ranges = (!query.is_empty())
+        .then(|| find_all_ascii_case_insensitive(text, query))
+        .unwrap_or_default();
 
     let mut boundaries: Vec<usize> = Vec::with_capacity(
         2 + word_ranges.len() * 2
-            + query_range.as_ref().map(|_| 2).unwrap_or(0)
+            + query_ranges.len() * 2
             + syntax_tokens.len() * 2,
     );
     boundaries.push(0);
@@ -60,7 +60,7 @@ fn build_diff_text_segments(
         boundaries.push(r.start.min(text.len()));
         boundaries.push(r.end.min(text.len()));
     }
-    if let Some(r) = &query_range {
+    for r in &query_ranges {
         boundaries.push(r.start);
         boundaries.push(r.end);
     }
@@ -100,9 +100,7 @@ fn build_diff_text_segments(
             .unwrap_or(SyntaxTokenKind::None);
 
         let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
-        let in_query = query_range
-            .as_ref()
-            .is_some_and(|r| a < r.end && b > r.start);
+        let in_query = query_ranges.iter().any(|r| a < r.end && b > r.start);
 
         segments.push(CachedDiffTextSegment {
             text: maybe_expand_tabs(seg),
@@ -172,8 +170,8 @@ mod tests {
         assert_eq!(text.as_ref(), "abcdef");
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].0, 3..6);
-        assert_eq!(highlights[0].1.font_weight, Some(FontWeight::BOLD));
-        assert_eq!(highlights[0].1.color, Some(theme.colors.accent.into()));
+        assert_eq!(highlights[0].1.font_weight, None);
+        assert!(highlights[0].1.background_color.is_some());
 
         // Hashing highlights is used for caching shaped layouts; it should be stable for identical
         // highlight sequences within a process.
@@ -188,6 +186,23 @@ mod tests {
         );
         assert_eq!(styled.highlights.len(), 1);
         assert_eq!(styled.highlights[0].0, 3..6);
+    }
+
+    #[test]
+    fn cached_styled_text_highlights_all_query_occurrences() {
+        let theme = AppTheme::zed_ayu_dark();
+        let styled = build_cached_diff_styled_text(
+            theme,
+            "abxxab",
+            &[],
+            "ab",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        assert_eq!(styled.highlights.len(), 2);
+        assert_eq!(styled.highlights[0].0, 0..2);
+        assert_eq!(styled.highlights[1].0, 4..6);
     }
 
     #[test]
@@ -413,24 +428,29 @@ fn styled_text_for_diff_segments(
         }
 
         if seg.in_query {
-            style.color = Some(theme.colors.accent.into());
-            style.font_weight = Some(FontWeight::BOLD);
-        } else {
-            let syntax_fg = match seg.syntax {
-                SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
-                SyntaxTokenKind::String => Some(calm_syntax_color(theme, theme.colors.warning)),
-                SyntaxTokenKind::Keyword => Some(calm_syntax_color(theme, theme.colors.accent)),
-                SyntaxTokenKind::Number => Some(calm_syntax_color(theme, theme.colors.success)),
-                SyntaxTokenKind::Function => Some(calm_syntax_color(theme, theme.colors.accent)),
-                SyntaxTokenKind::Type => Some(calm_syntax_color(theme, theme.colors.warning)),
-                SyntaxTokenKind::Property => Some(calm_syntax_color(theme, theme.colors.accent)),
-                SyntaxTokenKind::Constant => Some(calm_syntax_color(theme, theme.colors.success)),
-                SyntaxTokenKind::Punctuation => Some(theme.colors.text_muted),
-                SyntaxTokenKind::None => None,
-            };
-            if let Some(fg) = syntax_fg {
-                style.color = Some(fg.into());
-            }
+            style.background_color = Some(
+                with_alpha(
+                    theme.colors.accent,
+                    if theme.is_dark { 0.22 } else { 0.16 },
+                )
+                .into(),
+            );
+        }
+
+        let syntax_fg = match seg.syntax {
+            SyntaxTokenKind::Comment => Some(theme.colors.text_muted),
+            SyntaxTokenKind::String => Some(calm_syntax_color(theme, theme.colors.warning)),
+            SyntaxTokenKind::Keyword => Some(calm_syntax_color(theme, theme.colors.accent)),
+            SyntaxTokenKind::Number => Some(calm_syntax_color(theme, theme.colors.success)),
+            SyntaxTokenKind::Function => Some(calm_syntax_color(theme, theme.colors.accent)),
+            SyntaxTokenKind::Type => Some(calm_syntax_color(theme, theme.colors.warning)),
+            SyntaxTokenKind::Property => Some(calm_syntax_color(theme, theme.colors.accent)),
+            SyntaxTokenKind::Constant => Some(calm_syntax_color(theme, theme.colors.success)),
+            SyntaxTokenKind::Punctuation => Some(theme.colors.text_muted),
+            SyntaxTokenKind::None => None,
+        };
+        if let Some(fg) = syntax_fg {
+            style.color = Some(fg.into());
         }
 
         if style != gpui::HighlightStyle::default() && offset < next_offset {
@@ -443,28 +463,40 @@ fn styled_text_for_diff_segments(
     (combined.into(), highlights)
 }
 
-fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<Range<usize>> {
-    if needle.is_empty() {
-        return Some(0..0);
+fn find_all_ascii_case_insensitive(haystack: &str, needle: &str) -> Vec<Range<usize>> {
+    const MAX_MATCHES: usize = 64;
+
+    let needle_bytes = needle.as_bytes();
+    if needle_bytes.is_empty() {
+        return Vec::new();
     }
 
     let haystack_bytes = haystack.as_bytes();
-    let needle_bytes = needle.as_bytes();
     if needle_bytes.len() > haystack_bytes.len() {
-        return None;
+        return Vec::new();
     }
 
-    'outer: for start in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    while start + needle_bytes.len() <= haystack_bytes.len() && out.len() < MAX_MATCHES {
+        let mut matched = true;
         for (offset, needle_byte) in needle_bytes.iter().copied().enumerate() {
             let haystack_byte = haystack_bytes[start + offset];
             if !haystack_byte.eq_ignore_ascii_case(&needle_byte) {
-                continue 'outer;
+                matched = false;
+                break;
             }
         }
-        return Some(start..(start + needle_bytes.len()));
+
+        if matched {
+            out.push(start..(start + needle_bytes.len()));
+            start = start.saturating_add(needle_bytes.len().max(1));
+        } else {
+            start = start.saturating_add(1);
+        }
     }
 
-    None
+    out
 }
 
 pub(super) fn diff_line_colors(

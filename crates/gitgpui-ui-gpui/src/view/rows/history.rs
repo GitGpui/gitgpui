@@ -10,6 +10,12 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let query = if this.diff_search_active {
+            this.diff_search_query.as_ref()
+        } else {
+            ""
+        };
+
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
             return Vec::new();
@@ -58,7 +64,7 @@ impl MainPaneView {
                             theme,
                             line,
                             &[],
-                            "",
+                            query,
                             language,
                             syntax_mode,
                             None,

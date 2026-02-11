@@ -80,27 +80,10 @@ impl MainPaneView {
             .child(div().flex_1().min_h(px(0.0)).child(body))
     }
 
-    pub(in super::super) fn conflict_prefers_diff_view(
-        repo: &RepoState,
-        conflict_path: &std::path::PathBuf,
+    pub(in super::super) fn conflict_requires_resolver(
+        conflict: Option<gitgpui_core::domain::FileConflictKind>,
     ) -> bool {
-        if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
-            return true;
-        }
-
-        if let Loadable::Ready(Some(file)) = &repo.conflict_file {
-            if &file.path == conflict_path {
-                return file.ours.is_none() || file.theirs.is_none();
-            }
-        }
-
-        if let Loadable::Ready(Some(file)) = &repo.diff_file {
-            if &file.path == conflict_path {
-                return file.old.is_none() || file.new.is_none();
-            }
-        }
-
-        false
+        matches!(conflict, Some(gitgpui_core::domain::FileConflictKind::BothModified))
     }
 
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -209,7 +192,7 @@ impl MainPaneView {
                 .is_some_and(|r| Self::is_file_diff_target(r.diff_target.as_ref()));
 
         let repo = self.active_repo();
-        let conflict_target_path = repo.and_then(|repo| {
+        let conflict_target = repo.and_then(|repo| {
             let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
                 return None;
             };
@@ -217,20 +200,21 @@ impl MainPaneView {
                 return None;
             }
             match &repo.status {
-                Loadable::Ready(status) => status
-                    .unstaged
-                    .iter()
-                    .any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
-                    .then_some(path.clone()),
+                Loadable::Ready(status) => {
+                    let conflict = status
+                        .unstaged
+                        .iter()
+                        .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)?;
+                    Some((path.clone(), conflict.conflict))
+                }
                 _ => None,
             }
         });
-        let conflict_prefers_diff_view = repo.is_some_and(|repo| {
-            conflict_target_path
-                .as_ref()
-                .is_some_and(|path| Self::conflict_prefers_diff_view(repo, path))
-        });
-        let is_conflict_resolver = conflict_target_path.is_some() && !conflict_prefers_diff_view;
+        let (conflict_target_path, conflict_kind) = conflict_target
+            .map(|(path, kind)| (Some(path), kind))
+            .unwrap_or((None, None));
+        let is_conflict_resolver = Self::conflict_requires_resolver(conflict_kind);
+        let is_conflict_compare = conflict_target_path.is_some() && !is_conflict_resolver;
 
         let diff_nav_hotkey_hint = |label: &'static str| {
             div()
@@ -321,6 +305,11 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_view = DiffViewMode::Inline;
                             this.diff_text_segments_cache.clear();
+                            if this.diff_search_active
+                                && !this.diff_search_query.as_ref().trim().is_empty()
+                            {
+                                this.diff_search_recompute_matches();
+                            }
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
@@ -346,6 +335,11 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.diff_view = DiffViewMode::Split;
                             this.diff_text_segments_cache.clear();
+                            if this.diff_search_active
+                                && !this.diff_search_query.as_ref().trim().is_empty()
+                            {
+                                this.diff_search_recompute_matches();
+                            }
                             cx.notify();
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
@@ -457,6 +451,52 @@ impl MainPaneView {
                         }
                     })),
             );
+        }
+
+        if self.diff_search_active {
+            let query = self.diff_search_query.as_ref().trim();
+            let match_label: SharedString = if query.is_empty() {
+                "Type to search".into()
+            } else if self.diff_search_matches.is_empty() {
+                "No matches".into()
+            } else {
+                let ix = self
+                    .diff_search_match_ix
+                    .unwrap_or(0)
+                    .min(self.diff_search_matches.len().saturating_sub(1));
+                format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
+            };
+
+            controls = controls
+                .child(
+                    div()
+                        .w(px(240.0))
+                        .min_w(px(120.0))
+                        .child(self.diff_search_input.clone()),
+                )
+                .child(
+                    div()
+                        .font_family("monospace")
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(match_label),
+                )
+                .child(
+                    zed::Button::new("diff_search_close", "✕")
+                        .style(zed::ButtonStyle::Transparent)
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.diff_search_active = false;
+                            this.diff_search_matches.clear();
+                            this.diff_search_match_ix = None;
+                            this.diff_text_segments_cache.clear();
+                            this.worktree_preview_segments_cache_path = None;
+                            this.worktree_preview_segments_cache.clear();
+                            this.conflict_diff_segments_cache_split.clear();
+                            this.conflict_diff_segments_cache_inline.clear();
+                            window.focus(&this.diff_panel_focus_handle);
+                            cx.notify();
+                        }),
+                );
         }
 
         let header = div()
@@ -945,6 +985,101 @@ impl MainPaneView {
 	                                ),
 	                        )
 	                        .into_any_element()
+                        }
+                    }
+                }
+            }
+        } else if is_conflict_compare {
+            match (repo, conflict_target_path) {
+                (None, _) => {
+                    zed::empty_state(theme, "Resolve", "No repository.").into_any_element()
+                }
+                (_, None) => zed::empty_state(theme, "Resolve", "No conflicted file selected.")
+                    .into_any_element(),
+                (Some(repo), Some(path)) => {
+                    let title: SharedString =
+                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
+
+                    match &repo.conflict_file {
+                        Loadable::NotLoaded | Loadable::Loading => {
+                            zed::empty_state(theme, title, "Loading conflict data…")
+                                .into_any_element()
+                        }
+                        Loadable::Error(e) => {
+                            zed::empty_state(theme, title, e.clone()).into_any_element()
+                        }
+                        Loadable::Ready(None) => {
+                            zed::empty_state(theme, title, "No conflict data.").into_any_element()
+                        }
+                        Loadable::Ready(Some(file)) => {
+                            if file.path != path {
+                                zed::empty_state(theme, title, "Loading conflict data…")
+                                    .into_any_element()
+                            } else {
+                                let ours_label: SharedString = if file.ours.is_some() {
+                                    "Ours".into()
+                                } else {
+                                    "Ours (deleted)".into()
+                                };
+                                let theirs_label: SharedString = if file.theirs.is_some() {
+                                    "Theirs".into()
+                                } else {
+                                    "Theirs (deleted)".into()
+                                };
+
+                                let columns_header =
+                                    zed::split_columns_header(theme, ours_label, theirs_label);
+
+                                let diff_len = match self.diff_view {
+                                    DiffViewMode::Split => self.conflict_resolver.diff_rows.len(),
+                                    DiffViewMode::Inline => self.conflict_resolver.inline_rows.len(),
+                                };
+
+                                let diff_body: AnyElement = if diff_len == 0 {
+                                    zed::empty_state(theme, "Diff", "No conflict diff to show.")
+                                        .into_any_element()
+                                } else {
+                                    let scroll_handle =
+                                        self.diff_scroll.0.borrow().base_handle.clone();
+                                    let list = uniform_list(
+                                        "conflict_compare_diff",
+                                        diff_len,
+                                        cx.processor(Self::render_conflict_compare_diff_rows),
+                                    )
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .track_scroll(self.diff_scroll.clone());
+
+                                    div()
+                                        .id("conflict_compare_container")
+                                        .relative()
+                                        .flex()
+                                        .flex_col()
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .bg(theme.colors.window_bg)
+                                        .child(columns_header)
+                                        .child(
+                                            div()
+                                                .id("conflict_compare_scroll_container")
+                                                .relative()
+                                                .flex_1()
+                                                .min_h(px(0.0))
+                                                .child(list)
+                                                .child(
+                                                    zed::Scrollbar::new(
+                                                        "conflict_compare_scrollbar",
+                                                        scroll_handle,
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
+                                                ),
+                                        )
+                                        .into_any_element()
+                                };
+
+                                diff_body
+                            }
                         }
                     }
                 }
@@ -1439,11 +1574,65 @@ impl MainPaneView {
 
                 if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
                 {
-                    if let Some(repo_id) = this.active_repo_id() {
+                    if this.diff_search_active {
+                        this.diff_search_active = false;
+                        this.diff_search_matches.clear();
+                        this.diff_search_match_ix = None;
+                        this.diff_text_segments_cache.clear();
+                        this.worktree_preview_segments_cache_path = None;
+                        this.worktree_preview_segments_cache.clear();
+                        this.conflict_diff_segments_cache_split.clear();
+                        this.conflict_diff_segments_cache_inline.clear();
+                        window.focus(&this.diff_panel_focus_handle);
+                        handled = true;
+                    }
+                    if !handled && let Some(repo_id) = this.active_repo_id() {
                         this.clear_status_multi_selection(repo_id, cx);
                         this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                         handled = true;
                     }
+                }
+
+                if !handled
+                    && (mods.control || mods.platform)
+                    && !mods.alt
+                    && !mods.function
+                    && key == "f"
+                {
+                    this.diff_search_active = true;
+                    this.diff_text_segments_cache.clear();
+                    this.worktree_preview_segments_cache_path = None;
+                    this.worktree_preview_segments_cache.clear();
+                    this.conflict_diff_segments_cache_split.clear();
+                    this.conflict_diff_segments_cache_inline.clear();
+                    this.diff_search_recompute_matches();
+                    let focus = this.diff_search_input.read(cx).focus_handle();
+                    window.focus(&focus);
+                    handled = true;
+                }
+
+                if !handled
+                    && this.diff_search_active
+                    && key == "f2"
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                {
+                    this.diff_search_prev_match();
+                    handled = true;
+                }
+
+                if !handled
+                    && this.diff_search_active
+                    && key == "f3"
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                {
+                    this.diff_search_next_match();
+                    handled = true;
                 }
 
                 if !handled
@@ -1545,20 +1734,27 @@ impl MainPaneView {
                     .focus_handle()
                     .is_focused(window);
 
-                if mods.alt && !mods.control && !mods.platform && !mods.function {
-                    let conflict_active = this.active_repo().is_some_and(|repo| {
-                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
-                        else {
-                            return false;
-                        };
-                        if *area != DiffArea::Unstaged {
-                            return false;
-                        }
-                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
+                let conflict_resolver_active = this.active_repo().is_some_and(|repo| {
+                    let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                    else {
+                        return false;
+                    };
+                    if *area != DiffArea::Unstaged {
+                        return false;
+                    }
+                    let Loadable::Ready(status) = &repo.status else {
+                        return false;
+                    };
+                    let conflict = status.unstaged.iter().find(|e| {
+                        e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
                     });
+                    conflict.is_some_and(|e| Self::conflict_requires_resolver(e.conflict))
+                });
+
+                if mods.alt && !mods.control && !mods.platform && !mods.function {
                     match key {
                         "i" => {
-                            if conflict_active {
+                            if conflict_resolver_active {
                                 this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
                             } else {
                                 this.diff_view = DiffViewMode::Inline;
@@ -1567,7 +1763,7 @@ impl MainPaneView {
                             handled = true;
                         }
                         "s" => {
-                            if conflict_active {
+                            if conflict_resolver_active {
                                 this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
                             } else {
                                 this.diff_view = DiffViewMode::Split;
@@ -1607,24 +1803,14 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    let conflict_active = this.active_repo().is_some_and(|repo| {
-                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
-                        else {
-                            return false;
-                        };
-                        if *area != DiffArea::Unstaged {
-                            return false;
-                        }
-                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
-                    });
                     if mods.shift {
-                        if conflict_active {
+                        if conflict_resolver_active {
                             this.conflict_jump_prev();
                         } else {
                             this.diff_jump_prev();
                         }
                     } else {
-                        if conflict_active {
+                        if conflict_resolver_active {
                             this.conflict_jump_next();
                         } else {
                             this.diff_jump_next();
@@ -1640,17 +1826,7 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    let conflict_active = this.active_repo().is_some_and(|repo| {
-                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
-                        else {
-                            return false;
-                        };
-                        if *area != DiffArea::Unstaged {
-                            return false;
-                        }
-                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
-                    });
-                    if conflict_active {
+                    if conflict_resolver_active {
                         this.conflict_jump_prev();
                     } else {
                         this.diff_jump_prev();
@@ -1665,17 +1841,7 @@ impl MainPaneView {
                     && !mods.platform
                     && !mods.function
                 {
-                    let conflict_active = this.active_repo().is_some_and(|repo| {
-                        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
-                        else {
-                            return false;
-                        };
-                        if *area != DiffArea::Unstaged {
-                            return false;
-                        }
-                        matches!(&repo.status, Loadable::Ready(status) if status.unstaged.iter().any(|e| e.path == *path && e.kind == FileStatusKind::Conflicted))
-                    });
-                    if conflict_active {
+                    if conflict_resolver_active {
                         this.conflict_jump_next();
                     } else {
                         this.diff_jump_next();

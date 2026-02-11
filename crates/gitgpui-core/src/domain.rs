@@ -98,10 +98,22 @@ pub struct RemoteBranch {
     pub name: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileConflictKind {
+    BothDeleted,
+    AddedByUs,
+    DeletedByThem,
+    AddedByThem,
+    DeletedByUs,
+    BothAdded,
+    BothModified,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileStatus {
     pub path: PathBuf,
     pub kind: FileStatusKind,
+    pub conflict: Option<FileConflictKind>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

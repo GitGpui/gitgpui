@@ -309,8 +309,14 @@ impl DetailsPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.open_popover_at(kind, anchor, window, cx);
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.open_popover_at(kind, anchor, window, cx);
+                });
+            });
         });
     }
 

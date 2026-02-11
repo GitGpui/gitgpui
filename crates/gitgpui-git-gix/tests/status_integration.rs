@@ -1,4 +1,4 @@
-use gitgpui_core::domain::{DiffArea, DiffTarget, FileStatusKind};
+use gitgpui_core::domain::{DiffArea, DiffTarget, FileConflictKind, FileStatusKind};
 use gitgpui_core::services::ConflictSide;
 use gitgpui_core::services::GitBackend;
 use gitgpui_git_gix::GixBackend;
@@ -399,6 +399,7 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
+    assert_eq!(status.unstaged[0].conflict, Some(FileConflictKind::BothModified));
 
     let diff = opened
         .diff_file_text(&DiffTarget::WorkingTree {
@@ -461,6 +462,51 @@ fn status_reports_single_conflict_for_modify_delete() {
         status.unstaged
     );
     assert_eq!(entries[0].kind, FileStatusKind::Conflicted);
+    assert_eq!(entries[0].conflict, Some(FileConflictKind::DeletedByUs));
+}
+
+#[test]
+fn status_reports_conflict_kind_for_add_add() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "base.txt", "base\n");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "theirs\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs_add"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "ours\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_add"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+    let status = opened.status().unwrap();
+    assert_eq!(status.unstaged.len(), 1);
+    assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
+    assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
+    assert_eq!(status.unstaged[0].conflict, Some(FileConflictKind::BothAdded));
 }
 
 #[test]
