@@ -8,6 +8,7 @@ mod context_menu;
 mod create_branch;
 mod create_tag_prompt;
 mod diff_hunks;
+mod discard_changes_confirm;
 mod file_history;
 mod force_push_confirm;
 mod push_set_upstream_prompt;
@@ -52,6 +53,7 @@ impl GitGpuiView {
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
                 | PopoverKind::DiffHunkMenu { .. }
+                | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -1066,6 +1068,9 @@ impl GitGpuiView {
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
             }
+            PopoverKind::DiscardChangesConfirm { repo_id, paths } => {
+                discard_changes_confirm::panel(self, repo_id, paths.clone(), cx)
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
@@ -1083,6 +1088,31 @@ impl GitGpuiView {
                 .context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
+            PopoverKind::DiffEditorMenu {
+                repo_id,
+                area,
+                path,
+                hunk_patch,
+                hunks_count,
+                lines_patch,
+                lines_count,
+                copy_text,
+            } => self
+                .context_menu_view(
+                    PopoverKind::DiffEditorMenu {
+                        repo_id,
+                        area,
+                        path,
+                        hunk_patch,
+                        hunks_count,
+                        lines_patch,
+                        lines_count,
+                        copy_text,
+                    },
+                    cx,
+                )
+                .min_w(px(160.0))
+                .max_w(px(260.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

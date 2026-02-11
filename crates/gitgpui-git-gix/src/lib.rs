@@ -1,7 +1,8 @@
 use gitgpui_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget, FileConflictKind,
-    FileDiffText, FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch,
-    RepoSpec, RepoStatus, Submodule, Tag, Upstream, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, DiffArea, DiffTarget,
+    FileConflictKind, FileDiffText, FileStatus, FileStatusKind, LogCursor, LogPage, ReflogEntry,
+    Remote, RemoteBranch, RepoSpec, RepoStatus, Submodule, Tag, Upstream, UpstreamDivergence,
+    Worktree,
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
@@ -533,7 +534,11 @@ impl GitRepository for GixRepo {
                     } => {
                         let path = PathBuf::from(rela_path.to_str_lossy().into_owned());
                         let (kind, conflict) = map_entry_status(status);
-                        unstaged.push(FileStatus { path, kind, conflict });
+                        unstaged.push(FileStatus {
+                            path,
+                            kind,
+                            conflict,
+                        });
                     }
                     gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
                         let kind = match entry.status {
@@ -1742,6 +1747,44 @@ impl GitRepository for GixRepo {
         result
     }
 
+    fn apply_unified_patch_to_worktree_with_output(
+        &self,
+        patch: &str,
+        reverse: bool,
+    ) -> Result<CommandOutput> {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let tmp_path = std::env::temp_dir().join(format!(
+            "gitgpui-worktree-patch-{}-{nanos}.patch",
+            std::process::id()
+        ));
+        std::fs::write(&tmp_path, patch.as_bytes())
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("apply")
+            .arg("--recount")
+            .arg("--whitespace=nowarn");
+        if reverse {
+            cmd.arg("--reverse");
+        }
+        cmd.arg(&tmp_path);
+
+        let label = if reverse {
+            format!("git apply --reverse {}", tmp_path.display())
+        } else {
+            format!("git apply {}", tmp_path.display())
+        };
+
+        let result = run_git_with_output(cmd, &label);
+        let _ = std::fs::remove_file(&tmp_path);
+        result
+    }
+
     fn list_worktrees(&self) -> Result<Vec<Worktree>> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -2087,9 +2130,7 @@ fn git_show_path_utf8_optional_unmerged_stage(
 ) -> Result<Option<String>> {
     match git_show_path_utf8_optional(workdir, rev_prefix, path) {
         Ok(value) => Ok(value),
-        Err(e)
-            if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) =>
-        {
+        Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) => {
             Ok(None)
         }
         Err(e) => Err(e),
@@ -2140,9 +2181,7 @@ fn git_show_path_bytes_optional_unmerged_stage(
 ) -> Result<Option<Vec<u8>>> {
     match git_show_path_bytes_optional(workdir, rev_prefix, path) {
         Ok(value) => Ok(value),
-        Err(e)
-            if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) =>
-        {
+        Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) => {
             Ok(None)
         }
         Err(e) => Err(e),

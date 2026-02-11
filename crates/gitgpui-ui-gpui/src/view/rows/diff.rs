@@ -200,47 +200,43 @@ impl MainPaneView {
                     };
 
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                            let word_color = match line.kind {
-                                gitgpui_core::domain::DiffLineKind::Add => {
-                                    Some(theme.colors.success)
-                                }
-                                gitgpui_core::domain::DiffLineKind::Remove => {
-                                    Some(theme.colors.danger)
-                                }
-                                _ => None,
-                            };
-
-                            let language = matches!(
-                                line.kind,
-                                gitgpui_core::domain::DiffLineKind::Add
-                                    | gitgpui_core::domain::DiffLineKind::Remove
-                                    | gitgpui_core::domain::DiffLineKind::Context
-                            )
-                            .then_some(language)
-                            .flatten();
-
-                            build_cached_diff_styled_text(
-                                theme,
-                                diff_content_text(line),
-                                word_ranges,
-                                query.as_ref(),
-                                language,
-                                syntax_mode,
-                                word_color,
-                            )
-                        } else {
-                            let display =
-                                this.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
-                            build_cached_diff_styled_text(
-                                theme,
-                                display.as_ref(),
-                                &[] as &[Range<usize>],
-                                query.as_ref(),
-                                None,
-                                syntax_mode,
-                                None,
-                            )
+                        let word_color = match line.kind {
+                            gitgpui_core::domain::DiffLineKind::Add => Some(theme.colors.success),
+                            gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                            _ => None,
                         };
+
+                        let language = matches!(
+                            line.kind,
+                            gitgpui_core::domain::DiffLineKind::Add
+                                | gitgpui_core::domain::DiffLineKind::Remove
+                                | gitgpui_core::domain::DiffLineKind::Context
+                        )
+                        .then_some(language)
+                        .flatten();
+
+                        build_cached_diff_styled_text(
+                            theme,
+                            diff_content_text(line),
+                            word_ranges,
+                            query.as_ref(),
+                            language,
+                            syntax_mode,
+                            word_color,
+                        )
+                    } else {
+                        let display =
+                            this.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                        build_cached_diff_styled_text(
+                            theme,
+                            display.as_ref(),
+                            &[] as &[Range<usize>],
+                            query.as_ref(),
+                            None,
+                            syntax_mode,
+                            None,
+                        )
+                    };
                     this.diff_text_segments_cache_set(src_ix, computed);
                 }
 
@@ -538,8 +534,8 @@ impl MainPaneView {
                         let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
                         let should_style = !query.as_ref().is_empty();
                         if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
-                            let display =
-                                this.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                            let display = this
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
                             let computed = build_cached_diff_styled_text(
                                 theme,
                                 display.as_ref(),
@@ -845,10 +841,8 @@ impl MainPaneView {
                         let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
                         let should_style = !query.as_ref().is_empty();
                         if should_style && this.diff_text_segments_cache_get(src_ix).is_none() {
-                            let display = this.diff_text_line_for_region(
-                                visible_ix,
-                                DiffTextRegion::SplitRight,
-                            );
+                            let display = this
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
                             let computed = build_cached_diff_styled_text(
                                 theme,
                                 display.as_ref(),

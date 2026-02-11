@@ -751,6 +751,15 @@ pub(super) fn reduce(
 
         Msg::StageHunk { repo_id, patch } => vec![Effect::StageHunk { repo_id, patch }],
         Msg::UnstageHunk { repo_id, patch } => vec![Effect::UnstageHunk { repo_id, patch }],
+        Msg::ApplyWorktreePatch {
+            repo_id,
+            patch,
+            reverse,
+        } => vec![Effect::ApplyWorktreePatch {
+            repo_id,
+            patch,
+            reverse,
+        }],
 
         Msg::CheckoutBranch { repo_id, name } => vec![Effect::CheckoutBranch { repo_id, name }],
         Msg::CheckoutRemoteBranch {
@@ -1554,7 +1563,9 @@ pub(super) fn reduce(
             let mut extra_effects = Vec::new();
             if matches!(
                 &command,
-                crate::msg::RepoCommandKind::StageHunk | crate::msg::RepoCommandKind::UnstageHunk
+                crate::msg::RepoCommandKind::StageHunk
+                    | crate::msg::RepoCommandKind::UnstageHunk
+                    | crate::msg::RepoCommandKind::ApplyWorktreePatch { .. }
             ) {
                 if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
                     && let Some(target) = repo_state.diff_target.clone()
@@ -1741,6 +1752,13 @@ fn summarize_command(
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
+            RepoCommandKind::ApplyWorktreePatch { reverse } => {
+                if *reverse {
+                    "Discard"
+                } else {
+                    "Patch"
+                }
+            }
         };
         return (
             output.command.clone().if_empty_else(|| label.to_string()),
@@ -1875,6 +1893,13 @@ fn summarize_command(
         }
         RepoCommandKind::StageHunk => "Hunk staged".to_string(),
         RepoCommandKind::UnstageHunk => "Hunk unstaged".to_string(),
+        RepoCommandKind::ApplyWorktreePatch { reverse } => {
+            if *reverse {
+                "Changes discarded".to_string()
+            } else {
+                "Patch applied".to_string()
+            }
+        }
     };
 
     (output.command.clone(), summary)

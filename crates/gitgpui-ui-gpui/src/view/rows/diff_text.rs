@@ -50,9 +50,7 @@ fn build_diff_text_segments(
         .unwrap_or_default();
 
     let mut boundaries: Vec<usize> = Vec::with_capacity(
-        2 + word_ranges.len() * 2
-            + query_ranges.len() * 2
-            + syntax_tokens.len() * 2,
+        2 + word_ranges.len() * 2 + query_ranges.len() * 2 + syntax_tokens.len() * 2,
     );
     boundaries.push(0);
     boundaries.push(text.len());
@@ -325,9 +323,12 @@ pub(super) fn selectable_cached_diff_text(
         )
         .on_mouse_down(
             MouseButton::Right,
-            cx.listener(move |this, _e: &MouseDownEvent, _w, cx| {
+            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                if double_click_kind == DiffClickKind::HunkHeader {
+                    return;
+                }
                 cx.stop_propagation();
-                this.copy_diff_text_selection_or_region_line_to_clipboard(visible_ix, region, cx);
+                this.open_diff_editor_context_menu(visible_ix, region, e.position, window, cx);
             }),
         )
         .child(overlay)
@@ -429,11 +430,7 @@ fn styled_text_for_diff_segments(
 
         if seg.in_query {
             style.background_color = Some(
-                with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.22 } else { 0.16 },
-                )
-                .into(),
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into(),
             );
         }
 

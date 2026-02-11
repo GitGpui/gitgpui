@@ -679,6 +679,22 @@ pub(super) fn schedule_effect(
             }
         }
 
+        Effect::ApplyWorktreePatch {
+            repo_id,
+            patch,
+            reverse,
+        } => {
+            if let Some(repo) = repos.get(&repo_id).cloned() {
+                executor.spawn(move || {
+                    let _ = msg_tx.send(Msg::RepoCommandFinished {
+                        repo_id,
+                        command: crate::msg::RepoCommandKind::ApplyWorktreePatch { reverse },
+                        result: repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
+                    });
+                });
+            }
+        }
+
         Effect::StagePath { repo_id, path } => {
             if let Some(repo) = repos.get(&repo_id).cloned() {
                 executor.spawn(move || {

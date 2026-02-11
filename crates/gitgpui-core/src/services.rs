@@ -294,6 +294,16 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn apply_unified_patch_to_worktree_with_output(
+        &self,
+        _patch: &str,
+        _reverse: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "worktree patch apply is not implemented for this backend",
+        )))
+    }
+
     fn list_worktrees(&self) -> Result<Vec<Worktree>> {
         Err(Error::new(ErrorKind::Unsupported(
             "worktree listing is not implemented for this backend",

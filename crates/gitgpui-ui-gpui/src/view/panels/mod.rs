@@ -91,6 +91,16 @@ enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    ApplyIndexPatch {
+        repo_id: RepoId,
+        patch: String,
+        reverse: bool,
+    },
+    ApplyWorktreePatch {
+        repo_id: RepoId,
+        patch: String,
+        reverse: bool,
+    },
     StageHunk {
         repo_id: RepoId,
         src_ix: usize,

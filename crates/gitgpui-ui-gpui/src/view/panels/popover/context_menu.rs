@@ -4,6 +4,7 @@ mod branch;
 mod branch_section;
 mod commit;
 mod commit_file;
+mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
 mod pull;
@@ -31,15 +32,13 @@ impl GitGpuiView {
                 area,
                 path,
                 selection,
-            } => {
-                Some(status_file::model(
-                    self,
-                    selection.as_slice(),
-                    *repo_id,
-                    *area,
-                    path,
-                ))
-            }
+            } => Some(status_file::model(
+                self,
+                selection.as_slice(),
+                *repo_id,
+                *area,
+                path,
+            )),
             PopoverKind::BranchMenu {
                 repo_id,
                 section,
@@ -56,6 +55,25 @@ impl GitGpuiView {
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 Some(diff_hunk::model(self, *repo_id, *src_ix))
             }
+            PopoverKind::DiffEditorMenu {
+                repo_id,
+                area,
+                path,
+                hunk_patch,
+                hunks_count,
+                lines_patch,
+                lines_count,
+                copy_text,
+            } => Some(diff_editor::model(
+                *repo_id,
+                *area,
+                path,
+                hunk_patch,
+                *hunks_count,
+                lines_patch,
+                *lines_count,
+                copy_text,
+            )),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
             }
@@ -150,57 +168,31 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
-                let is_added_file = self
-                    .state
-                    .repos
-                    .iter()
-                    .find(|r| r.id == repo_id)
-                    .and_then(|r| match &r.status {
-                        Loadable::Ready(status) => status
-                            .unstaged
-                            .iter()
-                            .chain(status.staged.iter())
-                            .find(|s| s.path == path)
-                            .map(|s| s.kind),
-                        _ => None,
-                    })
-                    .is_some_and(|kind| {
-                        matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added)
-                    });
-
-                if is_added_file {
-                    let path_is_selected = self
-                        .active_repo()
-                        .filter(|r| r.id == repo_id)
-                        .and_then(|r| r.diff_target.as_ref())
-                        .is_some_and(|target| {
-                            matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
-                        });
-                    if path_is_selected {
-                        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    }
-                } else {
-                    self.store.dispatch(Msg::SelectDiff {
+                let anchor = self
+                    .popover_anchor
+                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
+                self.open_popover_at(
+                    PopoverKind::DiscardChangesConfirm {
                         repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area: DiffArea::Unstaged,
-                        },
-                    });
-                }
-                self.store
-                    .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
-                self.rebuild_diff_cache();
+                        paths: vec![path],
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::DiscardWorktreeChangesPaths { repo_id, paths } => {
-                let _ = self.details_pane.update(cx, |pane, cx| {
-                    pane.status_multi_selection.remove(&repo_id);
-                    cx.notify();
-                });
-                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                self.store
-                    .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
-                self.rebuild_diff_cache();
+                let anchor = self
+                    .popover_anchor
+                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
+                self.open_popover_at(
+                    PopoverKind::DiscardChangesConfirm { repo_id, paths },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::CheckoutConflictSide {
                 repo_id,
@@ -254,6 +246,37 @@ impl GitGpuiView {
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             }
+            ContextMenuAction::ApplyIndexPatch {
+                repo_id,
+                patch,
+                reverse,
+            } => {
+                if patch.trim().is_empty() {
+                    self.push_toast(zed::ToastKind::Error, "Patch is empty".to_string(), cx);
+                } else if reverse {
+                    self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
+                    self.rebuild_diff_cache();
+                } else {
+                    self.store.dispatch(Msg::StageHunk { repo_id, patch });
+                    self.rebuild_diff_cache();
+                }
+            }
+            ContextMenuAction::ApplyWorktreePatch {
+                repo_id,
+                patch,
+                reverse,
+            } => {
+                if patch.trim().is_empty() {
+                    self.push_toast(zed::ToastKind::Error, "Patch is empty".to_string(), cx);
+                } else {
+                    self.store.dispatch(Msg::ApplyWorktreePatch {
+                        repo_id,
+                        patch,
+                        reverse,
+                    });
+                    self.rebuild_diff_cache();
+                }
+            }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
                 if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(src_ix) {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });
@@ -281,6 +304,80 @@ impl GitGpuiView {
             }
         }
         self.close_popover(cx);
+    }
+
+    pub(super) fn discard_worktree_changes_confirmed(
+        &mut self,
+        repo_id: RepoId,
+        mut paths: Vec<std::path::PathBuf>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() > 1 {
+            let mut unique: Vec<std::path::PathBuf> = Vec::with_capacity(paths.len());
+            for p in paths {
+                if !unique.iter().any(|existing| existing == &p) {
+                    unique.push(p);
+                }
+            }
+            paths = unique;
+
+            let _ = self.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.remove(&repo_id);
+                cx.notify();
+            });
+            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            self.store
+                .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+            self.rebuild_diff_cache();
+            return;
+        }
+
+        let Some(path) = paths.into_iter().next() else {
+            return;
+        };
+
+        let is_added_file = self
+            .state
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .and_then(|r| match &r.status {
+                Loadable::Ready(status) => status
+                    .unstaged
+                    .iter()
+                    .chain(status.staged.iter())
+                    .find(|s| s.path == path)
+                    .map(|s| s.kind),
+                _ => None,
+            })
+            .is_some_and(|kind| matches!(kind, FileStatusKind::Untracked | FileStatusKind::Added));
+
+        if is_added_file {
+            let path_is_selected = self
+                .active_repo()
+                .filter(|r| r.id == repo_id)
+                .and_then(|r| r.diff_target.as_ref())
+                .is_some_and(|target| {
+                    matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
+                });
+            if path_is_selected {
+                self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            }
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+            });
+        }
+        self.store
+            .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
+        self.rebuild_diff_cache();
     }
 
     pub(super) fn build_unified_patch_for_hunk_src_ix(&self, hunk_src_ix: usize) -> Option<String> {

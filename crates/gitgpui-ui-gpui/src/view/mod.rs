@@ -57,7 +57,9 @@ use word_diff::word_diff_ranges;
 use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
 use diff_utils::{
-    compute_diff_file_for_src_ix, compute_diff_file_stats, diff_content_text,
+    build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
+    compute_diff_file_for_src_ix, compute_diff_file_stats,
+    context_menu_selection_range_from_diff_text, diff_content_text, enclosing_hunk_src_ix,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags,
 };
@@ -382,6 +384,10 @@ enum PopoverKind {
     ForcePushConfirm {
         repo_id: RepoId,
     },
+    DiscardChangesConfirm {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+    },
     PullPicker,
     PushPicker,
     AppMenu,
@@ -389,6 +395,16 @@ enum PopoverKind {
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
+    },
+    DiffEditorMenu {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: Option<std::path::PathBuf>,
+        hunk_patch: Option<String>,
+        hunks_count: usize,
+        lines_patch: Option<String>,
+        lines_count: usize,
+        copy_text: Option<String>,
     },
     CommitMenu {
         repo_id: RepoId,

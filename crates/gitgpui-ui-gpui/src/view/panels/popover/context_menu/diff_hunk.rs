@@ -38,5 +38,34 @@ pub(super) fn model(this: &GitGpuiView, repo_id: RepoId, src_ix: usize) -> Conte
         },
     });
 
+    let is_unstaged = this
+        .state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(|r| r.diff_target.as_ref())
+        .is_some_and(|target| {
+            matches!(
+                target,
+                DiffTarget::WorkingTree {
+                    area: DiffArea::Unstaged,
+                    ..
+                }
+            )
+        });
+    let patch = this.build_unified_patch_for_hunk_src_ix(src_ix);
+
+    items.push(ContextMenuItem::Entry {
+        label: "Discard hunk".into(),
+        icon: Some("↺".into()),
+        shortcut: Some("D".into()),
+        disabled: !is_unstaged || patch.is_none(),
+        action: ContextMenuAction::ApplyWorktreePatch {
+            repo_id,
+            patch: patch.unwrap_or_default(),
+            reverse: true,
+        },
+    });
+
     ContextMenuModel::new(items)
 }

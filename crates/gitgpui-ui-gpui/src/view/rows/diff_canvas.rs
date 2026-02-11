@@ -120,9 +120,11 @@ pub(super) fn inline_diff_line_row_canvas(
                         && text_bounds.contains(&event.position)
                     {
                         view.update(cx, |this, cx| {
-                            this.copy_diff_text_selection_or_region_line_to_clipboard(
+                            this.open_diff_editor_context_menu(
                                 visible_ix,
                                 DiffTextRegion::Inline,
+                                event.position,
+                                window,
                                 cx,
                             );
                             cx.notify();
@@ -325,8 +327,12 @@ pub(super) fn split_diff_line_row_canvas(
                         && let Some(region) = region
                     {
                         view.update(cx, |this, cx| {
-                            this.copy_diff_text_selection_or_region_line_to_clipboard(
-                                visible_ix, region, cx,
+                            this.open_diff_editor_context_menu(
+                                visible_ix,
+                                region,
+                                event.position,
+                                window,
+                                cx,
                             );
                             cx.notify();
                         });
@@ -480,8 +486,12 @@ pub(super) fn patch_split_column_row_canvas(
                         && text_bounds.contains(&event.position)
                     {
                         view.update(cx, |this, cx| {
-                            this.copy_diff_text_selection_or_region_line_to_clipboard(
-                                visible_ix, region, cx,
+                            this.open_diff_editor_context_menu(
+                                visible_ix,
+                                region,
+                                event.position,
+                                window,
+                                cx,
                             );
                             cx.notify();
                         });

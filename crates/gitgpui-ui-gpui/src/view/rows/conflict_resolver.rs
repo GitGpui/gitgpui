@@ -572,7 +572,10 @@ impl MainPaneView {
     }
 }
 
-fn conflict_diff_text_cell(text: SharedString, styled: Option<&CachedDiffStyledText>) -> AnyElement {
+fn conflict_diff_text_cell(
+    text: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+) -> AnyElement {
     let Some(styled) = styled else {
         return div()
             .flex_1()

@@ -16,13 +16,27 @@ fn commit_details_message_has_reasonable_max_height() {
 fn conflict_requires_resolver_only_for_both_modified() {
     use gitgpui_core::domain::FileConflictKind as K;
 
-    assert!(MainPaneView::conflict_requires_resolver(Some(K::BothModified)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::BothAdded)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::AddedByUs)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::AddedByThem)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::DeletedByUs)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::DeletedByThem)));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(K::BothDeleted)));
+    assert!(MainPaneView::conflict_requires_resolver(Some(
+        K::BothModified
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::BothAdded
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::AddedByUs
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::AddedByThem
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::DeletedByUs
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::DeletedByThem
+    )));
+    assert!(!MainPaneView::conflict_requires_resolver(Some(
+        K::BothDeleted
+    )));
     assert!(!MainPaneView::conflict_requires_resolver(None));
 }
 

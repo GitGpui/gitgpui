@@ -1414,6 +1414,320 @@ impl MainPaneView {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
     }
 
+    pub(in super::super) fn open_diff_editor_context_menu(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_id = repo.id;
+        let workdir = repo.spec.workdir.clone();
+
+        let (area, allow_apply) = match repo.diff_target.as_ref() {
+            Some(DiffTarget::WorkingTree { area, .. }) => (*area, true),
+            _ => (DiffArea::Unstaged, false),
+        };
+
+        let copy_text = self.selected_diff_text_string().or_else(|| {
+            let text = self.diff_text_line_for_region(visible_ix, region);
+            (!text.is_empty()).then_some(text.to_string())
+        });
+
+        let list_len = self.diff_visible_indices.len();
+        let clicked_visible_ix = if list_len == 0 {
+            visible_ix
+        } else {
+            visible_ix.min(list_len - 1)
+        };
+
+        let text_selection = context_menu_selection_range_from_diff_text(
+            self.diff_text_normalized_selection(),
+            self.diff_view,
+            clicked_visible_ix,
+            region,
+        );
+
+        if list_len > 0 && text_selection.is_none() {
+            let existing = self
+                .diff_selection_range
+                .map(|(a, b)| (a.min(b), a.max(b)))
+                .filter(|(a, b)| clicked_visible_ix >= *a && clicked_visible_ix <= *b);
+            if existing.is_none() {
+                self.diff_selection_anchor = Some(clicked_visible_ix);
+                self.diff_selection_range = Some((clicked_visible_ix, clicked_visible_ix));
+            }
+        }
+
+        struct FileDiffSrcLookup {
+            file_rel: std::path::PathBuf,
+            add_by_new_line: std::collections::HashMap<u32, usize>,
+            remove_by_old_line: std::collections::HashMap<u32, usize>,
+            context_by_old_line: std::collections::HashMap<u32, usize>,
+        }
+
+        let file_diff_lookup = if self.is_file_diff_view_active() {
+            self.file_diff_cache_path.as_ref().map(|abs| {
+                let rel = abs.strip_prefix(&workdir).unwrap_or(abs);
+                let file_rel = rel.to_path_buf();
+                // Git diffs use forward slashes even on Windows.
+                let rel_str = file_rel.to_string_lossy().replace('\\', "/");
+
+                let mut add_by_new_line: std::collections::HashMap<u32, usize> =
+                    std::collections::HashMap::new();
+                let mut remove_by_old_line: std::collections::HashMap<u32, usize> =
+                    std::collections::HashMap::new();
+                let mut context_by_old_line: std::collections::HashMap<u32, usize> =
+                    std::collections::HashMap::new();
+
+                for (ix, line) in self.diff_cache.iter().enumerate() {
+                    if self.diff_file_for_src_ix.get(ix).and_then(|p| p.as_deref())
+                        != Some(rel_str.as_str())
+                    {
+                        continue;
+                    }
+                    match line.kind {
+                        gitgpui_core::domain::DiffLineKind::Add => {
+                            if let Some(n) = line.new_line {
+                                add_by_new_line.insert(n, ix);
+                            }
+                        }
+                        gitgpui_core::domain::DiffLineKind::Remove => {
+                            if let Some(o) = line.old_line {
+                                remove_by_old_line.insert(o, ix);
+                            }
+                        }
+                        gitgpui_core::domain::DiffLineKind::Context => {
+                            if let Some(o) = line.old_line {
+                                context_by_old_line.insert(o, ix);
+                            }
+                        }
+                        gitgpui_core::domain::DiffLineKind::Header
+                        | gitgpui_core::domain::DiffLineKind::Hunk => {}
+                    }
+                }
+
+                FileDiffSrcLookup {
+                    file_rel,
+                    add_by_new_line,
+                    remove_by_old_line,
+                    context_by_old_line,
+                }
+            })
+        } else {
+            None
+        };
+
+        let src_ixs_for_visible_ix = |visible_ix: usize| -> Vec<usize> {
+            if let Some(lookup) = file_diff_lookup.as_ref() {
+                let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
+                    return Vec::new();
+                };
+                match self.diff_view {
+                    DiffViewMode::Inline => {
+                        let Some(line) = self.file_diff_inline_cache.get(mapped_ix) else {
+                            return Vec::new();
+                        };
+                        match line.kind {
+                            gitgpui_core::domain::DiffLineKind::Add => line
+                                .new_line
+                                .and_then(|n| lookup.add_by_new_line.get(&n).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::domain::DiffLineKind::Remove => line
+                                .old_line
+                                .and_then(|o| lookup.remove_by_old_line.get(&o).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::domain::DiffLineKind::Context => line
+                                .old_line
+                                .and_then(|o| lookup.context_by_old_line.get(&o).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::domain::DiffLineKind::Header
+                            | gitgpui_core::domain::DiffLineKind::Hunk => Vec::new(),
+                        }
+                    }
+                    DiffViewMode::Split => {
+                        let Some(row) = self.file_diff_cache_rows.get(mapped_ix) else {
+                            return Vec::new();
+                        };
+                        match row.kind {
+                            gitgpui_core::file_diff::FileDiffRowKind::Context => row
+                                .old_line
+                                .and_then(|o| lookup.context_by_old_line.get(&o).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::file_diff::FileDiffRowKind::Add => row
+                                .new_line
+                                .and_then(|n| lookup.add_by_new_line.get(&n).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::file_diff::FileDiffRowKind::Remove => row
+                                .old_line
+                                .and_then(|o| lookup.remove_by_old_line.get(&o).copied())
+                                .into_iter()
+                                .collect(),
+                            gitgpui_core::file_diff::FileDiffRowKind::Modify => {
+                                let mut out = Vec::new();
+                                if let Some(o) = row.old_line
+                                    && let Some(ix) = lookup.remove_by_old_line.get(&o).copied()
+                                {
+                                    out.push(ix);
+                                }
+                                if let Some(n) = row.new_line
+                                    && let Some(ix) = lookup.add_by_new_line.get(&n).copied()
+                                    && !out.contains(&ix)
+                                {
+                                    out.push(ix);
+                                }
+                                out
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.diff_src_ixs_for_visible_ix(visible_ix)
+            }
+        };
+
+        let clicked_src_ix = src_ixs_for_visible_ix(clicked_visible_ix)
+            .into_iter()
+            .next();
+        let hunk_src_ix = clicked_src_ix.and_then(|src_ix| self.diff_enclosing_hunk_src_ix(src_ix));
+
+        let path = hunk_src_ix
+            .or(clicked_src_ix)
+            .and_then(|ix| self.diff_file_for_src_ix.get(ix))
+            .and_then(|p| p.as_deref())
+            .map(std::path::PathBuf::from);
+        let path = path.or_else(|| file_diff_lookup.as_ref().map(|l| l.file_rel.clone()));
+
+        let allow_patch_actions = allow_apply && !self.is_file_preview_active();
+
+        let selection = text_selection
+            .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))
+            .or_else(|| (list_len > 0).then_some((clicked_visible_ix, clicked_visible_ix)))
+            .map(|(a, b)| {
+                if list_len == 0 {
+                    (0, 0)
+                } else {
+                    (a.min(list_len - 1), b.min(list_len - 1))
+                }
+            });
+
+        let (hunks_count, hunk_patch, lines_count, lines_patch) =
+            if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
+                let mut selected_src_ixs: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+                let mut selected_change_src_ixs: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+
+                for vix in sel_a..=sel_b {
+                    for src_ix in src_ixs_for_visible_ix(vix) {
+                        let Some(line) = self.diff_cache.get(src_ix) else {
+                            continue;
+                        };
+                        selected_src_ixs.insert(src_ix);
+                        if matches!(
+                            line.kind,
+                            gitgpui_core::domain::DiffLineKind::Add
+                                | gitgpui_core::domain::DiffLineKind::Remove
+                        ) {
+                            selected_change_src_ixs.insert(src_ix);
+                        }
+                    }
+                }
+
+                let mut selected_hunks: Vec<usize> = selected_src_ixs
+                    .into_iter()
+                    .filter_map(|ix| self.diff_enclosing_hunk_src_ix(ix))
+                    .collect();
+                selected_hunks.sort_unstable();
+                selected_hunks.dedup();
+
+                let hunk_patch = build_unified_patch_for_hunks(&self.diff_cache, &selected_hunks);
+                let hunks_count = hunk_patch
+                    .as_ref()
+                    .map(|_| selected_hunks.len())
+                    .unwrap_or(0);
+
+                let lines_patch = build_unified_patch_for_selected_lines_across_hunks(
+                    &self.diff_cache,
+                    &selected_change_src_ixs,
+                );
+                let lines_count = lines_patch
+                    .as_ref()
+                    .map(|_| selected_change_src_ixs.len())
+                    .unwrap_or(0);
+
+                (hunks_count, hunk_patch, lines_count, lines_patch)
+            } else {
+                (0, None, 0, None)
+            };
+
+        self.open_popover_at(
+            PopoverKind::DiffEditorMenu {
+                repo_id,
+                area,
+                path,
+                hunk_patch,
+                hunks_count,
+                lines_patch,
+                lines_count,
+                copy_text,
+            },
+            anchor,
+            window,
+            cx,
+        );
+    }
+
+    fn diff_src_ixs_for_visible_ix(&self, visible_ix: usize) -> Vec<usize> {
+        if self.is_file_diff_view_active() {
+            return Vec::new();
+        }
+        let Some(&mapped_ix) = self.diff_visible_indices.get(visible_ix) else {
+            return Vec::new();
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => vec![mapped_ix],
+            DiffViewMode::Split => {
+                let Some(row) = self.diff_split_cache.get(mapped_ix) else {
+                    return Vec::new();
+                };
+                match row {
+                    PatchSplitRow::Raw { src_ix, .. } => vec![*src_ix],
+                    PatchSplitRow::Aligned {
+                        old_src_ix,
+                        new_src_ix,
+                        ..
+                    } => {
+                        let mut out = Vec::new();
+                        if let Some(ix) = old_src_ix {
+                            out.push(*ix);
+                        }
+                        if let Some(ix) = new_src_ix {
+                            if !out.contains(ix) {
+                                out.push(*ix);
+                            }
+                        }
+                        out
+                    }
+                }
+            }
+        }
+    }
+
+    fn diff_enclosing_hunk_src_ix(&self, src_ix: usize) -> Option<usize> {
+        enclosing_hunk_src_ix(&self.diff_cache, src_ix)
+    }
+
     pub(in super::super) fn select_all_diff_text(&mut self) {
         if self.is_file_preview_active() {
             let Some(count) = self.worktree_preview_line_count() else {
@@ -2686,7 +3000,10 @@ impl MainPaneView {
 
     fn active_conflict_target(
         &self,
-    ) -> Option<(std::path::PathBuf, Option<gitgpui_core::domain::FileConflictKind>)> {
+    ) -> Option<(
+        std::path::PathBuf,
+        Option<gitgpui_core::domain::FileConflictKind>,
+    )> {
         let repo = self.active_repo()?;
         let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
             return None;
@@ -2793,7 +3110,8 @@ impl MainPaneView {
             for visible_ix in 0..total {
                 match self.diff_view {
                     DiffViewMode::Inline => {
-                        let text = self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                        let text =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
                         if contains_ascii_case_insensitive(text.as_ref(), query) {
                             self.diff_search_matches.push(visible_ix);
                         }
@@ -2833,7 +3151,10 @@ impl MainPaneView {
             return;
         }
 
-        let current = self.diff_search_match_ix.unwrap_or(0).min(len.saturating_sub(1));
+        let current = self
+            .diff_search_match_ix
+            .unwrap_or(0)
+            .min(len.saturating_sub(1));
         let next_ix = if current == 0 { len - 1 } else { current - 1 };
         self.diff_search_match_ix = Some(next_ix);
         let target = self.diff_search_matches[next_ix];
@@ -2853,7 +3174,10 @@ impl MainPaneView {
             return;
         }
 
-        let current = self.diff_search_match_ix.unwrap_or(0).min(len.saturating_sub(1));
+        let current = self
+            .diff_search_match_ix
+            .unwrap_or(0)
+            .min(len.saturating_sub(1));
         let next_ix = (current + 1) % len;
         self.diff_search_match_ix = Some(next_ix);
         let target = self.diff_search_matches[next_ix];

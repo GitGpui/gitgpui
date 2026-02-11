@@ -13,13 +13,11 @@ pub(super) fn model(
         .iter()
         .find(|r| r.id == repo_id)
         .and_then(|r| match &r.status {
-            Loadable::Ready(status) => Some(
-                status
-                    .unstaged
-                    .iter()
-                    .chain(status.staged.iter())
-                    .any(|s| &s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted),
-            ),
+            Loadable::Ready(status) => {
+                Some(status.unstaged.iter().chain(status.staged.iter()).any(|s| {
+                    &s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+                }))
+            }
             _ => None,
         })
         .unwrap_or(false);
@@ -39,12 +37,9 @@ pub(super) fn model(
         .and_then(|r| match &r.status {
             Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
                 let path = p.as_path();
-                if status
-                    .unstaged
-                    .iter()
-                    .chain(status.staged.iter())
-                    .any(|s| s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted)
-                {
+                if status.unstaged.iter().chain(status.staged.iter()).any(|s| {
+                    s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+                }) {
                     return false;
                 }
 

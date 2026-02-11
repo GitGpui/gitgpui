@@ -85,6 +85,9 @@ pub enum RepoCommandKind {
     },
     StageHunk,
     UnstageHunk,
+    ApplyWorktreePatch {
+        reverse: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,6 +170,11 @@ pub enum Msg {
     UnstageHunk {
         repo_id: RepoId,
         patch: String,
+    },
+    ApplyWorktreePatch {
+        repo_id: RepoId,
+        patch: String,
+        reverse: bool,
     },
     CheckoutBranch {
         repo_id: RepoId,
@@ -600,6 +608,16 @@ impl std::fmt::Debug for Msg {
             Msg::UnstageHunk { repo_id, patch } => f
                 .debug_struct("UnstageHunk")
                 .field("repo_id", repo_id)
+                .field("patch_len", &patch.len())
+                .finish(),
+            Msg::ApplyWorktreePatch {
+                repo_id,
+                patch,
+                reverse,
+            } => f
+                .debug_struct("ApplyWorktreePatch")
+                .field("repo_id", repo_id)
+                .field("reverse", reverse)
                 .field("patch_len", &patch.len())
                 .finish(),
             Msg::CheckoutBranch { repo_id, name } => f
@@ -1253,6 +1271,11 @@ pub enum Effect {
     UnstageHunk {
         repo_id: RepoId,
         patch: String,
+    },
+    ApplyWorktreePatch {
+        repo_id: RepoId,
+        patch: String,
+        reverse: bool,
     },
     StagePath {
         repo_id: RepoId,

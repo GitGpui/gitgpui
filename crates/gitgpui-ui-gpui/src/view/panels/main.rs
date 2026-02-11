@@ -83,7 +83,10 @@ impl MainPaneView {
     pub(in super::super) fn conflict_requires_resolver(
         conflict: Option<gitgpui_core::domain::FileConflictKind>,
     ) -> bool {
-        matches!(conflict, Some(gitgpui_core::domain::FileConflictKind::BothModified))
+        matches!(
+            conflict,
+            Some(gitgpui_core::domain::FileConflictKind::BothModified)
+        )
     }
 
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -285,8 +288,7 @@ impl MainPaneView {
                 .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                     let mut changed = false;
                     if *hovering {
-                        changed |= this
-                            .set_tooltip_text_if_changed(Some(prev_tooltip.clone()), cx);
+                        changed |= this.set_tooltip_text_if_changed(Some(prev_tooltip.clone()), cx);
                     } else {
                         changed |= this.clear_tooltip_if_matches(&prev_tooltip, cx);
                     }
@@ -318,8 +320,7 @@ impl MainPaneView {
                 .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                     let mut changed = false;
                     if *hovering {
-                        changed |= this
-                            .set_tooltip_text_if_changed(Some(next_tooltip.clone()), cx);
+                        changed |= this.set_tooltip_text_if_changed(Some(next_tooltip.clone()), cx);
                     } else {
                         changed |= this.clear_tooltip_if_matches(&next_tooltip, cx);
                     }
@@ -1150,7 +1151,9 @@ impl MainPaneView {
 
                                 let diff_len = match self.diff_view {
                                     DiffViewMode::Split => self.conflict_resolver.diff_rows.len(),
-                                    DiffViewMode::Inline => self.conflict_resolver.inline_rows.len(),
+                                    DiffViewMode::Inline => {
+                                        self.conflict_resolver.inline_rows.len()
+                                    }
                                 };
 
                                 let diff_body: AnyElement = if diff_len == 0 {
@@ -1910,7 +1913,8 @@ impl MainPaneView {
                         return false;
                     };
                     let conflict = status.unstaged.iter().find(|e| {
-                        e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+                        e.path == *path
+                            && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
                     });
                     conflict.is_some_and(|e| Self::conflict_requires_resolver(e.conflict))
                 });

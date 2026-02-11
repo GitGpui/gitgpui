@@ -469,7 +469,7 @@ impl DetailsPaneView {
         let discard_selected =
             zed::Button::new("discard_selected", format!("Discard ({selected_unstaged})"))
                 .style(zed::ButtonStyle::Outlined)
-                .on_click(theme, cx, |this, _e, _w, cx| {
+                .on_click(theme, cx, |this, e, window, cx| {
                     let Some(repo_id) = this.active_repo_id() else {
                         return;
                     };
@@ -481,10 +481,12 @@ impl DetailsPaneView {
                     if paths.is_empty() {
                         return;
                     }
-                    this.status_multi_selection.remove(&repo_id);
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store
-                        .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
+                    this.open_popover_at(
+                        PopoverKind::DiscardChangesConfirm { repo_id, paths },
+                        e.position(),
+                        window,
+                        cx,
+                    );
                     cx.notify();
                 });
 
@@ -712,10 +714,13 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
-        if let Some(message) = self.active_repo().and_then(|repo| match &repo.merge_commit_message {
-            Loadable::Ready(Some(msg)) => Some(msg.clone()),
-            _ => None,
-        }) {
+        if let Some(message) =
+            self.active_repo()
+                .and_then(|repo| match &repo.merge_commit_message {
+                    Loadable::Ready(Some(msg)) => Some(msg.clone()),
+                    _ => None,
+                })
+        {
             let current = self.commit_message_input.read(cx).text();
             if current.trim().is_empty() {
                 self.commit_message_input

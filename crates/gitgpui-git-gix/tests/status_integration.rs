@@ -441,7 +441,10 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
-    assert_eq!(status.unstaged[0].conflict, Some(FileConflictKind::BothModified));
+    assert_eq!(
+        status.unstaged[0].conflict,
+        Some(FileConflictKind::BothModified)
+    );
 
     let diff = opened
         .diff_file_text(&DiffTarget::WorkingTree {
@@ -548,7 +551,10 @@ fn status_reports_conflict_kind_for_add_add() {
     assert_eq!(status.unstaged.len(), 1);
     assert_eq!(status.unstaged[0].path, PathBuf::from("a.txt"));
     assert_eq!(status.unstaged[0].kind, FileStatusKind::Conflicted);
-    assert_eq!(status.unstaged[0].conflict, Some(FileConflictKind::BothAdded));
+    assert_eq!(
+        status.unstaged[0].conflict,
+        Some(FileConflictKind::BothAdded)
+    );
 }
 
 #[test]
@@ -1240,8 +1246,14 @@ fn merge_commit_message_is_available_during_conflict() {
         .merge_commit_message()
         .unwrap()
         .expect("merge commit message");
-    assert_eq!(msg.lines().next().unwrap_or_default(), "Merge branch 'feature'");
-    assert!(!msg.contains('#'), "expected message to be cleaned, got: {msg}");
+    assert_eq!(
+        msg.lines().next().unwrap_or_default(),
+        "Merge branch 'feature'"
+    );
+    assert!(
+        !msg.contains('#'),
+        "expected message to be cleaned, got: {msg}"
+    );
 
     run_git(repo, &["merge", "--abort"]);
     assert!(opened.merge_commit_message().unwrap().is_none());
