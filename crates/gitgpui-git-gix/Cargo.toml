@@ -14,4 +14,4 @@ gix = "0.78"
 gix-diff = "0.58"
 
 [dev-dependencies]
-tempfile = "3.24.0"
+tempfile = "3.25.0"

@@ -1,0 +1,420 @@
+use crate::model::RepoId;
+use gitgpui_core::domain::*;
+use gitgpui_core::error::Error;
+use gitgpui_core::services::GitRepository;
+use gitgpui_core::services::{CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode};
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use super::repo_command_kind::RepoCommandKind;
+use super::repo_external_change::RepoExternalChange;
+
+pub enum Msg {
+    OpenRepo(PathBuf),
+    RestoreSession {
+        open_repos: Vec<PathBuf>,
+        active_repo: Option<PathBuf>,
+    },
+    CloseRepo {
+        repo_id: RepoId,
+    },
+    SetActiveRepo {
+        repo_id: RepoId,
+    },
+    ReloadRepo {
+        repo_id: RepoId,
+    },
+    RepoExternallyChanged {
+        repo_id: RepoId,
+        change: RepoExternalChange,
+    },
+    SetHistoryScope {
+        repo_id: RepoId,
+        scope: LogScope,
+    },
+    LoadMoreHistory {
+        repo_id: RepoId,
+    },
+    SelectCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    ClearCommitSelection {
+        repo_id: RepoId,
+    },
+    SelectDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    ClearDiffSelection {
+        repo_id: RepoId,
+    },
+    LoadStashes {
+        repo_id: RepoId,
+    },
+    LoadConflictFile {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadReflog {
+        repo_id: RepoId,
+    },
+    LoadFileHistory {
+        repo_id: RepoId,
+        path: PathBuf,
+        limit: usize,
+    },
+    LoadBlame {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+    },
+    LoadWorktrees {
+        repo_id: RepoId,
+    },
+    LoadSubmodules {
+        repo_id: RepoId,
+    },
+    StageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
+    UnstageHunk {
+        repo_id: RepoId,
+        patch: String,
+    },
+    ApplyWorktreePatch {
+        repo_id: RepoId,
+        patch: String,
+        reverse: bool,
+    },
+    CheckoutBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CheckoutRemoteBranch {
+        repo_id: RepoId,
+        remote: String,
+        name: String,
+    },
+    CheckoutCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    CherryPickCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    RevertCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    CreateBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CreateBranchAndCheckout {
+        repo_id: RepoId,
+        name: String,
+    },
+    DeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    CloneRepo {
+        url: String,
+        dest: PathBuf,
+    },
+    CloneRepoProgress {
+        dest: PathBuf,
+        line: String,
+    },
+    CloneRepoFinished {
+        url: String,
+        dest: PathBuf,
+        result: Result<CommandOutput, Error>,
+    },
+    ExportPatch {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        dest: PathBuf,
+    },
+    ApplyPatch {
+        repo_id: RepoId,
+        patch: PathBuf,
+    },
+    AddWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: Option<String>,
+    },
+    RemoveWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    AddSubmodule {
+        repo_id: RepoId,
+        url: String,
+        path: PathBuf,
+    },
+    UpdateSubmodules {
+        repo_id: RepoId,
+    },
+    RemoveSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    StagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    StagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
+    UnstagePath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    UnstagePaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
+    DiscardWorktreeChangesPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    DiscardWorktreeChangesPaths {
+        repo_id: RepoId,
+        paths: Vec<PathBuf>,
+    },
+    SaveWorktreeFile {
+        repo_id: RepoId,
+        path: PathBuf,
+        contents: String,
+        stage: bool,
+    },
+    Commit {
+        repo_id: RepoId,
+        message: String,
+    },
+    CommitAmend {
+        repo_id: RepoId,
+        message: String,
+    },
+    FetchAll {
+        repo_id: RepoId,
+    },
+    Pull {
+        repo_id: RepoId,
+        mode: PullMode,
+    },
+    PullBranch {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    MergeRef {
+        repo_id: RepoId,
+        reference: String,
+    },
+    Push {
+        repo_id: RepoId,
+    },
+    ForcePush {
+        repo_id: RepoId,
+    },
+    PushSetUpstream {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    Reset {
+        repo_id: RepoId,
+        target: String,
+        mode: ResetMode,
+    },
+    Rebase {
+        repo_id: RepoId,
+        onto: String,
+    },
+    RebaseContinue {
+        repo_id: RepoId,
+    },
+    RebaseAbort {
+        repo_id: RepoId,
+    },
+    CreateTag {
+        repo_id: RepoId,
+        name: String,
+        target: String,
+    },
+    DeleteTag {
+        repo_id: RepoId,
+        name: String,
+    },
+    AddRemote {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+    },
+    RemoveRemote {
+        repo_id: RepoId,
+        name: String,
+    },
+    SetRemoteUrl {
+        repo_id: RepoId,
+        name: String,
+        url: String,
+        kind: RemoteUrlKind,
+    },
+    CheckoutConflictSide {
+        repo_id: RepoId,
+        path: PathBuf,
+        side: ConflictSide,
+    },
+    Stash {
+        repo_id: RepoId,
+        message: String,
+        include_untracked: bool,
+    },
+    ApplyStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    DropStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+    PopStash {
+        repo_id: RepoId,
+        index: usize,
+    },
+
+    RepoOpenedOk {
+        repo_id: RepoId,
+        spec: RepoSpec,
+        repo: Arc<dyn GitRepository>,
+    },
+    RepoOpenedErr {
+        repo_id: RepoId,
+        spec: RepoSpec,
+        error: Error,
+    },
+
+    BranchesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Branch>, Error>,
+    },
+    RemotesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Remote>, Error>,
+    },
+    RemoteBranchesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<RemoteBranch>, Error>,
+    },
+    StatusLoaded {
+        repo_id: RepoId,
+        result: Result<RepoStatus, Error>,
+    },
+    HeadBranchLoaded {
+        repo_id: RepoId,
+        result: Result<String, Error>,
+    },
+    UpstreamDivergenceLoaded {
+        repo_id: RepoId,
+        result: Result<Option<UpstreamDivergence>, Error>,
+    },
+    LogLoaded {
+        repo_id: RepoId,
+        scope: LogScope,
+        cursor: Option<LogCursor>,
+        result: Result<LogPage, Error>,
+    },
+    TagsLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Tag>, Error>,
+    },
+    StashesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<StashEntry>, Error>,
+    },
+    ReflogLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<ReflogEntry>, Error>,
+    },
+    RebaseStateLoaded {
+        repo_id: RepoId,
+        result: Result<bool, Error>,
+    },
+    MergeCommitMessageLoaded {
+        repo_id: RepoId,
+        result: Result<Option<String>, Error>,
+    },
+    FileHistoryLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<LogPage, Error>,
+    },
+    BlameLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        rev: Option<String>,
+        result: Result<Vec<gitgpui_core::services::BlameLine>, Error>,
+    },
+    ConflictFileLoaded {
+        repo_id: RepoId,
+        path: PathBuf,
+        result: Result<Option<crate::model::ConflictFile>, Error>,
+    },
+    WorktreesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Worktree>, Error>,
+    },
+    SubmodulesLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<Submodule>, Error>,
+    },
+
+    CommitDetailsLoaded {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        result: Result<CommitDetails, Error>,
+    },
+
+    DiffLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<Diff, Error>,
+    },
+    DiffFileLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<Option<FileDiffText>, Error>,
+    },
+    DiffFileImageLoaded {
+        repo_id: RepoId,
+        target: DiffTarget,
+        result: Result<Option<FileDiffImage>, Error>,
+    },
+
+    RepoActionFinished {
+        repo_id: RepoId,
+        result: Result<(), Error>,
+    },
+    CommitFinished {
+        repo_id: RepoId,
+        result: Result<(), Error>,
+    },
+    CommitAmendFinished {
+        repo_id: RepoId,
+        result: Result<(), Error>,
+    },
+
+    RepoCommandFinished {
+        repo_id: RepoId,
+        command: RepoCommandKind,
+        result: Result<CommandOutput, Error>,
+    },
+}

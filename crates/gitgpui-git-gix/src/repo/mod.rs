@@ -1,0 +1,338 @@
+use gitgpui_core::domain::{
+    Branch, CommitDetails, CommitId, DiffTarget, FileDiffImage, FileDiffText, LogCursor, LogPage,
+    ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry, Submodule, Tag,
+    UpstreamDivergence, Worktree,
+};
+use gitgpui_core::services::{
+    BlameLine, CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
+    Result,
+};
+use std::path::{Path, PathBuf};
+
+mod blame;
+mod diff;
+mod discard;
+mod history;
+mod log;
+mod patch;
+mod porcelain;
+mod refs;
+mod remotes;
+mod status;
+mod submodules;
+mod tags;
+mod worktrees;
+
+pub(crate) struct GixRepo {
+    spec: RepoSpec,
+    _workdir: PathBuf,
+    _repo: gix::ThreadSafeRepository,
+}
+
+impl GixRepo {
+    pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
+        Self {
+            spec: RepoSpec {
+                workdir: workdir.clone(),
+            },
+            _workdir: workdir,
+            _repo: repo,
+        }
+    }
+}
+
+impl GitRepository for GixRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        self.log_head_page_impl(limit, cursor)
+    }
+
+    fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        self.log_all_branches_page_impl(limit, cursor)
+    }
+
+    fn log_file_page(
+        &self,
+        path: &Path,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        self.log_file_page_impl(path, limit, cursor)
+    }
+
+    fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
+        self.commit_details_impl(id)
+    }
+
+    fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
+        self.reflog_head_impl(limit)
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        self.current_branch_impl()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        self.list_branches_impl()
+    }
+
+    fn list_tags(&self) -> Result<Vec<Tag>> {
+        self.list_tags_impl()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        self.list_remotes_impl()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        self.list_remote_branches_impl()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        self.status_impl()
+    }
+
+    fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
+        self.upstream_divergence_impl()
+    }
+
+    fn pull_branch_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        self.pull_branch_with_output_impl(remote, branch)
+    }
+
+    fn merge_ref_with_output(&self, reference: &str) -> Result<CommandOutput> {
+        self.merge_ref_with_output_impl(reference)
+    }
+
+    fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
+        self.diff_unified_impl(target)
+    }
+
+    fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
+        self.diff_file_text_impl(target)
+    }
+
+    fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
+        self.diff_file_image_impl(target)
+    }
+
+    fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.create_branch_impl(name, target)
+    }
+
+    fn delete_branch(&self, name: &str) -> Result<()> {
+        self.delete_branch_impl(name)
+    }
+
+    fn checkout_branch(&self, name: &str) -> Result<()> {
+        self.checkout_branch_impl(name)
+    }
+
+    fn checkout_remote_branch(&self, remote: &str, branch: &str) -> Result<()> {
+        self.checkout_remote_branch_impl(remote, branch)
+    }
+
+    fn checkout_commit(&self, id: &CommitId) -> Result<()> {
+        self.checkout_commit_impl(id)
+    }
+
+    fn cherry_pick(&self, id: &CommitId) -> Result<()> {
+        self.cherry_pick_impl(id)
+    }
+
+    fn revert(&self, id: &CommitId) -> Result<()> {
+        self.revert_impl(id)
+    }
+
+    fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
+        self.stash_create_impl(message, include_untracked)
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        self.stash_list_impl()
+    }
+
+    fn stash_apply(&self, index: usize) -> Result<()> {
+        self.stash_apply_impl(index)
+    }
+
+    fn stash_drop(&self, index: usize) -> Result<()> {
+        self.stash_drop_impl(index)
+    }
+
+    fn stage(&self, paths: &[&Path]) -> Result<()> {
+        self.stage_impl(paths)
+    }
+
+    fn unstage(&self, paths: &[&Path]) -> Result<()> {
+        self.unstage_impl(paths)
+    }
+
+    fn commit(&self, message: &str) -> Result<()> {
+        self.commit_impl(message)
+    }
+
+    fn commit_amend(&self, message: &str) -> Result<()> {
+        self.commit_amend_impl(message)
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        self.fetch_all_impl()
+    }
+
+    fn fetch_all_with_output(&self) -> Result<CommandOutput> {
+        self.fetch_all_with_output_impl()
+    }
+
+    fn pull(&self, mode: PullMode) -> Result<()> {
+        self.pull_impl(mode)
+    }
+
+    fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {
+        self.pull_with_output_impl(mode)
+    }
+
+    fn push(&self) -> Result<()> {
+        self.push_impl()
+    }
+
+    fn push_with_output(&self) -> Result<CommandOutput> {
+        self.push_with_output_impl()
+    }
+
+    fn push_force(&self) -> Result<()> {
+        self.push_force_impl()
+    }
+
+    fn push_force_with_output(&self) -> Result<CommandOutput> {
+        self.push_force_with_output_impl()
+    }
+
+    fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {
+        self.reset_with_output_impl(target, mode)
+    }
+
+    fn rebase_with_output(&self, onto: &str) -> Result<CommandOutput> {
+        self.rebase_with_output_impl(onto)
+    }
+
+    fn rebase_continue_with_output(&self) -> Result<CommandOutput> {
+        self.rebase_continue_with_output_impl()
+    }
+
+    fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
+        self.rebase_abort_with_output_impl()
+    }
+
+    fn rebase_in_progress(&self) -> Result<bool> {
+        self.rebase_in_progress_impl()
+    }
+
+    fn merge_commit_message(&self) -> Result<Option<String>> {
+        self.merge_commit_message_impl()
+    }
+
+    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
+        self.create_tag_with_output_impl(name, target)
+    }
+
+    fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {
+        self.delete_tag_with_output_impl(name)
+    }
+
+    fn add_remote_with_output(&self, name: &str, url: &str) -> Result<CommandOutput> {
+        self.add_remote_with_output_impl(name, url)
+    }
+
+    fn remove_remote_with_output(&self, name: &str) -> Result<CommandOutput> {
+        self.remove_remote_with_output_impl(name)
+    }
+
+    fn set_remote_url_with_output(
+        &self,
+        name: &str,
+        url: &str,
+        kind: RemoteUrlKind,
+    ) -> Result<CommandOutput> {
+        self.set_remote_url_with_output_impl(name, url, kind)
+    }
+
+    fn push_set_upstream(&self, remote: &str, branch: &str) -> Result<()> {
+        self.push_set_upstream_impl(remote, branch)
+    }
+
+    fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
+        self.push_set_upstream_with_output_impl(remote, branch)
+    }
+
+    fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
+        self.blame_file_impl(path, rev)
+    }
+
+    fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
+        self.checkout_conflict_side_impl(path, side)
+    }
+
+    fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {
+        self.export_patch_with_output_impl(commit_id, dest)
+    }
+
+    fn apply_patch_with_output(&self, patch: &Path) -> Result<CommandOutput> {
+        self.apply_patch_with_output_impl(patch)
+    }
+
+    fn apply_unified_patch_to_index_with_output(
+        &self,
+        patch: &str,
+        reverse: bool,
+    ) -> Result<CommandOutput> {
+        self.apply_unified_patch_to_index_with_output_impl(patch, reverse)
+    }
+
+    fn apply_unified_patch_to_worktree_with_output(
+        &self,
+        patch: &str,
+        reverse: bool,
+    ) -> Result<CommandOutput> {
+        self.apply_unified_patch_to_worktree_with_output_impl(patch, reverse)
+    }
+
+    fn list_worktrees(&self) -> Result<Vec<Worktree>> {
+        self.list_worktrees_impl()
+    }
+
+    fn add_worktree_with_output(
+        &self,
+        path: &Path,
+        reference: Option<&str>,
+    ) -> Result<CommandOutput> {
+        self.add_worktree_with_output_impl(path, reference)
+    }
+
+    fn remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.remove_worktree_with_output_impl(path)
+    }
+
+    fn list_submodules(&self) -> Result<Vec<Submodule>> {
+        self.list_submodules_impl()
+    }
+
+    fn add_submodule_with_output(&self, url: &str, path: &Path) -> Result<CommandOutput> {
+        self.add_submodule_with_output_impl(url, path)
+    }
+
+    fn update_submodules_with_output(&self) -> Result<CommandOutput> {
+        self.update_submodules_with_output_impl()
+    }
+
+    fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.remove_submodule_with_output_impl(path)
+    }
+
+    fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()> {
+        self.discard_worktree_changes_impl(paths)
+    }
+}

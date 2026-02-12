@@ -1,5 +1,8 @@
 use std::ops::Range;
 
+const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
+const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TokenKind {
     Whitespace,
@@ -185,6 +188,19 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
     (coalesce_ranges(old_ranges), coalesce_ranges(new_ranges))
 }
 
+pub(super) fn capped_word_diff_ranges(
+    old: &str,
+    new: &str,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
+    {
+        return (Vec::new(), Vec::new());
+    }
+    word_diff_ranges(old, new)
+}
+
 fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
     let mut prefix = 0usize;
     for ((old_ix, old_ch), (_new_ix, new_ch)) in old.char_indices().zip(new.char_indices()) {
@@ -220,4 +236,122 @@ fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<R
         Vec::new()
     };
     (old_ranges, new_ranges)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn word_diff_ranges_highlights_changed_tokens() {
+        let (old, new) = ("let x = 1;", "let x = 2;");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+        assert_eq!(
+            old_ranges
+                .iter()
+                .map(|r| &old[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["1"]
+        );
+        assert_eq!(
+            new_ranges
+                .iter()
+                .map(|r| &new[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["2"]
+        );
+    }
+
+    #[test]
+    fn capped_word_diff_ranges_matches_word_diff_for_small_inputs() {
+        let (old, new) = ("let x = 1;", "let x = 2;");
+        let (a_old, a_new) = word_diff_ranges(old, new);
+        let (b_old, b_new) = capped_word_diff_ranges(old, new);
+        assert_eq!(a_old, b_old);
+        assert_eq!(a_new, b_new);
+    }
+
+    #[test]
+    fn capped_word_diff_ranges_skips_huge_inputs() {
+        let old = "a".repeat(WORD_DIFF_MAX_TOTAL_BYTES + 1);
+        let new = format!("{old}x");
+        let (old_ranges, new_ranges) = capped_word_diff_ranges(&old, &new);
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
+    }
+
+    #[test]
+    fn word_diff_ranges_handles_unicode_safely() {
+        let (old, new) = ("aé", "aê");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+        assert_eq!(
+            old_ranges
+                .iter()
+                .map(|r| &old[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["aé"]
+        );
+        assert_eq!(
+            new_ranges
+                .iter()
+                .map(|r| &new[r.clone()])
+                .collect::<Vec<_>>(),
+            vec!["aê"]
+        );
+    }
+
+    #[test]
+    fn word_diff_ranges_falls_back_for_large_inputs() {
+        let old = "a".repeat(2048);
+        let new = format!("{old}x");
+        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
+        assert!(old_ranges.len() <= 1);
+        assert!(new_ranges.len() <= 1);
+    }
+
+    #[test]
+    fn word_diff_ranges_outputs_are_ordered_and_utf8_safe() {
+        let (old, new) = ("aé b", "aê  b");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+
+        for r in &old_ranges {
+            assert!(r.start <= r.end);
+            assert!(r.end <= old.len());
+            assert!(old.is_char_boundary(r.start));
+            assert!(old.is_char_boundary(r.end));
+        }
+        for w in old_ranges.windows(2) {
+            assert!(w[0].end <= w[1].start);
+        }
+
+        for r in &new_ranges {
+            assert!(r.start <= r.end);
+            assert!(r.end <= new.len());
+            assert!(new.is_char_boundary(r.start));
+            assert!(new.is_char_boundary(r.end));
+        }
+        for w in new_ranges.windows(2) {
+            assert!(w[0].end <= w[1].start);
+        }
+    }
+
+    #[test]
+    fn word_diff_ranges_empty_inputs_do_not_panic() {
+        let (old_ranges, new_ranges) = word_diff_ranges("", "");
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
+    }
+
+    #[test]
+    #[ignore]
+    fn perf_word_diff_ranges_smoke() {
+        let old = "fn foo(a: i32, b: i32) -> i32 { a + b }";
+        let new = "fn foo(a: i32, b: i32) -> i32 { a - b }";
+        let start = Instant::now();
+        for _ in 0..200_000 {
+            let _ = word_diff_ranges(old, new);
+        }
+        eprintln!("word_diff_ranges: {:?}", start.elapsed());
+    }
 }

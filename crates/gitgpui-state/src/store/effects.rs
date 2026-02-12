@@ -1,12 +1,13 @@
+mod clone;
+mod open_repo;
+mod repo_actions;
+mod repo_commands;
+mod repo_load;
+mod util;
+
 use crate::msg::{Effect, Msg};
-use gitgpui_core::domain::{Diff, RepoSpec};
-use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::CommandOutput;
 use gitgpui_core::services::{GitBackend, GitRepository};
 use std::collections::HashMap;
-use std::io::{BufRead as _, BufReader, Read as _};
-use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, mpsc};
 
 use super::RepoId;
@@ -21,1083 +22,273 @@ pub(super) fn schedule_effect(
 ) {
     match effect {
         Effect::OpenRepo { repo_id, path } => {
-            let backend = Arc::clone(backend);
-            executor.spawn(move || {
-                let spec = RepoSpec { workdir: path };
-                match backend.open(&spec.workdir) {
-                    Ok(repo) => {
-                        let _ = msg_tx.send(Msg::RepoOpenedOk {
-                            repo_id,
-                            spec,
-                            repo,
-                        });
-                    }
-                    Err(error) => {
-                        let _ = msg_tx.send(Msg::RepoOpenedErr {
-                            repo_id,
-                            spec,
-                            error,
-                        });
-                    }
-                }
-            });
+            open_repo::schedule_open_repo(executor, Arc::clone(backend), msg_tx, repo_id, path);
         }
-
         Effect::LoadBranches { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::BranchesLoaded {
-                        repo_id,
-                        result: repo.list_branches(),
-                    });
-                });
-            }
+            repo_load::schedule_load_branches(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadRemotes { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RemotesLoaded {
-                        repo_id,
-                        result: repo.list_remotes(),
-                    });
-                });
-            }
+            repo_load::schedule_load_remotes(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadRemoteBranches { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RemoteBranchesLoaded {
-                        repo_id,
-                        result: repo.list_remote_branches(),
-                    });
-                });
-            }
+            repo_load::schedule_load_remote_branches(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadStatus { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::StatusLoaded {
-                        repo_id,
-                        result: repo.status(),
-                    });
-                });
-            }
+            repo_load::schedule_load_status(executor, repos, msg_tx, repo_id)
         }
-
         Effect::LoadHeadBranch { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::HeadBranchLoaded {
-                        repo_id,
-                        result: repo.current_branch(),
-                    });
-                });
-            }
+            repo_load::schedule_load_head_branch(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadUpstreamDivergence { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::UpstreamDivergenceLoaded {
-                        repo_id,
-                        result: repo.upstream_divergence(),
-                    });
-                });
-            }
+            repo_load::schedule_load_upstream_divergence(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadLog {
             repo_id,
             scope,
             limit,
             cursor,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = {
-                        let cursor_ref = cursor.as_ref();
-                        match scope {
-                            gitgpui_core::domain::LogScope::CurrentBranch => {
-                                repo.log_head_page(limit, cursor_ref)
-                            }
-                            gitgpui_core::domain::LogScope::AllBranches => {
-                                repo.log_all_branches_page(limit, cursor_ref)
-                            }
-                        }
-                    };
-                    let _ = msg_tx.send(Msg::LogLoaded {
-                        repo_id,
-                        scope,
-                        cursor,
-                        result,
-                    });
-                });
-            }
-        }
-
+        } => repo_load::schedule_load_log(executor, repos, msg_tx, repo_id, scope, limit, cursor),
         Effect::LoadTags { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::TagsLoaded {
-                        repo_id,
-                        result: repo.list_tags(),
-                    });
-                });
-            }
+            repo_load::schedule_load_tags(executor, repos, msg_tx, repo_id)
         }
-
         Effect::LoadStashes { repo_id, limit } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let mut entries = repo.stash_list();
-                    if let Ok(v) = &mut entries {
-                        v.truncate(limit);
-                    }
-                    let _ = msg_tx.send(Msg::StashesLoaded {
-                        repo_id,
-                        result: entries,
-                    });
-                });
-            }
+            repo_load::schedule_load_stashes(executor, repos, msg_tx, repo_id, limit);
         }
-
         Effect::LoadConflictFile { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let ours_theirs =
-                        repo.diff_file_text(&gitgpui_core::domain::DiffTarget::WorkingTree {
-                            path: path.clone(),
-                            area: gitgpui_core::domain::DiffArea::Unstaged,
-                        });
-
-                    let current = std::fs::read(repo.spec().workdir.join(&path))
-                        .ok()
-                        .and_then(|bytes| String::from_utf8(bytes).ok());
-
-                    let result = ours_theirs.map(|opt| {
-                        opt.map(|d| crate::model::ConflictFile {
-                            path: d.path,
-                            ours: d.old,
-                            theirs: d.new,
-                            current,
-                        })
-                    });
-
-                    let _ = msg_tx.send(Msg::ConflictFileLoaded {
-                        repo_id,
-                        path,
-                        result,
-                    });
-                });
-            }
+            repo_load::schedule_load_conflict_file(executor, repos, msg_tx, repo_id, path);
         }
-
         Effect::LoadReflog { repo_id, limit } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::ReflogLoaded {
-                        repo_id,
-                        result: repo.reflog_head(limit),
-                    });
-                });
-            }
+            repo_load::schedule_load_reflog(executor, repos, msg_tx, repo_id, limit);
         }
-
         Effect::SaveWorktreeFile {
             repo_id,
             path,
             contents,
             stage,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let full = repo.spec().workdir.join(&path);
-                    let result = (|| -> Result<CommandOutput, Error> {
-                        if let Some(parent) = full.parent() {
-                            std::fs::create_dir_all(parent)
-                                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-                        }
-                        std::fs::write(&full, contents.as_bytes())
-                            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-                        if stage {
-                            let path_ref: &Path = &path;
-                            repo.stage(&[path_ref])?;
-                        }
-                        Ok(CommandOutput {
-                            command: format!(
-                                "Save {}{}",
-                                path.display(),
-                                if stage { " (staged)" } else { "" }
-                            ),
-                            stdout: String::new(),
-                            stderr: String::new(),
-                            exit_code: Some(0),
-                        })
-                    })();
-
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::SaveWorktreeFile { path, stage },
-                        result,
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_save_worktree_file(
+            executor, repos, msg_tx, repo_id, path, contents, stage,
+        ),
         Effect::LoadFileHistory {
             repo_id,
             path,
             limit,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::FileHistoryLoaded {
-                        repo_id,
-                        path: path.clone(),
-                        result: repo.log_file_page(&path, limit, None),
-                    });
-                });
-            }
-        }
-
+        } => repo_load::schedule_load_file_history(executor, repos, msg_tx, repo_id, path, limit),
         Effect::LoadBlame { repo_id, path, rev } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo.blame_file(&path, rev.as_deref());
-                    let _ = msg_tx.send(Msg::BlameLoaded {
-                        repo_id,
-                        path: path.clone(),
-                        rev: rev.clone(),
-                        result,
-                    });
-                });
-            }
+            repo_load::schedule_load_blame(executor, repos, msg_tx, repo_id, path, rev);
         }
-
         Effect::LoadWorktrees { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::WorktreesLoaded {
-                        repo_id,
-                        result: repo.list_worktrees(),
-                    });
-                });
-            }
+            repo_load::schedule_load_worktrees(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadSubmodules { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::SubmodulesLoaded {
-                        repo_id,
-                        result: repo.list_submodules(),
-                    });
-                });
-            }
+            repo_load::schedule_load_submodules(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadRebaseState { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RebaseStateLoaded {
-                        repo_id,
-                        result: repo.rebase_in_progress(),
-                    });
-                });
-            }
+            repo_load::schedule_load_rebase_state(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadMergeCommitMessage { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::MergeCommitMessageLoaded {
-                        repo_id,
-                        result: repo.merge_commit_message(),
-                    });
-                });
-            }
+            repo_load::schedule_load_merge_commit_message(executor, repos, msg_tx, repo_id);
         }
-
         Effect::LoadCommitDetails { repo_id, commit_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::CommitDetailsLoaded {
-                        repo_id,
-                        commit_id: commit_id.clone(),
-                        result: repo.commit_details(&commit_id),
-                    });
-                });
-            }
+            repo_load::schedule_load_commit_details(executor, repos, msg_tx, repo_id, commit_id);
         }
-
         Effect::LoadDiff { repo_id, target } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo
-                        .diff_unified(&target)
-                        .map(|text| Diff::from_unified(target.clone(), &text));
-                    let _ = msg_tx.send(Msg::DiffLoaded {
-                        repo_id,
-                        target,
-                        result,
-                    });
-                });
-            }
+            repo_load::schedule_load_diff(executor, repos, msg_tx, repo_id, target);
         }
-
         Effect::LoadDiffFile { repo_id, target } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo.diff_file_text(&target);
-                    let _ = msg_tx.send(Msg::DiffFileLoaded {
-                        repo_id,
-                        target,
-                        result,
-                    });
-                });
-            }
+            repo_load::schedule_load_diff_file(executor, repos, msg_tx, repo_id, target);
         }
-
         Effect::LoadDiffFileImage { repo_id, target } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo.diff_file_image(&target);
-                    let _ = msg_tx.send(Msg::DiffFileImageLoaded {
-                        repo_id,
-                        target,
-                        result,
-                    });
-                });
-            }
+            repo_load::schedule_load_diff_file_image(executor, repos, msg_tx, repo_id, target);
         }
-
         Effect::CheckoutBranch { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.checkout_branch(&name),
-                    });
-                });
-            }
+            repo_actions::schedule_checkout_branch(executor, repos, msg_tx, repo_id, name);
         }
-
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote,
             name,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.checkout_remote_branch(&remote, &name),
-                    });
-                });
-            }
-        }
-
+        } => repo_actions::schedule_checkout_remote_branch(
+            executor, repos, msg_tx, repo_id, remote, name,
+        ),
         Effect::CheckoutCommit { repo_id, commit_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.checkout_commit(&commit_id),
-                    });
-                });
-            }
+            repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-
         Effect::CherryPickCommit { repo_id, commit_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.cherry_pick(&commit_id),
-                    });
-                });
-            }
+            repo_actions::schedule_cherry_pick_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-
         Effect::RevertCommit { repo_id, commit_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.revert(&commit_id),
-                    });
-                });
-            }
+            repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-
         Effect::CreateBranch { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let target = gitgpui_core::domain::CommitId("HEAD".to_string());
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.create_branch(&name, &target),
-                    });
-                });
-            }
+            repo_actions::schedule_create_branch(executor, repos, msg_tx, repo_id, name);
         }
-
         Effect::CreateBranchAndCheckout { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let target = gitgpui_core::domain::CommitId("HEAD".to_string());
-                    let result = repo
-                        .create_branch(&name, &target)
-                        .and_then(|()| repo.checkout_branch(&name));
-                    let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
-                });
-            }
+            repo_actions::schedule_create_branch_and_checkout(
+                executor, repos, msg_tx, repo_id, name,
+            );
         }
-
         Effect::DeleteBranch { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.delete_branch(&name),
-                    });
-                });
-            }
+            repo_actions::schedule_delete_branch(executor, repos, msg_tx, repo_id, name);
         }
-
-        Effect::CloneRepo { url, dest } => {
-            executor.spawn(move || {
-                let mut cmd = Command::new("git");
-                cmd.arg("-c")
-                    .arg("color.ui=false")
-                    .arg("clone")
-                    .arg("--progress")
-                    .arg(&url)
-                    .arg(&dest)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-
-                let command_str = format!("git clone --progress {} {}", url, dest.display());
-
-                let mut child = match cmd.spawn() {
-                    Ok(child) => child,
-                    Err(e) => {
-                        let err = Error::new(ErrorKind::Io(e.kind()));
-                        let _ = msg_tx.send(Msg::CloneRepoFinished {
-                            url,
-                            dest,
-                            result: Err(err),
-                        });
-                        return;
-                    }
-                };
-
-                let stdout = child.stdout.take();
-                let stdout_handle = std::thread::spawn(move || {
-                    let mut buf = Vec::new();
-                    if let Some(mut stdout) = stdout {
-                        let _ = stdout.read_to_end(&mut buf);
-                    }
-                    String::from_utf8_lossy(&buf).into_owned()
-                });
-
-                let stderr = child.stderr.take();
-                let mut stderr_acc = String::new();
-                if let Some(stderr) = stderr {
-                    let reader = BufReader::new(stderr);
-                    for line in reader.lines().flatten() {
-                        stderr_acc.push_str(&line);
-                        stderr_acc.push('\n');
-                        let _ = msg_tx.send(Msg::CloneRepoProgress {
-                            dest: dest.clone(),
-                            line,
-                        });
-                    }
-                }
-
-                let status = child.wait();
-                let stdout_str = stdout_handle.join().unwrap_or_default();
-
-                let result = match status {
-                    Ok(status) => {
-                        let mut out = CommandOutput::default();
-                        out.command = command_str;
-                        out.stdout = stdout_str;
-                        out.stderr = stderr_acc;
-                        out.exit_code = status.code();
-                        if status.success() {
-                            Ok(out)
-                        } else {
-                            Err(Error::new(ErrorKind::Backend(out.combined())))
-                        }
-                    }
-                    Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
-                };
-
-                let ok = result.is_ok();
-                let _ = msg_tx.send(Msg::CloneRepoFinished {
-                    url: url.clone(),
-                    dest: dest.clone(),
-                    result,
-                });
-
-                if ok {
-                    let _ = msg_tx.send(Msg::OpenRepo(dest));
-                }
-            });
-        }
-
+        Effect::CloneRepo { url, dest } => clone::schedule_clone_repo(executor, msg_tx, url, dest),
         Effect::ExportPatch {
             repo_id,
             commit_id,
             dest,
         } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::ExportPatch {
-                            commit_id: commit_id.clone(),
-                            dest: dest.clone(),
-                        },
-                        result: repo.export_patch_with_output(&commit_id, &dest),
-                    });
-                });
-            }
+            repo_commands::schedule_export_patch(executor, repos, msg_tx, repo_id, commit_id, dest)
         }
-
         Effect::ApplyPatch { repo_id, patch } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::ApplyPatch {
-                            patch: patch.clone(),
-                        },
-                        result: repo.apply_patch_with_output(&patch),
-                    });
-                });
-            }
+            repo_commands::schedule_apply_patch(executor, repos, msg_tx, repo_id, patch);
         }
-
         Effect::AddWorktree {
             repo_id,
             path,
             reference,
         } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::AddWorktree {
-                            path: path.clone(),
-                            reference: reference.clone(),
-                        },
-                        result: repo.add_worktree_with_output(&path, reference.as_deref()),
-                    });
-                });
-            }
+            repo_commands::schedule_add_worktree(executor, repos, msg_tx, repo_id, path, reference)
         }
-
         Effect::RemoveWorktree { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::RemoveWorktree { path: path.clone() },
-                        result: repo.remove_worktree_with_output(&path),
-                    });
-                });
-            }
+            repo_commands::schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
-
         Effect::AddSubmodule { repo_id, url, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::AddSubmodule {
-                            url: url.clone(),
-                            path: path.clone(),
-                        },
-                        result: repo.add_submodule_with_output(&url, &path),
-                    });
-                });
-            }
+            repo_commands::schedule_add_submodule(executor, repos, msg_tx, repo_id, url, path);
         }
-
         Effect::UpdateSubmodules { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::UpdateSubmodules,
-                        result: repo.update_submodules_with_output(),
-                    });
-                });
-            }
+            repo_commands::schedule_update_submodules(executor, repos, msg_tx, repo_id);
         }
-
         Effect::RemoveSubmodule { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::RemoveSubmodule {
-                            path: path.clone(),
-                        },
-                        result: repo.remove_submodule_with_output(&path),
-                    });
-                });
-            }
+            repo_commands::schedule_remove_submodule(executor, repos, msg_tx, repo_id, path);
         }
-
         Effect::StageHunk { repo_id, patch } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::StageHunk,
-                        result: repo.apply_unified_patch_to_index_with_output(&patch, false),
-                    });
-                });
-            }
+            repo_commands::schedule_stage_hunk(executor, repos, msg_tx, repo_id, patch);
         }
-
         Effect::UnstageHunk { repo_id, patch } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::UnstageHunk,
-                        result: repo.apply_unified_patch_to_index_with_output(&patch, true),
-                    });
-                });
-            }
+            repo_commands::schedule_unstage_hunk(executor, repos, msg_tx, repo_id, patch);
         }
-
         Effect::ApplyWorktreePatch {
             repo_id,
             patch,
             reverse,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::ApplyWorktreePatch { reverse },
-                        result: repo.apply_unified_patch_to_worktree_with_output(&patch, reverse),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_apply_worktree_patch(
+            executor, repos, msg_tx, repo_id, patch, reverse,
+        ),
         Effect::StagePath { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let path_ref: &Path = &path;
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.stage(&[path_ref]),
-                    });
-                });
-            }
+            repo_actions::schedule_stage_path(executor, repos, msg_tx, repo_id, path);
         }
-
         Effect::StagePaths { repo_id, paths } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let mut unique = paths;
-                    unique.sort();
-                    unique.dedup();
-                    let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.stage(&refs),
-                    });
-                });
-            }
+            repo_actions::schedule_stage_paths(executor, repos, msg_tx, repo_id, paths);
         }
-
         Effect::UnstagePath { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let path_ref: &Path = &path;
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.unstage(&[path_ref]),
-                    });
-                });
-            }
+            repo_actions::schedule_unstage_path(executor, repos, msg_tx, repo_id, path);
         }
-
         Effect::UnstagePaths { repo_id, paths } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let mut unique = paths;
-                    unique.sort();
-                    unique.dedup();
-                    let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.unstage(&refs),
-                    });
-                });
-            }
+            repo_actions::schedule_unstage_paths(executor, repos, msg_tx, repo_id, paths);
         }
-
         Effect::DiscardWorktreeChangesPath { repo_id, path } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let path_ref: &Path = &path;
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.discard_worktree_changes(&[path_ref]),
-                    });
-                });
-            }
+            repo_actions::schedule_discard_worktree_changes_path(
+                executor, repos, msg_tx, repo_id, path,
+            );
         }
-
         Effect::DiscardWorktreeChangesPaths { repo_id, paths } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let mut unique = paths;
-                    unique.sort();
-                    unique.dedup();
-                    let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.discard_worktree_changes(&refs),
-                    });
-                });
-            }
+            repo_actions::schedule_discard_worktree_changes_paths(
+                executor, repos, msg_tx, repo_id, paths,
+            )
         }
-
         Effect::Commit { repo_id, message } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::CommitFinished {
-                        repo_id,
-                        result: repo.commit(&message),
-                    });
-                });
-            }
+            repo_actions::schedule_commit(executor, repos, msg_tx, repo_id, message);
         }
-
         Effect::CommitAmend { repo_id, message } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::CommitAmendFinished {
-                        repo_id,
-                        result: repo.commit_amend(&message),
-                    });
-                });
-            }
+            repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message);
         }
-
         Effect::FetchAll { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::FetchAll,
-                        result: repo.fetch_all_with_output(),
-                    });
-                });
-            }
+            repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id)
         }
-
         Effect::Pull { repo_id, mode } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::Pull { mode },
-                        result: repo.pull_with_output(mode),
-                    });
-                });
-            }
+            repo_commands::schedule_pull(executor, repos, msg_tx, repo_id, mode)
         }
-
         Effect::PullBranch {
             repo_id,
             remote,
             branch,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::PullBranch {
-                            remote: remote.clone(),
-                            branch: branch.clone(),
-                        },
-                        result: repo.pull_branch_with_output(&remote, &branch),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_pull_branch(executor, repos, msg_tx, repo_id, remote, branch),
         Effect::MergeRef { repo_id, reference } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::MergeRef {
-                            reference: reference.clone(),
-                        },
-                        result: repo.merge_ref_with_output(&reference),
-                    });
-                });
-            }
+            repo_commands::schedule_merge_ref(executor, repos, msg_tx, repo_id, reference);
         }
-
-        Effect::Push { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::Push,
-                        result: repo.push_with_output(),
-                    });
-                });
-            }
-        }
-
+        Effect::Push { repo_id } => repo_commands::schedule_push(executor, repos, msg_tx, repo_id),
         Effect::ForcePush { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::ForcePush,
-                        result: repo.push_force_with_output(),
-                    });
-                });
-            }
+            repo_commands::schedule_force_push(executor, repos, msg_tx, repo_id)
         }
-
         Effect::PushSetUpstream {
             repo_id,
             remote,
             branch,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::PushSetUpstream {
-                            remote: remote.clone(),
-                            branch: branch.clone(),
-                        },
-                        result: repo.push_set_upstream_with_output(&remote, &branch),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_push_set_upstream(
+            executor, repos, msg_tx, repo_id, remote, branch,
+        ),
         Effect::Reset {
             repo_id,
             target,
             mode,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::Reset {
-                            mode,
-                            target: target.clone(),
-                        },
-                        result: repo.reset_with_output(&target, mode),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_reset(executor, repos, msg_tx, repo_id, target, mode),
         Effect::Rebase { repo_id, onto } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::Rebase { onto: onto.clone() },
-                        result: repo.rebase_with_output(&onto),
-                    });
-                });
-            }
+            repo_commands::schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }
-
         Effect::RebaseContinue { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::RebaseContinue,
-                        result: repo.rebase_continue_with_output(),
-                    });
-                });
-            }
+            repo_commands::schedule_rebase_continue(executor, repos, msg_tx, repo_id);
         }
-
         Effect::RebaseAbort { repo_id } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::RebaseAbort,
-                        result: repo.rebase_abort_with_output(),
-                    });
-                });
-            }
+            repo_commands::schedule_rebase_abort(executor, repos, msg_tx, repo_id)
         }
-
         Effect::CreateTag {
             repo_id,
             name,
             target,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::CreateTag {
-                            name: name.clone(),
-                            target: target.clone(),
-                        },
-                        result: repo.create_tag_with_output(&name, &target),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_create_tag(executor, repos, msg_tx, repo_id, name, target),
         Effect::DeleteTag { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::DeleteTag { name: name.clone() },
-                        result: repo.delete_tag_with_output(&name),
-                    });
-                });
-            }
+            repo_commands::schedule_delete_tag(executor, repos, msg_tx, repo_id, name);
         }
-
         Effect::AddRemote { repo_id, name, url } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::AddRemote {
-                            name: name.clone(),
-                            url: url.clone(),
-                        },
-                        result: repo.add_remote_with_output(&name, &url),
-                    });
-                });
-            }
+            repo_commands::schedule_add_remote(executor, repos, msg_tx, repo_id, name, url);
         }
-
         Effect::RemoveRemote { repo_id, name } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::RemoveRemote { name: name.clone() },
-                        result: repo.remove_remote_with_output(&name),
-                    });
-                });
-            }
+            repo_commands::schedule_remove_remote(executor, repos, msg_tx, repo_id, name);
         }
-
         Effect::SetRemoteUrl {
             repo_id,
             name,
             url,
             kind,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::SetRemoteUrl {
-                            name: name.clone(),
-                            url: url.clone(),
-                            kind,
-                        },
-                        result: repo.set_remote_url_with_output(&name, &url, kind),
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_set_remote_url(
+            executor, repos, msg_tx, repo_id, name, url, kind,
+        ),
         Effect::CheckoutConflictSide {
             repo_id,
             path,
             side,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo.checkout_conflict_side(&path, side);
-                    let _ = msg_tx.send(Msg::RepoCommandFinished {
-                        repo_id,
-                        command: crate::msg::RepoCommandKind::CheckoutConflict {
-                            path: path.clone(),
-                            side,
-                        },
-                        result,
-                    });
-                });
-            }
-        }
-
+        } => repo_commands::schedule_checkout_conflict_side(
+            executor, repos, msg_tx, repo_id, path, side,
+        ),
         Effect::Stash {
             repo_id,
             message,
             include_untracked,
-        } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.stash_create(&message, include_untracked),
-                    });
-                });
-            }
-        }
-
+        } => repo_actions::schedule_stash(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            message,
+            include_untracked,
+        ),
         Effect::ApplyStash { repo_id, index } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.stash_apply(index),
-                    });
-                });
-            }
+            repo_actions::schedule_apply_stash(executor, repos, msg_tx, repo_id, index);
         }
-
         Effect::DropStash { repo_id, index } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let _ = msg_tx.send(Msg::RepoActionFinished {
-                        repo_id,
-                        result: repo.stash_drop(index),
-                    });
-                });
-            }
+            repo_actions::schedule_drop_stash(executor, repos, msg_tx, repo_id, index);
         }
-
         Effect::PopStash { repo_id, index } => {
-            if let Some(repo) = repos.get(&repo_id).cloned() {
-                executor.spawn(move || {
-                    let result = repo
-                        .stash_apply(index)
-                        .and_then(|()| repo.stash_drop(index));
-                    let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
-                });
-            }
+            repo_actions::schedule_pop_stash(executor, repos, msg_tx, repo_id, index);
         }
     }
 }

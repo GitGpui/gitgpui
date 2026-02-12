@@ -229,7 +229,7 @@ name = "action_macros"
 path = "tests/action_macros.rs"
 
 [dependencies.anyhow]
-version = "1.0.100"
+version = "1.0.101"
 
 [dependencies.async-task]
 version = "4.7"

@@ -1,0 +1,593 @@
+use super::*;
+
+#[test]
+fn open_repo_sets_opening_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    let repo_state = state.repos.first().expect("repo state to be set");
+    assert_eq!(repo_state.id.0, 1);
+    assert!(repo_state.open.is_loading());
+    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+}
+
+#[test]
+fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == PathBuf::from("/tmp/repo1"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn open_repo_allows_same_basename_in_different_folders() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = std::env::temp_dir().join(format!(
+        "gitgpui-open-repo-same-basename-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let repo_a = dir.join("a").join("repo");
+    let repo_b = dir.join("b").join("repo");
+    let _ = std::fs::create_dir_all(&repo_a);
+    let _ = std::fs::create_dir_all(&repo_b);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_a.clone()),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_b.clone()),
+    );
+
+    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(repo_a.clone()),
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == super::reducer::normalize_repo_path(repo_a.clone()))
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .filter(|r| r.spec.workdir == super::reducer::normalize_repo_path(repo_b.clone()))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn clone_repo_sets_running_state_and_emits_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloneRepo {
+            url: "file:///tmp/example.git".to_string(),
+            dest: PathBuf::from("/tmp/example"),
+        },
+    );
+
+    let op = state.clone.as_ref().expect("clone op set");
+    assert!(matches!(op.status, CloneOpStatus::Running));
+    assert_eq!(op.seq, 0);
+    assert!(matches!(effects.as_slice(), [Effect::CloneRepo { .. }]));
+}
+
+#[test]
+fn close_repo_removes_and_moves_active() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(10);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(11)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo {
+            repo_id: RepoId(11),
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.active_repo, Some(RepoId(10)));
+}
+
+#[test]
+fn remote_branches_loaded_sets_state() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RemoteBranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+            }]),
+        },
+    );
+
+    let repo = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
+    match &repo.remote_branches {
+        Loadable::Ready(branches) => {
+            assert_eq!(branches.len(), 1);
+            assert_eq!(branches[0].remote, "origin");
+            assert_eq!(branches[0].name, "main");
+        }
+        other => panic!("expected Ready remote_branches, got {other:?}"),
+    }
+}
+
+#[test]
+fn restore_session_opens_all_and_selects_active_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = std::env::temp_dir().join(format!(
+        "gitgpui-restore-session-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+
+    let repo_a = dir.join("repo-a");
+    let repo_b = dir.join("repo-b");
+    let _ = std::fs::create_dir_all(&repo_a);
+    let _ = std::fs::create_dir_all(&repo_b);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_a.clone(), repo_b],
+            active_repo: Some(repo_a.clone()),
+        },
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::OpenRepo { .. }, Effect::OpenRepo { .. }]
+    ));
+
+    let active_repo_id = state.active_repo.expect("active repo is set");
+    let active_workdir = state
+        .repos
+        .iter()
+        .find(|r| r.id == active_repo_id)
+        .expect("active repo exists")
+        .spec
+        .workdir
+        .clone();
+
+    assert_eq!(active_workdir, super::reducer::normalize_repo_path(repo_a));
+}
+
+#[test]
+fn set_active_repo_refreshes_repo_state_and_selected_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitgpui_core::domain::DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+
+    let has_status = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadStatus { repo_id } if *repo_id == repo1));
+    let has_log = effects.iter().any(|e| {
+        matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
+    });
+    let has_diff = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadDiff { repo_id, target: _ } if *repo_id == repo1));
+    let has_diff_file = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, target: _ } if *repo_id == repo1));
+
+    assert!(has_status, "expected status refresh on activation");
+    assert!(has_log, "expected log refresh on activation");
+    assert!(has_diff, "expected diff refresh on activation");
+    assert!(has_diff_file, "expected diff-file refresh on activation");
+}
+
+#[test]
+fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        },
+    );
+
+    let repo_state = state.repos.first().unwrap();
+    assert!(matches!(repo_state.open, Loadable::Ready(())));
+    assert!(repo_state.head_branch.is_loading());
+    assert!(repo_state.branches.is_loading());
+    assert!(repo_state.tags.is_loading());
+    assert!(repo_state.remotes.is_loading());
+    assert!(repo_state.remote_branches.is_loading());
+    assert!(repo_state.status.is_loading());
+    assert!(repo_state.log.is_loading());
+    assert!(repo_state.stashes.is_loading());
+    assert!(repo_state.reflog.is_loading());
+    assert!(repo_state.upstream_divergence.is_loading());
+    assert!(repo_state.rebase_in_progress.is_loading());
+    assert!(repo_state.merge_commit_message.is_loading());
+    assert!(matches!(repo_state.file_history, Loadable::NotLoaded));
+    assert!(matches!(repo_state.blame, Loadable::NotLoaded));
+    assert!(matches!(
+        effects.as_slice(),
+        [
+            Effect::LoadHeadBranch { .. },
+            Effect::LoadUpstreamDivergence { .. },
+            Effect::LoadBranches { .. },
+            Effect::LoadTags { .. },
+            Effect::LoadRemotes { .. },
+            Effect::LoadRemoteBranches { .. },
+            Effect::LoadStatus { .. },
+            Effect::LoadStashes { .. },
+            Effect::LoadReflog { .. },
+            Effect::LoadRebaseState { .. },
+            Effect::LoadMergeCommitMessage { .. },
+            Effect::LoadLog { .. }
+        ]
+    ));
+}
+
+#[test]
+fn repo_action_finished_clears_error_and_refreshes() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+    state.repos[0].last_error = Some("boom".to_string());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoActionFinished {
+            repo_id: RepoId(1),
+            result: Ok(()),
+        },
+    );
+
+    assert!(state.repos[0].last_error.is_none());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) }))
+    );
+}
+
+#[test]
+fn repo_action_finished_err_records_diagnostic() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let error = Error::new(ErrorKind::Backend("boom".to_string()));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoActionFinished {
+            repo_id: RepoId(1),
+            result: Err(error),
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(
+        repo_state
+            .last_error
+            .as_deref()
+            .is_some_and(|s| s.contains("boom"))
+    );
+    assert!(
+        repo_state
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("boom"))
+    );
+}
+
+#[test]
+fn repo_opened_err_records_diagnostic() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    let error = Error::new(ErrorKind::Backend("nope".to_string()));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            error,
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(
+        repo_state
+            .last_error
+            .as_deref()
+            .is_some_and(|s| s.contains("nope"))
+    );
+    assert!(
+        repo_state
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("nope"))
+    );
+}
+
+#[test]
+fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+    );
+
+    let error = Error::new(ErrorKind::NotARepository);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/not-a-repo"),
+            },
+            error,
+        },
+    );
+
+    assert!(state.repos.is_empty());
+    assert_eq!(state.active_repo, None);
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("not a git repository"))
+    );
+}
+
+#[test]
+fn set_active_repo_ignores_unknown_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: RepoId(999),
+        },
+    );
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+}
+
+#[test]
+fn diagnostics_are_capped() {
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+
+    for i in 0..205 {
+        super::reducer::push_diagnostic(&mut repo_state, DiagnosticKind::Error, format!("err-{i}"));
+    }
+
+    assert_eq!(repo_state.diagnostics.len(), 200);
+    assert_eq!(repo_state.diagnostics[0].message, "err-5");
+    assert_eq!(repo_state.diagnostics.last().unwrap().message, "err-204");
+}

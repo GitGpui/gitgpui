@@ -31,16 +31,23 @@ mod app_model;
 mod branch_sidebar;
 mod caches;
 mod chrome;
+mod color;
 mod conflict_resolver;
 mod date_time;
+mod diff_navigation;
+mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
+mod overlays;
 mod panels;
 mod panes;
+mod patch_split;
+mod poller;
 pub(crate) mod rows;
 mod state_apply;
+mod tooltip;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -52,7 +59,10 @@ use caches::{
 use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
 use date_time::{DateTimeFormat, format_datetime_utc};
-use word_diff::word_diff_ranges;
+use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
+use patch_split::build_patch_split_rows;
+use poller::Poller;
+use word_diff::capped_word_diff_ranges;
 
 use diff_text_model::{CachedDiffStyledText, CachedDiffTextSegment, SyntaxTokenKind};
 use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
@@ -66,6 +76,7 @@ use diff_utils::{
 use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
 
 pub(crate) use chrome::window_frame;
+use color::with_alpha;
 
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
@@ -257,19 +268,6 @@ fn reconcile_status_multi_selection(selection: &mut StatusMultiSelection, status
     {
         selection.staged_anchor = None;
     }
-}
-
-const WORD_DIFF_MAX_BYTES_PER_SIDE: usize = 4 * 1024;
-const WORD_DIFF_MAX_TOTAL_BYTES: usize = 8 * 1024;
-
-fn capped_word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
-        || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
-        || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
-    {
-        return (Vec::new(), Vec::new());
-    }
-    word_diff_ranges(old, new)
 }
 
 #[derive(Clone, Debug)]
@@ -3931,53 +3929,15 @@ impl GitGpuiView {
             .collect()
     }
 
-    fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut in_block = false;
-        for (ix, row) in rows.iter().enumerate() {
-            let is_change = row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context;
-            if is_change && !in_block {
-                out.push(ix);
-                in_block = true;
-            } else if !is_change {
-                in_block = false;
-            }
-        }
-        out
-    }
-
-    fn conflict_nav_entries_for_inline(rows: &[ConflictInlineRow]) -> Vec<usize> {
-        let mut out = Vec::new();
-        let mut in_block = false;
-        for (ix, row) in rows.iter().enumerate() {
-            let is_change = row.kind != gitgpui_core::domain::DiffLineKind::Context;
-            if is_change && !in_block {
-                out.push(ix);
-                in_block = true;
-            } else if !is_change {
-                in_block = false;
-            }
-        }
-        out
-    }
-
     fn conflict_nav_entries(&self) -> Vec<usize> {
         match self.conflict_resolver.diff_mode {
             ConflictDiffMode::Split => {
-                Self::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows)
+                diff_navigation::conflict_nav_entries_for_split(&self.conflict_resolver.diff_rows)
             }
-            ConflictDiffMode::Inline => {
-                Self::conflict_nav_entries_for_inline(&self.conflict_resolver.inline_rows)
-            }
+            ConflictDiffMode::Inline => diff_navigation::conflict_nav_entries_for_inline(
+                &self.conflict_resolver.inline_rows,
+            ),
         }
-    }
-
-    fn diff_nav_prev_target(entries: &[usize], current: usize) -> Option<usize> {
-        entries.iter().rev().find(|&&ix| ix < current).copied()
-    }
-
-    fn diff_nav_next_target(entries: &[usize], current: usize) -> Option<usize> {
-        entries.iter().find(|&&ix| ix > current).copied()
     }
 
     fn conflict_jump_prev(&mut self) {
@@ -3987,7 +3947,7 @@ impl GitGpuiView {
         }
 
         let current = self.conflict_resolver.nav_anchor.unwrap_or(0);
-        let Some(target) = Self::diff_nav_prev_target(&entries, current) else {
+        let Some(target) = diff_navigation::diff_nav_prev_target(&entries, current) else {
             return;
         };
 
@@ -4003,7 +3963,7 @@ impl GitGpuiView {
         }
 
         let current = self.conflict_resolver.nav_anchor.unwrap_or(0);
-        let Some(target) = Self::diff_nav_next_target(&entries, current) else {
+        let Some(target) = diff_navigation::diff_nav_next_target(&entries, current) else {
             return;
         };
 
@@ -4019,7 +3979,7 @@ impl GitGpuiView {
         }
 
         let current = self.diff_selection_anchor.unwrap_or(0);
-        let Some(target) = Self::diff_nav_prev_target(&entries, current) else {
+        let Some(target) = diff_navigation::diff_nav_prev_target(&entries, current) else {
             return;
         };
 
@@ -4036,7 +3996,7 @@ impl GitGpuiView {
         }
 
         let current = self.diff_selection_anchor.unwrap_or(0);
-        let Some(target) = Self::diff_nav_next_target(&entries, current) else {
+        let Some(target) = diff_navigation::diff_nav_next_target(&entries, current) else {
             return;
         };
 
@@ -4291,128 +4251,6 @@ impl GitGpuiView {
     }
 }
 
-fn build_patch_split_rows(diff: &[AnnotatedDiffLine]) -> Vec<PatchSplitRow> {
-    use gitgpui_core::domain::DiffLineKind as DK;
-    use gitgpui_core::file_diff::FileDiffRowKind as K;
-
-    let mut out: Vec<PatchSplitRow> = Vec::with_capacity(diff.len());
-    let mut ix = 0usize;
-
-    let mut pending_removes: Vec<usize> = Vec::new();
-    let mut pending_adds: Vec<usize> = Vec::new();
-
-    fn flush_pending(
-        out: &mut Vec<PatchSplitRow>,
-        diff: &[AnnotatedDiffLine],
-        pending_removes: &mut Vec<usize>,
-        pending_adds: &mut Vec<usize>,
-    ) {
-        let pairs = pending_removes.len().max(pending_adds.len());
-        for i in 0..pairs {
-            let left_ix = pending_removes.get(i).copied();
-            let right_ix = pending_adds.get(i).copied();
-            let left = left_ix.and_then(|ix| diff.get(ix));
-            let right = right_ix.and_then(|ix| diff.get(ix));
-
-            let kind = match (left_ix.is_some(), right_ix.is_some()) {
-                (true, true) => gitgpui_core::file_diff::FileDiffRowKind::Modify,
-                (true, false) => gitgpui_core::file_diff::FileDiffRowKind::Remove,
-                (false, true) => gitgpui_core::file_diff::FileDiffRowKind::Add,
-                (false, false) => gitgpui_core::file_diff::FileDiffRowKind::Context,
-            };
-            let row = FileDiffRow {
-                kind,
-                old_line: left.and_then(|l| l.old_line),
-                new_line: right.and_then(|l| l.new_line),
-                old: left.map(|l| diff_content_text(l).to_string()),
-                new: right.map(|l| diff_content_text(l).to_string()),
-            };
-            out.push(PatchSplitRow::Aligned {
-                row,
-                old_src_ix: left_ix,
-                new_src_ix: right_ix,
-            });
-        }
-        pending_removes.clear();
-        pending_adds.clear();
-    }
-
-    while ix < diff.len() {
-        let line = &diff[ix];
-        let is_file_header =
-            matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-
-        if is_file_header {
-            flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-            out.push(PatchSplitRow::Raw {
-                src_ix: ix,
-                click_kind: DiffClickKind::FileHeader,
-            });
-            ix += 1;
-            continue;
-        }
-
-        if matches!(line.kind, DK::Hunk) {
-            flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-            out.push(PatchSplitRow::Raw {
-                src_ix: ix,
-                click_kind: DiffClickKind::HunkHeader,
-            });
-            ix += 1;
-
-            while ix < diff.len() {
-                let line = &diff[ix];
-                let is_next_file_header =
-                    matches!(line.kind, DK::Header) && line.text.starts_with("diff --git ");
-                if is_next_file_header || matches!(line.kind, DK::Hunk) {
-                    break;
-                }
-
-                match line.kind {
-                    DK::Context => {
-                        flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-                        let text = diff_content_text(line).to_string();
-                        out.push(PatchSplitRow::Aligned {
-                            row: FileDiffRow {
-                                kind: K::Context,
-                                old_line: line.old_line,
-                                new_line: line.new_line,
-                                old: Some(text.clone()),
-                                new: Some(text),
-                            },
-                            old_src_ix: Some(ix),
-                            new_src_ix: Some(ix),
-                        });
-                    }
-                    DK::Remove => pending_removes.push(ix),
-                    DK::Add => pending_adds.push(ix),
-                    DK::Header | DK::Hunk => {
-                        flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-                        out.push(PatchSplitRow::Raw {
-                            src_ix: ix,
-                            click_kind: DiffClickKind::Line,
-                        });
-                    }
-                }
-                ix += 1;
-            }
-
-            flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-            continue;
-        }
-
-        // Headers outside hunks, e.g. `index`, `---`, `+++`, etc.
-        out.push(PatchSplitRow::Raw {
-            src_ix: ix,
-            click_kind: DiffClickKind::Line,
-        });
-        ix += 1;
-    }
-
-    flush_pending(&mut out, diff, &mut pending_removes, &mut pending_adds);
-    out
-}
-
 impl Render for GitGpuiView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
@@ -4607,449 +4445,11 @@ impl Render for GitGpuiView {
     }
 }
 
-impl GitGpuiView {
-    fn sync_tooltip_state(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.tooltip_text == self.tooltip_candidate_last {
-            return;
-        }
-
-        self.tooltip_candidate_last = self.tooltip_text.clone();
-        self.tooltip_visible_text = None;
-        self.tooltip_visible_pos = None;
-        self.tooltip_pending_pos = None;
-        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
-
-        let Some(text) = self.tooltip_text.clone() else {
-            return;
-        };
-
-        let anchor = self.last_mouse_pos;
-        self.tooltip_pending_pos = Some(anchor);
-        let seq = self.tooltip_delay_seq;
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(500)).await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.tooltip_delay_seq != seq {
-                        return;
-                    }
-                    if this.tooltip_text.as_ref() != Some(&text) {
-                        return;
-                    }
-                    let Some(pending_pos) = this.tooltip_pending_pos else {
-                        return;
-                    };
-                    let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
-                    let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
-                    if dx > px(2.0) || dy > px(2.0) {
-                        return;
-                    }
-                    this.tooltip_visible_text = Some(text.clone());
-                    this.tooltip_visible_pos = Some(pending_pos);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
-    }
-
-    fn maybe_restart_tooltip_delay(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(candidate) = self.tooltip_text.clone() else {
-            if self.tooltip_visible_text.is_some() {
-                self.tooltip_visible_text = None;
-                self.tooltip_visible_pos = None;
-                cx.notify();
-            }
-            return;
-        };
-
-        if let Some(visible_anchor) = self.tooltip_visible_pos {
-            let dx = (self.last_mouse_pos.x - visible_anchor.x).abs();
-            let dy = (self.last_mouse_pos.y - visible_anchor.y).abs();
-            if dx <= px(6.0) && dy <= px(6.0) {
-                return;
-            }
-        }
-
-        let should_restart = match self.tooltip_pending_pos {
-            None => true,
-            Some(pending_anchor) => {
-                let dx = (self.last_mouse_pos.x - pending_anchor.x).abs();
-                let dy = (self.last_mouse_pos.y - pending_anchor.y).abs();
-                dx > px(2.0) || dy > px(2.0)
-            }
-        };
-
-        if !should_restart {
-            return;
-        }
-
-        self.tooltip_visible_text = None;
-        self.tooltip_visible_pos = None;
-        self.tooltip_pending_pos = Some(self.last_mouse_pos);
-        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
-        let seq = self.tooltip_delay_seq;
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(500)).await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.tooltip_delay_seq != seq {
-                        return;
-                    }
-                    if this.tooltip_text.as_ref() != Some(&candidate) {
-                        return;
-                    }
-                    let Some(pending_pos) = this.tooltip_pending_pos else {
-                        return;
-                    };
-                    let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
-                    let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
-                    if dx > px(2.0) || dy > px(2.0) {
-                        return;
-                    }
-                    this.tooltip_visible_text = Some(candidate.clone());
-                    this.tooltip_visible_pos = Some(pending_pos);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
-    }
-
-    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
-        self.ui_settings_persist_seq = self.ui_settings_persist_seq.wrapping_add(1);
-        let seq = self.ui_settings_persist_seq;
-
-        cx.spawn(
-            async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                Timer::after(Duration::from_millis(250)).await;
-                let _ = view.update(cx, |this, _cx| {
-                    if this.ui_settings_persist_seq != seq {
-                        return;
-                    }
-
-                    let ww: f32 = this.last_window_size.width.round().into();
-                    let wh: f32 = this.last_window_size.height.round().into();
-                    let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
-                    let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
-
-                    let sidebar_width: f32 = this.sidebar_width.round().into();
-                    let details_width: f32 = this.details_width.round().into();
-
-                    let settings = session::UiSettings {
-                        window_width,
-                        window_height,
-                        sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
-                            .then_some(sidebar_width as u32),
-                        details_width: (details_width.is_finite() && details_width >= 1.0)
-                            .then_some(details_width as u32),
-                        date_time_format: Some(this.date_time_format.key().to_string()),
-                    };
-
-                    let _ = session::persist_ui_settings(settings);
-                });
-            },
-        )
-        .detach();
-    }
-
-    fn clamp_pane_widths_to_window(&mut self) {
-        let total_w = self.last_window_size.width;
-        if total_w.is_zero() {
-            return;
-        }
-
-        let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
-        let main_min = px(MAIN_MIN_PX);
-        let sidebar_min = px(SIDEBAR_MIN_PX);
-        let details_min = px(DETAILS_MIN_PX);
-
-        let max_sidebar = (total_w - self.details_width - main_min - handles_w).max(sidebar_min);
-        self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
-
-        let max_details = (total_w - self.sidebar_width - main_min - handles_w).max(details_min);
-        self.details_width = self.details_width.max(details_min).min(max_details);
-    }
-}
-
-pub(super) fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
-    color
-}
-
-fn build_new_file_preview_from_diff(
-    diff: &[AnnotatedDiffLine],
-    workdir: &std::path::Path,
-    target: Option<&DiffTarget>,
-) -> Option<(std::path::PathBuf, Vec<String>)> {
-    let mut file_header_count = 0usize;
-    let mut is_new_file = false;
-    let mut has_remove = false;
-
-    for line in diff {
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && line.text.starts_with("diff --git ")
-        {
-            file_header_count += 1;
-        }
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && (line.text.starts_with("new file mode ") || line.text == "--- /dev/null")
-        {
-            is_new_file = true;
-        }
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Remove) {
-            has_remove = true;
-        }
-    }
-
-    if file_header_count != 1 || !is_new_file || has_remove {
-        return None;
-    }
-
-    let rel_path = match target? {
-        DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        } => path.clone(),
-        _ => return None,
-    };
-
-    let abs_path = if rel_path.is_absolute() {
-        rel_path
-    } else {
-        workdir.join(rel_path)
-    };
-
-    let lines = diff
-        .iter()
-        .filter(|l| matches!(l.kind, gitgpui_core::domain::DiffLineKind::Add))
-        .map(|l| l.text.strip_prefix('+').unwrap_or(&l.text).to_string())
-        .collect::<Vec<_>>();
-
-    Some((abs_path, lines))
-}
-
-fn build_deleted_file_preview_from_diff(
-    diff: &[AnnotatedDiffLine],
-    workdir: &std::path::Path,
-    target: Option<&DiffTarget>,
-) -> Option<(std::path::PathBuf, Vec<String>)> {
-    let mut file_header_count = 0usize;
-    let mut is_deleted_file = false;
-    let mut has_add = false;
-
-    for line in diff {
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && line.text.starts_with("diff --git ")
-        {
-            file_header_count += 1;
-        }
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && (line.text.starts_with("deleted file mode ") || line.text == "+++ /dev/null")
-        {
-            is_deleted_file = true;
-        }
-        if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Add) {
-            has_add = true;
-        }
-    }
-
-    if file_header_count != 1 || !is_deleted_file || has_add {
-        return None;
-    }
-
-    let rel_path = match target? {
-        DiffTarget::WorkingTree { path, .. } => path.clone(),
-        DiffTarget::Commit {
-            path: Some(path), ..
-        } => path.clone(),
-        _ => return None,
-    };
-
-    let abs_path = if rel_path.is_absolute() {
-        rel_path
-    } else {
-        workdir.join(rel_path)
-    };
-
-    let lines = diff
-        .iter()
-        .filter(|l| matches!(l.kind, gitgpui_core::domain::DiffLineKind::Remove))
-        .map(|l| l.text.strip_prefix('-').unwrap_or(&l.text).to_string())
-        .collect::<Vec<_>>();
-
-    Some((abs_path, lines))
-}
-
-impl GitGpuiView {
-    fn popover_layer(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| this.close_popover(cx));
-
-        let scrim = div()
-            .id("popover_scrim")
-            .debug_selector(|| "repo_popover_close".to_string())
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(gpui::rgba(0x00000000))
-            .occlude()
-            .on_any_mouse_down(close);
-
-        let popover = self
-            .popover
-            .clone()
-            .map(|kind| self.popover_view(kind, cx).into_any_element())
-            .unwrap_or_else(|| div().into_any_element());
-
-        div()
-            .id("popover_layer")
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(scrim)
-            .child(popover)
-            .into_any_element()
-    }
-
-    fn toast_layer(&self, cx: &gpui::Context<Self>) -> AnyElement {
-        if self.toasts.is_empty() {
-            return div().into_any_element();
-        }
-        let theme = self.theme;
-
-        let progress_id = self.clone_progress_toast_id;
-        let max_other = if progress_id.is_some() { 2 } else { 3 };
-        let mut displayed = self
-            .toasts
-            .iter()
-            .rev()
-            .filter(|t| Some(t.id) != progress_id)
-            .take(max_other)
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(id) = progress_id
-            && let Some(progress) = self.toasts.iter().find(|t| t.id == id).cloned()
-        {
-            displayed.push(progress);
-        }
-
-        let fade_in = toast_fade_in_duration();
-        let fade_out = toast_fade_out_duration();
-        let children = displayed.into_iter().map(move |t| {
-            let animations = match t.ttl {
-                Some(ttl) => vec![
-                    Animation::new(fade_in).with_easing(gpui::quadratic),
-                    Animation::new(ttl),
-                    Animation::new(fade_out).with_easing(gpui::quadratic),
-                ],
-                None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
-            };
-
-            let close = zed::Button::new(format!("toast_close_{}", t.id), "✕")
-                .style(zed::ButtonStyle::Transparent)
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    this.remove_toast(t.id, cx);
-                })
-                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                    let text: SharedString = "Dismiss notification".into();
-                    let mut changed = false;
-                    if *hovering {
-                        changed |= this.set_tooltip_text_if_changed(Some(text));
-                    } else if this.tooltip_text.as_ref() == Some(&text) {
-                        changed |= this.set_tooltip_text_if_changed(None);
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                }));
-
-            div()
-                .relative()
-                .child(zed::toast(theme, t.kind, t.input.clone()))
-                .child(div().absolute().top(px(8.0)).right(px(8.0)).child(close))
-                .with_animations(
-                    ("toast", t.id),
-                    animations,
-                    move |toast, animation_ix, delta| {
-                        let opacity = match animation_ix {
-                            0 => delta,
-                            1 => 1.0,
-                            2 => 1.0 - delta,
-                            _ => 1.0,
-                        };
-                        let slide_x = match animation_ix {
-                            0 => (1.0 - delta) * TOAST_SLIDE_PX,
-                            2 => delta * TOAST_SLIDE_PX,
-                            _ => 0.0,
-                        };
-                        toast.opacity(opacity).relative().left(px(slide_x))
-                    },
-                )
-        });
-
-        div()
-            .id("toast_layer")
-            .absolute()
-            .right_0()
-            .bottom_0()
-            .p(px(16.0))
-            .flex()
-            .flex_col()
-            .items_end()
-            .gap(px(12.0))
-            .children(children)
-            .into_any_element()
-    }
-}
-
-struct Poller {
-    _task: gpui::Task<()>,
-}
-
-impl Poller {
-    fn start(
-        store: Arc<AppStore>,
-        events: smol::channel::Receiver<StoreEvent>,
-        model: WeakEntity<AppUiModel>,
-        window: &mut Window,
-        cx: &mut gpui::Context<GitGpuiView>,
-    ) -> Poller {
-        let task = window.spawn(cx, async move |cx| {
-            loop {
-                if events.recv().await.is_err() {
-                    break;
-                }
-                while events.try_recv().is_ok() {}
-
-                // Avoid blocking the UI thread on cloning large state.
-                // This still does a full snapshot clone today, but now it happens only when the
-                // store reports state changes (no 10ms polling loop), and coalescing ensures
-                // we do at most one pending update.
-                let snapshot = cx
-                    .background_spawn({
-                        let store = Arc::clone(&store);
-                        async move { store.snapshot() }
-                    })
-                    .await;
-
-                let _ = model.update(cx, |model, cx| model.set_state(Arc::new(snapshot), cx));
-            }
-        });
-
-        Poller { _task: task }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use gitgpui_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
     use std::path::PathBuf;
-    use std::time::Instant;
 
     #[test]
     fn toast_total_lifetime_includes_fade_in_and_out() {
@@ -5088,117 +4488,6 @@ mod tests {
         assert!(selection.unstaged_anchor.is_none());
         assert!(selection.staged.is_empty());
         assert!(selection.staged_anchor.is_none());
-    }
-
-    #[test]
-    fn diff_nav_prev_next_targets_do_not_wrap() {
-        let entries = vec![10, 20, 30];
-
-        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 10), None);
-        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 30), None);
-
-        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 25), Some(20));
-        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 25), Some(30));
-
-        assert_eq!(GitGpuiView::diff_nav_next_target(&entries, 0), Some(10));
-        assert_eq!(GitGpuiView::diff_nav_prev_target(&entries, 100), Some(30));
-    }
-
-    #[test]
-    fn conflict_nav_entries_group_contiguous_changes() {
-        use gitgpui_core::domain::DiffLineKind as DK;
-        use gitgpui_core::file_diff::FileDiffRowKind as K;
-
-        let split_rows = vec![
-            FileDiffRow {
-                kind: K::Context,
-                old_line: Some(1),
-                new_line: Some(1),
-                old: Some("a".into()),
-                new: Some("a".into()),
-            },
-            FileDiffRow {
-                kind: K::Remove,
-                old_line: Some(2),
-                new_line: None,
-                old: Some("b".into()),
-                new: None,
-            },
-            FileDiffRow {
-                kind: K::Add,
-                old_line: None,
-                new_line: Some(2),
-                old: None,
-                new: Some("b2".into()),
-            },
-            FileDiffRow {
-                kind: K::Context,
-                old_line: Some(3),
-                new_line: Some(3),
-                old: Some("c".into()),
-                new: Some("c".into()),
-            },
-            FileDiffRow {
-                kind: K::Modify,
-                old_line: Some(4),
-                new_line: Some(4),
-                old: Some("d".into()),
-                new: Some("d2".into()),
-            },
-            FileDiffRow {
-                kind: K::Context,
-                old_line: Some(5),
-                new_line: Some(5),
-                old: Some("e".into()),
-                new: Some("e".into()),
-            },
-        ];
-        assert_eq!(
-            GitGpuiView::conflict_nav_entries_for_split(&split_rows),
-            vec![1, 4]
-        );
-
-        let inline_rows = vec![
-            ConflictInlineRow {
-                side: ConflictPickSide::Ours,
-                kind: DK::Context,
-                old_line: Some(1),
-                new_line: Some(1),
-                content: "a".into(),
-            },
-            ConflictInlineRow {
-                side: ConflictPickSide::Ours,
-                kind: DK::Remove,
-                old_line: Some(2),
-                new_line: None,
-                content: "b".into(),
-            },
-            ConflictInlineRow {
-                side: ConflictPickSide::Theirs,
-                kind: DK::Add,
-                old_line: None,
-                new_line: Some(2),
-                content: "b2".into(),
-            },
-            ConflictInlineRow {
-                side: ConflictPickSide::Ours,
-                kind: DK::Context,
-                old_line: Some(3),
-                new_line: Some(3),
-                content: "c".into(),
-            },
-            ConflictInlineRow {
-                side: ConflictPickSide::Theirs,
-                kind: DK::Add,
-                old_line: None,
-                new_line: Some(4),
-                content: "d2".into(),
-            },
-        ];
-        assert_eq!(
-            GitGpuiView::conflict_nav_entries_for_inline(&inline_rows),
-            vec![1, 4]
-        );
     }
 
     #[test]
@@ -5377,117 +4666,5 @@ mod tests {
             cursor_style_for_resize_edge(ResizeEdge::TopRight),
             CursorStyle::ResizeUpRightDownLeft
         );
-    }
-
-    #[test]
-    fn word_diff_ranges_highlights_changed_tokens() {
-        let (old, new) = ("let x = 1;", "let x = 2;");
-        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
-        assert_eq!(
-            old_ranges
-                .iter()
-                .map(|r| &old[r.clone()])
-                .collect::<Vec<_>>(),
-            vec!["1"]
-        );
-        assert_eq!(
-            new_ranges
-                .iter()
-                .map(|r| &new[r.clone()])
-                .collect::<Vec<_>>(),
-            vec!["2"]
-        );
-    }
-
-    #[test]
-    fn capped_word_diff_ranges_matches_word_diff_for_small_inputs() {
-        let (old, new) = ("let x = 1;", "let x = 2;");
-        let (a_old, a_new) = word_diff_ranges(old, new);
-        let (b_old, b_new) = capped_word_diff_ranges(old, new);
-        assert_eq!(a_old, b_old);
-        assert_eq!(a_new, b_new);
-    }
-
-    #[test]
-    fn capped_word_diff_ranges_skips_huge_inputs() {
-        let old = "a".repeat(WORD_DIFF_MAX_TOTAL_BYTES + 1);
-        let new = format!("{old}x");
-        let (old_ranges, new_ranges) = capped_word_diff_ranges(&old, &new);
-        assert!(old_ranges.is_empty());
-        assert!(new_ranges.is_empty());
-    }
-
-    #[test]
-    fn word_diff_ranges_handles_unicode_safely() {
-        let (old, new) = ("aé", "aê");
-        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
-        assert_eq!(
-            old_ranges
-                .iter()
-                .map(|r| &old[r.clone()])
-                .collect::<Vec<_>>(),
-            vec!["aé"]
-        );
-        assert_eq!(
-            new_ranges
-                .iter()
-                .map(|r| &new[r.clone()])
-                .collect::<Vec<_>>(),
-            vec!["aê"]
-        );
-    }
-
-    #[test]
-    fn word_diff_ranges_falls_back_for_large_inputs() {
-        let old = "a".repeat(2048);
-        let new = format!("{old}x");
-        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
-        assert!(old_ranges.len() <= 1);
-        assert!(new_ranges.len() <= 1);
-    }
-
-    #[test]
-    fn word_diff_ranges_outputs_are_ordered_and_utf8_safe() {
-        let (old, new) = ("aé b", "aê  b");
-        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
-
-        for r in &old_ranges {
-            assert!(r.start <= r.end);
-            assert!(r.end <= old.len());
-            assert!(old.is_char_boundary(r.start));
-            assert!(old.is_char_boundary(r.end));
-        }
-        for w in old_ranges.windows(2) {
-            assert!(w[0].end <= w[1].start);
-        }
-
-        for r in &new_ranges {
-            assert!(r.start <= r.end);
-            assert!(r.end <= new.len());
-            assert!(new.is_char_boundary(r.start));
-            assert!(new.is_char_boundary(r.end));
-        }
-        for w in new_ranges.windows(2) {
-            assert!(w[0].end <= w[1].start);
-        }
-    }
-
-    #[test]
-    fn word_diff_ranges_empty_inputs_do_not_panic() {
-        let (old_ranges, new_ranges) = word_diff_ranges("", "");
-        assert!(old_ranges.is_empty());
-        assert!(new_ranges.is_empty());
-    }
-
-    #[test]
-    #[ignore]
-    fn perf_word_diff_ranges_smoke() {
-        let old = "fn foo(a: i32, b: i32) -> i32 { a + b }";
-        let new = "fn foo(a: i32, b: i32) -> i32 { a - b }";
-        let start = Instant::now();
-        for _ in 0..200_000 {
-            let _ = word_diff_ranges(old, new);
-        }
-        eprintln!("word_diff_ranges: {:?}", start.elapsed());
     }
 }

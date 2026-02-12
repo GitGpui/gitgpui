@@ -345,8 +345,10 @@ impl MainPaneView {
         if is_conflict_resolver {
             let nav_entries = self.conflict_nav_entries();
             let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
-            let can_nav_prev = Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-            let can_nav_next = Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_prev =
+                diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_next =
+                diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
             controls = controls
                 .child(
@@ -408,8 +410,10 @@ impl MainPaneView {
         } else if !is_file_preview {
             let nav_entries = self.diff_nav_entries();
             let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
-            let can_nav_prev = Self::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-            let can_nav_next = Self::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_prev =
+                diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
+            let can_nav_next =
+                diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
 
             controls = controls
                 .child(
