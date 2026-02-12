@@ -213,7 +213,7 @@ pub(super) fn log_loaded(
             Ok(mut page) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     let existing = Arc::make_mut(existing);
-                    existing.commits.extend(page.commits.drain(..));
+                    existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
                 } else {
                     repo_state.log = Loadable::Ready(Arc::new(page));

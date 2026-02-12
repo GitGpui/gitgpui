@@ -1238,7 +1238,8 @@ impl MainPaneView {
                     }
                     Loadable::Ready(diff) => {
                         if wants_file_diff {
-                            let rendered = if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
+                            
+                            if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
                                 enum DiffFileImageState {
                                     NotLoaded,
                                     Loading,
@@ -1544,8 +1545,7 @@ impl MainPaneView {
                                         }
                                     }
                                 }
-                            };
-                            rendered
+                            }
                         } else {
                             if self.diff_cache_repo_id != Some(repo.id)
                                 || self.diff_cache_rev != repo.diff_rev

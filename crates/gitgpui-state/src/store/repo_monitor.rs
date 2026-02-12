@@ -518,10 +518,10 @@ fn should_ignore_event_kind(event: &notify::Event) -> bool {
 }
 
 fn is_gitignore_config_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
-    if path == &workdir.join(".gitignore") {
+    if path == workdir.join(".gitignore") {
         return true;
     }
-    git_dir.is_some_and(|git_dir| path == &git_dir.join("info").join("exclude"))
+    git_dir.is_some_and(|git_dir| path == git_dir.join("info").join("exclude"))
 }
 
 fn is_ignored_worktree_path_with_hint(

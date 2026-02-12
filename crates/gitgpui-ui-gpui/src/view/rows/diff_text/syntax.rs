@@ -6,7 +6,7 @@ use tree_sitter::StreamingIterator;
 thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
     static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
-    static TS_INPUT: RefCell<String> = RefCell::new(String::new());
+    static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

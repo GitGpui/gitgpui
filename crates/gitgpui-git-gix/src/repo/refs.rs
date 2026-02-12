@@ -45,7 +45,7 @@ impl GixRepo {
             let mut behind: Option<usize> = None;
 
             for part in s.split(',') {
-                let mut it = part.trim().split_whitespace();
+                let mut it = part.split_whitespace();
                 let Some(kind) = it.next() else {
                     continue;
                 };

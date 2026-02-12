@@ -1349,13 +1349,13 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        let _ = self
+        self
             .sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        let _ = self
+        self
             .main_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        let _ = self
+        self
             .details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();

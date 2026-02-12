@@ -76,7 +76,9 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
         install_desktop = install_desktop.text_color(theme.colors.text_muted);
     }
 
-    let menu = div()
+    
+
+    div()
         .flex()
         .flex_col()
         .min_w(px(200.0))
@@ -487,7 +489,5 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
                 .active(move |s| s.bg(theme.colors.active))
                 .child("Close")
                 .on_click(close),
-        );
-
-    menu
+        )
 }

@@ -1038,7 +1038,7 @@ impl Element for TextElement {
         if self.input.read(cx).is_selecting {
             let input = self.input.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-                let _ = input.update(cx, |input, cx| {
+                input.update(cx, |input, cx| {
                     if input.is_selecting {
                         input.select_to(input.index_for_mouse_position(event.position), cx);
                     }
@@ -1050,7 +1050,7 @@ impl Element for TextElement {
                 if event.button != MouseButton::Left {
                     return;
                 }
-                let _ = input.update(cx, |input, _cx| {
+                input.update(cx, |input, _cx| {
                     input.is_selecting = false;
                 });
             });

@@ -45,9 +45,7 @@ fn build_diff_text_segments(
         .map(|language| syntax::syntax_tokens_for_line(text, language, syntax_mode))
         .unwrap_or_default();
 
-    let query_ranges = (!query.is_empty())
-        .then(|| find_all_ascii_case_insensitive(text, query))
-        .unwrap_or_default();
+    let query_ranges = if !query.is_empty() { find_all_ascii_case_insensitive(text, query) } else { Default::default() };
 
     let mut boundaries: Vec<usize> = Vec::with_capacity(
         2 + word_ranges.len() * 2 + query_ranges.len() * 2 + syntax_tokens.len() * 2,

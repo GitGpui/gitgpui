@@ -294,10 +294,7 @@ fn status_row(
             let paths = if this.status_selection_contains(repo_id, area, &path_for_stage)
                 && this.status_selected_paths_for_area(repo_id, area).len() > 1
             {
-                this.status_selected_paths_for_area(repo_id, area)
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
+                this.status_selected_paths_for_area(repo_id, area).to_vec()
             } else {
                 vec![path_for_stage.clone()]
             };

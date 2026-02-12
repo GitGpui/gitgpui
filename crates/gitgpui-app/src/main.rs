@@ -11,7 +11,7 @@ fn main() {
         let backend: Arc<dyn GitBackend> = if cfg!(feature = "gix") {
             #[cfg(feature = "gix")]
             {
-                Arc::new(gitgpui_git_gix::GixBackend::default())
+                Arc::new(gitgpui_git_gix::GixBackend)
             }
 
             #[cfg(not(feature = "gix"))]
@@ -35,7 +35,6 @@ fn main() {
         } else {
             gitgpui_ui::run(backend);
         }
-        return;
     }
 
     #[cfg(not(feature = "ui"))]

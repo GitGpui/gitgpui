@@ -139,7 +139,7 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::StagePaths { repo_id, paths } => {
-                let _ = self.details_pane.update(cx, |pane, cx| {
+                self.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.remove(&repo_id);
                     cx.notify();
                 });
@@ -159,7 +159,7 @@ impl GitGpuiView {
                 self.rebuild_diff_cache();
             }
             ContextMenuAction::UnstagePaths { repo_id, paths } => {
-                let _ = self.details_pane.update(cx, |pane, cx| {
+                self.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.remove(&repo_id);
                     cx.notify();
                 });
@@ -199,7 +199,7 @@ impl GitGpuiView {
                 paths,
                 side,
             } => {
-                let _ = self.details_pane.update(cx, |pane, cx| {
+                self.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.remove(&repo_id);
                     cx.notify();
                 });
@@ -324,7 +324,7 @@ impl GitGpuiView {
             }
             paths = unique;
 
-            let _ = self.details_pane.update(cx, |pane, cx| {
+            self.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.remove(&repo_id);
                 cx.notify();
             });

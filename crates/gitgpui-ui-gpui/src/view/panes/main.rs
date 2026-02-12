@@ -346,7 +346,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
-            let _ = root.details_pane.update(cx, |pane, cx| {
+            root.details_pane.update(cx, |pane, cx| {
                 pane.status_multi_selection.remove(&repo_id);
                 cx.notify();
             });
@@ -360,7 +360,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
-            let _ = root
+            root
                 .details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
                     match area {
@@ -601,11 +601,10 @@ impl MainPaneView {
                         if let Some(ix) = old_src_ix {
                             out.push(*ix);
                         }
-                        if let Some(ix) = new_src_ix {
-                            if !out.contains(ix) {
+                        if let Some(ix) = new_src_ix
+                            && !out.contains(ix) {
                                 out.push(*ix);
                             }
-                        }
                         out
                     }
                 }

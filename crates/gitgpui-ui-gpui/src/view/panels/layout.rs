@@ -80,7 +80,7 @@ impl DetailsPaneView {
                     }
                 }
                 Some(Loadable::Ready(details)) => {
-                    if &details.id != &selected_id {
+                    if details.id != selected_id {
                         if show_delayed_loading {
                             zed::empty_state(theme, "Commit", "Loading").into_any_element()
                         } else {

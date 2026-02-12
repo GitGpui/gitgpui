@@ -46,7 +46,7 @@ impl Element for DiffTextSelectionTracker {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        ()
+        
     }
 
     fn paint(
@@ -65,7 +65,7 @@ impl Element for DiffTextSelectionTracker {
 
         let view_for_move = self.view.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
-            let _ = view_for_move.update(cx, |this, cx| {
+            view_for_move.update(cx, |this, cx| {
                 if !this.diff_text_selecting {
                     return;
                 }
@@ -79,7 +79,7 @@ impl Element for DiffTextSelectionTracker {
             if event.button != MouseButton::Left {
                 return;
             }
-            let _ = view_for_up.update(cx, |this, cx| {
+            view_for_up.update(cx, |this, cx| {
                 if this.diff_text_selecting {
                     this.end_diff_text_selection();
                     cx.notify();
@@ -138,7 +138,7 @@ impl Element for DiffTextSelectionOverlay {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        ()
+        
     }
 
     fn paint(
@@ -202,8 +202,8 @@ impl Element for DiffTextSelectionOverlay {
             }
         };
 
-        if let (Some(x0), Some(x1)) = (x0, x1) {
-            if x1 > x0 {
+        if let (Some(x0), Some(x1)) = (x0, x1)
+            && x1 > x0 {
                 let color = self.view.read(cx).diff_text_selection_color();
                 window.paint_quad(fill(
                     Bounds::from_corners(
@@ -213,7 +213,6 @@ impl Element for DiffTextSelectionOverlay {
                     color,
                 ));
             }
-        }
 
         let hitbox = DiffTextHitbox {
             bounds,
@@ -224,7 +223,7 @@ impl Element for DiffTextSelectionOverlay {
         let visible_ix = self.visible_ix;
         let region = self.region;
         let view = self.view.clone();
-        let _ = view.update(cx, |this, _cx| {
+        view.update(cx, |this, _cx| {
             this.set_diff_text_hitbox(visible_ix, region, hitbox);
             this.touch_diff_text_layout_cache(layout_key, shaped);
         });

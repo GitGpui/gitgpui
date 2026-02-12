@@ -957,7 +957,7 @@ fn compute_runs(
         runs.push(
             default_style
                 .clone()
-                .highlight(highlight.clone())
+                .highlight(*highlight)
                 .to_run(range.len()),
         );
         ix = range.end;

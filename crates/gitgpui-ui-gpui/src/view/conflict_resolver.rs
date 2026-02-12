@@ -59,7 +59,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
 
         let mut ours = String::new();
         let mut found_sep = false;
-        while let Some(l) = it.next() {
+        for l in it.by_ref() {
             if l.starts_with("=======") {
                 found_sep = true;
                 break;
@@ -76,7 +76,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
 
         let mut theirs = String::new();
         let mut found_end = false;
-        while let Some(l) = it.next() {
+        for l in it.by_ref() {
             if l.starts_with(">>>>>>>") {
                 found_end = true;
                 break;

@@ -464,8 +464,8 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
-    ) {
-        if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+    )
+        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
             && let Some(target) = repo_state.diff_target.clone()
         {
             repo_state.diff = Loadable::Loading;
@@ -496,7 +496,6 @@ pub(super) fn repo_command_finished(
                 }
             }
         }
-    }
     let mut effects = if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         refresh_full_effects(repo_state)
     } else {

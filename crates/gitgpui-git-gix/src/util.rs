@@ -34,14 +34,11 @@ pub(crate) fn run_git_with_output(mut cmd: Command, label: &str) -> Result<Comma
 
     if !output.status.success() {
         let stderr_trimmed = stderr.trim();
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "{}",
-            if stderr_trimmed.is_empty() {
+        return Err(Error::new(ErrorKind::Backend((if stderr_trimmed.is_empty() {
                 format!("{label} failed")
             } else {
                 format!("{label} failed: {stderr_trimmed}")
-            }
-        ))));
+            }).to_string())));
     }
 
     Ok(CommandOutput {

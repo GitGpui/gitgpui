@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn default_backend() -> Arc<dyn GitBackend> {
-    Arc::new(NoopBackend::default())
+    Arc::new(NoopBackend)
 }
 
 pub fn open_repo(workdir: &Path) -> Result<Arc<dyn GitRepository>> {

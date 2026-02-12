@@ -186,7 +186,7 @@ fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
     }
 }
 
-fn active_repo_path<'a>(state: &'a AppState, active_repo_id: Option<RepoId>) -> Option<&'a Path> {
+fn active_repo_path(state: &AppState, active_repo_id: Option<RepoId>) -> Option<&Path> {
     let active_repo_id = active_repo_id?;
     state
         .repos
@@ -238,7 +238,7 @@ fn app_state_dir() -> Option<PathBuf> {
             return Some(PathBuf::from(state_home).join("gitgpui"));
         }
         let home = env::var_os("HOME")?;
-        return Some(PathBuf::from(home).join(".local/state/gitgpui"));
+        Some(PathBuf::from(home).join(".local/state/gitgpui"))
     }
 
     #[cfg(target_os = "macos")]
