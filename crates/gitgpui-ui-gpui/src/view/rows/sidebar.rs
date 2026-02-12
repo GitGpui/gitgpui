@@ -144,41 +144,42 @@ impl SidebarPaneView {
                 BranchSidebarRow::StashItem {
                     index,
                     message,
+                    tooltip,
+                    row_group,
+                    apply_button_id,
+                    pop_button_id,
+                    drop_button_id,
                     created_at: _,
                 } => {
                     let repo_id = repo_id;
-                    let tooltip: SharedString = if message.is_empty() {
-                        "Stash".into()
-                    } else {
-                        message.clone()
-                    };
-                    let row_group: SharedString = format!("stash_row_{}", index).into();
+                    let tooltip = tooltip.clone();
+                    let row_group = row_group.clone();
+                    let apply_button_id = apply_button_id.clone();
+                    let pop_button_id = pop_button_id.clone();
+                    let drop_button_id = drop_button_id.clone();
 
                     let apply_tooltip: SharedString = "Apply stash".into();
-                    let apply_button =
-                        zed::Button::new(format!("stash_sidebar_apply_{index}"), "Apply")
-                            .style(zed::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
-                                this.store.dispatch(Msg::ApplyStash { repo_id, index });
+                    let apply_button = zed::Button::new(apply_button_id, "Apply")
+                        .style(zed::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.store.dispatch(Msg::ApplyStash { repo_id, index });
+                            cx.notify();
+                        })
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(apply_tooltip.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&apply_tooltip, cx);
+                            }
+                            if changed {
                                 cx.notify();
-                            })
-                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |= this.set_tooltip_text_if_changed(
-                                        Some(apply_tooltip.clone()),
-                                        cx,
-                                    );
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&apply_tooltip, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            }));
+                            }
+                        }));
 
                     let pop_tooltip: SharedString = "Pop stash".into();
-                    let pop_button = zed::Button::new(format!("stash_sidebar_pop_{index}"), "Pop")
+                    let pop_button = zed::Button::new(pop_button_id, "Pop")
                         .style(zed::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::PopStash { repo_id, index });
@@ -198,27 +199,24 @@ impl SidebarPaneView {
                         }));
 
                     let drop_tooltip: SharedString = "Drop stash".into();
-                    let drop_button =
-                        zed::Button::new(format!("stash_sidebar_drop_{index}"), "Drop")
-                            .style(zed::ButtonStyle::Danger)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
-                                this.store.dispatch(Msg::DropStash { repo_id, index });
+                    let drop_button = zed::Button::new(drop_button_id, "Drop")
+                        .style(zed::ButtonStyle::Danger)
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            this.store.dispatch(Msg::DropStash { repo_id, index });
+                            cx.notify();
+                        })
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this
+                                    .set_tooltip_text_if_changed(Some(drop_tooltip.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&drop_tooltip, cx);
+                            }
+                            if changed {
                                 cx.notify();
-                            })
-                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |= this.set_tooltip_text_if_changed(
-                                        Some(drop_tooltip.clone()),
-                                        cx,
-                                    );
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&drop_tooltip, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            }));
+                            }
+                        }));
 
                     div()
                         .id(("stash_sidebar_row", index))
@@ -323,12 +321,15 @@ impl SidebarPaneView {
                     section,
                     depth,
                     muted,
-                    divergence,
+                    divergence: _,
+                    divergence_ahead,
+                    divergence_behind,
+                    tooltip,
                     is_head,
                     is_upstream,
                 } => {
-                    let name_for_tooltip: SharedString = name.clone();
-                    let full_name_for_checkout = name.to_string();
+                    let full_name_for_checkout: SharedString = name.clone();
+                    let full_name_for_menu: SharedString = name.clone();
                     let branch_icon_color = if muted {
                         theme.colors.text_muted
                     } else {
@@ -395,11 +396,9 @@ impl SidebarPaneView {
                         );
                     }
 
-                    if let Some(divg) = divergence
-                        && (divg.ahead > 0 || divg.behind > 0)
-                    {
+                    if divergence_behind.is_some() || divergence_ahead.is_some() {
                         has_right = true;
-                        if divg.behind > 0 {
+                        if let Some(behind) = divergence_behind.as_ref() {
                             let color = theme.colors.warning;
                             right = right.child(
                                 div()
@@ -410,10 +409,10 @@ impl SidebarPaneView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(color)
                                     .child(svg_icon("icons/arrow_down.svg", color, 11.0))
-                                    .child(divg.behind.to_string()),
+                                    .child(behind.clone()),
                             );
                         }
-                        if divg.ahead > 0 {
+                        if let Some(ahead) = divergence_ahead.as_ref() {
                             let color = theme.colors.success;
                             right = right.child(
                                 div()
@@ -424,7 +423,7 @@ impl SidebarPaneView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(color)
                                     .child(svg_icon("icons/arrow_up.svg", color, 11.0))
-                                    .child(divg.ahead.to_string()),
+                                    .child(ahead.clone()),
                             );
                         }
                     }
@@ -433,13 +432,7 @@ impl SidebarPaneView {
                         row = row.child(right);
                     }
 
-                    let upstream_note = if is_upstream && section == BranchSection::Remote {
-                        " (upstream for current branch)"
-                    } else {
-                        ""
-                    };
-                    let branch_tooltip: SharedString =
-                        format!("Branch: {name_for_tooltip}{upstream_note}").into();
+                    let branch_tooltip: SharedString = tooltip.clone();
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -450,14 +443,14 @@ impl SidebarPaneView {
                                 BranchSection::Local => {
                                     this.store.dispatch(Msg::CheckoutBranch {
                                         repo_id,
-                                        name: full_name_for_checkout.clone(),
+                                        name: full_name_for_checkout.as_ref().to_owned(),
                                     });
                                     this.rebuild_diff_cache(cx);
                                     cx.notify();
                                 }
                                 BranchSection::Remote => {
                                     if let Some((remote, branch)) =
-                                        full_name_for_checkout.split_once('/')
+                                        full_name_for_checkout.as_ref().split_once('/')
                                     {
                                         this.store.dispatch(Msg::CheckoutRemoteBranch {
                                             repo_id,
@@ -478,7 +471,7 @@ impl SidebarPaneView {
                                     PopoverKind::BranchMenu {
                                         repo_id,
                                         section,
-                                        name: name.to_string(),
+                                        name: full_name_for_menu.as_ref().to_owned(),
                                     },
                                     e.position,
                                     window,

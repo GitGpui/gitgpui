@@ -1349,14 +1349,11 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self
-            .sidebar_pane
+        self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self
-            .main_pane
+        self.main_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
-        self
-            .details_pane
+        self.details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
@@ -4502,14 +4499,17 @@ mod tests {
             RemoteBranch {
                 remote: "origin".to_string(),
                 name: "b".to_string(),
+                target: CommitId("b0".to_string()),
             },
             RemoteBranch {
                 remote: "origin".to_string(),
                 name: "a".to_string(),
+                target: CommitId("a0".to_string()),
             },
             RemoteBranch {
                 remote: "upstream".to_string(),
                 name: "main".to_string(),
+                target: CommitId("c0".to_string()),
             },
         ]);
 
@@ -4557,6 +4557,7 @@ mod tests {
         repo.remote_branches = Loadable::Ready(vec![RemoteBranch {
             remote: "origin".to_string(),
             name: "main".to_string(),
+            target: CommitId("deadbeef".to_string()),
         }]);
 
         let rows = GitGpuiView::branch_sidebar_rows(&repo);

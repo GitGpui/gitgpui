@@ -36,7 +36,7 @@ impl GixRepo {
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("for-each-ref")
-            .arg("--format=%(refname:strip=2)")
+            .arg("--format=%(refname:strip=2)\t%(objectname)")
             .arg("refs/remotes");
         let output = run_git_capture(cmd, "git for-each-ref refs/remotes")?;
         Ok(parse_remote_branches(&output))

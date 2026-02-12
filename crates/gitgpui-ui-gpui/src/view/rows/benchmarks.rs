@@ -41,7 +41,8 @@ impl OpenRepoFixture {
 
         // History graph is the main "long history" transformation.
         let refs = self.commits.iter().collect::<Vec<_>>();
-        let graph = history_graph::compute_graph(&refs, self.theme);
+        let branch_heads = std::collections::HashSet::new();
+        let graph = history_graph::compute_graph(&refs, self.theme, &branch_heads);
 
         let mut h = DefaultHasher::new();
         rows.len().hash(&mut h);
@@ -212,6 +213,7 @@ fn build_synthetic_repo_state(
         remote.push(RemoteBranch {
             remote: remote_name,
             name: format!("feature/{}/topic/{ix}", ix % 100),
+            target: target.clone(),
         });
     }
     repo.remote_branches = Loadable::Ready(remote);

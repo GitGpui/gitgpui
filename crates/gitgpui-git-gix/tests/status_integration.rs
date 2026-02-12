@@ -1447,14 +1447,16 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     let opened = backend.open(&repo).unwrap();
     let branches = opened.list_remote_branches().unwrap();
 
-    assert!(branches.contains(&gitgpui_core::domain::RemoteBranch {
-        remote: "origin".to_string(),
-        name: "master".to_string(),
-    }));
-    assert!(branches.contains(&gitgpui_core::domain::RemoteBranch {
-        remote: "origin".to_string(),
-        name: "feature".to_string(),
-    }));
+    assert!(
+        branches
+            .iter()
+            .any(|b| b.remote == "origin" && b.name == "master")
+    );
+    assert!(
+        branches
+            .iter()
+            .any(|b| b.remote == "origin" && b.name == "feature")
+    );
     assert!(!branches.iter().any(|b| b.name == "HEAD"));
 }
 

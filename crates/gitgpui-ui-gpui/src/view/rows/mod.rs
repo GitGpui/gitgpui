@@ -39,3 +39,5 @@ mod sidebar;
 mod status;
 
 pub(crate) mod benchmarks;
+
+pub(super) use diff_text::{DiffSyntaxLanguage, diff_syntax_language_for_path};

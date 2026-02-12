@@ -10,7 +10,7 @@ thread_local! {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in super::super) enum DiffSyntaxLanguage {
+pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
     Html,
     Css,
@@ -42,7 +42,7 @@ pub(in super::super) enum DiffSyntaxLanguage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in super::super) enum DiffSyntaxMode {
+pub(in crate::view) enum DiffSyntaxMode {
     Auto,
     HeuristicOnly,
 }
@@ -53,7 +53,7 @@ pub(super) struct SyntaxToken {
     pub(super) kind: SyntaxTokenKind,
 }
 
-pub(in super::super) fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
+pub(in crate::view) fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
     let p = std::path::Path::new(path);
     let ext = p
         .extension()

@@ -31,6 +31,9 @@ pub(super) enum BranchSidebarRow {
         depth: usize,
         muted: bool,
         divergence: Option<UpstreamDivergence>,
+        divergence_ahead: Option<SharedString>,
+        divergence_behind: Option<SharedString>,
+        tooltip: SharedString,
         is_head: bool,
         is_upstream: bool,
     },
@@ -43,6 +46,11 @@ pub(super) enum BranchSidebarRow {
     StashItem {
         index: usize,
         message: SharedString,
+        tooltip: SharedString,
+        row_group: SharedString,
+        apply_button_id: SharedString,
+        pop_button_id: SharedString,
+        drop_button_id: SharedString,
         created_at: Option<std::time::SystemTime>,
     },
 }
@@ -215,9 +223,27 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
         }
         Loadable::Ready(stashes) => {
             for stash in stashes {
+                let row_group: SharedString = format!("stash_row_{}", stash.index).into();
+                let apply_button_id: SharedString =
+                    format!("stash_sidebar_apply_{}", stash.index).into();
+                let pop_button_id: SharedString =
+                    format!("stash_sidebar_pop_{}", stash.index).into();
+                let drop_button_id: SharedString =
+                    format!("stash_sidebar_drop_{}", stash.index).into();
+                let message: SharedString = stash.message.clone().into();
+                let tooltip: SharedString = if stash.message.is_empty() {
+                    "Stash".into()
+                } else {
+                    message.clone()
+                };
                 rows.push(BranchSidebarRow::StashItem {
                     index: stash.index,
-                    message: stash.message.clone().into(),
+                    message,
+                    tooltip,
+                    row_group,
+                    apply_button_id,
+                    pop_button_id,
+                    drop_button_id,
                     created_at: stash.created_at,
                 });
             }
@@ -255,6 +281,18 @@ fn push_slash_tree_rows(
                     .and_then(|m| m.get(&full))
                     .copied()
                     .unwrap_or((None, false));
+                let divergence_ahead = divergence
+                    .filter(|d| d.ahead > 0)
+                    .map(|d| d.ahead.to_string().into());
+                let divergence_behind = divergence
+                    .filter(|d| d.behind > 0)
+                    .map(|d| d.behind.to_string().into());
+                let upstream_note = if is_upstream && section == BranchSection::Remote {
+                    " (upstream for current branch)"
+                } else {
+                    ""
+                };
+                let tooltip: SharedString = format!("Branch: {full}{upstream_note}").into();
                 out.push(BranchSidebarRow::Branch {
                     label: label.clone().into(),
                     name: full.into(),
@@ -262,6 +300,9 @@ fn push_slash_tree_rows(
                     depth,
                     muted,
                     divergence,
+                    divergence_ahead,
+                    divergence_behind,
+                    tooltip,
                     is_head,
                     is_upstream,
                 });
@@ -281,6 +322,18 @@ fn push_slash_tree_rows(
                 .and_then(|m| m.get(&full))
                 .copied()
                 .unwrap_or((None, false));
+            let divergence_ahead = divergence
+                .filter(|d| d.ahead > 0)
+                .map(|d| d.ahead.to_string().into());
+            let divergence_behind = divergence
+                .filter(|d| d.behind > 0)
+                .map(|d| d.behind.to_string().into());
+            let upstream_note = if is_upstream && section == BranchSection::Remote {
+                " (upstream for current branch)"
+            } else {
+                ""
+            };
+            let tooltip: SharedString = format!("Branch: {full}{upstream_note}").into();
             out.push(BranchSidebarRow::Branch {
                 label: label.clone().into(),
                 name: full.into(),
@@ -288,6 +341,9 @@ fn push_slash_tree_rows(
                 depth: depth + 1,
                 muted,
                 divergence,
+                divergence_ahead,
+                divergence_behind,
+                tooltip,
                 is_head,
                 is_upstream,
             });

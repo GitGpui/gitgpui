@@ -4,10 +4,19 @@ use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::OnceLock;
 
 const DIFF_FONT_SCALE: f32 = 0.80;
+
+const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
+
+thread_local! {
+    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
+        RefCell::new(HashMap::new());
+}
 
 pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
@@ -26,6 +35,7 @@ pub(super) fn inline_diff_line_row_canvas(
         .map(|s| Arc::clone(&s.highlights))
         .unwrap_or_else(empty_highlights);
     let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
+    let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
 
     keyed_canvas(
         ("diff_row_canvas_inline", visible_ix),
@@ -77,6 +87,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     &text,
                     &highlights,
                     highlights_hash,
+                    text_hash,
                     y,
                     fg,
                     line_metrics,
@@ -193,11 +204,13 @@ pub(super) fn split_diff_line_row_canvas(
         .map(|s| Arc::clone(&s.highlights))
         .unwrap_or_else(empty_highlights);
     let left_highlights_hash = left_styled.map(|s| s.highlights_hash).unwrap_or(0);
+    let left_text_hash = left_styled.map(|s| s.text_hash).unwrap_or(0);
     let right_text = right_styled.map(|s| s.text.clone()).unwrap_or_default();
     let right_highlights = right_styled
         .map(|s| Arc::clone(&s.highlights))
         .unwrap_or_else(empty_highlights);
     let right_highlights_hash = right_styled.map(|s| s.highlights_hash).unwrap_or(0);
+    let right_text_hash = right_styled.map(|s| s.text_hash).unwrap_or(0);
 
     keyed_canvas(
         ("diff_row_canvas_split", visible_ix),
@@ -262,6 +275,7 @@ pub(super) fn split_diff_line_row_canvas(
                     &left_text,
                     &left_highlights,
                     left_highlights_hash,
+                    left_text_hash,
                     y,
                     left_fg,
                     line_metrics,
@@ -279,6 +293,7 @@ pub(super) fn split_diff_line_row_canvas(
                     &right_text,
                     &right_highlights,
                     right_highlights_hash,
+                    right_text_hash,
                     y,
                     right_fg,
                     line_metrics,
@@ -399,6 +414,7 @@ pub(super) fn patch_split_column_row_canvas(
         .map(|s| Arc::clone(&s.highlights))
         .unwrap_or_else(empty_highlights);
     let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
+    let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
 
     keyed_canvas(
         (
@@ -447,6 +463,7 @@ pub(super) fn patch_split_column_row_canvas(
                     &text,
                     &highlights,
                     highlights_hash,
+                    text_hash,
                     y,
                     fg,
                     line_metrics,
@@ -548,6 +565,7 @@ pub(super) fn worktree_preview_row_canvas(
     let text = styled.text.clone();
     let highlights = Arc::clone(&styled.highlights);
     let highlights_hash = styled.highlights_hash;
+    let text_hash = styled.text_hash;
 
     keyed_canvas(
         ("worktree_preview_row_canvas", ix),
@@ -611,6 +629,7 @@ pub(super) fn worktree_preview_row_canvas(
                     &text,
                     &highlights,
                     highlights_hash,
+                    text_hash,
                     y,
                     theme.colors.text,
                     line_metrics,
@@ -799,10 +818,37 @@ fn paint_gutter_text(
     }
     let mut style = diff_text_style(window);
     style.color = color.into();
-    let run = style.to_run(text.len());
-    let shaped = window
-        .text_system()
-        .shape_line(text.clone(), metrics.font_size, &[run], None);
+    let key = {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        text.as_ref().hash(&mut hasher);
+        metrics.font_size.hash(&mut hasher);
+        style.font_family.hash(&mut hasher);
+        style.font_weight.hash(&mut hasher);
+        color.r.to_bits().hash(&mut hasher);
+        color.g.to_bits().hash(&mut hasher);
+        color.b.to_bits().hash(&mut hasher);
+        color.a.to_bits().hash(&mut hasher);
+        hasher.finish()
+    };
+
+    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned());
+    let shaped = shaped.unwrap_or_else(|| {
+        let run = style.to_run(text.len());
+        let shaped = window
+            .text_system()
+            .shape_line(text.clone(), metrics.font_size, &[run], None);
+
+        GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() > GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(key, shaped.clone());
+        });
+
+        shaped
+    });
     let _ = shaped.paint(point(x, y), metrics.line_height, window, cx);
 }
 
@@ -814,6 +860,7 @@ fn paint_selectable_diff_text(
     text: &SharedString,
     highlights: &Arc<Vec<(Range<usize>, HighlightStyle)>>,
     highlights_hash: u64,
+    text_hash: u64,
     y: Pixels,
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
@@ -831,6 +878,7 @@ fn paint_selectable_diff_text(
 
     let (layout_key, layout, shaped_new) = ensure_layout_cached(
         view,
+        text_hash,
         text,
         &base_style,
         base_fg,
@@ -881,7 +929,7 @@ fn paint_selectable_diff_text(
 }
 
 fn diff_layout_base_key(
-    text: &SharedString,
+    text_hash: u64,
     base_style: &TextStyle,
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
@@ -889,7 +937,7 @@ fn diff_layout_base_key(
     use std::collections::hash_map::DefaultHasher;
 
     let mut hasher = DefaultHasher::new();
-    text.as_ref().hash(&mut hasher);
+    text_hash.hash(&mut hasher);
     metrics.font_size.hash(&mut hasher);
     base_style.font_family.hash(&mut hasher);
     base_style.font_weight.hash(&mut hasher);
@@ -902,6 +950,7 @@ fn diff_layout_base_key(
 
 fn ensure_layout_cached(
     view: &Entity<MainPaneView>,
+    text_hash: u64,
     text: &SharedString,
     base_style: &TextStyle,
     base_fg: gpui::Rgba,
@@ -913,7 +962,7 @@ fn ensure_layout_cached(
 ) -> (u64, gpui::ShapedLine, Option<gpui::ShapedLine>) {
     use std::collections::hash_map::DefaultHasher;
 
-    let base_key = diff_layout_base_key(text, base_style, base_fg, metrics);
+    let base_key = diff_layout_base_key(text_hash, base_style, base_fg, metrics);
 
     let layout_key = if highlights.is_empty() {
         base_key

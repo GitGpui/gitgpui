@@ -4,6 +4,7 @@ use gpui::{Bounds, Pixels, Window, fill, point, px, size};
 pub(super) fn paint_history_graph(
     theme: AppTheme,
     row: &history_graph::GraphRow,
+    connect_incoming_node: bool,
     is_stash_node: bool,
     bounds: Bounds<Pixels>,
     window: &mut Window,
@@ -26,24 +27,10 @@ pub(super) fn paint_history_graph(
     let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
     let node_x = x_for_col(row.node_col);
 
-    let mut col_now: std::collections::HashMap<history_graph::LaneId, usize> =
-        std::collections::HashMap::new();
-    for (ix, lane) in row.lanes_now.iter().enumerate() {
-        col_now.insert(lane.id, ix);
-    }
-
-    let mut col_next: std::collections::HashMap<history_graph::LaneId, usize> =
-        std::collections::HashMap::new();
-    for (ix, lane) in row.lanes_next.iter().enumerate() {
-        col_next.insert(lane.id, ix);
-    }
-
     // Incoming vertical segments.
-    for lane in row.lanes_now.iter() {
-        let Some(col) = col_now.get(&lane.id).copied() else {
-            continue;
-        };
-        if !row.incoming_ids.contains(&lane.id) {
+    for (col, lane) in row.lanes_now.iter().enumerate() {
+        let incoming = row.incoming_mask.get(col).copied().unwrap_or(false);
+        if !incoming && !(connect_incoming_node && col == row.node_col) {
             continue;
         }
         let x = x_for_col(col);
@@ -80,16 +67,16 @@ pub(super) fn paint_history_graph(
     }
 
     // Continuations from current row to next row.
-    for lane in row.lanes_next.iter() {
-        let Some(out_col) = col_next.get(&lane.id).copied() else {
-            continue;
-        };
+    for (out_col, lane) in row.lanes_next.iter().enumerate() {
         let x_out = x_for_col(out_col);
 
-        let x_from = match col_now.get(&lane.id).copied() {
-            Some(now_col) => x_for_col(now_col),
-            None => node_x,
-        };
+        let x_from = row
+            .next_from_cols
+            .get(out_col)
+            .copied()
+            .flatten()
+            .map(x_for_col)
+            .unwrap_or(node_x);
 
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(bounds.left() + x_from, y_center));

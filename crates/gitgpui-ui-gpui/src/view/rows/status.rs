@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 const STATUS_ROW_HEIGHT_PX: f32 = 24.0;
 
@@ -246,10 +247,10 @@ fn status_row(
         FileStatusKind::Conflicted => ("!", theme.colors.danger),
     };
 
-    let path = entry.path.clone();
-    let path_for_stage = path.clone();
-    let path_for_row = path.clone();
-    let path_for_menu = path.clone();
+    let path = Arc::new(entry.path.clone());
+    let path_for_stage = Arc::clone(&path);
+    let path_for_row = Arc::clone(&path);
+    let path_for_menu = Arc::clone(&path);
     let is_conflicted = entry.kind == FileStatusKind::Conflicted;
     let stage_label = if is_conflicted {
         "Resolve…"
@@ -260,7 +261,12 @@ fn status_row(
         }
     };
     let row_tooltip = path_display.clone();
-    let stage_tooltip: SharedString = format!("{stage_label} file").into();
+    let stage_tooltip: SharedString = match stage_label {
+        "Stage" => "Stage file".into(),
+        "Unstage" => "Unstage file".into(),
+        "Resolve…" => "Resolve… file".into(),
+        _ => format!("{stage_label} file").into(),
+    };
     let row_group: SharedString = {
         let area_label = match area {
             DiffArea::Unstaged => "unstaged",
@@ -281,7 +287,7 @@ fn status_row(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
-                        path: path_for_stage.clone(),
+                        path: (*path_for_stage).clone(),
                         selection,
                     },
                     e.position(),
@@ -291,12 +297,12 @@ fn status_row(
                 return;
             }
 
-            let paths = if this.status_selection_contains(repo_id, area, &path_for_stage)
+            let paths = if this.status_selection_contains(repo_id, area, path_for_stage.as_ref())
                 && this.status_selected_paths_for_area(repo_id, area).len() > 1
             {
                 this.status_selected_paths_for_area(repo_id, area).to_vec()
             } else {
-                vec![path_for_stage.clone()]
+                vec![(*path_for_stage).clone()]
             };
 
             match area {
@@ -357,7 +363,7 @@ fn status_row(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
-                        path: path_for_menu.clone(),
+                        path: (*path_for_menu).clone(),
                         selection,
                     },
                     e.position,
@@ -419,14 +425,14 @@ fn status_row(
             this.status_selection_apply_click(
                 repo_id,
                 area,
-                path_for_row.clone(),
+                (*path_for_row).clone(),
                 modifiers,
                 entries.as_deref(),
             );
             this.store.dispatch(Msg::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {
-                    path: path_for_row.clone(),
+                    path: (*path_for_row).clone(),
                     area,
                 },
             });

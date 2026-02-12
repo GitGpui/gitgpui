@@ -34,11 +34,14 @@ pub(crate) fn run_git_with_output(mut cmd: Command, label: &str) -> Result<Comma
 
     if !output.status.success() {
         let stderr_trimmed = stderr.trim();
-        return Err(Error::new(ErrorKind::Backend((if stderr_trimmed.is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            (if stderr_trimmed.is_empty() {
                 format!("{label} failed")
             } else {
                 format!("{label} failed: {stderr_trimmed}")
-            }).to_string())));
+            })
+            .to_string(),
+        )));
     }
 
     Ok(CommandOutput {
@@ -175,15 +178,26 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
     let mut branches = Vec::new();
     for line in output.lines() {
         let line = line.trim();
-        if line.is_empty() || line.ends_with("/HEAD") {
+        if line.is_empty() {
             continue;
         }
-        let Some((remote, name)) = line.split_once('/') else {
+        let mut parts = line.split('\t');
+        let Some(full_name) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if full_name.ends_with("/HEAD") {
+            continue;
+        }
+        let Some(sha) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let Some((remote, name)) = full_name.split_once('/') else {
             continue;
         };
         branches.push(RemoteBranch {
             remote: remote.to_string(),
             name: name.to_string(),
+            target: CommitId(sha.to_string()),
         });
     }
     branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
@@ -196,18 +210,21 @@ mod tests {
 
     #[test]
     fn parse_remote_branches_splits_and_skips_head() {
-        let output = "origin/HEAD\norigin/main\nupstream/feature/foo\n\n";
+        let output =
+            "origin/HEAD\tdeadbeef\norigin/main\t1111111\nupstream/feature/foo\t2222222\n\n";
         let branches = parse_remote_branches(output);
         assert_eq!(
             branches,
             vec![
                 RemoteBranch {
                     remote: "origin".to_string(),
-                    name: "main".to_string()
+                    name: "main".to_string(),
+                    target: CommitId("1111111".to_string())
                 },
                 RemoteBranch {
                     remote: "upstream".to_string(),
-                    name: "feature/foo".to_string()
+                    name: "feature/foo".to_string(),
+                    target: CommitId("2222222".to_string())
                 },
             ]
         );

@@ -3,6 +3,8 @@ use gitgpui_core::domain::{Commit, CommitId};
 use gpui::Rgba;
 use std::collections::{HashMap, HashSet};
 
+const LANE_COLOR_PALETTE_SIZE: usize = 64;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct LaneId(pub u64);
 
@@ -21,9 +23,10 @@ pub struct GraphEdge {
 
 #[derive(Clone, Debug)]
 pub struct GraphRow {
-    pub incoming_ids: Vec<LaneId>,
+    pub incoming_mask: Vec<bool>,
     pub lanes_now: Vec<LanePaint>,
     pub lanes_next: Vec<LanePaint>,
+    pub next_from_cols: Vec<Option<usize>>,
     pub joins_in: Vec<GraphEdge>,
     pub edges_out: Vec<GraphEdge>,
     pub node_id: LaneId,
@@ -38,9 +41,13 @@ struct LaneState {
     target: CommitId,
 }
 
-pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
+pub fn compute_graph(
+    commits: &[&Commit],
+    theme: AppTheme,
+    branch_heads: &HashSet<&str>,
+) -> Vec<GraphRow> {
     let mut palette: Vec<Rgba> = Vec::new();
-    for i in 0..24 {
+    for i in 0..LANE_COLOR_PALETTE_SIZE {
         let hue = (i as f32 * 0.13) % 1.0;
         let sat = 0.75;
         let light = if theme.is_dark { 0.62 } else { 0.45 };
@@ -84,6 +91,20 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
     let mut rows: Vec<GraphRow> = Vec::with_capacity(commits.len());
     let mut main_lane_id: Option<LaneId> = None;
 
+    let mut pick_lane_color = |lanes: &[LaneState]| -> Rgba {
+        let start = next_color;
+        for offset in 0..palette.len() {
+            let candidate = palette[(start + offset) % palette.len()];
+            if lanes.iter().all(|l| l.color != candidate) {
+                next_color = start + offset + 1;
+                return candidate;
+            }
+        }
+        let candidate = palette[start % palette.len()];
+        next_color = start + 1;
+        candidate
+    };
+
     for commit in commits.iter().copied() {
         let incoming_ids = lanes.iter().map(|l| l.id).collect::<Vec<_>>();
 
@@ -92,19 +113,7 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
             .enumerate()
             .filter_map(|(ix, l)| (l.target == commit.id).then_some(ix))
             .collect::<Vec<_>>();
-
-        if hits.is_empty() {
-            let id = LaneId(next_id);
-            next_id += 1;
-            let color = palette[next_color % palette.len()];
-            next_color += 1;
-            lanes.push(LaneState {
-                id,
-                color,
-                target: commit.id.clone(),
-            });
-            hits.push(lanes.len() - 1);
-        }
+        let had_hit_lanes = !hits.is_empty();
 
         let is_merge = commit.parent_ids.len() > 1;
         let parent_ids = commit
@@ -113,6 +122,53 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
             .filter(|p| known.contains(p.as_ref()))
             .cloned()
             .collect::<Vec<_>>();
+
+        if hits.is_empty() {
+            let id = LaneId(next_id);
+            next_id += 1;
+            let color = pick_lane_color(&lanes);
+            lanes.push(LaneState {
+                id,
+                color,
+                target: commit.id.clone(),
+            });
+            hits.push(lanes.len() - 1);
+        }
+
+        // If a branch head points at a commit that's already reached by another lane (i.e. the
+        // branch is behind some other branch), split a new lane at this row so the head has its
+        // own lane/color instead of inheriting the descendant lane's color.
+        //
+        // We currently only do this for non-merge commits to avoid interfering with merge-parent
+        // lane assignment.
+        let force_branch_head_lane =
+            had_hit_lanes && branch_heads.contains(commit.id.as_ref()) && parent_ids.len() <= 1;
+
+        let mut node_col = if let Some(main_lane_id) = main_lane_id
+            && head_chain.contains(commit.id.as_ref())
+        {
+            hits.iter()
+                .copied()
+                .find(|ix| lanes.get(*ix).is_some_and(|lane| lane.id == main_lane_id))
+                .unwrap_or_else(|| *hits.first().unwrap())
+        } else {
+            *hits.first().unwrap()
+        };
+
+        let mut swap_node_into_col: Option<usize> = None;
+        if force_branch_head_lane {
+            let id = LaneId(next_id);
+            next_id += 1;
+            let color = pick_lane_color(&lanes);
+            swap_node_into_col = Some(node_col);
+            node_col = lanes.len();
+            lanes.push(LaneState {
+                id,
+                color,
+                target: commit.id.clone(),
+            });
+            hits.push(node_col);
+        }
 
         // Snapshot of lanes used for drawing this row (including any lanes that have converged
         // onto this commit before we re-target them to parents).
@@ -124,18 +180,22 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
             })
             .collect::<Vec<_>>();
 
-        let node_col = if let Some(main_lane_id) = main_lane_id
-            && head_chain.contains(commit.id.as_ref())
-        {
-            hits.iter()
-                .copied()
-                .find(|ix| lanes.get(*ix).is_some_and(|lane| lane.id == main_lane_id))
-                .unwrap_or_else(|| *hits.first().unwrap())
-        } else {
-            *hits.first().unwrap()
-        };
+        let incoming_mask = lanes_now
+            .iter()
+            .map(|lane| incoming_ids.contains(&lane.id))
+            .collect::<Vec<_>>();
+
+        if let Some(pos) = hits.iter().position(|&ix| ix == node_col) {
+            hits.swap(0, pos);
+        }
+
+        // Ensure the node lane is the first hit lane for the parent assignment logic below.
+        node_col = hits.first().copied().unwrap_or(node_col);
+
         let node_id = lanes[node_col].id;
         if main_lane_id.is_none() {
+            main_lane_id = Some(node_id);
+        } else if force_branch_head_lane && head_chain.contains(commit.id.as_ref()) {
             main_lane_id = Some(node_id);
         }
 
@@ -149,27 +209,25 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
             });
         }
 
-        // Assign parents to lanes that were already targeting this commit:
-        // - Node lane follows first parent.
-        // - Remaining hit lanes (if any) follow subsequent parents in order.
-        // - Extra hit lanes beyond available parents are ended.
-        if let Some(first_parent) = parent_ids.first().cloned() {
-            lanes[node_col].target = first_parent;
+        let mut covered_parents = 0usize;
+        if parent_ids.is_empty() {
+            // No parents: end all lanes converging here.
+            for &hit_ix in &hits {
+                lanes[hit_ix].target = commit.id.clone();
+            }
         } else {
-            // No parents: end lane.
-            // We'll drop ended lanes after recording lanes_next.
-            lanes[node_col].target = commit.id.clone();
-        }
+            lanes[node_col].target = parent_ids[0].clone();
+            covered_parents = 1;
 
-        let mut covered_parents = 1usize;
-        for (hit_ix, parent) in hits.iter().skip(1).zip(parent_ids.iter().skip(1)) {
-            lanes[*hit_ix].target = parent.clone();
-            covered_parents += 1;
-        }
+            for (&hit_ix, parent) in hits.iter().skip(1).zip(parent_ids.iter().skip(1)) {
+                lanes[hit_ix].target = parent.clone();
+                covered_parents += 1;
+            }
 
-        for &hit_ix in hits.iter().skip(1 + parent_ids.len().saturating_sub(1)) {
-            // End lanes that converged here but don't have a parent to follow.
-            lanes[hit_ix].target = commit.id.clone();
+            // End hit lanes that converged here but don't have a parent to follow.
+            for &hit_ix in hits.iter().skip(parent_ids.len().min(hits.len())) {
+                lanes[hit_ix].target = commit.id.clone();
+            }
         }
 
         // Create lanes for any remaining parents not covered by existing converged lanes.
@@ -182,8 +240,7 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
                 }
                 let id = LaneId(next_id);
                 next_id += 1;
-                let color = palette[next_color % palette.len()];
-                next_color += 1;
+                let color = pick_lane_color(&lanes);
                 lanes.insert(
                     insert_at,
                     LaneState {
@@ -194,6 +251,10 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
                 );
                 insert_at += 1;
             }
+        }
+
+        if let Some(swap_col) = swap_node_into_col {
+            lanes.swap(node_col, swap_col);
         }
 
         // Remove ended lanes: lanes whose target is not part of the visible graph, or whose target
@@ -208,6 +269,11 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
                 id: l.id,
                 color: l.color,
             })
+            .collect::<Vec<_>>();
+
+        let next_from_cols = lanes_next
+            .iter()
+            .map(|lane| lanes_now.iter().position(|now| now.id == lane.id))
             .collect::<Vec<_>>();
 
         // Node->parent "merge" edges: connect the node into secondary-parent lanes.
@@ -234,9 +300,10 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
         }
 
         rows.push(GraphRow {
-            incoming_ids,
+            incoming_mask,
             lanes_now,
             lanes_next,
+            next_from_cols,
             joins_in,
             edges_out,
             node_id,
@@ -246,4 +313,88 @@ pub fn compute_graph(commits: &[&Commit], theme: AppTheme) -> Vec<GraphRow> {
     }
 
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    fn commit(id: &str, parent_ids: Vec<&str>) -> Commit {
+        Commit {
+            id: CommitId(id.to_string()),
+            parent_ids: parent_ids
+                .into_iter()
+                .map(|p| CommitId(p.to_string()))
+                .collect(),
+            summary: String::new(),
+            author: String::new(),
+            time: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn new_lanes_avoid_reusing_active_lane_colors() {
+        let theme = AppTheme::zed_ayu_dark();
+        let mut commits = Vec::new();
+
+        // Advance the internal color counter beyond the palette size using disconnected commits.
+        for i in 0..LANE_COLOR_PALETTE_SIZE {
+            commits.push(commit(&format!("e{i}"), Vec::new()));
+        }
+
+        // Create a long-lived lane (it stays active until we later reach p0).
+        commits.push(commit("head0", vec!["p0"]));
+
+        // Consume more colors while keeping the original lane active, until the counter wraps.
+        for i in 0..(LANE_COLOR_PALETTE_SIZE - 1) {
+            commits.push(commit(&format!("f{i}"), Vec::new()));
+        }
+
+        // This new lane would reuse the first color if we weren't skipping colors currently in use.
+        commits.push(commit("head1", vec!["p1"]));
+
+        // Parents, placed after the heads so the lanes stay active long enough.
+        commits.push(commit("p0", Vec::new()));
+        commits.push(commit("p1", Vec::new()));
+
+        let refs = commits.iter().collect::<Vec<_>>();
+        let branch_heads = HashSet::new();
+        let graph = compute_graph(&refs, theme, &branch_heads);
+
+        let head1_ix = LANE_COLOR_PALETTE_SIZE + 1 + (LANE_COLOR_PALETTE_SIZE - 1);
+        let row = &graph[head1_ix];
+        assert_eq!(row.lanes_now.len(), 2);
+
+        let c0 = row.lanes_now[0].color;
+        let c1 = row.lanes_now[1].color;
+        assert_ne!(c0, c1);
+    }
+
+    #[test]
+    fn branch_heads_split_off_new_lane_when_behind() {
+        let theme = AppTheme::zed_ayu_dark();
+        let commits = vec![
+            commit("new1", vec!["base"]),
+            commit("base", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+
+        let mut branch_heads = HashSet::new();
+        branch_heads.insert("new1");
+        branch_heads.insert("base");
+
+        let refs = commits.iter().collect::<Vec<_>>();
+        let graph = compute_graph(&refs, theme, &branch_heads);
+
+        let base_row = &graph[1];
+        assert_eq!(base_row.lanes_now.len(), 2);
+        assert_eq!(base_row.joins_in.len(), 1);
+        assert_eq!(base_row.node_col, 1);
+        assert_ne!(base_row.lanes_now[0].color, base_row.lanes_now[1].color);
+
+        assert_eq!(base_row.lanes_next.len(), 1);
+        assert_eq!(base_row.lanes_next[0].id, base_row.node_id);
+        assert_eq!(base_row.next_from_cols, vec![Some(1)]);
+    }
 }

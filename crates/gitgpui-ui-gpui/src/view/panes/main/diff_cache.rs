@@ -37,6 +37,7 @@ impl MainPaneView {
             diff_file_rev: u64,
             diff_target: Option<DiffTarget>,
             file_path: Option<std::path::PathBuf>,
+            language: Option<rows::DiffSyntaxLanguage>,
             rows: Vec<FileDiffRow>,
             inline_rows: Vec<AnnotatedDiffLine>,
             inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
@@ -101,6 +102,9 @@ impl MainPaneView {
             } else {
                 workdir.join(&file.path)
             });
+            let language = file_path
+                .as_ref()
+                .and_then(|p| rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
 
             // Precompute word highlights and inline rows.
             let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
@@ -182,6 +186,7 @@ impl MainPaneView {
                 diff_file_rev,
                 diff_target,
                 file_path,
+                language,
                 rows,
                 inline_rows,
                 inline_word_highlights,
@@ -197,6 +202,7 @@ impl MainPaneView {
                 self.file_diff_cache_target = None;
                 self.file_diff_cache_rev = 0;
                 self.file_diff_cache_path = None;
+                self.file_diff_cache_language = None;
                 self.file_diff_cache_rows.clear();
                 self.file_diff_inline_cache.clear();
                 self.file_diff_inline_word_highlights.clear();
@@ -212,6 +218,7 @@ impl MainPaneView {
                 self.file_diff_cache_rev = diff_file_rev;
                 self.file_diff_cache_target = diff_target;
                 self.file_diff_cache_path = None;
+                self.file_diff_cache_language = None;
                 self.file_diff_cache_rows.clear();
                 self.file_diff_inline_cache.clear();
                 self.file_diff_inline_word_highlights.clear();
@@ -223,6 +230,7 @@ impl MainPaneView {
                 self.file_diff_cache_rev = rebuild.diff_file_rev;
                 self.file_diff_cache_target = rebuild.diff_target;
                 self.file_diff_cache_path = rebuild.file_path;
+                self.file_diff_cache_language = rebuild.language;
                 self.file_diff_cache_rows = rebuild.rows;
                 self.file_diff_inline_cache = rebuild.inline_rows;
                 self.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
@@ -369,6 +377,9 @@ impl MainPaneView {
         self.diff_cache_rev = 0;
         self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
+        self.diff_language_for_src_ix.clear();
+        self.diff_click_kinds.clear();
+        self.diff_header_display_cache.clear();
         self.diff_split_cache.clear();
         self.diff_split_cache_len = 0;
         self.diff_visible_indices.clear();
@@ -411,8 +422,82 @@ impl MainPaneView {
 
         self.diff_cache = annotated;
         self.diff_file_for_src_ix = compute_diff_file_for_src_ix(&self.diff_cache);
+        self.diff_click_kinds = self
+            .diff_cache
+            .iter()
+            .map(|line| {
+                if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+                    DiffClickKind::HunkHeader
+                } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
+                    && line.text.starts_with("diff --git ")
+                {
+                    DiffClickKind::FileHeader
+                } else {
+                    DiffClickKind::Line
+                }
+            })
+            .collect();
+        for (src_ix, click_kind) in self.diff_click_kinds.iter().enumerate() {
+            match click_kind {
+                DiffClickKind::FileHeader => {
+                    let Some(line) = self.diff_cache.get(src_ix) else {
+                        continue;
+                    };
+                    let display = parse_diff_git_header_path(line.text.as_ref())
+                        .unwrap_or_else(|| line.text.clone());
+                    self.diff_header_display_cache
+                        .insert(src_ix, display.into());
+                }
+                DiffClickKind::HunkHeader => {
+                    let Some(line) = self.diff_cache.get(src_ix) else {
+                        continue;
+                    };
+                    let display = parse_unified_hunk_header_for_display(line.text.as_ref())
+                        .map(|p| {
+                            let heading = p.heading.unwrap_or_default();
+                            if heading.is_empty() {
+                                format!("{} {}", p.old, p.new)
+                            } else {
+                                format!("{} {}  {heading}", p.old, p.new)
+                            }
+                        })
+                        .unwrap_or_else(|| line.text.clone());
+                    self.diff_header_display_cache
+                        .insert(src_ix, display.into());
+                }
+                DiffClickKind::Line => {}
+            }
+        }
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
         self.rebuild_diff_word_highlights();
+
+        let mut current_file: Option<Arc<str>> = None;
+        let mut current_language: Option<rows::DiffSyntaxLanguage> = None;
+        for (src_ix, line) in self.diff_cache.iter().enumerate() {
+            let file = self
+                .diff_file_for_src_ix
+                .get(src_ix)
+                .and_then(|p| p.as_ref());
+            let file_changed = match (&current_file, file) {
+                (Some(cur), Some(next)) => !Arc::ptr_eq(cur, next),
+                (None, None) => false,
+                _ => true,
+            };
+            if file_changed {
+                current_file = file.cloned();
+                current_language =
+                    file.and_then(|p| rows::diff_syntax_language_for_path(p.as_ref()));
+            }
+
+            let language = match line.kind {
+                gitgpui_core::domain::DiffLineKind::Add
+                | gitgpui_core::domain::DiffLineKind::Remove
+                | gitgpui_core::domain::DiffLineKind::Context => current_language,
+                gitgpui_core::domain::DiffLineKind::Header
+                | gitgpui_core::domain::DiffLineKind::Hunk => None,
+            };
+            self.diff_language_for_src_ix.push(language);
+        }
 
         if let Some((abs_path, lines)) = build_new_file_preview_from_diff(
             &self.diff_cache,

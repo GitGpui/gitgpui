@@ -464,38 +464,37 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
-    )
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-            && let Some(target) = repo_state.diff_target.clone()
-        {
-            repo_state.diff = Loadable::Loading;
-            let supports_file = matches!(
-                &target,
-                DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-            );
-            let wants_image = diff_target_wants_image_preview(&target);
-            repo_state.diff_file = if supports_file && !wants_image {
-                Loadable::Loading
+    ) && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && let Some(target) = repo_state.diff_target.clone()
+    {
+        repo_state.diff = Loadable::Loading;
+        let supports_file = matches!(
+            &target,
+            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+        );
+        let wants_image = diff_target_wants_image_preview(&target);
+        repo_state.diff_file = if supports_file && !wants_image {
+            Loadable::Loading
+        } else {
+            Loadable::NotLoaded
+        };
+        repo_state.diff_file_image = if supports_file && wants_image {
+            Loadable::Loading
+        } else {
+            Loadable::NotLoaded
+        };
+        extra_effects.push(Effect::LoadDiff {
+            repo_id,
+            target: target.clone(),
+        });
+        if supports_file {
+            if wants_image {
+                extra_effects.push(Effect::LoadDiffFileImage { repo_id, target });
             } else {
-                Loadable::NotLoaded
-            };
-            repo_state.diff_file_image = if supports_file && wants_image {
-                Loadable::Loading
-            } else {
-                Loadable::NotLoaded
-            };
-            extra_effects.push(Effect::LoadDiff {
-                repo_id,
-                target: target.clone(),
-            });
-            if supports_file {
-                if wants_image {
-                    extra_effects.push(Effect::LoadDiffFileImage { repo_id, target });
-                } else {
-                    extra_effects.push(Effect::LoadDiffFile { repo_id, target });
-                }
+                extra_effects.push(Effect::LoadDiffFile { repo_id, target });
             }
         }
+    }
     let mut effects = if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         refresh_full_effects(repo_state)
     } else {

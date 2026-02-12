@@ -46,7 +46,6 @@ impl Element for DiffTextSelectionTracker {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        
     }
 
     fn paint(
@@ -138,7 +137,6 @@ impl Element for DiffTextSelectionOverlay {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Self::PrepaintState {
-        
     }
 
     fn paint(
@@ -203,16 +201,17 @@ impl Element for DiffTextSelectionOverlay {
         };
 
         if let (Some(x0), Some(x1)) = (x0, x1)
-            && x1 > x0 {
-                let color = self.view.read(cx).diff_text_selection_color();
-                window.paint_quad(fill(
-                    Bounds::from_corners(
-                        point(bounds.left() + x0, bounds.top()),
-                        point(bounds.left() + x1, bounds.bottom()),
-                    ),
-                    color,
-                ));
-            }
+            && x1 > x0
+        {
+            let color = self.view.read(cx).diff_text_selection_color();
+            window.paint_quad(fill(
+                Bounds::from_corners(
+                    point(bounds.left() + x0, bounds.top()),
+                    point(bounds.left() + x1, bounds.bottom()),
+                ),
+                color,
+            ));
+        }
 
         let hitbox = DiffTextHitbox {
             bounds,

@@ -264,25 +264,19 @@ impl MainPaneView {
             let Some(line) = self.diff_cache.get(mapped_ix) else {
                 return fallback;
             };
-            let display = if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-                parse_unified_hunk_header_for_display(line.text.as_ref())
-                    .map(|p| {
-                        let heading = p.heading.unwrap_or_default();
-                        if heading.is_empty() {
-                            format!("{} {}", p.old, p.new)
-                        } else {
-                            format!("{} {}  {heading}", p.old, p.new)
-                        }
-                    })
-                    .unwrap_or_else(|| line.text.clone())
-            } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-                && line.text.starts_with("diff --git ")
+            let click_kind = self
+                .diff_click_kinds
+                .get(mapped_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if matches!(
+                click_kind,
+                DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+            ) && let Some(display) = self.diff_header_display_cache.get(&mapped_ix)
             {
-                parse_diff_git_header_path(line.text.as_ref()).unwrap_or_else(|| line.text.clone())
-            } else {
-                line.text.clone()
-            };
-            return expand_tabs(display.as_str());
+                return display.clone();
+            }
+            return expand_tabs(line.text.as_str());
         }
 
         match region {
@@ -318,24 +312,14 @@ impl MainPaneView {
                 let Some(line) = self.diff_cache.get(*src_ix) else {
                     return fallback;
                 };
-                let display = match click_kind {
-                    DiffClickKind::HunkHeader => {
-                        parse_unified_hunk_header_for_display(line.text.as_ref())
-                            .map(|p| {
-                                let heading = p.heading.unwrap_or_default();
-                                if heading.is_empty() {
-                                    format!("{} {}", p.old, p.new)
-                                } else {
-                                    format!("{} {}  {heading}", p.old, p.new)
-                                }
-                            })
-                            .unwrap_or_else(|| line.text.clone())
-                    }
-                    DiffClickKind::FileHeader => parse_diff_git_header_path(line.text.as_ref())
-                        .unwrap_or_else(|| line.text.clone()),
-                    DiffClickKind::Line => line.text.clone(),
-                };
-                expand_tabs(display.as_str())
+                if matches!(
+                    click_kind,
+                    DiffClickKind::HunkHeader | DiffClickKind::FileHeader
+                ) && let Some(display) = self.diff_header_display_cache.get(src_ix)
+                {
+                    return display.clone();
+                }
+                expand_tabs(line.text.as_str())
             }
             PatchSplitRow::Aligned { row, .. } => {
                 let text = match region {

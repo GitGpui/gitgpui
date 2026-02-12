@@ -1189,10 +1189,7 @@ impl GitGpuiView {
 
 fn clone_repo_name_from_url(url: &str) -> String {
     let trimmed = url.trim().trim_end_matches(['/', '\\']);
-    let last = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(trimmed);
+    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     let name = last.strip_suffix(".git").unwrap_or(last).trim();
     if name.is_empty() {
         "repo".to_string()

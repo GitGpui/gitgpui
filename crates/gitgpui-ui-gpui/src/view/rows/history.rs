@@ -30,6 +30,8 @@ impl MainPaneView {
         };
         if should_clear_cache {
             this.worktree_preview_segments_cache_path = Some(path.clone());
+            this.worktree_preview_syntax_language =
+                diff_syntax_language_for_path(path.to_string_lossy().as_ref());
             this.worktree_preview_segments_cache.clear();
         }
 
@@ -38,7 +40,7 @@ impl MainPaneView {
         } else {
             DiffSyntaxMode::HeuristicOnly
         };
-        let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
+        let language = this.worktree_preview_syntax_language;
 
         let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();
         let highlight_new_file = this.untracked_worktree_preview_path().is_some()
@@ -71,13 +73,13 @@ impl MainPaneView {
                         )
                     });
 
-                let line_no = format!("{}", ix + 1);
+                let line_no = line_number_string(u32::try_from(ix + 1).ok());
                 diff_canvas::worktree_preview_row_canvas(
                     theme,
                     cx.entity(),
                     ix,
                     bar_color,
-                    line_no.into(),
+                    line_no,
                     styled,
                 )
             })
@@ -148,21 +150,7 @@ impl MainPaneView {
                 let commit = page.commits.get(commit_ix)?;
                 let graph_row = cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;
-                let mut graph_row_with_incoming;
-                let graph_row = if show_working_tree_summary_row && visible_ix == 0 {
-                    graph_row_with_incoming = graph_row.clone();
-                    if !graph_row_with_incoming
-                        .incoming_ids
-                        .contains(&graph_row_with_incoming.node_id)
-                    {
-                        graph_row_with_incoming
-                            .incoming_ids
-                            .push(graph_row_with_incoming.node_id);
-                    }
-                    &graph_row_with_incoming
-                } else {
-                    graph_row
-                };
+                let connect_incoming_node = show_working_tree_summary_row && visible_ix == 0;
                 let selected = repo.selected_commit.as_ref() == Some(&commit.id);
                 let show_graph_color_marker =
                     repo.history_scope == gitgpui_core::domain::LogScope::AllBranches;
@@ -182,9 +170,11 @@ impl MainPaneView {
                     list_ix,
                     repo.id,
                     commit,
-                    graph_row,
+                    Arc::clone(graph_row),
+                    connect_incoming_node,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
+                    row_vm.summary.clone(),
                     row_vm.when.clone(),
                     row_vm.short_sha.clone(),
                     selected,
@@ -210,9 +200,11 @@ fn history_table_row(
     ix: usize,
     repo_id: RepoId,
     commit: &Commit,
-    graph_row: &history_graph::GraphRow,
+    graph_row: Arc<history_graph::GraphRow>,
+    connect_incoming_node: bool,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
+    summary: SharedString,
     when: SharedString,
     short_sha: SharedString,
     selected: bool,
@@ -233,10 +225,11 @@ fn history_table_row(
         show_sha,
         show_graph_color_marker,
         is_stash_node,
-        graph_row.clone(),
+        connect_incoming_node,
+        graph_row,
         tag_names,
         branches_text,
-        commit.summary.clone().into(),
+        summary,
         when,
         short_sha,
     );

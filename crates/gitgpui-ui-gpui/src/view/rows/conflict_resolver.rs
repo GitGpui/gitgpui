@@ -55,7 +55,11 @@ impl MainPaneView {
             } else {
                 DiffSyntaxMode::HeuristicOnly
             };
-        let language = diff_syntax_language_for_path(path.to_string_lossy().as_ref());
+        if this.conflict_resolved_preview_syntax_language.is_none() {
+            this.conflict_resolved_preview_syntax_language =
+                diff_syntax_language_for_path(path.to_string_lossy().as_ref());
+        }
+        let language = this.conflict_resolved_preview_syntax_language;
 
         range
             .map(|ix| {
@@ -80,13 +84,13 @@ impl MainPaneView {
                         )
                     });
 
-                let line_no = format!("{}", ix + 1);
+                let line_no = line_number_string(u32::try_from(ix + 1).ok());
                 diff_canvas::worktree_preview_row_canvas(
                     theme,
                     cx.entity(),
                     ix,
                     None,
-                    line_no.into(),
+                    line_no,
                     styled,
                 )
             })

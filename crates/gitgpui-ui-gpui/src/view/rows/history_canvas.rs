@@ -1,9 +1,74 @@
 use super::*;
 use gpui::{Bounds, ContentMask, DispatchPhase, MouseButton, fill, point, px, size};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
 const HISTORY_TAG_CHIP_GAP_PX: f32 = 4.0;
+
+const HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 8_192;
+
+thread_local! {
+    static HISTORY_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
+        RefCell::new(HashMap::new());
+}
+
+fn shape_truncated_line_cached(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    font_family: Option<&'static str>,
+) -> gpui::ShapedLine {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let key = {
+        let mut hasher = DefaultHasher::new();
+        text.as_ref().hash(&mut hasher);
+        max_width.hash(&mut hasher);
+        font_size.hash(&mut hasher);
+        base_style.font_weight.hash(&mut hasher);
+        font_family
+            .unwrap_or_else(|| base_style.font_family.as_ref())
+            .hash(&mut hasher);
+        color.r.to_bits().hash(&mut hasher);
+        color.g.to_bits().hash(&mut hasher);
+        color.b.to_bits().hash(&mut hasher);
+        color.a.to_bits().hash(&mut hasher);
+        hasher.finish()
+    };
+
+    if let Some(shaped) = HISTORY_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+    {
+        return shaped;
+    }
+
+    let mut style = base_style.clone();
+    style.color = color.into();
+    if let Some(family) = font_family {
+        style.font_family = family.into();
+    }
+    let mut runs = vec![style.to_run(text.len())];
+    let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
+    let truncated = wrapper.truncate_line(text.clone(), max_width.max(px(0.0)), "…", &mut runs);
+    let shaped = window
+        .text_system()
+        .shape_line(truncated, font_size, &runs, None);
+
+    HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() > HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, shaped.clone());
+    });
+
+    shaped
+}
 
 fn layout_chip_bounds(
     branch_bounds: Bounds<Pixels>,
@@ -47,7 +112,8 @@ pub(super) fn history_commit_row_canvas(
     show_sha: bool,
     show_graph_color_marker: bool,
     is_stash_node: bool,
-    graph_row: history_graph::GraphRow,
+    connect_incoming_node: bool,
+    graph_row: Arc<history_graph::GraphRow>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
     summary: SharedString,
@@ -135,6 +201,7 @@ pub(super) fn history_commit_row_canvas(
                 super::history_graph_paint::paint_history_graph(
                     theme,
                     &graph_row,
+                    connect_incoming_node,
                     is_stash_node,
                     graph_bounds,
                     window,
@@ -163,20 +230,15 @@ pub(super) fn history_commit_row_canvas(
                                 break;
                             }
 
-                            let mut style = base_style.clone();
-                            style.color = theme.colors.accent.into();
-                            let mut runs = vec![style.to_run(name.len())];
-                            let mut wrapper =
-                                window.text_system().line_wrapper(style.font(), xs_font);
-                            let truncated = wrapper.truncate_line(
-                                name.clone(),
+                            let shaped = shape_truncated_line_cached(
+                                window,
+                                &base_style,
+                                xs_font,
+                                name,
                                 (remaining - chip_pad_x * 2.0).max(px(0.0)),
-                                "…",
-                                &mut runs,
+                                theme.colors.accent,
+                                None,
                             );
-                            let shaped = window
-                                .text_system()
-                                .shape_line(truncated, xs_font, &runs, None);
 
                             let chip_w = (shaped.width + chip_pad_x * 2.0).min(remaining);
                             chip_widths.push(chip_w);
@@ -231,20 +293,15 @@ pub(super) fn history_commit_row_canvas(
 
                         if !branches_text.as_ref().trim().is_empty() && x < branch_bounds.right() {
                             let remaining = (branch_bounds.right() - x).max(px(0.0));
-                            let mut style = base_style.clone();
-                            style.color = theme.colors.text_muted.into();
-                            let mut runs = vec![style.to_run(branches_text.len())];
-                            let mut wrapper =
-                                window.text_system().line_wrapper(style.font(), xs_font);
-                            let truncated = wrapper.truncate_line(
-                                branches_text.clone(),
+                            let shaped = shape_truncated_line_cached(
+                                window,
+                                &base_style,
+                                xs_font,
+                                &branches_text,
                                 remaining,
-                                "…",
-                                &mut runs,
+                                theme.colors.text_muted,
+                                None,
                             );
-                            let shaped = window
-                                .text_system()
-                                .shape_line(truncated, xs_font, &runs, None);
                             let _ = shaped.paint(
                                 point(x, center_y(xs_line_height)),
                                 xs_line_height,
@@ -286,19 +343,15 @@ pub(super) fn history_commit_row_canvas(
                 ),
             );
             if !summary.as_ref().is_empty() {
-                let mut style = base_style.clone();
-                style.color = theme.colors.text.into();
-                let mut runs = vec![style.to_run(summary.len())];
-                let mut wrapper = window.text_system().line_wrapper(style.font(), sm_font);
-                let truncated = wrapper.truncate_line(
-                    summary.clone(),
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    &base_style,
+                    sm_font,
+                    &summary,
                     summary_text_bounds.size.width.max(px(0.0)),
-                    "…",
-                    &mut runs,
+                    theme.colors.text,
+                    None,
                 );
-                let shaped = window
-                    .text_system()
-                    .shape_line(truncated, sm_font, &runs, None);
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: summary_text_bounds,
@@ -315,20 +368,15 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_date && !when.as_ref().is_empty() {
-                let mut style = base_style.clone();
-                style.color = theme.colors.text_muted.into();
-                style.font_family = "monospace".into();
-                let mut runs = vec![style.to_run(when.len())];
-                let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
-                let truncated = wrapper.truncate_line(
-                    when.clone(),
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    &base_style,
+                    xs_font,
+                    &when,
                     date_bounds.size.width.max(px(0.0)),
-                    "…",
-                    &mut runs,
+                    theme.colors.text_muted,
+                    Some("monospace"),
                 );
-                let shaped = window
-                    .text_system()
-                    .shape_line(truncated, xs_font, &runs, None);
                 let origin_x = (date_bounds.right() - shaped.width).max(date_bounds.left());
                 window.with_content_mask(
                     Some(ContentMask {
@@ -346,20 +394,15 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_sha && !short_sha.as_ref().is_empty() {
-                let mut style = base_style.clone();
-                style.color = theme.colors.text_muted.into();
-                style.font_family = "monospace".into();
-                let mut runs = vec![style.to_run(short_sha.len())];
-                let mut wrapper = window.text_system().line_wrapper(style.font(), xs_font);
-                let truncated = wrapper.truncate_line(
-                    short_sha.clone(),
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    &base_style,
+                    xs_font,
+                    &short_sha,
                     sha_bounds.size.width.max(px(0.0)),
-                    "…",
-                    &mut runs,
+                    theme.colors.text_muted,
+                    Some("monospace"),
                 );
-                let shaped = window
-                    .text_system()
-                    .shape_line(truncated, xs_font, &runs, None);
                 let origin_x = (sha_bounds.right() - shaped.width).max(sha_bounds.left());
                 window.with_content_mask(Some(ContentMask { bounds: sha_bounds }), |window| {
                     let _ = shaped.paint(

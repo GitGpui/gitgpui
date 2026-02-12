@@ -3,7 +3,9 @@ use std::sync::{Arc, OnceLock};
 
 mod syntax;
 
-pub(super) use syntax::{DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path};
+pub(in crate::view) use syntax::{
+    DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path,
+};
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
@@ -45,7 +47,11 @@ fn build_diff_text_segments(
         .map(|language| syntax::syntax_tokens_for_line(text, language, syntax_mode))
         .unwrap_or_default();
 
-    let query_ranges = if !query.is_empty() { find_all_ascii_case_insensitive(text, query) } else { Default::default() };
+    let query_ranges = if !query.is_empty() {
+        find_all_ascii_case_insensitive(text, query)
+    } else {
+        Default::default()
+    };
 
     let mut boundaries: Vec<usize> = Vec::with_capacity(
         2 + word_ranges.len() * 2 + query_ranges.len() * 2 + syntax_tokens.len() * 2,
@@ -351,27 +357,37 @@ pub(super) fn build_cached_diff_styled_text(
     syntax_mode: DiffSyntaxMode,
     word_color: Option<gpui::Rgba>,
 ) -> CachedDiffStyledText {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     if text.is_empty() {
+        let mut hasher = DefaultHasher::new();
+        "".hash(&mut hasher);
+        let text_hash = hasher.finish();
         return CachedDiffStyledText {
             text: "".into(),
             highlights: empty_highlights(),
             highlights_hash: 0,
+            text_hash,
         };
     }
 
     let segments = build_diff_text_segments(text, word_ranges, query, language, syntax_mode);
     let (expanded_text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
 
+    let mut hasher = DefaultHasher::new();
+    expanded_text.as_ref().hash(&mut hasher);
+    let text_hash = hasher.finish();
+
     if highlights.is_empty() {
         return CachedDiffStyledText {
             text: expanded_text,
             highlights: empty_highlights(),
             highlights_hash: 0,
+            text_hash,
         };
     }
 
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
     for (range, style) in &highlights {
         range.hash(&mut hasher);
@@ -383,6 +399,7 @@ pub(super) fn build_cached_diff_styled_text(
         text: expanded_text,
         highlights: Arc::new(highlights),
         highlights_hash,
+        text_hash,
     }
 }
 

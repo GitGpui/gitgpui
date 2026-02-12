@@ -24,10 +24,7 @@ impl MainPaneView {
                 } else {
                     DiffSyntaxMode::HeuristicOnly
                 };
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = this.file_diff_cache_language;
 
             return range
                 .map(|visible_ix| {
@@ -116,6 +113,7 @@ impl MainPaneView {
                         DiffViewMode::Inline,
                         line,
                         None,
+                        None,
                         Some(styled),
                         cx,
                     )
@@ -146,29 +144,11 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 };
-                let click_kind = {
-                    let Some(line) = this.diff_cache.get(src_ix) else {
-                        return div()
-                            .id(("diff_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .font_family("monospace")
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-
-                    if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-                        DiffClickKind::HunkHeader
-                    } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-                        && line.text.starts_with("diff --git ")
-                    {
-                        DiffClickKind::FileHeader
-                    } else {
-                        DiffClickKind::Line
-                    }
-                };
+                let click_kind = this
+                    .diff_click_kinds
+                    .get(src_ix)
+                    .copied()
+                    .unwrap_or(DiffClickKind::Line);
 
                 let word_ranges: &[Range<usize>] = this
                     .diff_word_highlights
@@ -178,11 +158,7 @@ impl MainPaneView {
 
                 let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
 
-                let language = this
-                    .diff_file_for_src_ix
-                    .get(src_ix)
-                    .and_then(|p| p.as_deref())
-                    .and_then(diff_syntax_language_for_path);
+                let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
 
                 let should_style =
                     matches!(click_kind, DiffClickKind::Line) || !query.as_ref().is_empty();
@@ -205,15 +181,6 @@ impl MainPaneView {
                             gitgpui_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
                             _ => None,
                         };
-
-                        let language = matches!(
-                            line.kind,
-                            gitgpui_core::domain::DiffLineKind::Add
-                                | gitgpui_core::domain::DiffLineKind::Remove
-                                | gitgpui_core::domain::DiffLineKind::Context
-                        )
-                        .then_some(language)
-                        .flatten();
 
                         build_cached_diff_styled_text(
                             theme,
@@ -256,6 +223,12 @@ impl MainPaneView {
                         .into_any_element();
                 };
 
+                let header_display = matches!(
+                    click_kind,
+                    DiffClickKind::FileHeader | DiffClickKind::HunkHeader
+                )
+                .then(|| this.diff_header_display_cache.get(&src_ix).cloned())
+                .flatten();
                 diff_row(
                     theme,
                     visible_ix,
@@ -264,6 +237,7 @@ impl MainPaneView {
                     DiffViewMode::Inline,
                     line,
                     file_stat,
+                    header_display,
                     styled,
                     cx,
                 )
@@ -292,10 +266,7 @@ impl MainPaneView {
                 } else {
                     DiffSyntaxMode::HeuristicOnly
                 };
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = this.file_diff_cache_language;
 
             return range
                 .map(|visible_ix| {
@@ -441,24 +412,8 @@ impl MainPaneView {
                             };
 
                             let text = row.old.as_deref().unwrap_or("");
-                            let language = this
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|p| p.as_deref())
-                                .and_then(diff_syntax_language_for_path);
-                            let language = this
-                                .diff_cache
-                                .get(src_ix)
-                                .is_some_and(|l| {
-                                    matches!(
-                                        l.kind,
-                                        gitgpui_core::domain::DiffLineKind::Add
-                                            | gitgpui_core::domain::DiffLineKind::Remove
-                                            | gitgpui_core::domain::DiffLineKind::Context
-                                    )
-                                })
-                                .then_some(language)
-                                .flatten();
+                            let language =
+                                this.diff_language_for_src_ix.get(src_ix).copied().flatten();
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(src_ix)
@@ -569,6 +524,7 @@ impl MainPaneView {
                             selected,
                             line,
                             file_stat,
+                            this.diff_header_display_cache.get(&src_ix).cloned(),
                             styled,
                             cx,
                         )
@@ -599,10 +555,7 @@ impl MainPaneView {
                 } else {
                     DiffSyntaxMode::HeuristicOnly
                 };
-            let language = this
-                .file_diff_cache_path
-                .as_ref()
-                .and_then(|p| diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+            let language = this.file_diff_cache_language;
 
             return range
                 .map(|visible_ix| {
@@ -748,24 +701,8 @@ impl MainPaneView {
                             };
 
                             let text = row.new.as_deref().unwrap_or("");
-                            let language = this
-                                .diff_file_for_src_ix
-                                .get(src_ix)
-                                .and_then(|p| p.as_deref())
-                                .and_then(diff_syntax_language_for_path);
-                            let language = this
-                                .diff_cache
-                                .get(src_ix)
-                                .is_some_and(|l| {
-                                    matches!(
-                                        l.kind,
-                                        gitgpui_core::domain::DiffLineKind::Add
-                                            | gitgpui_core::domain::DiffLineKind::Remove
-                                            | gitgpui_core::domain::DiffLineKind::Context
-                                    )
-                                })
-                                .then_some(language)
-                                .flatten();
+                            let language =
+                                this.diff_language_for_src_ix.get(src_ix).copied().flatten();
                             let word_ranges: &[Range<usize>] = this
                                 .diff_word_highlights
                                 .get(src_ix)
@@ -876,6 +813,7 @@ impl MainPaneView {
                             selected,
                             line,
                             file_stat,
+                            this.diff_header_display_cache.get(&src_ix).cloned(),
                             styled,
                             cx,
                         )
@@ -894,6 +832,7 @@ fn diff_row(
     mode: DiffViewMode,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
+    header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
@@ -907,7 +846,7 @@ fn diff_row(
     });
 
     if matches!(click_kind, DiffClickKind::FileHeader) {
-        let file = parse_diff_git_header_path(&line.text).unwrap_or_else(|| line.text.clone());
+        let file = header_display.unwrap_or_else(|| line.text.clone().into());
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
             .h(px(28.0))
@@ -927,7 +866,7 @@ fn diff_row(
                 DiffClickKind::FileHeader,
                 theme.colors.text,
                 None,
-                file.into(),
+                file,
                 cx,
             ))
             .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
@@ -947,16 +886,7 @@ fn diff_row(
     }
 
     if matches!(click_kind, DiffClickKind::HunkHeader) {
-        let display = parse_unified_hunk_header_for_display(&line.text)
-            .map(|p| {
-                let heading = p.heading.unwrap_or_default();
-                if heading.is_empty() {
-                    format!("{} {}", p.old, p.new)
-                } else {
-                    format!("{} {}  {heading}", p.old, p.new)
-                }
-            })
-            .unwrap_or_else(|| line.text.clone());
+        let display = header_display.unwrap_or_else(|| line.text.clone().into());
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
@@ -982,7 +912,7 @@ fn diff_row(
                 DiffClickKind::HunkHeader,
                 theme.colors.text_muted,
                 None,
-                display.into(),
+                display,
                 cx,
             ))
             .on_click(on_click);
@@ -1142,6 +1072,7 @@ fn patch_split_header_row(
     selected: bool,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
+    header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
@@ -1160,7 +1091,7 @@ fn patch_split_header_row(
 
     match click_kind {
         DiffClickKind::FileHeader => {
-            let file = parse_diff_git_header_path(&line.text).unwrap_or_else(|| line.text.clone());
+            let display = header_display.unwrap_or_else(|| line.text.clone().into());
             let mut row = div()
                 .id((
                     match column {
@@ -1186,7 +1117,7 @@ fn patch_split_header_row(
                     DiffClickKind::FileHeader,
                     theme.colors.text,
                     styled,
-                    file.into(),
+                    display,
                     cx,
                 ))
                 .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
@@ -1205,16 +1136,7 @@ fn patch_split_header_row(
             row.into_any_element()
         }
         DiffClickKind::HunkHeader => {
-            let display = parse_unified_hunk_header_for_display(&line.text)
-                .map(|p| {
-                    let heading = p.heading.unwrap_or_default();
-                    if heading.is_empty() {
-                        format!("{} {}", p.old, p.new)
-                    } else {
-                        format!("{} {}  {heading}", p.old, p.new)
-                    }
-                })
-                .unwrap_or_else(|| line.text.clone());
+            let display = header_display.unwrap_or_else(|| line.text.clone().into());
 
             let mut row = div()
                 .id((
@@ -1246,7 +1168,7 @@ fn patch_split_header_row(
                     DiffClickKind::HunkHeader,
                     theme.colors.text_muted,
                     styled,
-                    display.into(),
+                    display,
                     cx,
                 ))
                 .on_click(on_click);

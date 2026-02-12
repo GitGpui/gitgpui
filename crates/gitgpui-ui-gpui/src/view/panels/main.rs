@@ -958,30 +958,6 @@ impl MainPaneView {
                                 )
                                 .child(start_controls);
 
-                            use std::hash::{Hash, Hasher};
-                            let mut output_hasher =
-                                std::collections::hash_map::DefaultHasher::new();
-                            let output_text = self
-                                .conflict_resolver_input
-                                .read_with(cx, |i, _| i.text().to_string());
-                            output_text.hash(&mut output_hasher);
-                            let output_hash = output_hasher.finish();
-
-                            let should_clear_preview_cache =
-                                self.conflict_resolved_preview_path.as_ref() != Some(&path)
-                                    || self.conflict_resolved_preview_source_hash
-                                        != Some(output_hash);
-                            if should_clear_preview_cache {
-                                self.conflict_resolved_preview_path = Some(path.clone());
-                                self.conflict_resolved_preview_source_hash = Some(output_hash);
-                                self.conflict_resolved_preview_lines =
-                                    output_text.split('\n').map(|s| s.to_string()).collect();
-                                if self.conflict_resolved_preview_lines.is_empty() {
-                                    self.conflict_resolved_preview_lines.push(String::new());
-                                }
-                                self.conflict_resolved_preview_segments_cache.clear();
-                            }
-
                             let preview_count = self.conflict_resolved_preview_lines.len();
                             let preview_body: AnyElement = if preview_count == 0 {
                                 zed::empty_state(theme, "Preview", "Empty.").into_any_element()
@@ -1238,7 +1214,6 @@ impl MainPaneView {
                     }
                     Loadable::Ready(diff) => {
                         if wants_file_diff {
-                            
                             if !matches!(repo.diff_file_image, Loadable::NotLoaded) {
                                 enum DiffFileImageState {
                                     NotLoaded,

@@ -76,8 +76,6 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
         install_desktop = install_desktop.text_color(theme.colors.text_muted);
     }
 
-    
-
     div()
         .flex()
         .flex_col()

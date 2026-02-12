@@ -1,4 +1,5 @@
 use super::super::*;
+use std::hash::{Hash, Hasher};
 
 mod diff_cache;
 mod diff_search;
@@ -21,6 +22,9 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_cache_target: Option<DiffTarget>,
     pub(in super::super) diff_cache: Vec<AnnotatedDiffLine>,
     pub(in super::super) diff_file_for_src_ix: Vec<Option<Arc<str>>>,
+    pub(in super::super) diff_language_for_src_ix: Vec<Option<rows::DiffSyntaxLanguage>>,
+    pub(in super::super) diff_click_kinds: Vec<DiffClickKind>,
+    pub(in super::super) diff_header_display_cache: HashMap<usize, SharedString>,
     pub(in super::super) diff_split_cache: Vec<PatchSplitRow>,
     pub(in super::super) diff_split_cache_len: usize,
     pub(in super::super) diff_panel_focus_handle: FocusHandle,
@@ -55,6 +59,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) file_diff_cache_rev: u64,
     pub(in super::super) file_diff_cache_target: Option<DiffTarget>,
     pub(in super::super) file_diff_cache_path: Option<std::path::PathBuf>,
+    pub(in super::super) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in super::super) file_diff_cache_rows: Vec<FileDiffRow>,
     pub(in super::super) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
     pub(in super::super) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
@@ -71,17 +76,21 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) worktree_preview_path: Option<std::path::PathBuf>,
     pub(in super::super) worktree_preview: Loadable<Arc<Vec<String>>>,
     pub(in super::super) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
+    pub(in super::super) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in super::super) worktree_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
     pub(in super::super) diff_preview_is_new_file: bool,
     pub(in super::super) diff_preview_new_file_lines: Arc<Vec<String>>,
 
     pub(in super::super) conflict_resolver_input: Entity<zed::TextInput>,
+    _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in super::super) conflict_resolver: ConflictResolverUiState,
     pub(in super::super) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
     pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
     pub(in super::super) conflict_resolved_preview_path: Option<std::path::PathBuf>,
     pub(in super::super) conflict_resolved_preview_source_hash: Option<u64>,
+    pub(in super::super) conflict_resolved_preview_syntax_language:
+        Option<rows::DiffSyntaxLanguage>,
     pub(in super::super) conflict_resolved_preview_lines: Vec<String>,
     pub(in super::super) conflict_resolved_preview_segments_cache:
         HashMap<usize, CachedDiffStyledText>,
@@ -152,6 +161,34 @@ impl MainPaneView {
             )
         });
 
+        let conflict_resolver_subscription =
+            cx.observe(&conflict_resolver_input, |this, input, cx| {
+                let output_text = input.read(cx).text();
+                let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+                output_text.hash(&mut output_hasher);
+                let output_hash = output_hasher.finish();
+
+                let path = this.conflict_resolver.path.clone();
+                let needs_update = this.conflict_resolved_preview_path != path
+                    || this.conflict_resolved_preview_source_hash != Some(output_hash);
+                if !needs_update {
+                    return;
+                }
+
+                this.conflict_resolved_preview_path = path.clone();
+                this.conflict_resolved_preview_source_hash = Some(output_hash);
+                this.conflict_resolved_preview_syntax_language = path.as_ref().and_then(|p| {
+                    rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
+                });
+                this.conflict_resolved_preview_lines =
+                    output_text.split('\n').map(|s| s.to_string()).collect();
+                if this.conflict_resolved_preview_lines.is_empty() {
+                    this.conflict_resolved_preview_lines.push(String::new());
+                }
+                this.conflict_resolved_preview_segments_cache.clear();
+                cx.notify();
+            });
+
         let diff_search_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
@@ -195,6 +232,9 @@ impl MainPaneView {
             diff_cache_target: None,
             diff_cache: Vec::new(),
             diff_file_for_src_ix: Vec::new(),
+            diff_language_for_src_ix: Vec::new(),
+            diff_click_kinds: Vec::new(),
+            diff_header_display_cache: HashMap::new(),
             diff_split_cache: Vec::new(),
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
@@ -228,6 +268,7 @@ impl MainPaneView {
             file_diff_cache_rev: 0,
             file_diff_cache_target: None,
             file_diff_cache_path: None,
+            file_diff_cache_language: None,
             file_diff_cache_rows: Vec::new(),
             file_diff_inline_cache: Vec::new(),
             file_diff_inline_word_highlights: Vec::new(),
@@ -242,15 +283,18 @@ impl MainPaneView {
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_segments_cache_path: None,
+            worktree_preview_syntax_language: None,
             worktree_preview_segments_cache: HashMap::new(),
             diff_preview_is_new_file: false,
             diff_preview_new_file_lines: Arc::new(Vec::new()),
             conflict_resolver_input,
+            _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
             conflict_diff_segments_cache_split: HashMap::new(),
             conflict_diff_segments_cache_inline: HashMap::new(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
+            conflict_resolved_preview_syntax_language: None,
             conflict_resolved_preview_lines: Vec::new(),
             conflict_resolved_preview_segments_cache: HashMap::new(),
             history_cache_seq: 0,
@@ -282,6 +326,9 @@ impl MainPaneView {
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
+        self.conflict_diff_segments_cache_split.clear();
+        self.conflict_diff_segments_cache_inline.clear();
+        self.conflict_resolved_preview_segments_cache.clear();
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_search_input
@@ -360,8 +407,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
-            root
-                .details_pane
+            root.details_pane
                 .update(cx, |pane: &mut DetailsPaneView, cx| {
                     match area {
                         DiffArea::Unstaged => pane
@@ -602,9 +648,10 @@ impl MainPaneView {
                             out.push(*ix);
                         }
                         if let Some(ix) = new_src_ix
-                            && !out.contains(ix) {
-                                out.push(*ix);
-                            }
+                            && !out.contains(ix)
+                        {
+                            out.push(*ix);
+                        }
                         out
                     }
                 }
@@ -1294,12 +1341,6 @@ impl MainPaneView {
             None
         };
 
-        let theme = self.theme;
-        self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text(resolved, cx);
-        });
-
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
@@ -1312,6 +1353,12 @@ impl MainPaneView {
             split_selected: std::collections::BTreeSet::new(),
             inline_selected: std::collections::BTreeSet::new(),
         };
+
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(resolved, cx);
+        });
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();

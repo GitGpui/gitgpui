@@ -1,10 +1,11 @@
 use super::*;
+use gitgpui_core::domain::RemoteBranch;
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
     pub(super) request: HistoryCacheRequest,
     pub(super) visible_indices: Vec<usize>,
-    pub(super) graph_rows: Vec<history_graph::GraphRow>,
+    pub(super) graph_rows: Vec<Arc<history_graph::GraphRow>>,
     pub(super) commit_row_vms: Vec<HistoryCommitRowVm>,
 }
 
@@ -14,6 +15,7 @@ pub(super) struct HistoryCacheRequest {
     pub(super) log_fingerprint: u64,
     pub(super) head_branch_rev: u64,
     pub(super) branches_rev: u64,
+    pub(super) remote_branches_rev: u64,
     pub(super) tags_rev: u64,
     pub(super) date_time_format: DateTimeFormat,
 }
@@ -22,6 +24,7 @@ pub(super) struct HistoryCacheRequest {
 pub(super) struct HistoryCommitRowVm {
     pub(super) branches_text: SharedString,
     pub(super) tag_names: Arc<[SharedString]>,
+    pub(super) summary: SharedString,
     pub(super) when: SharedString,
     pub(super) short_sha: SharedString,
 }
@@ -237,6 +240,7 @@ impl MainPaneView {
                 commits: Vec<Commit>,
                 head_branch: Option<String>,
                 branches: Vec<Branch>,
+                remote_branches: Vec<RemoteBranch>,
                 tags: Vec<Tag>,
             },
         }
@@ -248,6 +252,7 @@ impl MainPaneView {
                     log_fingerprint: Self::log_fingerprint(&page.commits),
                     head_branch_rev: repo.head_branch_rev,
                     branches_rev: repo.branches_rev,
+                    remote_branches_rev: repo.remote_branches_rev,
                     tags_rev: repo.tags_rev,
                     date_time_format: self.date_time_format,
                 };
@@ -272,6 +277,10 @@ impl MainPaneView {
                             Loadable::Ready(b) => b.clone(),
                             _ => Vec::new(),
                         },
+                        remote_branches: match &repo.remote_branches {
+                            Loadable::Ready(b) => b.clone(),
+                            _ => Vec::new(),
+                        },
                         tags: match &repo.tags {
                             Loadable::Ready(t) => t.clone(),
                             _ => Vec::new(),
@@ -285,7 +294,7 @@ impl MainPaneView {
             Next::Clear
         };
 
-        let (request_for_task, commits, head_branch, branches, tags) = match next {
+        let (request_for_task, commits, head_branch, branches, remote_branches, tags) = match next {
             Next::Clear => {
                 self.history_cache_inflight = None;
                 self.history_cache = None;
@@ -303,8 +312,16 @@ impl MainPaneView {
                 commits,
                 head_branch,
                 branches,
+                remote_branches,
                 tags,
-            } => (request, commits, head_branch, branches, tags),
+            } => (
+                request,
+                commits,
+                head_branch,
+                branches,
+                remote_branches,
+                tags,
+            ),
         };
 
         self.history_cache_seq = self.history_cache_seq.wrapping_add(1);
@@ -322,7 +339,16 @@ impl MainPaneView {
                     .filter_map(|ix| commits.get(*ix))
                     .collect::<Vec<_>>();
 
-                let graph_rows = history_graph::compute_graph(&visible_commits, theme);
+                let branch_heads: HashSet<&str> = branches
+                    .iter()
+                    .map(|b| b.target.as_ref())
+                    .chain(remote_branches.iter().map(|b| b.target.as_ref()))
+                    .collect();
+                let graph_rows: Vec<Arc<history_graph::GraphRow>> =
+                    history_graph::compute_graph(&visible_commits, theme, &branch_heads)
+                        .into_iter()
+                        .map(Arc::new)
+                        .collect();
                 let max_lanes = graph_rows
                     .iter()
                     .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
@@ -334,7 +360,7 @@ impl MainPaneView {
                     .and_then(|head| branches.iter().find(|b| b.name == head))
                     .map(|b| b.target.as_ref());
 
-                let mut branch_names_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+                let mut branch_names_by_target: HashMap<&str, Vec<String>> = HashMap::new();
                 for branch in &branches {
                     let should_skip = head_branch
                         .as_ref()
@@ -346,10 +372,16 @@ impl MainPaneView {
                     branch_names_by_target
                         .entry(branch.target.as_ref())
                         .or_default()
-                        .push(branch.name.as_str());
+                        .push(branch.name.clone());
+                }
+                for branch in &remote_branches {
+                    branch_names_by_target
+                        .entry(branch.target.as_ref())
+                        .or_default()
+                        .push(format!("{}/{}", branch.remote, branch.name));
                 }
                 for names in branch_names_by_target.values_mut() {
-                    names.sort_unstable();
+                    names.sort();
                     names.dedup();
                 }
 
@@ -380,7 +412,7 @@ impl MainPaneView {
                                 names.push(format!("HEAD → {head}"));
                             }
                             if let Some(branches) = branch_names_by_target.get(commit_id) {
-                                names.extend(branches.iter().copied().map(ToOwned::to_owned));
+                                names.extend(branches.iter().cloned());
                             }
                             names.sort();
                             names.dedup();
@@ -403,6 +435,8 @@ impl MainPaneView {
                             },
                         );
 
+                        let summary: SharedString = commit.summary.clone().into();
+
                         let when: SharedString =
                             format_datetime_utc(commit.time, request_for_task.date_time_format)
                                 .into();
@@ -414,6 +448,7 @@ impl MainPaneView {
                         HistoryCommitRowVm {
                             branches_text,
                             tag_names,
+                            summary,
                             when,
                             short_sha,
                         }

@@ -96,6 +96,7 @@ pub struct Submodule {
 pub struct RemoteBranch {
     pub remote: String,
     pub name: String,
+    pub target: CommitId,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
