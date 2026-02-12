@@ -35,14 +35,14 @@ pub struct GraphRow {
 }
 
 #[derive(Clone, Debug)]
-struct LaneState {
+struct LaneState<'a> {
     id: LaneId,
     color: Rgba,
-    target: CommitId,
+    target: &'a str,
 }
 
 pub fn compute_graph(
-    commits: &[&Commit],
+    commits: &[Commit],
     theme: AppTheme,
     branch_heads: &HashSet<&str>,
 ) -> Vec<GraphRow> {
@@ -54,30 +54,26 @@ pub fn compute_graph(
         palette.push(gpui::hsla(hue, sat, light, 1.0).into());
     }
 
-    let known: HashSet<&str> = commits.iter().copied().map(|c| c.id.as_ref()).collect();
-    let by_id: HashMap<&str, &Commit> = commits
-        .iter()
-        .copied()
-        .map(|c| (c.id.as_ref(), c))
-        .collect();
+    let known: HashSet<&str> = commits.iter().map(|c| c.id.as_ref()).collect();
+    let by_id: HashMap<&str, &Commit> = commits.iter().map(|c| (c.id.as_ref(), c)).collect();
 
     // Approximate the "main line" as the first-parent chain from the first commit in the list,
     // which is typically the checked-out branch HEAD in our log view.
-    let mut head_chain: HashSet<String> = HashSet::new();
-    if let Some(&first) = commits.first() {
-        let mut cur = first.id.clone();
+    let mut head_chain: HashSet<&str> = HashSet::new();
+    if let Some(first) = commits.first() {
+        let mut cur: &str = first.id.as_ref();
         loop {
-            if !head_chain.insert(cur.as_ref().to_string()) {
+            if !head_chain.insert(cur) {
                 break;
             }
-            let Some(commit) = by_id.get(cur.as_ref()) else {
+            let Some(commit) = by_id.get(cur) else {
                 break;
             };
             let Some(parent) = commit
                 .parent_ids
                 .first()
-                .filter(|p| known.contains(p.as_ref()))
-                .cloned()
+                .map(|p| p.as_ref())
+                .filter(|p| known.contains(p))
             else {
                 break;
             };
@@ -87,7 +83,7 @@ pub fn compute_graph(
 
     let mut next_id: u64 = 1;
     let mut next_color: usize = 0;
-    let mut lanes: Vec<LaneState> = Vec::new();
+    let mut lanes: Vec<LaneState<'_>> = Vec::new();
     let mut rows: Vec<GraphRow> = Vec::with_capacity(commits.len());
     let mut main_lane_id: Option<LaneId> = None;
 
@@ -105,13 +101,13 @@ pub fn compute_graph(
         candidate
     };
 
-    for commit in commits.iter().copied() {
+    for commit in commits.iter() {
         let incoming_ids = lanes.iter().map(|l| l.id).collect::<Vec<_>>();
 
         let mut hits = lanes
             .iter()
             .enumerate()
-            .filter_map(|(ix, l)| (l.target == commit.id).then_some(ix))
+            .filter_map(|(ix, l)| (l.target == commit.id.as_ref()).then_some(ix))
             .collect::<Vec<_>>();
         let had_hit_lanes = !hits.is_empty();
 
@@ -119,8 +115,8 @@ pub fn compute_graph(
         let parent_ids = commit
             .parent_ids
             .iter()
-            .filter(|p| known.contains(p.as_ref()))
-            .cloned()
+            .map(|p| p.as_ref())
+            .filter(|p| known.contains(p))
             .collect::<Vec<_>>();
 
         if hits.is_empty() {
@@ -130,7 +126,7 @@ pub fn compute_graph(
             lanes.push(LaneState {
                 id,
                 color,
-                target: commit.id.clone(),
+                target: commit.id.as_ref(),
             });
             hits.push(lanes.len() - 1);
         }
@@ -165,7 +161,7 @@ pub fn compute_graph(
             lanes.push(LaneState {
                 id,
                 color,
-                target: commit.id.clone(),
+                target: commit.id.as_ref(),
             });
             hits.push(node_col);
         }
@@ -213,20 +209,20 @@ pub fn compute_graph(
         if parent_ids.is_empty() {
             // No parents: end all lanes converging here.
             for &hit_ix in &hits {
-                lanes[hit_ix].target = commit.id.clone();
+                lanes[hit_ix].target = commit.id.as_ref();
             }
         } else {
-            lanes[node_col].target = parent_ids[0].clone();
+            lanes[node_col].target = parent_ids[0];
             covered_parents = 1;
 
             for (&hit_ix, parent) in hits.iter().skip(1).zip(parent_ids.iter().skip(1)) {
-                lanes[hit_ix].target = parent.clone();
+                lanes[hit_ix].target = *parent;
                 covered_parents += 1;
             }
 
             // End hit lanes that converged here but don't have a parent to follow.
             for &hit_ix in hits.iter().skip(parent_ids.len().min(hits.len())) {
-                lanes[hit_ix].target = commit.id.clone();
+                lanes[hit_ix].target = commit.id.as_ref();
             }
         }
 
@@ -246,7 +242,7 @@ pub fn compute_graph(
                     LaneState {
                         id,
                         color,
-                        target: parent.clone(),
+                        target: *parent,
                     },
                 );
                 insert_at += 1;
@@ -260,7 +256,7 @@ pub fn compute_graph(
         // Remove ended lanes: lanes whose target is not part of the visible graph, or whose target
         // is this commit without a parent to follow.
         lanes.retain(|l| {
-            known.contains(l.target.as_ref()) && l.target.as_ref() != commit.id.as_ref()
+            known.contains(l.target) && l.target != commit.id.as_ref()
         });
 
         let lanes_next = lanes
@@ -358,9 +354,8 @@ mod tests {
         commits.push(commit("p0", Vec::new()));
         commits.push(commit("p1", Vec::new()));
 
-        let refs = commits.iter().collect::<Vec<_>>();
         let branch_heads = HashSet::new();
-        let graph = compute_graph(&refs, theme, &branch_heads);
+        let graph = compute_graph(&commits, theme, &branch_heads);
 
         let head1_ix = LANE_COLOR_PALETTE_SIZE + 1 + (LANE_COLOR_PALETTE_SIZE - 1);
         let row = &graph[head1_ix];
@@ -384,8 +379,7 @@ mod tests {
         branch_heads.insert("new1");
         branch_heads.insert("base");
 
-        let refs = commits.iter().collect::<Vec<_>>();
-        let graph = compute_graph(&refs, theme, &branch_heads);
+        let graph = compute_graph(&commits, theme, &branch_heads);
 
         let base_row = &graph[1];
         assert_eq!(base_row.lanes_now.len(), 2);

@@ -136,7 +136,7 @@ mod tests {
     ) -> AnnotatedDiffLine {
         AnnotatedDiffLine {
             kind,
-            text: text.to_string(),
+            text: text.into(),
             old_line,
             new_line,
         }

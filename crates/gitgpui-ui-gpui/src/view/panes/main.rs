@@ -13,6 +13,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) date_time_format: DateTimeFormat,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
+    tooltip_host: WeakEntity<TooltipHost>,
 
     pub(in super::super) last_window_size: Size<Pixels>,
 
@@ -36,6 +37,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_visible_is_file_view: bool,
     pub(in super::super) diff_scrollbar_markers_cache: Vec<zed::ScrollbarMarker>,
     pub(in super::super) diff_word_highlights: Vec<Option<Vec<Range<usize>>>>,
+    pub(in super::super) diff_word_highlights_seq: u64,
+    pub(in super::super) diff_word_highlights_inflight: Option<u64>,
     pub(in super::super) diff_file_stats: Vec<Option<(usize, usize)>>,
     pub(in super::super) diff_text_segments_cache: Vec<Option<CachedDiffStyledText>>,
     pub(in super::super) diff_selection_anchor: Option<usize>,
@@ -123,6 +126,7 @@ impl MainPaneView {
         theme: AppTheme,
         date_time_format: DateTimeFormat,
         root_view: WeakEntity<GitGpuiView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -225,6 +229,7 @@ impl MainPaneView {
             date_time_format,
             _ui_model_subscription: subscription,
             root_view,
+            tooltip_host,
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
             diff_cache_repo_id: None,
@@ -246,6 +251,8 @@ impl MainPaneView {
             diff_visible_is_file_view: false,
             diff_scrollbar_markers_cache: Vec::new(),
             diff_word_highlights: Vec::new(),
+            diff_word_highlights_seq: 0,
+            diff_word_highlights_inflight: None,
             diff_file_stats: Vec::new(),
             diff_text_segments_cache: Vec::new(),
             diff_selection_anchor: None,
@@ -317,7 +324,7 @@ impl MainPaneView {
         };
 
         pane.set_theme(theme, cx);
-        pane.rebuild_diff_cache();
+        pane.rebuild_diff_cache(cx);
         pane
     }
 
@@ -427,15 +434,10 @@ impl MainPaneView {
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.root_view
-            .update(cx, |root, cx| {
-                let changed = root.set_tooltip_text_if_changed(next);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
+        false
     }
 
     pub(in super::super) fn clear_tooltip_if_matches(
@@ -444,18 +446,10 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let tooltip = tooltip.clone();
-        self.root_view
-            .update(cx, |root, cx| {
-                if root.tooltip_text.as_ref() != Some(&tooltip) {
-                    return false;
-                }
-                let changed = root.set_tooltip_text_if_changed(None);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
+        false
     }
 
     pub(super) fn apply_state_snapshot(
@@ -493,7 +487,7 @@ impl MainPaneView {
             || self.diff_cache_rev != next_diff_rev
             || self.diff_cache_target != next_diff_target;
         if should_rebuild_diff_cache {
-            self.rebuild_diff_cache();
+            self.rebuild_diff_cache(cx);
         }
 
         // Precompute derived data that would otherwise be recalculated in hot render paths.

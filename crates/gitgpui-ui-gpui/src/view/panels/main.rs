@@ -1527,7 +1527,7 @@ impl MainPaneView {
                                 || self.diff_cache_target != repo.diff_target
                                 || self.diff_cache.len() != diff.lines.len()
                             {
-                                self.rebuild_diff_cache();
+                                self.rebuild_diff_cache(cx);
                             }
 
                             self.ensure_diff_visible_indices();
@@ -1813,7 +1813,7 @@ impl MainPaneView {
                             });
                         }
                     }
-                    this.rebuild_diff_cache();
+                    this.rebuild_diff_cache(cx);
                     handled = true;
                 }
 

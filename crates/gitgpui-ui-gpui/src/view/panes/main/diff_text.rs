@@ -276,7 +276,7 @@ impl MainPaneView {
             {
                 return display.clone();
             }
-            return expand_tabs(line.text.as_str());
+            return expand_tabs(line.text.as_ref());
         }
 
         match region {
@@ -319,7 +319,7 @@ impl MainPaneView {
                 {
                     return display.clone();
                 }
-                expand_tabs(line.text.as_str())
+                expand_tabs(line.text.as_ref())
             }
             PatchSplitRow::Aligned { row, .. } => {
                 let text = match region {

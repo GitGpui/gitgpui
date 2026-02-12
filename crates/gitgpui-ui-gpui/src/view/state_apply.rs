@@ -18,7 +18,6 @@ impl GitGpuiView {
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_diff_target = next_repo.and_then(|r| r.diff_target.as_ref()).cloned();
-        let next_diff_rev = next_repo.map(|r| r.diff_rev).unwrap_or(0);
         let next_selected_commit = next_repo.and_then(|r| r.selected_commit.clone());
 
         let prev_diff_target = self
@@ -213,13 +212,6 @@ impl GitGpuiView {
         }
 
         self.update_commit_details_delay(cx);
-
-        let should_rebuild_diff_cache = self.diff_cache_repo_id != next_repo_id
-            || self.diff_cache_rev != next_diff_rev
-            || self.diff_cache_target != next_diff_target;
-        if should_rebuild_diff_cache {
-            self.rebuild_diff_cache();
-        }
     }
 
     fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {

@@ -9,6 +9,7 @@ pub(in super::super) struct SidebarPaneView {
     branches_scroll: UniformListScrollHandle,
     branch_sidebar_cache: Option<BranchSidebarCache>,
     root_view: WeakEntity<GitGpuiView>,
+    tooltip_host: WeakEntity<TooltipHost>,
 }
 
 impl SidebarPaneView {
@@ -17,6 +18,7 @@ impl SidebarPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         root_view: WeakEntity<GitGpuiView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -33,6 +35,7 @@ impl SidebarPaneView {
             branches_scroll: UniformListScrollHandle::default(),
             branch_sidebar_cache: None,
             root_view,
+            tooltip_host,
         }
     }
 
@@ -131,15 +134,10 @@ impl SidebarPaneView {
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.root_view
-            .update(cx, |root, cx| {
-                let changed = root.set_tooltip_text_if_changed(next);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
+        false
     }
 
     pub(in super::super) fn clear_tooltip_if_matches(
@@ -148,18 +146,10 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let tooltip = tooltip.clone();
-        self.root_view
-            .update(cx, |root, cx| {
-                if root.tooltip_text.as_ref() != Some(&tooltip) {
-                    return false;
-                }
-                let changed = root.set_tooltip_text_if_changed(None);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
+        false
     }
 
     pub(in super::super) fn open_popover_at(

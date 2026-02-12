@@ -1,9 +1,10 @@
 use crate::domain::{Diff, DiffLineKind};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnnotatedDiffLine {
     pub kind: DiffLineKind,
-    pub text: String,
+    pub text: Arc<str>,
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
 }
@@ -141,7 +142,7 @@ index 1111111..2222222 100644
                     DiffLineKind::Context | DiffLineKind::Add | DiffLineKind::Remove
                 )
             })
-            .map(|l| (l.kind, l.old_line, l.new_line, l.text.as_str()))
+            .map(|l| (l.kind, l.old_line, l.new_line, l.text.as_ref()))
             .collect::<Vec<_>>();
 
         // Context lines include a leading space in unified diff.

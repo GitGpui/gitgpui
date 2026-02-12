@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -174,7 +175,7 @@ pub struct FileDiffImage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DiffLine {
     pub kind: DiffLineKind,
-    pub text: String,
+    pub text: Arc<str>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,7 +216,7 @@ impl Diff {
 
             lines.push(DiffLine {
                 kind,
-                text: raw.to_string(),
+                text: raw.into(),
             });
         }
 

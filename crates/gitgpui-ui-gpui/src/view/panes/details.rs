@@ -6,6 +6,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
+    tooltip_host: WeakEntity<TooltipHost>,
 
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
     pub(in super::super) staged_scroll: UniformListScrollHandle,
@@ -30,6 +31,7 @@ impl DetailsPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         root_view: WeakEntity<GitGpuiView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -74,6 +76,7 @@ impl DetailsPaneView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
+            tooltip_host,
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
@@ -271,15 +274,10 @@ impl DetailsPaneView {
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.root_view
-            .update(cx, |root, cx| {
-                let changed = root.set_tooltip_text_if_changed(next);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
+        false
     }
 
     pub(in super::super) fn clear_tooltip_if_matches(
@@ -288,18 +286,10 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let tooltip = tooltip.clone();
-        self.root_view
-            .update(cx, |root, cx| {
-                if root.tooltip_text.as_ref() != Some(&tooltip) {
-                    return false;
-                }
-                let changed = root.set_tooltip_text_if_changed(None);
-                if changed {
-                    cx.notify();
-                }
-                changed
-            })
-            .unwrap_or(false)
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
+        false
     }
 
     pub(in super::super) fn open_popover_at(

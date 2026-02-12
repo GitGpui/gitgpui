@@ -21,7 +21,6 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
                 .render(theme, cx, move |this, ix, _e, _w, cx| {
                     if let Some(&repo_id) = repo_ids.get(ix) {
                         this.store.dispatch(Msg::SetActiveRepo { repo_id });
-                        this.rebuild_diff_cache();
                     }
                     this.popover = None;
                     this.popover_anchor = None;
@@ -50,7 +49,6 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
                     this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
                     this.popover = None;
                     this.popover_anchor = None;
-                    this.rebuild_diff_cache();
                     cx.notify();
                 })),
             );

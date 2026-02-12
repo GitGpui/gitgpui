@@ -53,7 +53,7 @@ pub(super) fn model(this: &GitGpuiView, repo_id: RepoId, src_ix: usize) -> Conte
                 }
             )
         });
-    let patch = this.build_unified_patch_for_hunk_src_ix(src_ix);
+    let patch = this.build_unified_patch_for_hunk_src_ix(repo_id, src_ix);
 
     items.push(ContextMenuItem::Entry {
         label: "Discard hunk".into(),

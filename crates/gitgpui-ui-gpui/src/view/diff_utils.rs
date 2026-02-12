@@ -423,7 +423,7 @@ mod tests {
     fn dl(kind: K, text: &str) -> AnnotatedDiffLine {
         AnnotatedDiffLine {
             kind,
-            text: text.to_string(),
+            text: text.into(),
             old_line: None,
             new_line: None,
         }

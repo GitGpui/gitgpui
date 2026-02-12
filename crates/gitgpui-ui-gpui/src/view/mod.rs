@@ -48,6 +48,7 @@ mod poller;
 pub(crate) mod rows;
 mod state_apply;
 mod tooltip;
+mod tooltip_host;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -74,6 +75,8 @@ use diff_utils::{
     scrollbar_markers_from_flags,
 };
 use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
+use panels::{ActionBarView, RepoTabsBarView};
+use tooltip_host::TooltipHost;
 
 pub(crate) use chrome::window_frame;
 use color::with_alpha;
@@ -476,6 +479,9 @@ pub struct GitGpuiView {
     sidebar_pane: Entity<SidebarPaneView>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
+    repo_tabs_bar: Entity<RepoTabsBarView>,
+    action_bar: Entity<ActionBarView>,
+    tooltip_host: Entity<TooltipHost>,
 
     diff_view: DiffViewMode,
     diff_cache_repo_id: Option<RepoId>,
@@ -603,19 +609,11 @@ pub struct GitGpuiView {
     pane_resize: Option<PaneResizeState>,
 
     last_mouse_pos: Point<Pixels>,
-    tooltip_text: Option<SharedString>,
-    tooltip_visible_text: Option<SharedString>,
-    tooltip_candidate_last: Option<SharedString>,
-    tooltip_pending_pos: Option<Point<Pixels>>,
-    tooltip_visible_pos: Option<Point<Pixels>>,
-    tooltip_delay_seq: u64,
 
     toasts: Vec<ToastState>,
     clone_progress_toast_id: Option<u64>,
     clone_progress_last_seq: u64,
     clone_progress_dest: Option<std::path::PathBuf>,
-
-    hovered_repo_tab: Option<RepoId>,
 
     status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
     status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
@@ -649,12 +647,23 @@ impl GitGpuiView {
         s
     }
 
-    fn set_tooltip_text_if_changed(&mut self, next: Option<SharedString>) -> bool {
-        if self.tooltip_text == next {
-            return false;
-        }
-        self.tooltip_text = next;
-        true
+    fn set_tooltip_text_if_changed(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.tooltip_host
+            .update(cx, |tooltip, cx| tooltip.set_tooltip_text_if_changed(next, cx))
+    }
+
+    fn clear_tooltip_if_matches(
+        &mut self,
+        tooltip: &SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let tooltip = tooltip.clone();
+        self.tooltip_host
+            .update(cx, |tooltip_host, cx| tooltip_host.clear_tooltip_if_matches(&tooltip, cx))
     }
 
     fn is_file_preview_active(&self) -> bool {
@@ -841,12 +850,35 @@ impl GitGpuiView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
+        let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
+        let repo_tabs_bar = cx.new(|cx| {
+            RepoTabsBarView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                weak_view.clone(),
+                tooltip_host.downgrade(),
+                cx,
+            )
+        });
+        let action_bar = cx.new(|cx| {
+            ActionBarView::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                weak_view.clone(),
+                tooltip_host.downgrade(),
+                cx,
+            )
+        });
+
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 cx,
             )
         });
@@ -857,6 +889,7 @@ impl GitGpuiView {
                 initial_theme,
                 date_time_format,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 window,
                 cx,
             )
@@ -867,6 +900,7 @@ impl GitGpuiView {
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 window,
                 cx,
             )
@@ -1197,6 +1231,9 @@ impl GitGpuiView {
             sidebar_pane,
             main_pane,
             details_pane,
+            repo_tabs_bar,
+            action_bar,
+            tooltip_host,
             diff_view: DiffViewMode::Split,
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -1318,17 +1355,10 @@ impl GitGpuiView {
                 .max(px(DETAILS_MIN_PX)),
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
-            tooltip_text: None,
-            tooltip_visible_text: None,
-            tooltip_candidate_last: None,
-            tooltip_pending_pos: None,
-            tooltip_visible_pos: None,
-            tooltip_delay_seq: 0,
             toasts: Vec::new(),
             clone_progress_toast_id: None,
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
-            hovered_repo_tab: None,
             status_multi_selection: HashMap::new(),
             status_multi_selection_last_status: HashMap::new(),
             commit_details_message_input,
@@ -1339,7 +1369,6 @@ impl GitGpuiView {
         };
 
         view.set_theme(initial_theme, cx);
-        view.rebuild_diff_cache();
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
@@ -1355,6 +1384,12 @@ impl GitGpuiView {
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.details_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
+        self.repo_tabs_bar
+            .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.action_bar
+            .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.tooltip_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
@@ -1792,13 +1827,14 @@ impl GitGpuiView {
                             format!("{} {}  {heading}", p.old, p.new)
                         }
                     })
-                    .unwrap_or_else(|| line.text.clone())
+                    .unwrap_or_else(|| line.text.as_ref().to_string())
             } else if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
                 && line.text.starts_with("diff --git ")
             {
-                parse_diff_git_header_path(line.text.as_ref()).unwrap_or_else(|| line.text.clone())
+                parse_diff_git_header_path(line.text.as_ref())
+                    .unwrap_or_else(|| line.text.as_ref().to_string())
             } else {
-                line.text.clone()
+                line.text.as_ref().to_string()
             };
             return expand_tabs(display.as_str());
         }
@@ -1847,11 +1883,11 @@ impl GitGpuiView {
                                     format!("{} {}  {heading}", p.old, p.new)
                                 }
                             })
-                            .unwrap_or_else(|| line.text.clone())
+                            .unwrap_or_else(|| line.text.as_ref().to_string())
                     }
                     DiffClickKind::FileHeader => parse_diff_git_header_path(line.text.as_ref())
-                        .unwrap_or_else(|| line.text.clone()),
-                    DiffClickKind::Line => line.text.clone(),
+                        .unwrap_or_else(|| line.text.as_ref().to_string()),
+                    DiffClickKind::Line => line.text.as_ref().to_string(),
                 };
                 expand_tabs(display.as_str())
             }
@@ -2964,7 +3000,7 @@ impl GitGpuiView {
                     K::Context => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Context,
-                            text: format!(" {}", row.old.as_deref().unwrap_or("")),
+                            text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
                             old_line: row.old_line,
                             new_line: row.new_line,
                         });
@@ -2973,7 +3009,7 @@ impl GitGpuiView {
                     K::Add => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", row.new.as_deref().unwrap_or("")),
+                            text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
                             old_line: None,
                             new_line: row.new_line,
                         });
@@ -2982,7 +3018,7 @@ impl GitGpuiView {
                     K::Remove => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", row.old.as_deref().unwrap_or("")),
+                            text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
                             old_line: row.old_line,
                             new_line: None,
                         });
@@ -2995,7 +3031,7 @@ impl GitGpuiView {
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", old),
+                            text: format!("-{}", old).into(),
                             old_line: row.old_line,
                             new_line: None,
                         });
@@ -3003,7 +3039,7 @@ impl GitGpuiView {
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", new),
+                            text: format!("+{}", new).into(),
                             old_line: None,
                             new_line: row.new_line,
                         });
@@ -4252,7 +4288,6 @@ impl Render for GitGpuiView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         self.last_window_size = window.window_bounds().get_bounds().size;
-        self.sync_tooltip_state(cx);
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
@@ -4277,15 +4312,15 @@ impl Render for GitGpuiView {
             .size_full()
             .text_color(theme.colors.text)
             .child(self.title_bar(window, cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(self.repo_tabs_bar(cx))
-                    .child(self.open_repo_panel(cx))
-                    .child(self.action_bar(cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(self.repo_tabs_bar.clone())
+                            .child(self.open_repo_panel(cx))
+                            .child(self.action_bar.clone())
                     .child(
                         div()
                             .flex()
@@ -4364,7 +4399,8 @@ impl Render for GitGpuiView {
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
-            this.maybe_restart_tooltip_delay(cx);
+            this.tooltip_host
+                .update(cx, |tooltip, cx| tooltip.on_mouse_moved(e.position, cx));
 
             let Decorations::Client { tiling } = window.window_decorations() else {
                 if this.hover_resize_edge.is_some() {
@@ -4413,30 +4449,7 @@ impl Render for GitGpuiView {
             root = root.child(self.popover_layer(cx));
         }
 
-        if let Some(text) = self.tooltip_visible_text.clone() {
-            let tooltip_bg = gpui::rgba(0x000000ff);
-            let tooltip_text_color = gpui::rgba(0xffffffff);
-            let anchor = self.tooltip_visible_pos.unwrap_or(self.last_mouse_pos);
-            let pos = point(anchor.x + px(12.0), anchor.y + px(18.0));
-            root = root.child(
-                anchored()
-                    .position(pos)
-                    .anchor(Corner::TopLeft)
-                    .offset(point(px(0.0), px(0.0)))
-                    .child(
-                        div()
-                            .occlude()
-                            .px_2()
-                            .py_1()
-                            .bg(tooltip_bg)
-                            .rounded(px(theme.radii.row))
-                            .shadow_sm()
-                            .text_xs()
-                            .text_color(tooltip_text_color)
-                            .child(text),
-                    ),
-            );
-        }
+        root = root.child(self.tooltip_host.clone());
 
         root
     }

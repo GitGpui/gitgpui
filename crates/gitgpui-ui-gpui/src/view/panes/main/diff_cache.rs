@@ -133,7 +133,7 @@ impl MainPaneView {
                     K::Context => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Context,
-                            text: format!(" {}", row.old.as_deref().unwrap_or("")),
+                            text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
                             old_line: row.old_line,
                             new_line: row.new_line,
                         });
@@ -142,7 +142,7 @@ impl MainPaneView {
                     K::Add => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", row.new.as_deref().unwrap_or("")),
+                            text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
                             old_line: None,
                             new_line: row.new_line,
                         });
@@ -151,7 +151,7 @@ impl MainPaneView {
                     K::Remove => {
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", row.old.as_deref().unwrap_or("")),
+                            text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
                             old_line: row.old_line,
                             new_line: None,
                         });
@@ -164,7 +164,7 @@ impl MainPaneView {
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", old),
+                            text: format!("-{}", old).into(),
                             old_line: row.old_line,
                             new_line: None,
                         });
@@ -172,7 +172,7 @@ impl MainPaneView {
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", new),
+                            text: format!("+{}", new).into(),
                             old_line: None,
                             new_line: row.new_line,
                         });
@@ -371,7 +371,7 @@ impl MainPaneView {
         }
     }
 
-    pub(in super::super::super) fn rebuild_diff_cache(&mut self) {
+    pub(in super::super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         self.diff_cache.clear();
         self.diff_cache_repo_id = None;
         self.diff_cache_rev = 0;
@@ -387,6 +387,7 @@ impl MainPaneView {
         self.diff_visible_is_file_view = false;
         self.diff_scrollbar_markers_cache.clear();
         self.diff_word_highlights.clear();
+        self.diff_word_highlights_inflight = None;
         self.diff_file_stats.clear();
         self.diff_text_segments_cache.clear();
         self.diff_selection_anchor = None;
@@ -444,7 +445,7 @@ impl MainPaneView {
                         continue;
                     };
                     let display = parse_diff_git_header_path(line.text.as_ref())
-                        .unwrap_or_else(|| line.text.clone());
+                        .unwrap_or_else(|| line.text.as_ref().to_string());
                     self.diff_header_display_cache
                         .insert(src_ix, display.into());
                 }
@@ -461,7 +462,7 @@ impl MainPaneView {
                                 format!("{} {}  {heading}", p.old, p.new)
                             }
                         })
-                        .unwrap_or_else(|| line.text.clone());
+                        .unwrap_or_else(|| line.text.as_ref().to_string());
                     self.diff_header_display_cache
                         .insert(src_ix, display.into());
                 }
@@ -469,7 +470,33 @@ impl MainPaneView {
             }
         }
         self.diff_file_stats = compute_diff_file_stats(&self.diff_cache);
-        self.rebuild_diff_word_highlights();
+        self.diff_word_highlights = vec![None; self.diff_cache.len()];
+        self.diff_word_highlights_seq = self.diff_word_highlights_seq.wrapping_add(1);
+        let seq = self.diff_word_highlights_seq;
+        self.diff_word_highlights_inflight = Some(seq);
+
+        let diff_lines = self.diff_cache.clone();
+        let diff_target_for_task = self.diff_cache_target.clone();
+        cx.spawn(async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+            let highlights = compute_diff_word_highlights(&diff_lines);
+
+            let _ = view.update(cx, |this, cx| {
+                if this.diff_word_highlights_inflight != Some(seq) {
+                    return;
+                }
+                if this.diff_cache_repo_id != Some(repo_id)
+                    || this.diff_cache_rev != diff_rev
+                    || this.diff_cache_target != diff_target_for_task
+                {
+                    return;
+                }
+
+                this.diff_word_highlights_inflight = None;
+                this.diff_word_highlights = highlights;
+                cx.notify();
+            });
+        })
+        .detach();
 
         let mut current_file: Option<Arc<str>> = None;
         let mut current_language: Option<rows::DiffSyntaxLanguage> = None;
@@ -512,74 +539,6 @@ impl MainPaneView {
             self.worktree_preview_segments_cache.clear();
             self.worktree_preview_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-        }
-    }
-
-    fn rebuild_diff_word_highlights(&mut self) {
-        self.diff_word_highlights.clear();
-        self.diff_word_highlights
-            .resize_with(self.diff_cache.len(), || None);
-
-        let mut ix = 0usize;
-        while ix < self.diff_cache.len() {
-            let kind = self.diff_cache[ix].kind;
-            if matches!(kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-                ix += 1;
-                continue;
-            }
-
-            if !matches!(kind, gitgpui_core::domain::DiffLineKind::Remove) {
-                ix += 1;
-                continue;
-            }
-
-            let mut removed: Vec<(usize, &str)> = Vec::new();
-            while ix < self.diff_cache.len()
-                && matches!(
-                    self.diff_cache[ix].kind,
-                    gitgpui_core::domain::DiffLineKind::Remove
-                )
-            {
-                let text = diff_content_text(&self.diff_cache[ix]);
-                removed.push((ix, text));
-                ix += 1;
-            }
-
-            let mut added: Vec<(usize, &str)> = Vec::new();
-            while ix < self.diff_cache.len()
-                && matches!(
-                    self.diff_cache[ix].kind,
-                    gitgpui_core::domain::DiffLineKind::Add
-                )
-            {
-                let text = diff_content_text(&self.diff_cache[ix]);
-                added.push((ix, text));
-                ix += 1;
-            }
-
-            let pairs = removed.len().min(added.len());
-            for i in 0..pairs {
-                let (old_ix, old_text) = removed[i];
-                let (new_ix, new_text) = added[i];
-                let (old_ranges, new_ranges) = capped_word_diff_ranges(old_text, new_text);
-                if !old_ranges.is_empty() {
-                    self.diff_word_highlights[old_ix] = Some(old_ranges);
-                }
-                if !new_ranges.is_empty() {
-                    self.diff_word_highlights[new_ix] = Some(new_ranges);
-                }
-            }
-
-            for (old_ix, old_text) in removed.into_iter().skip(pairs) {
-                if !old_text.is_empty() {
-                    self.diff_word_highlights[old_ix] = Some(vec![0..old_text.len()]);
-                }
-            }
-            for (new_ix, new_text) in added.into_iter().skip(pairs) {
-                if !new_text.is_empty() {
-                    self.diff_word_highlights[new_ix] = Some(vec![0..new_text.len()]);
-                }
-            }
         }
     }
 
@@ -737,6 +696,68 @@ impl MainPaneView {
             self.diff_search_recompute_matches_for_current_view();
         }
     }
+}
+
+fn compute_diff_word_highlights(
+    diff: &[AnnotatedDiffLine],
+) -> Vec<Option<Vec<Range<usize>>>> {
+    let mut highlights: Vec<Option<Vec<Range<usize>>>> = vec![None; diff.len()];
+
+    let mut ix = 0usize;
+    while ix < diff.len() {
+        let kind = diff[ix].kind;
+        if matches!(kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+            ix += 1;
+            continue;
+        }
+
+        if !matches!(kind, gitgpui_core::domain::DiffLineKind::Remove) {
+            ix += 1;
+            continue;
+        }
+
+        let mut removed: Vec<(usize, &str)> = Vec::new();
+        while ix < diff.len()
+            && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Remove)
+        {
+            let text = diff_content_text(&diff[ix]);
+            removed.push((ix, text));
+            ix += 1;
+        }
+
+        let mut added: Vec<(usize, &str)> = Vec::new();
+        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Add) {
+            let text = diff_content_text(&diff[ix]);
+            added.push((ix, text));
+            ix += 1;
+        }
+
+        let pairs = removed.len().min(added.len());
+        for i in 0..pairs {
+            let (old_ix, old_text) = removed[i];
+            let (new_ix, new_text) = added[i];
+            let (old_ranges, new_ranges) = capped_word_diff_ranges(old_text, new_text);
+            if !old_ranges.is_empty() {
+                highlights[old_ix] = Some(old_ranges);
+            }
+            if !new_ranges.is_empty() {
+                highlights[new_ix] = Some(new_ranges);
+            }
+        }
+
+        for (old_ix, old_text) in removed.into_iter().skip(pairs) {
+            if !old_text.is_empty() {
+                highlights[old_ix] = Some(vec![0..old_text.len()]);
+            }
+        }
+        for (new_ix, new_text) in added.into_iter().skip(pairs) {
+            if !new_text.is_empty() {
+                highlights[new_ix] = Some(vec![0..new_text.len()]);
+            }
+        }
+    }
+
+    highlights
 }
 
 #[cfg(test)]

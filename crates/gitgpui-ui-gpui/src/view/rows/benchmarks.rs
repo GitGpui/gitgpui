@@ -40,9 +40,8 @@ impl OpenRepoFixture {
         let rows = GitGpuiView::branch_sidebar_rows(&self.repo);
 
         // History graph is the main "long history" transformation.
-        let refs = self.commits.iter().collect::<Vec<_>>();
         let branch_heads = std::collections::HashSet::new();
-        let graph = history_graph::compute_graph(&refs, self.theme, &branch_heads);
+        let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
 
         let mut h = DefaultHasher::new();
         rows.len().hash(&mut h);

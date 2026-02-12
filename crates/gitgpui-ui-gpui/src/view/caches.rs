@@ -1,5 +1,5 @@
 use super::*;
-use gitgpui_core::domain::RemoteBranch;
+use gitgpui_core::domain::{LogPage, RemoteBranch};
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryCache {
@@ -237,7 +237,7 @@ impl MainPaneView {
             Inflight,
             Build {
                 request: HistoryCacheRequest,
-                commits: Vec<Commit>,
+                page: Arc<LogPage>,
                 head_branch: Option<String>,
                 branches: Vec<Branch>,
                 remote_branches: Vec<RemoteBranch>,
@@ -268,7 +268,7 @@ impl MainPaneView {
                 } else {
                     Next::Build {
                         request,
-                        commits: page.commits.clone(),
+                        page: Arc::clone(page),
                         head_branch: match &repo.head_branch {
                             Loadable::Ready(h) => Some(h.clone()),
                             _ => None,
@@ -294,7 +294,7 @@ impl MainPaneView {
             Next::Clear
         };
 
-        let (request_for_task, commits, head_branch, branches, remote_branches, tags) = match next {
+        let (request_for_task, page, head_branch, branches, remote_branches, tags) = match next {
             Next::Clear => {
                 self.history_cache_inflight = None;
                 self.history_cache = None;
@@ -309,14 +309,14 @@ impl MainPaneView {
             }
             Next::Build {
                 request,
-                commits,
+                page,
                 head_branch,
                 branches,
                 remote_branches,
                 tags,
             } => (
                 request,
-                commits,
+                page,
                 head_branch,
                 branches,
                 remote_branches,
@@ -332,12 +332,7 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let visible_indices = (0..commits.len()).collect::<Vec<_>>();
-
-                let visible_commits = visible_indices
-                    .iter()
-                    .filter_map(|ix| commits.get(*ix))
-                    .collect::<Vec<_>>();
+                let visible_indices = (0..page.commits.len()).collect::<Vec<_>>();
 
                 let branch_heads: HashSet<&str> = branches
                     .iter()
@@ -345,7 +340,7 @@ impl MainPaneView {
                     .chain(remote_branches.iter().map(|b| b.target.as_ref()))
                     .collect();
                 let graph_rows: Vec<Arc<history_graph::GraphRow>> =
-                    history_graph::compute_graph(&visible_commits, theme, &branch_heads)
+                    history_graph::compute_graph(&page.commits, theme, &branch_heads)
                         .into_iter()
                         .map(Arc::new)
                         .collect();
@@ -400,7 +395,7 @@ impl MainPaneView {
                 let empty_tags: Arc<[SharedString]> = Vec::new().into();
                 let commit_row_vms = visible_indices
                     .iter()
-                    .filter_map(|ix| commits.get(*ix))
+                    .filter_map(|ix| page.commits.get(*ix))
                     .map(|commit| {
                         let commit_id = commit.id.as_ref();
 

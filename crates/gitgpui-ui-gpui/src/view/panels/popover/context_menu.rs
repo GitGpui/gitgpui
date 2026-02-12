@@ -90,7 +90,6 @@ impl GitGpuiView {
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
                 self.store
@@ -106,7 +105,6 @@ impl GitGpuiView {
             }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::CheckoutRemoteBranch {
                 repo_id,
@@ -118,11 +116,9 @@ impl GitGpuiView {
                     remote,
                     name,
                 });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
@@ -136,7 +132,6 @@ impl GitGpuiView {
                     },
                 });
                 self.store.dispatch(Msg::StagePath { repo_id, path });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::StagePaths { repo_id, paths } => {
                 self.details_pane.update(cx, |pane, cx| {
@@ -145,7 +140,6 @@ impl GitGpuiView {
                 });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 self.store.dispatch(Msg::StagePaths { repo_id, paths });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::UnstagePath { repo_id, path } => {
                 self.store.dispatch(Msg::SelectDiff {
@@ -156,7 +150,6 @@ impl GitGpuiView {
                     },
                 });
                 self.store.dispatch(Msg::UnstagePath { repo_id, path });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::UnstagePaths { repo_id, paths } => {
                 self.details_pane.update(cx, |pane, cx| {
@@ -165,7 +158,6 @@ impl GitGpuiView {
                 });
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
                 let anchor = self
@@ -211,7 +203,6 @@ impl GitGpuiView {
                         side,
                     });
                 }
-                self.rebuild_diff_cache();
             }
             ContextMenuAction::FetchAll { repo_id } => {
                 self.store.dispatch(Msg::FetchAll { repo_id });
@@ -255,10 +246,8 @@ impl GitGpuiView {
                     self.push_toast(zed::ToastKind::Error, "Patch is empty".to_string(), cx);
                 } else if reverse {
                     self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
-                    self.rebuild_diff_cache();
                 } else {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });
-                    self.rebuild_diff_cache();
                 }
             }
             ContextMenuAction::ApplyWorktreePatch {
@@ -274,11 +263,10 @@ impl GitGpuiView {
                         patch,
                         reverse,
                     });
-                    self.rebuild_diff_cache();
                 }
             }
             ContextMenuAction::StageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
                     self.store.dispatch(Msg::StageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -289,7 +277,7 @@ impl GitGpuiView {
                 }
             }
             ContextMenuAction::UnstageHunk { repo_id, src_ix } => {
-                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(src_ix) {
+                if let Some(patch) = self.build_unified_patch_for_hunk_src_ix(repo_id, src_ix) {
                     self.store.dispatch(Msg::UnstageHunk { repo_id, patch });
                 } else {
                     self.push_toast(
@@ -331,7 +319,6 @@ impl GitGpuiView {
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             self.store
                 .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });
-            self.rebuild_diff_cache();
             return;
         }
 
@@ -377,14 +364,19 @@ impl GitGpuiView {
         }
         self.store
             .dispatch(Msg::DiscardWorktreeChangesPath { repo_id, path });
-        self.rebuild_diff_cache();
     }
 
-    pub(super) fn build_unified_patch_for_hunk_src_ix(&self, hunk_src_ix: usize) -> Option<String> {
-        if self.is_file_diff_view_active() {
+    pub(super) fn build_unified_patch_for_hunk_src_ix(
+        &self,
+        repo_id: RepoId,
+        hunk_src_ix: usize,
+    ) -> Option<String> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        let Loadable::Ready(diff) = &repo.diff else {
             return None;
-        }
-        let lines = &self.diff_cache;
+        };
+
+        let lines = diff.lines.as_slice();
         let hunk = lines.get(hunk_src_ix)?;
         if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
             return None;

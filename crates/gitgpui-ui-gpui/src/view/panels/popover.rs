@@ -613,7 +613,6 @@ impl GitGpuiView {
                                 path: Some(path.clone()),
                             },
                         });
-                        this.rebuild_diff_cache();
                         this.popover = None;
                         this.popover_anchor = None;
                         cx.notify();

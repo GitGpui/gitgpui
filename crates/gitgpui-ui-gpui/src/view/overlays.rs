@@ -73,14 +73,10 @@ impl GitGpuiView {
                 })
                 .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                     let text: SharedString = "Dismiss notification".into();
-                    let mut changed = false;
                     if *hovering {
-                        changed |= this.set_tooltip_text_if_changed(Some(text));
-                    } else if this.tooltip_text.as_ref() == Some(&text) {
-                        changed |= this.set_tooltip_text_if_changed(None);
-                    }
-                    if changed {
-                        cx.notify();
+                        this.set_tooltip_text_if_changed(Some(text), cx);
+                    } else {
+                        this.clear_tooltip_if_matches(&text, cx);
                     }
                 }));
 

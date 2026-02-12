@@ -17,7 +17,7 @@ pub(super) fn build_new_file_preview_from_diff(
             file_header_count += 1;
         }
         if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && (line.text.starts_with("new file mode ") || line.text == "--- /dev/null")
+            && (line.text.starts_with("new file mode ") || line.text.eq_ignore_ascii_case("--- /dev/null"))
         {
             is_new_file = true;
         }
@@ -69,7 +69,7 @@ pub(super) fn build_deleted_file_preview_from_diff(
             file_header_count += 1;
         }
         if matches!(line.kind, gitgpui_core::domain::DiffLineKind::Header)
-            && (line.text.starts_with("deleted file mode ") || line.text == "+++ /dev/null")
+            && (line.text.starts_with("deleted file mode ") || line.text.eq_ignore_ascii_case("+++ /dev/null"))
         {
             is_deleted_file = true;
         }
@@ -114,7 +114,7 @@ mod tests {
     fn line(kind: DiffLineKind, text: &str) -> AnnotatedDiffLine {
         AnnotatedDiffLine {
             kind,
-            text: text.to_string(),
+            text: text.into(),
             old_line: None,
             new_line: None,
         }

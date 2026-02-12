@@ -167,15 +167,15 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
                 lines: vec![
                     gitgpui_core::domain::DiffLine {
                         kind: gitgpui_core::domain::DiffLineKind::Header,
-                        text: "diff --git a/foo.rs b/foo.rs".to_string(),
+                        text: "diff --git a/foo.rs b/foo.rs".into(),
                     },
                     gitgpui_core::domain::DiffLine {
                         kind: gitgpui_core::domain::DiffLineKind::Hunk,
-                        text: "@@ -1,1 +1,1 @@".to_string(),
+                        text: "@@ -1,1 +1,1 @@".into(),
                     },
                     gitgpui_core::domain::DiffLine {
                         kind: gitgpui_core::domain::DiffLineKind::Context,
-                        text: " fn main() { let x = 1; }".to_string(),
+                        text: " fn main() { let x = 1; }".into(),
                     },
                 ],
             };
