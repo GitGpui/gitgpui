@@ -255,9 +255,7 @@ pub fn compute_graph(
 
         // Remove ended lanes: lanes whose target is not part of the visible graph, or whose target
         // is this commit without a parent to follow.
-        lanes.retain(|l| {
-            known.contains(l.target) && l.target != commit.id.as_ref()
-        });
+        lanes.retain(|l| known.contains(l.target) && l.target != commit.id.as_ref());
 
         let lanes_next = lanes
             .iter()

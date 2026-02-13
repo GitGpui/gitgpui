@@ -32,18 +32,27 @@ pub(super) fn select_diff(
         Loadable::NotLoaded
     };
 
-    let mut effects = vec![Effect::LoadDiff {
-        repo_id,
-        target: target.clone(),
-    }];
     if supports_file {
         if wants_image {
-            effects.push(Effect::LoadDiffFileImage { repo_id, target });
+            vec![
+                Effect::LoadDiffFileImage {
+                    repo_id,
+                    target: target.clone(),
+                },
+                Effect::LoadDiff { repo_id, target },
+            ]
         } else {
-            effects.push(Effect::LoadDiffFile { repo_id, target });
+            vec![
+                Effect::LoadDiffFile {
+                    repo_id,
+                    target: target.clone(),
+                },
+                Effect::LoadDiff { repo_id, target },
+            ]
         }
+    } else {
+        vec![Effect::LoadDiff { repo_id, target }]
     }
-    effects
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

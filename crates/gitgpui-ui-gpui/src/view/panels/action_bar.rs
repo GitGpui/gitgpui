@@ -269,7 +269,12 @@ impl Render for ActionBarView {
             .rounded(px(theme.radii.row))
             .hover(move |s| s.bg(hover_bg))
             .active(move |s| s.bg(active_bg))
-            .child(div().text_sm().font_weight(FontWeight::BOLD).child("Branch"))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .child("Branch"),
+            )
             .child(
                 div()
                     .text_sm()

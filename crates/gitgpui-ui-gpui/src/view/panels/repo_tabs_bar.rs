@@ -41,7 +41,9 @@ impl RepoTabsBarView {
 
             this.state = next;
 
-            if this.hovered_repo_tab.is_some_and(|id| !this.state.repos.iter().any(|r| r.id == id))
+            if this
+                .hovered_repo_tab
+                .is_some_and(|id| !this.state.repos.iter().any(|r| r.id == id))
             {
                 this.hovered_repo_tab = None;
             }

@@ -6,9 +6,7 @@ impl GitGpuiView {
         next: Arc<AppState>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let prev_error = self
-            .active_repo()
-            .and_then(|repo| repo.last_error.clone());
+        let prev_error = self.active_repo().and_then(|repo| repo.last_error.clone());
         let next_error = next
             .active_repo
             .and_then(|repo_id| next.repos.iter().find(|repo| repo.id == repo_id))
@@ -69,8 +67,9 @@ impl GitGpuiView {
             }
         }
 
-        self.toast_host
-            .update(cx, |host, cx| host.sync_clone_progress(next.clone.as_ref(), cx));
+        self.toast_host.update(cx, |host, cx| {
+            host.sync_clone_progress(next.clone.as_ref(), cx)
+        });
 
         self.state = next;
 

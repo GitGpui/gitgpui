@@ -282,13 +282,11 @@ fn status_row(
             this.focus_diff_panel(window, cx);
 
             if is_conflicted {
-                let selection = this.status_selected_paths_for_area(repo_id, area).to_vec();
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
                         path: (*path_for_stage).clone(),
-                        selection,
                     },
                     e.position(),
                     window,
@@ -358,13 +356,11 @@ fn status_row(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                let selection = this.status_selected_paths_for_area(repo_id, area).to_vec();
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
                         path: (*path_for_menu).clone(),
-                        selection,
                     },
                     e.position,
                     window,

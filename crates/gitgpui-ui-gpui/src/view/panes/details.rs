@@ -47,7 +47,10 @@ impl DetailsPaneView {
             }
         }
 
-        fn hash_loadable_kind<T>(value: &Loadable<T>, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        fn hash_loadable_kind<T>(
+            value: &Loadable<T>,
+            hasher: &mut std::collections::hash_map::DefaultHasher,
+        ) {
             match value {
                 Loadable::NotLoaded => 0u8.hash(hasher),
                 Loadable::Loading => 1u8.hash(hasher),

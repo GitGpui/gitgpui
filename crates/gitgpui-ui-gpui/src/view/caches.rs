@@ -314,14 +314,7 @@ impl MainPaneView {
                 branches,
                 remote_branches,
                 tags,
-            } => (
-                request,
-                page,
-                head_branch,
-                branches,
-                remote_branches,
-                tags,
-            ),
+            } => (request, page, head_branch, branches, remote_branches, tags),
         };
 
         self.history_cache_seq = self.history_cache_seq.wrapping_add(1);

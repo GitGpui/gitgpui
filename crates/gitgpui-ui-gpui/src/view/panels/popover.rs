@@ -649,7 +649,11 @@ impl PopoverHost {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(super) fn set_date_time_format(&mut self, next: DateTimeFormat, cx: &mut gpui::Context<Self>) {
+    pub(super) fn set_date_time_format(
+        &mut self,
+        next: DateTimeFormat,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.date_time_format == next {
             return;
         }
@@ -1770,13 +1774,11 @@ impl PopoverHost {
                 repo_id,
                 area,
                 path,
-                selection,
             } => self.context_menu_view(
                 PopoverKind::StatusFileMenu {
                     repo_id,
                     area,
                     path,
-                    selection,
                 },
                 cx,
             ),
@@ -2134,7 +2136,6 @@ mod tests {
                                 repo_id,
                                 area: DiffArea::Unstaged,
                                 path: a.clone(),
-                                selection: vec![a.clone(), b.clone()],
                             },
                             cx,
                         )
@@ -2150,14 +2151,14 @@ mod tests {
             });
 
             match stage_action {
-                Some(ContextMenuAction::StagePaths {
+                Some(ContextMenuAction::StageSelectionOrPath {
                     repo_id: rid,
-                    paths,
+                    area,
+                    path,
                 }) => {
                     assert_eq!(rid, repo_id);
-                    assert_eq!(paths.len(), 2);
-                    assert!(paths.contains(&a));
-                    assert!(paths.contains(&b));
+                    assert_eq!(area, DiffArea::Unstaged);
+                    assert_eq!(path, a);
                 }
                 _ => panic!("expected Stage (2) to stage selected paths"),
             }
@@ -2236,7 +2237,6 @@ mod tests {
                                 repo_id,
                                 area: DiffArea::Staged,
                                 path: a.clone(),
-                                selection: vec![a.clone(), b.clone()],
                             },
                             cx,
                         )
@@ -2252,14 +2252,14 @@ mod tests {
             });
 
             match unstage_action {
-                Some(ContextMenuAction::UnstagePaths {
+                Some(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id: rid,
-                    paths,
+                    area,
+                    path,
                 }) => {
                     assert_eq!(rid, repo_id);
-                    assert_eq!(paths.len(), 2);
-                    assert!(paths.contains(&a));
-                    assert!(paths.contains(&b));
+                    assert_eq!(area, DiffArea::Staged);
+                    assert_eq!(path, a);
                 }
                 _ => panic!("expected Unstage (2) to unstage selected paths"),
             }
@@ -2319,7 +2319,6 @@ mod tests {
                                 repo_id,
                                 area: DiffArea::Unstaged,
                                 path: path.clone(),
-                                selection: Vec::new(),
                             },
                             cx,
                         )
@@ -2333,11 +2332,12 @@ mod tests {
                 {
                     matches!(
                         action,
-                        ContextMenuAction::CheckoutConflictSide {
+                        ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                             repo_id: rid,
-                            paths,
+                            area: DiffArea::Unstaged,
+                            path: p,
                             side: gitgpui_core::services::ConflictSide::Ours
-                        } if rid.0 == repo_id.0 && paths.first() == Some(&path)
+                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,
@@ -2348,11 +2348,12 @@ mod tests {
                 {
                     matches!(
                         action,
-                        ContextMenuAction::CheckoutConflictSide {
+                        ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                             repo_id: rid,
-                            paths,
+                            area: DiffArea::Unstaged,
+                            path: p,
                             side: gitgpui_core::services::ConflictSide::Theirs
-                        } if rid.0 == repo_id.0 && paths.first() == Some(&path)
+                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,
@@ -2430,7 +2431,6 @@ mod tests {
                         repo_id,
                         area: DiffArea::Unstaged,
                         path: path.clone(),
-                        selection: Vec::new(),
                     },
                     anchor,
                     window,

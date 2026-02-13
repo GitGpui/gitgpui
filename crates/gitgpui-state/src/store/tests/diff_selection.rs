@@ -35,8 +35,8 @@ fn select_diff_sets_loading_and_emits_effect() {
     assert!(matches!(
         effects.as_slice(),
         [
-            Effect::LoadDiff { repo_id: RepoId(1), target: a },
-            Effect::LoadDiffFile { repo_id: RepoId(1), target: b },
+            Effect::LoadDiffFile { repo_id: RepoId(1), target: a },
+            Effect::LoadDiff { repo_id: RepoId(1), target: b },
         ] if a == &target && b == &target
     ));
 }
@@ -77,8 +77,8 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     assert!(matches!(
         effects.as_slice(),
         [
-            Effect::LoadDiff { repo_id: RepoId(1), target: a },
-            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: b },
+            Effect::LoadDiffFileImage { repo_id: RepoId(1), target: a },
+            Effect::LoadDiff { repo_id: RepoId(1), target: b },
         ] if a == &target && b == &target
     ));
 }

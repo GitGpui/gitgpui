@@ -1,12 +1,29 @@
 use super::*;
+use std::collections::HashSet;
 
 pub(super) fn model(
     this: &PopoverHost,
-    selection: &[std::path::PathBuf],
     repo_id: RepoId,
     area: DiffArea,
     path: &std::path::PathBuf,
+    cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
+    let (use_selection, selected_count) = {
+        let pane = this.details_pane.read(cx);
+        let selection = pane
+            .status_multi_selection
+            .get(&repo_id)
+            .map(|sel| match area {
+                DiffArea::Unstaged => sel.unstaged.as_slice(),
+                DiffArea::Staged => sel.staged.as_slice(),
+            })
+            .unwrap_or(&[]);
+
+        let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);
+        let selected_count = if use_selection { selection.len() } else { 1 };
+        (use_selection, selected_count)
+    };
+
     let is_conflicted = this
         .state
         .repos
@@ -22,34 +39,68 @@ pub(super) fn model(
         })
         .unwrap_or(false);
 
-    let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);
-    let selected_paths = if use_selection {
-        selection.to_vec()
-    } else {
-        vec![path.clone()]
-    };
-
     let can_discard_worktree_changes = this
         .state
         .repos
         .iter()
         .find(|r| r.id == repo_id)
         .and_then(|r| match &r.status {
-            Loadable::Ready(status) => Some(selected_paths.iter().all(|p| {
-                let path = p.as_path();
-                if status.unstaged.iter().chain(status.staged.iter()).any(|s| {
-                    s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted
-                }) {
-                    return false;
+            Loadable::Ready(status) => {
+                let selected = {
+                    let pane = this.details_pane.read(cx);
+                    let selection = pane
+                        .status_multi_selection
+                        .get(&repo_id)
+                        .map(|sel| match area {
+                            DiffArea::Unstaged => sel.unstaged.as_slice(),
+                            DiffArea::Staged => sel.staged.as_slice(),
+                        })
+                        .unwrap_or(&[]);
+
+                    if use_selection {
+                        selection
+                    } else {
+                        std::slice::from_ref(path)
+                    }
+                };
+
+                if selected.is_empty() {
+                    return Some(false);
                 }
 
-                if status.unstaged.iter().any(|s| s.path == path) {
-                    return true;
+                let mut conflicted: HashSet<&std::path::Path> = HashSet::new();
+                for entry in status.unstaged.iter().chain(status.staged.iter()) {
+                    if entry.kind == gitgpui_core::domain::FileStatusKind::Conflicted {
+                        conflicted.insert(entry.path.as_path());
+                    }
                 }
-                status.staged.iter().any(|s| {
-                    s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Added
-                })
-            })),
+
+                if area == DiffArea::Unstaged {
+                    if conflicted.is_empty() {
+                        return Some(true);
+                    }
+                    return Some(selected.iter().all(|p| !conflicted.contains(p.as_path())));
+                }
+
+                let mut unstaged_paths: HashSet<&std::path::Path> =
+                    HashSet::with_capacity(status.unstaged.len());
+                for entry in &status.unstaged {
+                    unstaged_paths.insert(entry.path.as_path());
+                }
+
+                let mut staged_added_paths: HashSet<&std::path::Path> = HashSet::new();
+                for entry in &status.staged {
+                    if entry.kind == gitgpui_core::domain::FileStatusKind::Added {
+                        staged_added_paths.insert(entry.path.as_path());
+                    }
+                }
+
+                Some(selected.iter().all(|p| {
+                    let p = p.as_path();
+                    !conflicted.contains(p)
+                        && (unstaged_paths.contains(p) || staged_added_paths.contains(p))
+                }))
+            }
             _ => None,
         })
         .unwrap_or(false);
@@ -104,7 +155,7 @@ pub(super) fn model(
 
     if is_conflicted {
         items.push(ContextMenuItem::Separator);
-        let n = selected_paths.len();
+        let n = selected_count;
         items.push(ContextMenuItem::Entry {
             label: if use_selection {
                 format!("Resolve selected using ours ({n})").into()
@@ -114,9 +165,10 @@ pub(super) fn model(
             icon: Some("⇤".into()),
             shortcut: Some("O".into()),
             disabled: false,
-            action: ContextMenuAction::CheckoutConflictSide {
+            action: ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
-                paths: selected_paths.clone(),
+                area,
+                path: path.clone(),
                 side: gitgpui_core::services::ConflictSide::Ours,
             },
         });
@@ -129,22 +181,15 @@ pub(super) fn model(
             icon: Some("⇥".into()),
             shortcut: Some("T".into()),
             disabled: false,
-            action: ContextMenuAction::CheckoutConflictSide {
+            action: ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
-                paths: selected_paths.clone(),
+                area,
+                path: path.clone(),
                 side: gitgpui_core::services::ConflictSide::Theirs,
             },
         });
 
-        let can_manual = !use_selection || selected_paths.len() == 1;
-        let manual_path = if use_selection {
-            selected_paths
-                .first()
-                .cloned()
-                .unwrap_or_else(|| path.clone())
-        } else {
-            path.clone()
-        };
+        let can_manual = !use_selection;
         items.push(ContextMenuItem::Entry {
             label: if can_manual {
                 "Resolve manually…".into()
@@ -157,7 +202,7 @@ pub(super) fn model(
             action: ContextMenuAction::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {
-                    path: manual_path,
+                    path: path.clone(),
                     area: DiffArea::Unstaged,
                 },
             },
@@ -166,44 +211,32 @@ pub(super) fn model(
         match area {
             DiffArea::Unstaged => items.push(ContextMenuItem::Entry {
                 label: if use_selection {
-                    format!("Stage ({})", selected_paths.len()).into()
+                    format!("Stage ({})", selected_count).into()
                 } else {
                     "Stage".into()
                 },
                 icon: Some("+".into()),
                 shortcut: Some("S".into()),
                 disabled: false,
-                action: if use_selection {
-                    ContextMenuAction::StagePaths {
-                        repo_id,
-                        paths: selected_paths.clone(),
-                    }
-                } else {
-                    ContextMenuAction::StagePath {
-                        repo_id,
-                        path: path.clone(),
-                    }
+                action: ContextMenuAction::StageSelectionOrPath {
+                    repo_id,
+                    area,
+                    path: path.clone(),
                 },
             }),
             DiffArea::Staged => items.push(ContextMenuItem::Entry {
                 label: if use_selection {
-                    format!("Unstage ({})", selected_paths.len()).into()
+                    format!("Unstage ({})", selected_count).into()
                 } else {
                     "Unstage".into()
                 },
                 icon: Some("−".into()),
                 shortcut: Some("U".into()),
                 disabled: false,
-                action: if use_selection {
-                    ContextMenuAction::UnstagePaths {
-                        repo_id,
-                        paths: selected_paths.clone(),
-                    }
-                } else {
-                    ContextMenuAction::UnstagePath {
-                        repo_id,
-                        path: path.clone(),
-                    }
+                action: ContextMenuAction::UnstageSelectionOrPath {
+                    repo_id,
+                    area,
+                    path: path.clone(),
                 },
             }),
         };
@@ -211,23 +244,17 @@ pub(super) fn model(
 
     items.push(ContextMenuItem::Entry {
         label: if use_selection {
-            format!("Discard ({})", selected_paths.len()).into()
+            format!("Discard ({})", selected_count).into()
         } else {
             "Discard changes".into()
         },
         icon: Some("↺".into()),
         shortcut: Some("D".into()),
         disabled: !can_discard_worktree_changes,
-        action: if use_selection {
-            ContextMenuAction::DiscardWorktreeChangesPaths {
-                repo_id,
-                paths: selected_paths.clone(),
-            }
-        } else {
-            ContextMenuAction::DiscardWorktreeChangesPath {
-                repo_id,
-                path: path.clone(),
-            }
+        action: ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+            repo_id,
+            area,
+            path: path.clone(),
         },
     });
 

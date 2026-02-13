@@ -122,7 +122,10 @@ pub(in super::super) struct MainPaneView {
 
 impl MainPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
-        fn hash_diff_target(target: &DiffTarget, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        fn hash_diff_target(
+            target: &DiffTarget,
+            hasher: &mut std::collections::hash_map::DefaultHasher,
+        ) {
             match target {
                 DiffTarget::WorkingTree { path, area } => {
                     0u8.hash(hasher);
@@ -140,7 +143,10 @@ impl MainPaneView {
             }
         }
 
-        fn hash_loadable_kind<T>(value: &Loadable<T>, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        fn hash_loadable_kind<T>(
+            value: &Loadable<T>,
+            hasher: &mut std::collections::hash_map::DefaultHasher,
+        ) {
             match value {
                 Loadable::NotLoaded => 0u8.hash(hasher),
                 Loadable::Loading => 1u8.hash(hasher),

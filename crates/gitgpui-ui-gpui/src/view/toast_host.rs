@@ -105,7 +105,12 @@ impl ToastHost {
         id
     }
 
-    pub(super) fn update_toast_text(&mut self, id: u64, message: String, cx: &mut gpui::Context<Self>) {
+    pub(super) fn update_toast_text(
+        &mut self,
+        id: u64,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
             return;
         };
@@ -315,4 +320,3 @@ impl Render for ToastHost {
             .into_any_element()
     }
 }
-

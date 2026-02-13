@@ -111,23 +111,10 @@ impl MainPaneView {
                 vec![None; rows.len()];
             let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
                 vec![None; rows.len()];
-            for (row_ix, row) in rows.iter().enumerate() {
-                if matches!(row.kind, gitgpui_core::file_diff::FileDiffRowKind::Modify) {
-                    let old = row.old.as_deref().unwrap_or("");
-                    let new = row.new.as_deref().unwrap_or("");
-                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                    if !old_ranges.is_empty() {
-                        split_word_highlights_old[row_ix] = Some(old_ranges);
-                    }
-                    if !new_ranges.is_empty() {
-                        split_word_highlights_new[row_ix] = Some(new_ranges);
-                    }
-                }
-            }
 
             let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::new();
             let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> = Vec::new();
-            for row in &rows {
+            for (row_ix, row) in rows.iter().enumerate() {
                 use gitgpui_core::file_diff::FileDiffRowKind as K;
                 match row.kind {
                     K::Context => {
@@ -161,6 +148,11 @@ impl MainPaneView {
                         let old = row.old.as_deref().unwrap_or("");
                         let new = row.new.as_deref().unwrap_or("");
                         let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                        let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
+                        let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
+
+                        split_word_highlights_old[row_ix] = old_ranges_opt.clone();
+                        split_word_highlights_new[row_ix] = new_ranges_opt.clone();
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Remove,
@@ -168,7 +160,7 @@ impl MainPaneView {
                             old_line: row.old_line,
                             new_line: None,
                         });
-                        inline_word_highlights.push((!old_ranges.is_empty()).then_some(old_ranges));
+                        inline_word_highlights.push(old_ranges_opt);
 
                         inline_rows.push(AnnotatedDiffLine {
                             kind: gitgpui_core::domain::DiffLineKind::Add,
@@ -176,7 +168,7 @@ impl MainPaneView {
                             old_line: None,
                             new_line: row.new_line,
                         });
-                        inline_word_highlights.push((!new_ranges.is_empty()).then_some(new_ranges));
+                        inline_word_highlights.push(new_ranges_opt);
                     }
                 }
             }
@@ -477,25 +469,27 @@ impl MainPaneView {
 
         let diff_lines = self.diff_cache.clone();
         let diff_target_for_task = self.diff_cache_target.clone();
-        cx.spawn(async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-            let highlights = compute_diff_word_highlights(&diff_lines);
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let highlights = compute_diff_word_highlights(&diff_lines);
 
-            let _ = view.update(cx, |this, cx| {
-                if this.diff_word_highlights_inflight != Some(seq) {
-                    return;
-                }
-                if this.diff_cache_repo_id != Some(repo_id)
-                    || this.diff_cache_rev != diff_rev
-                    || this.diff_cache_target != diff_target_for_task
-                {
-                    return;
-                }
+                let _ = view.update(cx, |this, cx| {
+                    if this.diff_word_highlights_inflight != Some(seq) {
+                        return;
+                    }
+                    if this.diff_cache_repo_id != Some(repo_id)
+                        || this.diff_cache_rev != diff_rev
+                        || this.diff_cache_target != diff_target_for_task
+                    {
+                        return;
+                    }
 
-                this.diff_word_highlights_inflight = None;
-                this.diff_word_highlights = highlights;
-                cx.notify();
-            });
-        })
+                    this.diff_word_highlights_inflight = None;
+                    this.diff_word_highlights = highlights;
+                    cx.notify();
+                });
+            },
+        )
         .detach();
 
         let mut current_file: Option<Arc<str>> = None;
@@ -698,9 +692,7 @@ impl MainPaneView {
     }
 }
 
-fn compute_diff_word_highlights(
-    diff: &[AnnotatedDiffLine],
-) -> Vec<Option<Vec<Range<usize>>>> {
+fn compute_diff_word_highlights(diff: &[AnnotatedDiffLine]) -> Vec<Option<Vec<Range<usize>>>> {
     let mut highlights: Vec<Option<Vec<Range<usize>>>> = vec![None; diff.len()];
 
     let mut ix = 0usize;
@@ -717,8 +709,7 @@ fn compute_diff_word_highlights(
         }
 
         let mut removed: Vec<(usize, &str)> = Vec::new();
-        while ix < diff.len()
-            && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Remove)
+        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Remove)
         {
             let text = diff_content_text(&diff[ix]);
             removed.push((ix, text));

@@ -47,9 +47,9 @@ mod patch_split;
 mod poller;
 pub(crate) mod rows;
 mod state_apply;
+mod toast_host;
 mod tooltip;
 mod tooltip_host;
-mod toast_host;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -58,7 +58,9 @@ use caches::{
     BranchSidebarCache, HistoryCache, HistoryCacheRequest, HistoryStashIdsCache,
     HistoryWorktreeSummaryCache,
 };
-use chrome::{CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge};
+use chrome::{
+    CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
+};
 use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
 use date_time::{DateTimeFormat, format_datetime_utc};
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
@@ -75,8 +77,8 @@ use diff_utils::{
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
     scrollbar_markers_from_flags,
 };
-use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
+use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
@@ -417,7 +419,6 @@ enum PopoverKind {
         repo_id: RepoId,
         area: DiffArea,
         path: std::path::PathBuf,
-        selection: Vec<std::path::PathBuf>,
     },
     BranchMenu {
         repo_id: RepoId,
@@ -622,8 +623,9 @@ impl GitGpuiView {
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        self.tooltip_host
-            .update(cx, |tooltip, cx| tooltip.set_tooltip_text_if_changed(next, cx))
+        self.tooltip_host.update(cx, |tooltip, cx| {
+            tooltip.set_tooltip_text_if_changed(next, cx)
+        })
     }
 
     fn clear_tooltip_if_matches(
@@ -632,12 +634,14 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         let tooltip = tooltip.clone();
-        self.tooltip_host
-            .update(cx, |tooltip_host, cx| tooltip_host.clear_tooltip_if_matches(&tooltip, cx))
+        self.tooltip_host.update(cx, |tooltip_host, cx| {
+            tooltip_host.clear_tooltip_if_matches(&tooltip, cx)
+        })
     }
 
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
-        self.popover_host.update(cx, |host, cx| host.close_popover(cx));
+        self.popover_host
+            .update(cx, |host, cx| host.close_popover(cx));
     }
 
     pub(in crate::view) fn open_popover_at(
@@ -647,8 +651,9 @@ impl GitGpuiView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.popover_host
-            .update(cx, |host, cx| host.open_popover_at(kind, anchor, window, cx));
+        self.popover_host.update(cx, |host, cx| {
+            host.open_popover_at(kind, anchor, window, cx)
+        });
     }
 
     fn is_file_preview_active(&self) -> bool {
@@ -3770,15 +3775,15 @@ impl Render for GitGpuiView {
             .size_full()
             .text_color(theme.colors.text)
             .child(self.title_bar.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(self.repo_tabs_bar.clone())
-                            .child(self.open_repo_panel(cx))
-                            .child(self.action_bar.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(self.repo_tabs_bar.clone())
+                    .child(self.open_repo_panel(cx))
+                    .child(self.action_bar.clone())
                     .child(
                         div()
                             .flex()

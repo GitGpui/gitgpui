@@ -218,4 +218,3 @@ impl Render for TooltipHost {
         layer
     }
 }
-

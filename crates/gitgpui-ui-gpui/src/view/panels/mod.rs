@@ -45,6 +45,11 @@ enum ContextMenuAction {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
     },
+    StageSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     UnstagePath {
         repo_id: RepoId,
         path: std::path::PathBuf,
@@ -52,6 +57,11 @@ enum ContextMenuAction {
     UnstagePaths {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
+    },
+    UnstageSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
     },
     DiscardWorktreeChangesPath {
         repo_id: RepoId,
@@ -61,9 +71,20 @@ enum ContextMenuAction {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
     },
+    DiscardWorktreeChangesSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     CheckoutConflictSide {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
+        side: gitgpui_core::services::ConflictSide,
+    },
+    CheckoutConflictSideSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
         side: gitgpui_core::services::ConflictSide,
     },
     FetchAll {
@@ -187,16 +208,16 @@ impl Render for HistoryColResizeDragGhost {
     }
 }
 
-mod bars;
 mod action_bar;
+mod bars;
 mod layout;
 mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(in super) use action_bar::ActionBarView;
-pub(in super) use popover::PopoverHost;
-pub(in super) use repo_tabs_bar::RepoTabsBarView;
+pub(super) use action_bar::ActionBarView;
+pub(super) use popover::PopoverHost;
+pub(super) use repo_tabs_bar::RepoTabsBarView;
 
 #[cfg(test)]
 mod tests;

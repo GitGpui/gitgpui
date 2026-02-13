@@ -15,24 +15,24 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     } else {
         for (visible_ix, &ix) in pane.diff_visible_indices.iter().enumerate() {
             let (src_ix, click_kind) = match pane.diff_view {
-            DiffViewMode::Inline => {
-                let click_kind = pane
-                    .diff_click_kinds
-                    .get(ix)
-                    .copied()
-                    .unwrap_or(DiffClickKind::Line);
-                (ix, click_kind)
-            }
-            DiffViewMode::Split => {
-                let Some(row) = pane.diff_split_cache.get(ix) else {
-                    continue;
-                };
-                let PatchSplitRow::Raw { src_ix, click_kind } = row else {
-                    continue;
-                };
-                (*src_ix, *click_kind)
-            }
-        };
+                DiffViewMode::Inline => {
+                    let click_kind = pane
+                        .diff_click_kinds
+                        .get(ix)
+                        .copied()
+                        .unwrap_or(DiffClickKind::Line);
+                    (ix, click_kind)
+                }
+                DiffViewMode::Split => {
+                    let Some(row) = pane.diff_split_cache.get(ix) else {
+                        continue;
+                    };
+                    let PatchSplitRow::Raw { src_ix, click_kind } = row else {
+                        continue;
+                    };
+                    (*src_ix, *click_kind)
+                }
+            };
 
             let Some(line) = pane.diff_cache.get(src_ix) else {
                 continue;
@@ -46,17 +46,18 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 continue;
             }
 
-            let label = if let Some(parsed) = parse_unified_hunk_header_for_display(line.text.as_ref()) {
-                let file = current_file.as_deref().unwrap_or("<file>").to_string();
-                let heading = parsed.heading.unwrap_or_default();
-                if heading.is_empty() {
-                    format!("{file}: {} {}", parsed.old, parsed.new)
+            let label =
+                if let Some(parsed) = parse_unified_hunk_header_for_display(line.text.as_ref()) {
+                    let file = current_file.as_deref().unwrap_or("<file>").to_string();
+                    let heading = parsed.heading.unwrap_or_default();
+                    if heading.is_empty() {
+                        format!("{file}: {} {}", parsed.old, parsed.new)
+                    } else {
+                        format!("{file}: {} {} {heading}", parsed.old, parsed.new)
+                    }
                 } else {
-                    format!("{file}: {} {} {heading}", parsed.old, parsed.new)
-                }
-            } else {
-                current_file.as_deref().unwrap_or("<file>").to_string()
-            };
+                    current_file.as_deref().unwrap_or("<file>").to_string()
+                };
 
             items.push(label.into());
             targets.push(visible_ix);
