@@ -17,6 +17,12 @@ pub(super) fn normalize_repo_path(path: std::path::PathBuf) -> std::path::PathBu
     util::normalize_repo_path(path)
 }
 
+fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
+    }
+}
+
 #[cfg(test)]
 pub(super) fn push_diagnostic(
     repo_state: &mut crate::model::RepoState,
@@ -75,27 +81,41 @@ pub(super) fn reduce(
             reverse,
         } => diff_selection::apply_worktree_patch(repo_id, patch, reverse),
         Msg::CheckoutBranch { repo_id, name } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::checkout_branch(repo_id, name)
         }
         Msg::CheckoutRemoteBranch {
             repo_id,
             remote,
             name,
-        } => actions_emit_effects::checkout_remote_branch(repo_id, remote, name),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::checkout_remote_branch(repo_id, remote, name)
+        }
         Msg::CheckoutCommit { repo_id, commit_id } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::checkout_commit(repo_id, commit_id)
         }
         Msg::CherryPickCommit { repo_id, commit_id } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id)
         }
         Msg::RevertCommit { repo_id, commit_id } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
         }
-        Msg::CreateBranch { repo_id, name } => actions_emit_effects::create_branch(repo_id, name),
+        Msg::CreateBranch { repo_id, name } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::create_branch(repo_id, name)
+        }
         Msg::CreateBranchAndCheckout { repo_id, name } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::create_branch_and_checkout(repo_id, name)
         }
-        Msg::DeleteBranch { repo_id, name } => actions_emit_effects::delete_branch(repo_id, name),
+        Msg::DeleteBranch { repo_id, name } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::delete_branch(repo_id, name)
+        }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
         Msg::CloneRepoProgress { dest, line } => {
             repo_management::clone_repo_progress(state, dest, line)
@@ -124,14 +144,28 @@ pub(super) fn reduce(
         Msg::RemoveSubmodule { repo_id, path } => {
             actions_emit_effects::remove_submodule(repo_id, path)
         }
-        Msg::StagePath { repo_id, path } => actions_emit_effects::stage_path(repo_id, path),
-        Msg::StagePaths { repo_id, paths } => actions_emit_effects::stage_paths(repo_id, paths),
-        Msg::UnstagePath { repo_id, path } => actions_emit_effects::unstage_path(repo_id, path),
-        Msg::UnstagePaths { repo_id, paths } => actions_emit_effects::unstage_paths(repo_id, paths),
+        Msg::StagePath { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::stage_path(repo_id, path)
+        }
+        Msg::StagePaths { repo_id, paths } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::stage_paths(repo_id, paths)
+        }
+        Msg::UnstagePath { repo_id, path } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::unstage_path(repo_id, path)
+        }
+        Msg::UnstagePaths { repo_id, paths } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::unstage_paths(repo_id, paths)
+        }
         Msg::DiscardWorktreeChangesPath { repo_id, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::discard_worktree_changes_path(repo_id, path)
         }
         Msg::DiscardWorktreeChangesPaths { repo_id, paths } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::discard_worktree_changes_paths(repo_id, paths)
         }
         Msg::SaveWorktreeFile {
@@ -192,10 +226,22 @@ pub(super) fn reduce(
             repo_id,
             message,
             include_untracked,
-        } => actions_emit_effects::stash(repo_id, message, include_untracked),
-        Msg::ApplyStash { repo_id, index } => actions_emit_effects::apply_stash(repo_id, index),
-        Msg::DropStash { repo_id, index } => actions_emit_effects::drop_stash(repo_id, index),
-        Msg::PopStash { repo_id, index } => actions_emit_effects::pop_stash(repo_id, index),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::stash(repo_id, message, include_untracked)
+        }
+        Msg::ApplyStash { repo_id, index } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::apply_stash(repo_id, index)
+        }
+        Msg::DropStash { repo_id, index } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::drop_stash(repo_id, index)
+        }
+        Msg::PopStash { repo_id, index } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::pop_stash(repo_id, index)
+        }
         Msg::RepoOpenedOk {
             repo_id,
             spec,

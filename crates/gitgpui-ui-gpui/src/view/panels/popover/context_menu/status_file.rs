@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashSet;
 
 pub(super) fn model(
     this: &PopoverHost,
@@ -24,86 +23,52 @@ pub(super) fn model(
         (use_selection, selected_count)
     };
 
-    let is_conflicted = this
+    let (is_conflicted, has_unstaged_for_path, is_staged_added) = this
         .state
         .repos
         .iter()
         .find(|r| r.id == repo_id)
         .and_then(|r| match &r.status {
             Loadable::Ready(status) => {
-                Some(status.unstaged.iter().chain(status.staged.iter()).any(|s| {
-                    &s.path == path && s.kind == gitgpui_core::domain::FileStatusKind::Conflicted
-                }))
+                let unstaged_kind = status
+                    .unstaged
+                    .iter()
+                    .find(|s| &s.path == path)
+                    .map(|s| s.kind);
+                let staged_kind = status
+                    .staged
+                    .iter()
+                    .find(|s| &s.path == path)
+                    .map(|s| s.kind);
+
+                Some((
+                    matches!(
+                        unstaged_kind,
+                        Some(gitgpui_core::domain::FileStatusKind::Conflicted)
+                    ) || matches!(
+                        staged_kind,
+                        Some(gitgpui_core::domain::FileStatusKind::Conflicted)
+                    ),
+                    unstaged_kind.is_some(),
+                    matches!(
+                        staged_kind,
+                        Some(gitgpui_core::domain::FileStatusKind::Added)
+                    ),
+                ))
             }
             _ => None,
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false, false));
 
-    let can_discard_worktree_changes = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| match &r.status {
-            Loadable::Ready(status) => {
-                let selected = {
-                    let pane = this.details_pane.read(cx);
-                    let selection = pane
-                        .status_multi_selection
-                        .get(&repo_id)
-                        .map(|sel| match area {
-                            DiffArea::Unstaged => sel.unstaged.as_slice(),
-                            DiffArea::Staged => sel.staged.as_slice(),
-                        })
-                        .unwrap_or(&[]);
-
-                    if use_selection {
-                        selection
-                    } else {
-                        std::slice::from_ref(path)
-                    }
-                };
-
-                if selected.is_empty() {
-                    return Some(false);
-                }
-
-                let mut conflicted: HashSet<&std::path::Path> = HashSet::new();
-                for entry in status.unstaged.iter().chain(status.staged.iter()) {
-                    if entry.kind == gitgpui_core::domain::FileStatusKind::Conflicted {
-                        conflicted.insert(entry.path.as_path());
-                    }
-                }
-
-                if area == DiffArea::Unstaged {
-                    if conflicted.is_empty() {
-                        return Some(true);
-                    }
-                    return Some(selected.iter().all(|p| !conflicted.contains(p.as_path())));
-                }
-
-                let mut unstaged_paths: HashSet<&std::path::Path> =
-                    HashSet::with_capacity(status.unstaged.len());
-                for entry in &status.unstaged {
-                    unstaged_paths.insert(entry.path.as_path());
-                }
-
-                let mut staged_added_paths: HashSet<&std::path::Path> = HashSet::new();
-                for entry in &status.staged {
-                    if entry.kind == gitgpui_core::domain::FileStatusKind::Added {
-                        staged_added_paths.insert(entry.path.as_path());
-                    }
-                }
-
-                Some(selected.iter().all(|p| {
-                    let p = p.as_path();
-                    !conflicted.contains(p)
-                        && (unstaged_paths.contains(p) || staged_added_paths.contains(p))
-                }))
-            }
-            _ => None,
-        })
-        .unwrap_or(false);
+    // Keep context menu opening fast. Validate precisely when the action runs instead.
+    let can_discard_worktree_changes = if is_conflicted {
+        false
+    } else {
+        match area {
+            DiffArea::Unstaged => true,
+            DiffArea::Staged => has_unstaged_for_path || is_staged_added,
+        }
+    };
 
     let mut items = vec![ContextMenuItem::Header(
         path.file_name()

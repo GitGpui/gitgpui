@@ -63,14 +63,6 @@ enum ContextMenuAction {
         area: DiffArea,
         path: std::path::PathBuf,
     },
-    DiscardWorktreeChangesPath {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    DiscardWorktreeChangesPaths {
-        repo_id: RepoId,
-        paths: Vec<std::path::PathBuf>,
-    },
     DiscardWorktreeChangesSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,

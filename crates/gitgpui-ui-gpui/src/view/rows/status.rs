@@ -90,6 +90,33 @@ impl DetailsPaneView {
         self.status_multi_selection.remove(&repo_id);
     }
 
+    fn take_status_selected_paths_for_action(
+        &mut self,
+        repo_id: RepoId,
+        area: DiffArea,
+        clicked_path: &std::path::PathBuf,
+    ) -> (Vec<std::path::PathBuf>, bool) {
+        let selection = self.status_selected_paths_for_area(repo_id, area);
+        let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
+        if !use_selection {
+            return (vec![clicked_path.clone()], false);
+        }
+
+        let sel = self
+            .status_multi_selection
+            .remove(&repo_id)
+            .unwrap_or_default();
+        let paths = match area {
+            DiffArea::Unstaged => sel.unstaged,
+            DiffArea::Staged => sel.staged,
+        };
+        if paths.is_empty() {
+            (vec![clicked_path.clone()], false)
+        } else {
+            (paths, true)
+        }
+    }
+
     fn status_multi_selection_for_repo_mut(
         &mut self,
         repo_id: RepoId,
@@ -295,13 +322,8 @@ fn status_row(
                 return;
             }
 
-            let paths = if this.status_selection_contains(repo_id, area, path_for_stage.as_ref())
-                && this.status_selected_paths_for_area(repo_id, area).len() > 1
-            {
-                this.status_selected_paths_for_area(repo_id, area).to_vec()
-            } else {
-                vec![(*path_for_stage).clone()]
-            };
+            let (paths, _used_selection) =
+                this.take_status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
 
             match area {
                 DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths { repo_id, paths }),

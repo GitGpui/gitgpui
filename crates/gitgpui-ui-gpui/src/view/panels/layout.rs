@@ -395,6 +395,7 @@ impl DetailsPaneView {
         }
 
         let repo = self.active_repo();
+        let local_actions_in_flight = repo.map(|r| r.local_actions_in_flight > 0).unwrap_or(false);
         let (staged_count, unstaged_count) = repo
             .and_then(|r| match &r.status {
                 Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
@@ -418,8 +419,27 @@ impl DetailsPaneView {
             })
             .unwrap_or(0);
 
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            gpui::svg()
+                .path("icons/spinner.svg")
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(color)
+                .with_animation(
+                    id,
+                    gpui::Animation::new(std::time::Duration::from_millis(850)).repeat(),
+                    |svg, delta| {
+                        svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
+        };
+        let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
+
         let stage_all = zed::Button::new("stage_all", "Stage all changes")
             .style(zed::ButtonStyle::Subtle)
+            .disabled(local_actions_in_flight)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
@@ -448,19 +468,19 @@ impl DetailsPaneView {
         let stage_selected =
             zed::Button::new("stage_selected", format!("Stage ({selected_unstaged})"))
                 .style(zed::ButtonStyle::Outlined)
+                .disabled(local_actions_in_flight)
                 .on_click(theme, cx, |this, _e, _w, cx| {
                     let Some(repo_id) = this.active_repo_id() else {
                         return;
                     };
                     let paths = this
                         .status_multi_selection
-                        .get(&repo_id)
-                        .map(|s| s.unstaged.clone())
+                        .remove(&repo_id)
+                        .map(|s| s.unstaged)
                         .unwrap_or_default();
                     if paths.is_empty() {
                         return;
                     }
-                    this.status_multi_selection.remove(&repo_id);
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store.dispatch(Msg::StagePaths { repo_id, paths });
                     cx.notify();
@@ -469,20 +489,25 @@ impl DetailsPaneView {
         let discard_selected =
             zed::Button::new("discard_selected", format!("Discard ({selected_unstaged})"))
                 .style(zed::ButtonStyle::Outlined)
+                .disabled(local_actions_in_flight)
                 .on_click(theme, cx, |this, e, window, cx| {
                     let Some(repo_id) = this.active_repo_id() else {
                         return;
                     };
-                    let paths = this
+                    let count = this
                         .status_multi_selection
                         .get(&repo_id)
-                        .map(|s| s.unstaged.clone())
-                        .unwrap_or_default();
-                    if paths.is_empty() {
+                        .map(|s| s.unstaged.len())
+                        .unwrap_or(0);
+                    if count == 0 {
                         return;
                     }
                     this.open_popover_at(
-                        PopoverKind::DiscardChangesConfirm { repo_id, paths },
+                        PopoverKind::DiscardChangesConfirm {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: None,
+                        },
                         e.position(),
                         window,
                         cx,
@@ -492,6 +517,7 @@ impl DetailsPaneView {
 
         let unstage_all = zed::Button::new("unstage_all", "Unstage all changes")
             .style(zed::ButtonStyle::Subtle)
+            .disabled(local_actions_in_flight)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
@@ -520,19 +546,19 @@ impl DetailsPaneView {
         let unstage_selected =
             zed::Button::new("unstage_selected", format!("Unstage ({selected_staged})"))
                 .style(zed::ButtonStyle::Outlined)
+                .disabled(local_actions_in_flight)
                 .on_click(theme, cx, |this, _e, _w, cx| {
                     let Some(repo_id) = this.active_repo_id() else {
                         return;
                     };
                     let paths = this
                         .status_multi_selection
-                        .get(&repo_id)
-                        .map(|s| s.staged.clone())
+                        .remove(&repo_id)
+                        .map(|s| s.staged)
                         .unwrap_or_default();
                     if paths.is_empty() {
                         return;
                     }
-                    this.status_multi_selection.remove(&repo_id);
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store.dispatch(Msg::UnstagePaths { repo_id, paths });
                     cx.notify();
@@ -560,6 +586,15 @@ impl DetailsPaneView {
 
         let unstaged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if local_actions_in_flight {
+                actions = actions.child(
+                    spinner(
+                        ("unstaged_actions_spinner", repo_key),
+                        theme.colors.text_muted,
+                    )
+                    .into_any_element(),
+                );
+            }
             if selected_unstaged > 0 {
                 actions = actions.child(stage_selected).child(discard_selected);
             }
@@ -568,6 +603,15 @@ impl DetailsPaneView {
 
         let staged_actions = {
             let mut actions = div().flex().items_center().gap_2();
+            if local_actions_in_flight {
+                actions = actions.child(
+                    spinner(
+                        ("staged_actions_spinner", repo_key),
+                        theme.colors.text_muted,
+                    )
+                    .into_any_element(),
+                );
+            }
             if selected_staged > 0 {
                 actions = actions.child(unstage_selected);
             }

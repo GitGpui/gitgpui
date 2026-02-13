@@ -31,11 +31,8 @@ impl MainPaneView {
         input.clone()
     }
 
-    pub(in super::super::super) fn ensure_file_diff_cache(&mut self) {
+    pub(in super::super::super) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         struct Rebuild {
-            repo_id: RepoId,
-            diff_file_rev: u64,
-            diff_target: Option<DiffTarget>,
             file_path: Option<std::path::PathBuf>,
             language: Option<rows::DiffSyntaxLanguage>,
             rows: Vec<FileDiffRow>,
@@ -45,194 +42,195 @@ impl MainPaneView {
             split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
         }
 
-        enum Action {
-            Clear,
-            Noop,
-            Reset {
-                repo_id: RepoId,
-                diff_file_rev: u64,
-                diff_target: Option<DiffTarget>,
-            },
-            Rebuild(Rebuild),
+        let clear_cache = |this: &mut Self| {
+            this.file_diff_cache_repo_id = None;
+            this.file_diff_cache_target = None;
+            this.file_diff_cache_rev = 0;
+            this.file_diff_cache_inflight = None;
+            this.file_diff_cache_path = None;
+            this.file_diff_cache_language = None;
+            this.file_diff_cache_rows.clear();
+            this.file_diff_inline_cache.clear();
+            this.file_diff_inline_word_highlights.clear();
+            this.file_diff_split_word_highlights_old.clear();
+            this.file_diff_split_word_highlights_new.clear();
+        };
+
+        let Some((repo_id, diff_file_rev, diff_target, workdir, file)) = (|| {
+            let repo = self.active_repo()?;
+            if !Self::is_file_diff_target(repo.diff_target.as_ref()) {
+                return None;
+            }
+
+            let file = match &repo.diff_file {
+                Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+                _ => None,
+            };
+
+            Some((
+                repo.id,
+                repo.diff_file_rev,
+                repo.diff_target.clone(),
+                repo.spec.workdir.clone(),
+                file,
+            ))
+        })() else {
+            clear_cache(self);
+            return;
+        };
+
+        let diff_target_for_task = diff_target.clone();
+
+        if self.file_diff_cache_repo_id == Some(repo_id)
+            && self.file_diff_cache_rev == diff_file_rev
+            && self.file_diff_cache_target == diff_target
+        {
+            return;
         }
 
-        let action = (|| {
-            let Some(repo) = self.active_repo() else {
-                return Action::Clear;
-            };
+        self.file_diff_cache_repo_id = Some(repo_id);
+        self.file_diff_cache_rev = diff_file_rev;
+        self.file_diff_cache_target = diff_target;
+        self.file_diff_cache_inflight = None;
+        self.file_diff_cache_path = None;
+        self.file_diff_cache_language = None;
+        self.file_diff_cache_rows.clear();
+        self.file_diff_inline_cache.clear();
+        self.file_diff_inline_word_highlights.clear();
+        self.file_diff_split_word_highlights_old.clear();
+        self.file_diff_split_word_highlights_new.clear();
 
-            if !Self::is_file_diff_target(repo.diff_target.as_ref()) {
-                return Action::Clear;
-            }
+        // Reset the segment cache to avoid mixing patch/file indices.
+        self.diff_text_segments_cache.clear();
 
-            if self.file_diff_cache_repo_id == Some(repo.id)
-                && self.file_diff_cache_rev == repo.diff_file_rev
-                && self.file_diff_cache_target.as_ref() == repo.diff_target.as_ref()
-            {
-                return Action::Noop;
-            }
+        let Some(file) = file else {
+            return;
+        };
 
-            let repo_id = repo.id;
-            let diff_file_rev = repo.diff_file_rev;
-            let diff_target = repo.diff_target.clone();
+        self.file_diff_cache_seq = self.file_diff_cache_seq.wrapping_add(1);
+        let seq = self.file_diff_cache_seq;
+        self.file_diff_cache_inflight = Some(seq);
 
-            let Loadable::Ready(file_opt) = &repo.diff_file else {
-                return Action::Reset {
-                    repo_id,
-                    diff_file_rev,
-                    diff_target,
-                };
-            };
-            let Some(file) = file_opt.as_ref() else {
-                return Action::Reset {
-                    repo_id,
-                    diff_file_rev,
-                    diff_target,
-                };
-            };
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let old_text = file.old.as_deref().unwrap_or("");
+                let new_text = file.new.as_deref().unwrap_or("");
+                let rows = gitgpui_core::file_diff::side_by_side_rows(old_text, new_text);
 
-            let old_text = file.old.as_deref().unwrap_or("");
-            let new_text = file.new.as_deref().unwrap_or("");
-            let rows = gitgpui_core::file_diff::side_by_side_rows(old_text, new_text);
+                // Store the file path for syntax highlighting.
+                let file_path = Some(if file.path.is_absolute() {
+                    file.path.clone()
+                } else {
+                    workdir.join(&file.path)
+                });
+                let language = file_path.as_ref().and_then(|p| {
+                    rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
+                });
 
-            // Store the file path for syntax highlighting.
-            let workdir = &repo.spec.workdir;
-            let file_path = Some(if file.path.is_absolute() {
-                file.path.clone()
-            } else {
-                workdir.join(&file.path)
-            });
-            let language = file_path
-                .as_ref()
-                .and_then(|p| rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
+                // Precompute word highlights and inline rows.
+                let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
+                    vec![None; rows.len()];
+                let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
+                    vec![None; rows.len()];
 
-            // Precompute word highlights and inline rows.
-            let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
-                vec![None; rows.len()];
-            let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
-                vec![None; rows.len()];
+                let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::new();
+                let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> = Vec::new();
+                for (row_ix, row) in rows.iter().enumerate() {
+                    use gitgpui_core::file_diff::FileDiffRowKind as K;
+                    match row.kind {
+                        K::Context => {
+                            inline_rows.push(AnnotatedDiffLine {
+                                kind: gitgpui_core::domain::DiffLineKind::Context,
+                                text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
+                                old_line: row.old_line,
+                                new_line: row.new_line,
+                            });
+                            inline_word_highlights.push(None);
+                        }
+                        K::Add => {
+                            inline_rows.push(AnnotatedDiffLine {
+                                kind: gitgpui_core::domain::DiffLineKind::Add,
+                                text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
+                                old_line: None,
+                                new_line: row.new_line,
+                            });
+                            inline_word_highlights.push(None);
+                        }
+                        K::Remove => {
+                            inline_rows.push(AnnotatedDiffLine {
+                                kind: gitgpui_core::domain::DiffLineKind::Remove,
+                                text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
+                                old_line: row.old_line,
+                                new_line: None,
+                            });
+                            inline_word_highlights.push(None);
+                        }
+                        K::Modify => {
+                            let old = row.old.as_deref().unwrap_or("");
+                            let new = row.new.as_deref().unwrap_or("");
+                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                            let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
+                            let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
 
-            let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::new();
-            let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> = Vec::new();
-            for (row_ix, row) in rows.iter().enumerate() {
-                use gitgpui_core::file_diff::FileDiffRowKind as K;
-                match row.kind {
-                    K::Context => {
-                        inline_rows.push(AnnotatedDiffLine {
-                            kind: gitgpui_core::domain::DiffLineKind::Context,
-                            text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
-                            old_line: row.old_line,
-                            new_line: row.new_line,
-                        });
-                        inline_word_highlights.push(None);
-                    }
-                    K::Add => {
-                        inline_rows.push(AnnotatedDiffLine {
-                            kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
-                            old_line: None,
-                            new_line: row.new_line,
-                        });
-                        inline_word_highlights.push(None);
-                    }
-                    K::Remove => {
-                        inline_rows.push(AnnotatedDiffLine {
-                            kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
-                            old_line: row.old_line,
-                            new_line: None,
-                        });
-                        inline_word_highlights.push(None);
-                    }
-                    K::Modify => {
-                        let old = row.old.as_deref().unwrap_or("");
-                        let new = row.new.as_deref().unwrap_or("");
-                        let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                        let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
-                        let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
+                            split_word_highlights_old[row_ix] = old_ranges_opt.clone();
+                            split_word_highlights_new[row_ix] = new_ranges_opt.clone();
 
-                        split_word_highlights_old[row_ix] = old_ranges_opt.clone();
-                        split_word_highlights_new[row_ix] = new_ranges_opt.clone();
+                            inline_rows.push(AnnotatedDiffLine {
+                                kind: gitgpui_core::domain::DiffLineKind::Remove,
+                                text: format!("-{}", old).into(),
+                                old_line: row.old_line,
+                                new_line: None,
+                            });
+                            inline_word_highlights.push(old_ranges_opt);
 
-                        inline_rows.push(AnnotatedDiffLine {
-                            kind: gitgpui_core::domain::DiffLineKind::Remove,
-                            text: format!("-{}", old).into(),
-                            old_line: row.old_line,
-                            new_line: None,
-                        });
-                        inline_word_highlights.push(old_ranges_opt);
-
-                        inline_rows.push(AnnotatedDiffLine {
-                            kind: gitgpui_core::domain::DiffLineKind::Add,
-                            text: format!("+{}", new).into(),
-                            old_line: None,
-                            new_line: row.new_line,
-                        });
-                        inline_word_highlights.push(new_ranges_opt);
+                            inline_rows.push(AnnotatedDiffLine {
+                                kind: gitgpui_core::domain::DiffLineKind::Add,
+                                text: format!("+{}", new).into(),
+                                old_line: None,
+                                new_line: row.new_line,
+                            });
+                            inline_word_highlights.push(new_ranges_opt);
+                        }
                     }
                 }
-            }
 
-            Action::Rebuild(Rebuild {
-                repo_id,
-                diff_file_rev,
-                diff_target,
-                file_path,
-                language,
-                rows,
-                inline_rows,
-                inline_word_highlights,
-                split_word_highlights_old,
-                split_word_highlights_new,
-            })
-        })();
+                let rebuild = Rebuild {
+                    file_path,
+                    language,
+                    rows,
+                    inline_rows,
+                    inline_word_highlights,
+                    split_word_highlights_old,
+                    split_word_highlights_new,
+                };
 
-        match action {
-            Action::Noop => {}
-            Action::Clear => {
-                self.file_diff_cache_repo_id = None;
-                self.file_diff_cache_target = None;
-                self.file_diff_cache_rev = 0;
-                self.file_diff_cache_path = None;
-                self.file_diff_cache_language = None;
-                self.file_diff_cache_rows.clear();
-                self.file_diff_inline_cache.clear();
-                self.file_diff_inline_word_highlights.clear();
-                self.file_diff_split_word_highlights_old.clear();
-                self.file_diff_split_word_highlights_new.clear();
-            }
-            Action::Reset {
-                repo_id,
-                diff_file_rev,
-                diff_target,
-            } => {
-                self.file_diff_cache_repo_id = Some(repo_id);
-                self.file_diff_cache_rev = diff_file_rev;
-                self.file_diff_cache_target = diff_target;
-                self.file_diff_cache_path = None;
-                self.file_diff_cache_language = None;
-                self.file_diff_cache_rows.clear();
-                self.file_diff_inline_cache.clear();
-                self.file_diff_inline_word_highlights.clear();
-                self.file_diff_split_word_highlights_old.clear();
-                self.file_diff_split_word_highlights_new.clear();
-            }
-            Action::Rebuild(rebuild) => {
-                self.file_diff_cache_repo_id = Some(rebuild.repo_id);
-                self.file_diff_cache_rev = rebuild.diff_file_rev;
-                self.file_diff_cache_target = rebuild.diff_target;
-                self.file_diff_cache_path = rebuild.file_path;
-                self.file_diff_cache_language = rebuild.language;
-                self.file_diff_cache_rows = rebuild.rows;
-                self.file_diff_inline_cache = rebuild.inline_rows;
-                self.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
-                self.file_diff_split_word_highlights_old = rebuild.split_word_highlights_old;
-                self.file_diff_split_word_highlights_new = rebuild.split_word_highlights_new;
+                let _ = view.update(cx, |this, cx| {
+                    if this.file_diff_cache_inflight != Some(seq) {
+                        return;
+                    }
+                    if this.file_diff_cache_repo_id != Some(repo_id)
+                        || this.file_diff_cache_rev != diff_file_rev
+                        || this.file_diff_cache_target != diff_target_for_task
+                    {
+                        return;
+                    }
 
-                // Reset the segment cache to avoid mixing patch/file indices.
-                self.diff_text_segments_cache.clear();
-            }
-        }
+                    this.file_diff_cache_inflight = None;
+                    this.file_diff_cache_path = rebuild.file_path;
+                    this.file_diff_cache_language = rebuild.language;
+                    this.file_diff_cache_rows = rebuild.rows;
+                    this.file_diff_inline_cache = rebuild.inline_rows;
+                    this.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
+                    this.file_diff_split_word_highlights_old = rebuild.split_word_highlights_old;
+                    this.file_diff_split_word_highlights_new = rebuild.split_word_highlights_new;
+
+                    // Reset the segment cache to avoid mixing patch/file indices.
+                    this.diff_text_segments_cache.clear();
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
     }
 
     fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {

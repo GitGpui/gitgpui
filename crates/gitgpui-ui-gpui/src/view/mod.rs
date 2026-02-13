@@ -391,7 +391,8 @@ enum PopoverKind {
     },
     DiscardChangesConfirm {
         repo_id: RepoId,
-        paths: Vec<std::path::PathBuf>,
+        area: DiffArea,
+        path: Option<std::path::PathBuf>,
     },
     PullPicker,
     PushPicker,

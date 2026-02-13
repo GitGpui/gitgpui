@@ -260,12 +260,13 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 path: file_rel.clone(),
                 area: gitgpui_core::domain::DiffArea::Staged,
             });
-            repo.diff_file =
-                gitgpui_state::model::Loadable::Ready(Some(gitgpui_core::domain::FileDiffText {
+            repo.diff_file = gitgpui_state::model::Loadable::Ready(Some(Arc::new(
+                gitgpui_core::domain::FileDiffText {
                     path: file_rel.clone(),
                     old: Some("one\ntwo\n".to_string()),
                     new: None,
-                }));
+                },
+            )));
 
             this.state = Arc::new(AppState {
                 repos: vec![repo],

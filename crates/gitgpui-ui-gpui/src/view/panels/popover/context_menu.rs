@@ -13,28 +13,39 @@ mod status_file;
 mod tag;
 
 impl PopoverHost {
-    fn status_paths_for_action(
-        &self,
+    fn take_status_paths_for_action(
+        &mut self,
         repo_id: RepoId,
         area: DiffArea,
         clicked_path: &std::path::PathBuf,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> (Vec<std::path::PathBuf>, bool) {
-        let pane = self.details_pane.read(cx);
-        let selection = pane
-            .status_multi_selection
-            .get(&repo_id)
-            .map(|sel| match area {
-                DiffArea::Unstaged => sel.unstaged.as_slice(),
-                DiffArea::Staged => sel.staged.as_slice(),
-            })
-            .unwrap_or(&[]);
+        let selection = self.details_pane.update(cx, |pane, cx| {
+            let selection = pane
+                .status_multi_selection
+                .get(&repo_id)
+                .map(|sel| match area {
+                    DiffArea::Unstaged => sel.unstaged.as_slice(),
+                    DiffArea::Staged => sel.staged.as_slice(),
+                })
+                .unwrap_or(&[]);
 
-        let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
-        if use_selection {
-            (selection.to_vec(), true)
-        } else {
-            (vec![clicked_path.clone()], false)
+            let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
+            if !use_selection {
+                return None;
+            }
+
+            let sel = pane.status_multi_selection.remove(&repo_id)?;
+            cx.notify();
+            Some(match area {
+                DiffArea::Unstaged => sel.unstaged,
+                DiffArea::Staged => sel.staged,
+            })
+        });
+
+        match selection {
+            Some(paths) if !paths.is_empty() => (paths, true),
+            _ => (vec![clicked_path.clone()], false),
         }
     }
 
@@ -165,12 +176,8 @@ impl PopoverHost {
                 path,
             } => {
                 let (paths, used_selection) =
-                    self.status_paths_for_action(repo_id, area, &path, cx);
+                    self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
-                    self.details_pane.update(cx, |pane, cx| {
-                        pane.status_multi_selection.remove(&repo_id);
-                        cx.notify();
-                    });
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     self.store.dispatch(Msg::StagePaths { repo_id, paths });
                 } else {
@@ -208,12 +215,8 @@ impl PopoverHost {
                 path,
             } => {
                 let (paths, used_selection) =
-                    self.status_paths_for_action(repo_id, area, &path, cx);
+                    self.take_status_paths_for_action(repo_id, area, &path, cx);
                 if used_selection {
-                    self.details_pane.update(cx, |pane, cx| {
-                        pane.status_multi_selection.remove(&repo_id);
-                        cx.notify();
-                    });
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     self.store.dispatch(Msg::UnstagePaths { repo_id, paths });
                 } else {
@@ -227,44 +230,20 @@ impl PopoverHost {
                     self.store.dispatch(Msg::UnstagePath { repo_id, path });
                 }
             }
-            ContextMenuAction::DiscardWorktreeChangesPath { repo_id, path } => {
+            ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                repo_id,
+                area,
+                path,
+            } => {
                 let anchor = self
                     .popover_anchor
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
                     PopoverKind::DiscardChangesConfirm {
                         repo_id,
-                        paths: vec![path],
+                        area,
+                        path: Some(path),
                     },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::DiscardWorktreeChangesPaths { repo_id, paths } => {
-                let anchor = self
-                    .popover_anchor
-                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
-                self.open_popover_at(
-                    PopoverKind::DiscardChangesConfirm { repo_id, paths },
-                    anchor,
-                    window,
-                    cx,
-                );
-                return;
-            }
-            ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
-                repo_id,
-                area,
-                path,
-            } => {
-                let (paths, _) = self.status_paths_for_action(repo_id, area, &path, cx);
-                let anchor = self
-                    .popover_anchor
-                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
-                self.open_popover_at(
-                    PopoverKind::DiscardChangesConfirm { repo_id, paths },
                     anchor,
                     window,
                     cx,
@@ -295,7 +274,7 @@ impl PopoverHost {
                 path,
                 side,
             } => {
-                let (paths, _) = self.status_paths_for_action(repo_id, area, &path, cx);
+                let (paths, _) = self.take_status_paths_for_action(repo_id, area, &path, cx);
                 self.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.remove(&repo_id);
                     cx.notify();
@@ -402,25 +381,61 @@ impl PopoverHost {
     pub(super) fn discard_worktree_changes_confirmed(
         &mut self,
         repo_id: RepoId,
-        mut paths: Vec<std::path::PathBuf>,
+        area: DiffArea,
+        path: Option<std::path::PathBuf>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if paths.is_empty() {
-            return;
-        }
-        if paths.len() > 1 {
-            let mut unique: Vec<std::path::PathBuf> = Vec::with_capacity(paths.len());
-            for p in paths {
-                if !unique.iter().any(|existing| existing == &p) {
-                    unique.push(p);
+        let (paths, _used_selection) = match path.as_ref() {
+            Some(clicked_path) => {
+                let selection = self.details_pane.update(cx, |pane, cx| {
+                    let selection = pane
+                        .status_multi_selection
+                        .get(&repo_id)
+                        .map(|sel| match area {
+                            DiffArea::Unstaged => sel.unstaged.as_slice(),
+                            DiffArea::Staged => sel.staged.as_slice(),
+                        })
+                        .unwrap_or(&[]);
+
+                    let use_selection =
+                        selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
+                    if !use_selection {
+                        return None;
+                    }
+
+                    let sel = pane.status_multi_selection.remove(&repo_id)?;
+                    cx.notify();
+                    Some(match area {
+                        DiffArea::Unstaged => sel.unstaged,
+                        DiffArea::Staged => sel.staged,
+                    })
+                });
+
+                match selection {
+                    Some(paths) if !paths.is_empty() => (paths, true),
+                    _ => (vec![clicked_path.clone()], false),
                 }
             }
-            paths = unique;
+            None => {
+                let paths = self
+                    .details_pane
+                    .update(cx, |pane, cx| {
+                        let sel = pane.status_multi_selection.remove(&repo_id)?;
+                        cx.notify();
+                        Some(match area {
+                            DiffArea::Unstaged => sel.unstaged,
+                            DiffArea::Staged => sel.staged,
+                        })
+                    })
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return;
+                }
+                (paths, true)
+            }
+        };
 
-            self.details_pane.update(cx, |pane, cx| {
-                pane.status_multi_selection.remove(&repo_id);
-                cx.notify();
-            });
+        if paths.len() > 1 {
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             self.store
                 .dispatch(Msg::DiscardWorktreeChangesPaths { repo_id, paths });

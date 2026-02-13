@@ -221,7 +221,7 @@ impl MainPaneView {
                 },
             };
 
-            self.ensure_file_diff_cache();
+            self.ensure_file_diff_cache(cx);
             match diff_file_state {
                 DiffFileState::NotLoaded => {
                     zed::empty_state(theme, "Diff", "Select a file.").into_any_element()
@@ -251,6 +251,8 @@ impl MainPaneView {
                     if !has_file || !self.is_file_diff_view_active() {
                         zed::empty_state(theme, "Diff", "No file contents available.")
                             .into_any_element()
+                    } else if self.file_diff_cache_inflight.is_some() {
+                        zed::empty_state(theme, "Diff", "Processing file…").into_any_element()
                     } else {
                         self.ensure_diff_visible_indices();
                         self.maybe_autoscroll_diff_to_first_change();

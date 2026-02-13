@@ -424,12 +424,14 @@ impl PopoverHost {
                 | PopoverKind::TagMenu { .. }
         );
 
-        self.popover = Some(kind.clone());
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         if is_context_menu {
+            self.popover = Some(kind);
             self.context_menu_selected_ix = self
-                .context_menu_model(&kind, cx)
+                .popover
+                .as_ref()
+                .and_then(|kind| self.context_menu_model(kind, cx))
                 .and_then(|m| m.first_selectable());
             window.focus(&self.context_menu_focus_handle);
         } else {
@@ -636,6 +638,7 @@ impl PopoverHost {
                 }
                 _ => {}
             }
+            self.popover = Some(kind);
         }
         cx.notify();
     }
@@ -1725,9 +1728,11 @@ impl PopoverHost {
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::DiscardChangesConfirm { repo_id, paths } => {
-                discard_changes_confirm::panel(self, repo_id, paths.clone(), cx)
-            }
+            PopoverKind::DiscardChangesConfirm {
+                repo_id,
+                area,
+                path,
+            } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))

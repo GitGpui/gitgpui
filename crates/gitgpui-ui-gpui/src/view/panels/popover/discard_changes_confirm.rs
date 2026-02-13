@@ -3,18 +3,72 @@ use super::*;
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
-    paths: Vec<std::path::PathBuf>,
+    area: DiffArea,
+    path: Option<std::path::PathBuf>,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let count = paths.len();
-    let detail = if count == 1 {
-        paths
-            .first()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "file".to_string())
-    } else {
-        format!("{count} files")
+    let selected_paths_count = {
+        let pane = this.details_pane.read(cx);
+        pane.status_multi_selection
+            .get(&repo_id)
+            .map(|sel| match area {
+                DiffArea::Unstaged => sel.unstaged.len(),
+                DiffArea::Staged => sel.staged.len(),
+            })
+            .unwrap_or(0)
+    };
+
+    let (_count, detail, can_discard) = match path.as_ref() {
+        Some(clicked_path) => {
+            let (_use_selection, selected_count) = {
+                let pane = this.details_pane.read(cx);
+                let selection = pane
+                    .status_multi_selection
+                    .get(&repo_id)
+                    .map(|sel| match area {
+                        DiffArea::Unstaged => sel.unstaged.as_slice(),
+                        DiffArea::Staged => sel.staged.as_slice(),
+                    })
+                    .unwrap_or(&[]);
+
+                let use_selection =
+                    selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
+                let selected_count = if use_selection { selection.len() } else { 1 };
+                (use_selection, selected_count)
+            };
+
+            let detail = if selected_count == 1 {
+                clicked_path.display().to_string()
+            } else {
+                format!("{selected_count} files")
+            };
+            (selected_count, detail, true)
+        }
+        None => {
+            if selected_paths_count == 0 {
+                (0, "No files selected.".to_string(), false)
+            } else if selected_paths_count == 1 {
+                let selected_path = this
+                    .details_pane
+                    .read(cx)
+                    .status_multi_selection
+                    .get(&repo_id)
+                    .and_then(|sel| match area {
+                        DiffArea::Unstaged => sel.unstaged.first(),
+                        DiffArea::Staged => sel.staged.first(),
+                    })
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                (1, selected_path, true)
+            } else {
+                (
+                    selected_paths_count,
+                    format!("{selected_paths_count} files"),
+                    true,
+                )
+            }
+        }
     };
 
     div()
@@ -60,8 +114,14 @@ pub(super) fn panel(
                 .child(
                     zed::Button::new("discard_changes_go", "Discard")
                         .style(zed::ButtonStyle::Danger)
+                        .disabled(!can_discard)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.discard_worktree_changes_confirmed(repo_id, paths.clone(), cx);
+                            this.discard_worktree_changes_confirmed(
+                                repo_id,
+                                area,
+                                path.clone(),
+                                cx,
+                            );
                             this.popover = None;
                             this.popover_anchor = None;
                             cx.notify();

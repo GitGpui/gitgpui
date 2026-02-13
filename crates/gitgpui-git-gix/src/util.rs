@@ -3,7 +3,7 @@ use gitgpui_core::domain::{
 };
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{CommandOutput, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 use std::time::{Duration, SystemTime};
@@ -18,6 +18,61 @@ pub(crate) fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
         return Err(Error::new(ErrorKind::Backend(format!(
             "{label} failed: {stderr}"
         ))));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn run_git_simple_with_paths(
+    workdir: &Path,
+    label: &str,
+    args: &[&str],
+    paths: &[&Path],
+) -> Result<()> {
+    const MAX_PATH_BYTES_PER_CMD: usize = 28_000;
+    const MAX_PATHS_PER_CMD: usize = 1024;
+
+    if paths.is_empty() {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(workdir);
+        cmd.args(args);
+        return run_git_simple(cmd, label);
+    }
+
+    let mut batch: Vec<&Path> = Vec::new();
+    let mut bytes: usize = 0;
+    for path in paths {
+        let path_len = path.to_string_lossy().len() + 1;
+
+        if !batch.is_empty()
+            && (batch.len() >= MAX_PATHS_PER_CMD
+                || bytes.saturating_add(path_len) > MAX_PATH_BYTES_PER_CMD)
+        {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg(workdir);
+            cmd.args(args);
+            cmd.arg("--");
+            for p in &batch {
+                cmd.arg(p);
+            }
+            run_git_simple(cmd, label)?;
+            batch.clear();
+            bytes = 0;
+        }
+
+        batch.push(*path);
+        bytes = bytes.saturating_add(path_len);
+    }
+
+    if !batch.is_empty() {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(workdir);
+        cmd.args(args);
+        cmd.arg("--");
+        for p in &batch {
+            cmd.arg(p);
+        }
+        run_git_simple(cmd, label)?;
     }
 
     Ok(())

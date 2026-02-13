@@ -170,6 +170,7 @@ pub struct RepoState {
     pub loads_in_flight: RepoLoadsInFlight,
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
+    pub local_actions_in_flight: u32,
 
     pub open: Loadable<()>,
     pub history_scope: LogScope,
@@ -206,8 +207,8 @@ pub struct RepoState {
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
-    pub diff_file: Loadable<Option<FileDiffText>>,
-    pub diff_file_image: Loadable<Option<FileDiffImage>>,
+    pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 
     pub conflict_file_path: Option<PathBuf>,
     pub conflict_file: Loadable<Option<ConflictFile>>,
@@ -226,6 +227,7 @@ impl RepoState {
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
             push_in_flight: 0,
+            local_actions_in_flight: 0,
             open: Loadable::Loading,
             history_scope: LogScope::CurrentBranch,
             head_branch: Loadable::NotLoaded,

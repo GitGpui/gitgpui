@@ -69,6 +69,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in super::super) file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
     pub(in super::super) file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
+    pub(in super::super) file_diff_cache_seq: u64,
+    pub(in super::super) file_diff_cache_inflight: Option<u64>,
 
     pub(in super::super) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in super::super) file_image_diff_cache_rev: u64,
@@ -380,6 +382,8 @@ impl MainPaneView {
             file_diff_inline_word_highlights: Vec::new(),
             file_diff_split_word_highlights_old: Vec::new(),
             file_diff_split_word_highlights_new: Vec::new(),
+            file_diff_cache_seq: 0,
+            file_diff_cache_inflight: None,
             file_image_diff_cache_repo_id: None,
             file_image_diff_cache_rev: 0,
             file_image_diff_cache_target: None,

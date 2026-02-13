@@ -1,6 +1,7 @@
 use super::GixRepo;
 use crate::util::{
-    parse_reflog_index, run_git_capture, run_git_simple, unix_seconds_to_system_time,
+    parse_reflog_index, run_git_capture, run_git_simple, run_git_simple_with_paths,
+    unix_seconds_to_system_time,
 };
 use gitgpui_core::domain::{CommitId, StashEntry};
 use gitgpui_core::error::{Error, ErrorKind};
@@ -188,15 +189,7 @@ impl GixRepo {
     }
 
     pub(super) fn stage_impl(&self, paths: &[&Path]) -> Result<()> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir).arg("add").arg("-A");
-        if !paths.is_empty() {
-            cmd.arg("--");
-            for path in paths {
-                cmd.arg(path);
-            }
-        }
-        run_git_simple(cmd, "git add")
+        run_git_simple_with_paths(&self.spec.workdir, "git add", &["add", "-A"], paths)
     }
 
     pub(super) fn unstage_impl(&self, paths: &[&Path]) -> Result<()> {
@@ -236,21 +229,20 @@ impl GixRepo {
             .output()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        let mut cmd = Command::new("git");
-        cmd.arg("-C").arg(&self.spec.workdir);
         if head.status.success() {
-            cmd.arg("reset").arg("HEAD").arg("--");
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git reset HEAD",
+                &["reset", "HEAD"],
+                paths,
+            )
         } else {
-            cmd.arg("rm").arg("--cached").arg("--");
-        }
-        for path in paths {
-            cmd.arg(path);
-        }
-
-        if head.status.success() {
-            run_git_simple(cmd, "git reset HEAD")
-        } else {
-            run_git_simple(cmd, "git rm --cached")
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git rm --cached",
+                &["rm", "--cached"],
+                paths,
+            )
         }
     }
 

@@ -115,7 +115,7 @@ pub(super) fn diff_file_loaded(
     {
         repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
         repo_state.diff_file = match result {
-            Ok(v) => Loadable::Ready(v),
+            Ok(v) => Loadable::Ready(v.map(Arc::new)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
@@ -136,7 +136,7 @@ pub(super) fn diff_file_image_loaded(
     {
         repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
         repo_state.diff_file_image = match result {
-            Ok(v) => Loadable::Ready(v),
+            Ok(v) => Loadable::Ready(v.map(Arc::new)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
