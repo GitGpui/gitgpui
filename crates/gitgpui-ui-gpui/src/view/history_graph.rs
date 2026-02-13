@@ -1,7 +1,7 @@
 use crate::theme::AppTheme;
-use gitgpui_core::domain::{Commit, CommitId};
+use gitgpui_core::domain::Commit;
 use gpui::Rgba;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 const LANE_COLOR_PALETTE_SIZE: usize = 64;
 
@@ -59,7 +59,7 @@ pub fn compute_graph(
 
     // Approximate the "main line" as the first-parent chain from the first commit in the list,
     // which is typically the checked-out branch HEAD in our log view.
-    let mut head_chain: HashSet<&str> = HashSet::new();
+    let mut head_chain: HashSet<&str> = HashSet::default();
     if let Some(first) = commits.first() {
         let mut cur: &str = first.id.as_ref();
         loop {
@@ -274,7 +274,7 @@ pub fn compute_graph(
         // - If the secondary parent lane existed already in this row, draw an explicit edge.
         // - If it was inserted this row, the continuation line already originates from the node.
         let mut edges_out = Vec::new();
-        let mut next_index_by_lane: HashMap<LaneId, usize> = HashMap::new();
+        let mut next_index_by_lane: HashMap<LaneId, usize> = HashMap::default();
         for (ix, lane) in lanes_next.iter().enumerate() {
             next_index_by_lane.insert(lane.id, ix);
         }
@@ -312,6 +312,7 @@ pub fn compute_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitgpui_core::domain::CommitId;
     use std::time::SystemTime;
 
     fn commit(id: &str, parent_ids: Vec<&str>) -> Commit {
@@ -352,7 +353,7 @@ mod tests {
         commits.push(commit("p0", Vec::new()));
         commits.push(commit("p1", Vec::new()));
 
-        let branch_heads = HashSet::new();
+        let branch_heads = HashSet::default();
         let graph = compute_graph(&commits, theme, &branch_heads);
 
         let head1_ix = LANE_COLOR_PALETTE_SIZE + 1 + (LANE_COLOR_PALETTE_SIZE - 1);
@@ -373,7 +374,7 @@ mod tests {
             commit("root", Vec::new()),
         ];
 
-        let mut branch_heads = HashSet::new();
+        let mut branch_heads = HashSet::default();
         branch_heads.insert("new1");
         branch_heads.insert("base");
 

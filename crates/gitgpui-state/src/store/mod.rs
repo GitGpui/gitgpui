@@ -1,7 +1,7 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
 use gitgpui_core::services::{GitBackend, GitRepository};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, mpsc};
@@ -43,7 +43,7 @@ impl AppStore {
 
         thread::spawn(move || {
             let executor = TaskExecutor::new(default_worker_threads());
-            let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+            let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));

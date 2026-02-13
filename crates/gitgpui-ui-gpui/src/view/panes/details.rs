@@ -145,11 +145,11 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
-            status_multi_selection: HashMap::new(),
-            status_multi_selection_last_status: HashMap::new(),
+            status_multi_selection: HashMap::default(),
+            status_multi_selection_last_status: HashMap::default(),
             commit_details_delay: None,
             commit_details_delay_seq: 0,
-            path_display_cache: std::cell::RefCell::new(HashMap::new()),
+            path_display_cache: std::cell::RefCell::new(HashMap::default()),
         };
         pane.set_theme(theme, cx);
         pane

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn select_diff_sets_loading_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -43,7 +43,7 @@ fn select_diff_sets_loading_and_emits_effect() {
 
 #[test]
 fn select_diff_for_image_sets_loading_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -85,7 +85,7 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
 
 #[test]
 fn stage_hunk_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -117,7 +117,7 @@ fn stage_hunk_emits_effect() {
 
 #[test]
 fn unstage_hunk_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -149,7 +149,7 @@ fn unstage_hunk_emits_effect() {
 
 #[test]
 fn stage_hunk_command_finished_reloads_current_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -195,7 +195,7 @@ fn stage_hunk_command_finished_reloads_current_diff() {
 
 #[test]
 fn clear_diff_selection_resets_diff_state() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -229,7 +229,7 @@ fn clear_diff_selection_resets_diff_state() {
 
 #[test]
 fn diff_loaded_err_records_diagnostic_when_target_matches() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(

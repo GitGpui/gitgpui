@@ -1,6 +1,6 @@
 use crate::msg::Msg;
 use gitgpui_core::services::GitRepository;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, mpsc};
 
 use super::super::{RepoId, executor::TaskExecutor};

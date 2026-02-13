@@ -10,7 +10,7 @@ use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::Result;
 use gix::bstr::ByteSlice as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::str;
@@ -162,7 +162,7 @@ impl GixRepo {
         // `refs/remotes`. Some repositories (e.g. Chromium) use additional namespaces like
         // `refs/branch-heads/*`.
         let mut tips = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         tips.push(head_id);
         seen.insert(head_id);
 

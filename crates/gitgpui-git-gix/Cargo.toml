@@ -12,6 +12,7 @@ workspace = true
 gitgpui-core = { path = "../gitgpui-core" }
 gix = "0.78"
 gix-diff = "0.58"
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.25.0"

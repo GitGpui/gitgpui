@@ -1,10 +1,10 @@
 use gitgpui_core::domain::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::time::{Duration, SystemTime};
 
 #[test]
 fn commit_id_is_hashable() {
-    let mut set = HashSet::new();
+    let mut set = FxHashSet::default();
     set.insert(CommitId("a".into()));
     set.insert(CommitId("b".into()));
     assert!(set.contains(&CommitId("a".into())));

@@ -2,7 +2,7 @@ use super::GixRepo;
 use crate::util::{run_git_capture, run_git_with_output};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -110,7 +110,7 @@ impl GixRepo {
 
 fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
     let mut out = Vec::new();
-    let mut cached_by_commit: HashMap<String, (String, Option<i64>, String)> = HashMap::new();
+    let mut cached_by_commit: HashMap<String, (String, Option<i64>, String)> = HashMap::default();
 
     let mut current_commit: Option<String> = None;
     let mut author: Option<String> = None;

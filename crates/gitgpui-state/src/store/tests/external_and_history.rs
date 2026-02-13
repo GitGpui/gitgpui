@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -104,7 +104,7 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 
 #[test]
 fn external_git_state_change_refreshes_history_and_selected_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -258,7 +258,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
 
 #[test]
 fn external_git_state_refresh_is_coalesced_and_replayed_once() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -420,7 +420,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 
 #[test]
 fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -457,7 +457,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
 
 #[test]
 fn load_more_history_emits_paginated_load_log_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -506,7 +506,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
 
 #[test]
 fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -552,7 +552,7 @@ fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
 
 #[test]
 fn load_more_history_noops_when_no_next_cursor() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -589,7 +589,7 @@ fn load_more_history_noops_when_no_next_cursor() {
 
 #[test]
 fn log_loaded_appends_when_loading_more() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(

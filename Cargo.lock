@@ -2376,6 +2376,9 @@ dependencies = [
 [[package]]
 name = "gitgpui-core"
 version = "0.1.0"
+dependencies = [
+ "rustc-hash 2.1.1",
+]
 
 [[package]]
 name = "gitgpui-git"
@@ -2391,6 +2394,7 @@ dependencies = [
  "gitgpui-core",
  "gix",
  "gix-diff",
+ "rustc-hash 2.1.1",
  "tempfile",
 ]
 
@@ -2401,6 +2405,7 @@ dependencies = [
  "gitgpui-core",
  "globset",
  "notify",
+ "rustc-hash 2.1.1",
  "serde",
  "serde_json",
  "smol",
@@ -2422,6 +2427,7 @@ dependencies = [
  "gitgpui-state",
  "gitgpui-ui",
  "gpui",
+ "rustc-hash 2.1.1",
  "smol",
  "tree-sitter",
  "tree-sitter-bash",

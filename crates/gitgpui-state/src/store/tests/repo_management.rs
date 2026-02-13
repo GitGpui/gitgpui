@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -22,7 +22,7 @@ fn open_repo_sets_opening_and_emits_effect() {
 
 #[test]
 fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -64,7 +64,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
 
 #[test]
 fn open_repo_allows_same_basename_in_different_folders() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -128,7 +128,7 @@ fn open_repo_allows_same_basename_in_different_folders() {
 
 #[test]
 fn clone_repo_sets_running_state_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -150,7 +150,7 @@ fn clone_repo_sets_running_state_and_emits_effect() {
 
 #[test]
 fn close_repo_removes_and_moves_active() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(10);
     let mut state = AppState::default();
 
@@ -186,7 +186,7 @@ fn close_repo_removes_and_moves_active() {
 
 #[test]
 fn remote_branches_loaded_sets_state() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -224,7 +224,7 @@ fn remote_branches_loaded_sets_state() {
 
 #[test]
 fn restore_session_opens_all_and_selects_active_repo() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -274,7 +274,7 @@ fn restore_session_opens_all_and_selects_active_repo() {
 
 #[test]
 fn set_active_repo_refreshes_repo_state_and_selected_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -335,7 +335,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 
 #[test]
 fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -396,7 +396,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
 
 #[test]
 fn repo_action_finished_clears_error_and_refreshes() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -428,7 +428,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
 
 #[test]
 fn repo_action_finished_err_records_diagnostic() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -467,7 +467,7 @@ fn repo_action_finished_err_records_diagnostic() {
 
 #[test]
 fn repo_opened_err_records_diagnostic() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -509,7 +509,7 @@ fn repo_opened_err_records_diagnostic() {
 
 #[test]
 fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -546,7 +546,7 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
 
 #[test]
 fn set_active_repo_ignores_unknown_repo() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 

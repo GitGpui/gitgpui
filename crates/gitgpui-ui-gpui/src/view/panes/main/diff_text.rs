@@ -511,9 +511,9 @@ impl MainPaneView {
 
         struct FileDiffSrcLookup {
             file_rel: std::path::PathBuf,
-            add_by_new_line: std::collections::HashMap<u32, usize>,
-            remove_by_old_line: std::collections::HashMap<u32, usize>,
-            context_by_old_line: std::collections::HashMap<u32, usize>,
+            add_by_new_line: HashMap<u32, usize>,
+            remove_by_old_line: HashMap<u32, usize>,
+            context_by_old_line: HashMap<u32, usize>,
         }
 
         let file_diff_lookup = if self.is_file_diff_view_active() {
@@ -523,12 +523,9 @@ impl MainPaneView {
                 // Git diffs use forward slashes even on Windows.
                 let rel_str = file_rel.to_string_lossy().replace('\\', "/");
 
-                let mut add_by_new_line: std::collections::HashMap<u32, usize> =
-                    std::collections::HashMap::new();
-                let mut remove_by_old_line: std::collections::HashMap<u32, usize> =
-                    std::collections::HashMap::new();
-                let mut context_by_old_line: std::collections::HashMap<u32, usize> =
-                    std::collections::HashMap::new();
+                let mut add_by_new_line: HashMap<u32, usize> = HashMap::default();
+                let mut remove_by_old_line: HashMap<u32, usize> = HashMap::default();
+                let mut context_by_old_line: HashMap<u32, usize> = HashMap::default();
 
                 for (ix, line) in self.diff_cache.iter().enumerate() {
                     if self.diff_file_for_src_ix.get(ix).and_then(|p| p.as_deref())
@@ -668,10 +665,8 @@ impl MainPaneView {
 
         let (hunks_count, hunk_patch, lines_count, lines_patch, discard_lines_patch) =
             if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
-                let mut selected_src_ixs: std::collections::HashSet<usize> =
-                    std::collections::HashSet::new();
-                let mut selected_change_src_ixs: std::collections::HashSet<usize> =
-                    std::collections::HashSet::new();
+                let mut selected_src_ixs: HashSet<usize> = HashSet::default();
+                let mut selected_change_src_ixs: HashSet<usize> = HashSet::default();
 
                 for vix in sel_a..=sel_b {
                     for src_ix in src_ixs_for_visible_ix(vix) {

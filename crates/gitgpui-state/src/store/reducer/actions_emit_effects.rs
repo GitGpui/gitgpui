@@ -7,7 +7,7 @@ use crate::msg::{Effect, RepoCommandKind};
 use gitgpui_core::domain::DiffTarget;
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 

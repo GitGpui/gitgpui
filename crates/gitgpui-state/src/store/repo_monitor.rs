@@ -3,7 +3,7 @@ use crate::msg::{Msg, RepoExternalChange};
 use globset::{Glob, GlobMatcher};
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -94,7 +94,7 @@ pub(super) struct RepoMonitorManager {
 impl RepoMonitorManager {
     pub(super) fn new() -> Self {
         Self {
-            handles: HashMap::new(),
+            handles: HashMap::default(),
         }
     }
 

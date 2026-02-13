@@ -3,7 +3,7 @@ use crate::util::run_git_simple_with_paths;
 use gitgpui_core::domain::FileStatusKind;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::Result;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::path::Path;
 
 impl GixRepo {
@@ -17,7 +17,7 @@ impl GixRepo {
 
         let mut checkout_paths: Vec<&Path> = Vec::new();
         let mut clean_paths: Vec<&Path> = Vec::new();
-        let mut unstaged_selected: HashSet<&Path> = HashSet::new();
+        let mut unstaged_selected: HashSet<&Path> = HashSet::default();
         let mut has_conflicts = false;
 
         for entry in &status.unstaged {

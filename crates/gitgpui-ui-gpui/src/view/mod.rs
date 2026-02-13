@@ -22,7 +22,8 @@ use gpui::{
     Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
     point, px, relative, size, uniform_list,
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -1068,7 +1069,7 @@ impl GitGpuiView {
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
             conflict_resolved_preview_lines: Vec::new(),
-            conflict_resolved_preview_segments_cache: HashMap::new(),
+            conflict_resolved_preview_segments_cache: HashMap::default(),
             diff_visible_indices: Vec::new(),
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
@@ -1083,9 +1084,9 @@ impl GitGpuiView {
             diff_text_anchor: None,
             diff_text_head: None,
             diff_suppress_clicks_remaining: 0,
-            diff_text_hitboxes: HashMap::new(),
+            diff_text_hitboxes: HashMap::default(),
             diff_text_layout_cache_epoch: 0,
-            diff_text_layout_cache: HashMap::new(),
+            diff_text_layout_cache: HashMap::default(),
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
             file_diff_cache_target: None,
@@ -1105,7 +1106,7 @@ impl GitGpuiView {
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_segments_cache_path: None,
-            worktree_preview_segments_cache: HashMap::new(),
+            worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
             diff_preview_new_file_lines: Arc::new(Vec::new()),
             history_cache_seq: 0,
@@ -1145,13 +1146,13 @@ impl GitGpuiView {
                 .max(px(DETAILS_MIN_PX)),
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
-            status_multi_selection: HashMap::new(),
-            status_multi_selection_last_status: HashMap::new(),
+            status_multi_selection: HashMap::default(),
+            status_multi_selection_last_status: HashMap::default(),
             commit_details_message_input,
             error_banner_input,
             commit_details_delay: None,
             commit_details_delay_seq: 0,
-            path_display_cache: std::cell::RefCell::new(HashMap::new()),
+            path_display_cache: std::cell::RefCell::new(HashMap::default()),
         };
 
         view.set_theme(initial_theme, cx);

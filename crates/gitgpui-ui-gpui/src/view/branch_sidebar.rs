@@ -99,10 +99,8 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
                 Loadable::Ready(h) => Some(h.as_str()),
                 _ => None,
             };
-            let mut local_meta: std::collections::HashMap<
-                String,
-                (Option<UpstreamDivergence>, bool),
-            > = std::collections::HashMap::new();
+            let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
+                HashMap::default();
             for b in branches {
                 local_meta.insert(
                     b.name.clone(),
@@ -265,7 +263,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
 fn push_slash_tree_rows(
     tree: &SlashTree,
     out: &mut Vec<BranchSidebarRow>,
-    local_meta: Option<&std::collections::HashMap<String, (Option<UpstreamDivergence>, bool)>>,
+    local_meta: Option<&HashMap<String, (Option<UpstreamDivergence>, bool)>>,
     upstream_full: Option<&str>,
     depth: usize,
     muted: bool,

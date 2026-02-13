@@ -1,7 +1,7 @@
 use super::*;
 use gpui::{Bounds, ContentMask, DispatchPhase, MouseButton, fill, point, px, size};
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
 const HISTORY_TAG_CHIP_PADDING_X_PX: f32 = 6.0;
@@ -11,7 +11,7 @@ const HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 8_192;
 
 thread_local! {
     static HISTORY_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::new());
+        RefCell::new(HashMap::default());
 }
 
 fn shape_truncated_line_cached(

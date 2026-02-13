@@ -10,7 +10,7 @@ use crate::session;
 use gitgpui_core::domain::{DiffTarget, RepoSpec};
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

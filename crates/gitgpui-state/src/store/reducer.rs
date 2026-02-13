@@ -8,7 +8,7 @@ mod util;
 use crate::model::{AppState, RepoId};
 use crate::msg::{Effect, Msg};
 use gitgpui_core::services::GitRepository;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 

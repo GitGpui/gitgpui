@@ -13,6 +13,7 @@ gitgpui-core = { path = "../gitgpui-core" }
 gitgpui-state = { path = "../gitgpui-state" }
 gitgpui-ui = { path = "../gitgpui-ui" }
 gpui = "0.2.2"
+rustc-hash = { workspace = true }
 smol = "2"
 tree-sitter = "0.26"
 tree-sitter-bash = "0.25.1"

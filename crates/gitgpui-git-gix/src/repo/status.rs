@@ -5,6 +5,7 @@ use gitgpui_core::domain::{
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::Result;
 use gix::bstr::ByteSlice as _;
+use rustc_hash::FxHashSet as HashSet;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -136,7 +137,7 @@ impl GixRepo {
         // gix may report unmerged entries (conflicts) as both Index/Worktree and Tree/Index
         // changes, which causes the same path to show up in both sections in the UI. Mirror
         // `git status` behavior by showing conflicted paths only once.
-        let conflicted: std::collections::HashSet<std::path::PathBuf> = unstaged
+        let conflicted: HashSet<std::path::PathBuf> = unstaged
             .iter()
             .filter(|e| e.kind == FileStatusKind::Conflicted)
             .map(|e| e.path.clone())

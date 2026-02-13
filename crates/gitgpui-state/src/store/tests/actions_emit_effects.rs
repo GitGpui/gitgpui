@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn pull_and_push_mark_in_flight_until_command_finished() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -74,7 +74,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
 
 #[test]
 fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -104,7 +104,7 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
 
 #[test]
 fn commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -133,7 +133,7 @@ fn commit_emits_effect() {
 
 #[test]
 fn reset_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -164,7 +164,7 @@ fn reset_emits_effect() {
 
 #[test]
 fn revert_commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -196,7 +196,7 @@ fn revert_commit_emits_effect() {
 
 #[test]
 fn commit_amend_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -225,7 +225,7 @@ fn commit_amend_emits_effect() {
 
 #[test]
 fn merge_ref_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -254,7 +254,7 @@ fn merge_ref_emits_effect() {
 
 #[test]
 fn rebase_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -283,7 +283,7 @@ fn rebase_emits_effect() {
 
 #[test]
 fn create_and_delete_branch_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -325,7 +325,7 @@ fn create_and_delete_branch_emit_effects() {
 
 #[test]
 fn create_and_delete_tag_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -368,7 +368,7 @@ fn create_and_delete_tag_emit_effects() {
 
 #[test]
 fn apply_drop_and_pop_stash_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -433,7 +433,7 @@ fn apply_drop_and_pop_stash_emit_effects() {
 
 #[test]
 fn checkout_commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -465,7 +465,7 @@ fn checkout_commit_emits_effect() {
 
 #[test]
 fn discard_worktree_changes_path_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -497,7 +497,7 @@ fn discard_worktree_changes_path_emits_effect() {
 
 #[test]
 fn repo_operations_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(

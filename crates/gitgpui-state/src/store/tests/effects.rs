@@ -36,7 +36,7 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     super::effects::schedule_effect(
@@ -217,7 +217,11 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::from([(repo_id, repo)]);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     super::effects::schedule_effect(
@@ -377,7 +381,11 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         staged: std::sync::Mutex::new(Vec::new()),
     });
     let repo_trait: Arc<dyn GitRepository> = repo.clone();
-    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::from([(repo_id, repo_trait)]);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo_trait);
+        repos
+    };
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
@@ -549,7 +557,11 @@ fn load_stashes_effect_truncates_results_to_limit() {
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::from([(repo_id, repo)]);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     super::effects::schedule_effect(
@@ -702,7 +714,7 @@ fn pop_stash_effect_applies_then_drops() {
 
     let executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::new();
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     repos.insert(RepoId(1), repo);
     let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 

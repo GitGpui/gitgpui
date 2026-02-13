@@ -4,8 +4,8 @@ use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::OnceLock;
 
@@ -15,7 +15,7 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::new());
+        RefCell::new(HashMap::default());
 }
 
 pub(super) fn inline_diff_line_row_canvas(

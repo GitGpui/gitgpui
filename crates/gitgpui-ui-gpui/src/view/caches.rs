@@ -348,7 +348,7 @@ impl MainPaneView {
                     .and_then(|head| branches.iter().find(|b| b.name == head))
                     .map(|b| b.target.as_ref());
 
-                let mut branch_names_by_target: HashMap<&str, Vec<String>> = HashMap::new();
+                let mut branch_names_by_target: HashMap<&str, Vec<String>> = HashMap::default();
                 for branch in &branches {
                     let should_skip = head_branch
                         .as_ref()
@@ -373,7 +373,7 @@ impl MainPaneView {
                     names.dedup();
                 }
 
-                let mut tag_names_by_target: HashMap<&str, Vec<&str>> = HashMap::new();
+                let mut tag_names_by_target: HashMap<&str, Vec<&str>> = HashMap::default();
                 for tag in &tags {
                     tag_names_by_target
                         .entry(tag.target.as_ref())

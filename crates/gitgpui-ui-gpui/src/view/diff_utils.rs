@@ -245,7 +245,7 @@ pub(super) fn build_unified_patch_for_hunks(
 pub(super) fn build_unified_patch_for_hunk_selection(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
-    selected_src_ixs: &std::collections::HashSet<usize>,
+    selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
     if selected_src_ixs.is_empty() {
         return None;
@@ -352,7 +352,7 @@ pub(super) fn build_unified_patch_for_hunk_selection(
 pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
-    selected_src_ixs: &std::collections::HashSet<usize>,
+    selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
     if selected_src_ixs.is_empty() {
         return None;
@@ -458,10 +458,10 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
 
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &std::collections::HashSet<usize>,
+    selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
     use gitgpui_core::domain::DiffLineKind as K;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
 
     if selected_src_ixs.is_empty() {
         return None;
@@ -495,10 +495,10 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
 
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
     diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &std::collections::HashSet<usize>,
+    selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
     use gitgpui_core::domain::DiffLineKind as K;
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
 
     if selected_src_ixs.is_empty() {
         return None;
@@ -565,7 +565,6 @@ pub(super) fn context_menu_selection_range_from_diff_text(
 mod tests {
     use super::*;
     use gitgpui_core::domain::DiffLineKind as K;
-    use std::collections::HashSet;
 
     fn dl(kind: K, text: &str) -> AnnotatedDiffLine {
         AnnotatedDiffLine {

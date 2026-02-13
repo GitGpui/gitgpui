@@ -7,7 +7,7 @@ mod util;
 
 use crate::msg::{Effect, Msg};
 use gitgpui_core::services::{GitBackend, GitRepository};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, mpsc};
 
 use super::RepoId;
