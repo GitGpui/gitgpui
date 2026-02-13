@@ -666,7 +666,7 @@ impl MainPaneView {
                 }
             });
 
-        let (hunks_count, hunk_patch, lines_count, lines_patch) =
+        let (hunks_count, hunk_patch, lines_count, lines_patch, discard_lines_patch) =
             if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
                 let mut selected_src_ixs: std::collections::HashSet<usize> =
                     std::collections::HashSet::new();
@@ -706,14 +706,28 @@ impl MainPaneView {
                     &self.diff_cache,
                     &selected_change_src_ixs,
                 );
+                let discard_lines_patch = if area == DiffArea::Unstaged {
+                    build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+                        &self.diff_cache,
+                        &selected_change_src_ixs,
+                    )
+                } else {
+                    None
+                };
                 let lines_count = lines_patch
                     .as_ref()
                     .map(|_| selected_change_src_ixs.len())
                     .unwrap_or(0);
 
-                (hunks_count, hunk_patch, lines_count, lines_patch)
+                (
+                    hunks_count,
+                    hunk_patch,
+                    lines_count,
+                    lines_patch,
+                    discard_lines_patch,
+                )
             } else {
-                (0, None, 0, None)
+                (0, None, 0, None, None)
             };
 
         self.open_popover_at(
@@ -724,6 +738,7 @@ impl MainPaneView {
                 hunk_patch,
                 hunks_count,
                 lines_patch,
+                discard_lines_patch,
                 lines_count,
                 copy_text,
             },

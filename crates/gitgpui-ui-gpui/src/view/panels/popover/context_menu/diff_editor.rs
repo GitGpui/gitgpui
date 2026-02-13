@@ -7,6 +7,7 @@ pub(super) fn model(
     hunk_patch: &Option<String>,
     hunks_count: usize,
     lines_patch: &Option<String>,
+    discard_lines_patch: &Option<String>,
     lines_count: usize,
     copy_text: &Option<String>,
 ) -> ContextMenuModel {
@@ -53,10 +54,10 @@ pub(super) fn model(
             },
             icon: Some("↺".into()),
             shortcut: Some("D".into()),
-            disabled: lines_patch.is_none(),
+            disabled: discard_lines_patch.is_none(),
             action: ContextMenuAction::ApplyWorktreePatch {
                 repo_id,
-                patch: lines_patch.clone().unwrap_or_default(),
+                patch: discard_lines_patch.clone().unwrap_or_default(),
                 reverse: true,
             },
         });
@@ -103,6 +104,29 @@ pub(super) fn model(
     }
 
     items.push(ContextMenuItem::Separator);
+    if let Some(path) = path {
+        items.push(ContextMenuItem::Entry {
+            label: "Open file".into(),
+            icon: Some("🗎".into()),
+            shortcut: None,
+            disabled: false,
+            action: ContextMenuAction::OpenFile {
+                repo_id,
+                path: path.clone(),
+            },
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "Open file location".into(),
+            icon: Some("📂".into()),
+            shortcut: None,
+            disabled: false,
+            action: ContextMenuAction::OpenFileLocation {
+                repo_id,
+                path: path.clone(),
+            },
+        });
+        items.push(ContextMenuItem::Separator);
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy".into(),
         icon: Some("⧉".into()),

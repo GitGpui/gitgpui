@@ -8,6 +8,14 @@ enum ContextMenuAction {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    OpenFile {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    OpenFileLocation {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,

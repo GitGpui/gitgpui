@@ -349,6 +349,113 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     has_change.then_some(out)
 }
 
+pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
+    diff: &[AnnotatedDiffLine],
+    hunk_src_ix: usize,
+    selected_src_ixs: &std::collections::HashSet<usize>,
+) -> Option<String> {
+    if selected_src_ixs.is_empty() {
+        return None;
+    }
+
+    let lines = diff;
+    let hunk = lines.get(hunk_src_ix)?;
+    if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+        return None;
+    }
+
+    let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
+        lines
+            .get(ix)
+            .is_some_and(|l| l.text.starts_with("diff --git "))
+    })?;
+
+    let first_hunk = (file_start + 1..lines.len())
+        .find(|&ix| {
+            let Some(line) = lines.get(ix) else {
+                return false;
+            };
+            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                || line.text.starts_with("diff --git ")
+        })
+        .unwrap_or(lines.len());
+
+    let header_end = first_hunk.min(hunk_src_ix);
+    let hunk_end = (hunk_src_ix + 1..lines.len())
+        .find(|&ix| {
+            let Some(line) = lines.get(ix) else {
+                return false;
+            };
+            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
+                || line.text.starts_with("diff --git ")
+        })
+        .unwrap_or(lines.len());
+
+    let mut out = String::new();
+    for line in &lines[file_start..header_end] {
+        out.push_str(&line.text);
+        out.push('\n');
+    }
+
+    // Keep the original hunk header; `git apply --recount` will adjust counts.
+    out.push_str(&lines[hunk_src_ix].text);
+    out.push('\n');
+
+    let mut has_change = false;
+    let mut prev_included = false;
+    for ix in hunk_src_ix + 1..hunk_end {
+        let line = &lines[ix];
+
+        if line.text.starts_with("\\") {
+            if prev_included {
+                out.push_str(&line.text);
+                out.push('\n');
+            }
+            continue;
+        }
+
+        match line.kind {
+            gitgpui_core::domain::DiffLineKind::Add => {
+                if selected_src_ixs.contains(&ix) {
+                    out.push_str(&line.text);
+                    out.push('\n');
+                    has_change = true;
+                    prev_included = true;
+                } else {
+                    let content = line.text.strip_prefix('+').unwrap_or(&line.text);
+                    out.push(' ');
+                    out.push_str(content);
+                    out.push('\n');
+                    prev_included = true;
+                }
+            }
+            gitgpui_core::domain::DiffLineKind::Remove => {
+                if selected_src_ixs.contains(&ix) {
+                    out.push_str(&line.text);
+                    out.push('\n');
+                    has_change = true;
+                    prev_included = true;
+                } else {
+                    prev_included = false;
+                }
+            }
+            gitgpui_core::domain::DiffLineKind::Context => {
+                out.push_str(&line.text);
+                out.push('\n');
+                prev_included = true;
+            }
+            gitgpui_core::domain::DiffLineKind::Header
+            | gitgpui_core::domain::DiffLineKind::Hunk => {
+                out.push_str(&line.text);
+                out.push('\n');
+                prev_included = true;
+            }
+        }
+    }
+
+    has_change.then_some(out)
+}
+
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &std::collections::HashSet<usize>,
@@ -378,6 +485,46 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     for (hunk_src_ix, src_ixs) in by_hunk {
         let Some(patch) = build_unified_patch_for_hunk_selection(diff, hunk_src_ix, &src_ixs)
         else {
+            continue;
+        };
+        out.push_str(&patch);
+    }
+
+    (!out.trim().is_empty()).then_some(out)
+}
+
+pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+    diff: &[AnnotatedDiffLine],
+    selected_src_ixs: &std::collections::HashSet<usize>,
+) -> Option<String> {
+    use gitgpui_core::domain::DiffLineKind as K;
+    use std::collections::{BTreeMap, HashSet};
+
+    if selected_src_ixs.is_empty() {
+        return None;
+    }
+
+    let mut by_hunk: BTreeMap<usize, HashSet<usize>> = BTreeMap::new();
+    for &src_ix in selected_src_ixs {
+        let Some(line) = diff.get(src_ix) else {
+            continue;
+        };
+        if !matches!(line.kind, K::Add | K::Remove) {
+            continue;
+        }
+        let Some(hunk_src_ix) = enclosing_hunk_src_ix(diff, src_ix) else {
+            continue;
+        };
+        by_hunk.entry(hunk_src_ix).or_default().insert(src_ix);
+    }
+
+    let mut out = String::new();
+    for (hunk_src_ix, src_ixs) in by_hunk {
+        let Some(patch) = build_unified_patch_for_hunk_selection_for_worktree_discard(
+            diff,
+            hunk_src_ix,
+            &src_ixs,
+        ) else {
             continue;
         };
         out.push_str(&patch);
@@ -463,6 +610,22 @@ mod tests {
         ]
     }
 
+    fn example_two_mods_one_hunk_diff() -> Vec<AnnotatedDiffLine> {
+        vec![
+            dl(K::Header, "diff --git a/file.txt b/file.txt"),
+            dl(K::Header, "index 1111111..2222222 100644"),
+            dl(K::Header, "--- a/file.txt"),
+            dl(K::Header, "+++ b/file.txt"),
+            dl(K::Hunk, "@@ -1,4 +1,4 @@"),
+            dl(K::Context, " line1"),
+            dl(K::Remove, "-line2"),
+            dl(K::Add, "+line2_mod"),
+            dl(K::Remove, "-line3"),
+            dl(K::Add, "+line3_mod"),
+            dl(K::Context, " line4"),
+        ]
+    }
+
     #[test]
     fn build_unified_patch_for_hunks_includes_multiple_hunks() {
         let diff = example_two_hunk_diff();
@@ -504,6 +667,24 @@ mod tests {
         assert!(patch.contains("diff --git a/b.txt b/b.txt"));
         assert!(patch.contains("+a"));
         assert!(patch.contains("+b"));
+    }
+
+    #[test]
+    fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard_keeps_unselected_changes_as_worktree_context()
+     {
+        let diff = example_two_mods_one_hunk_diff();
+        let selected: HashSet<usize> = [6, 7].into_iter().collect();
+
+        let patch = build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+            &diff, &selected,
+        )
+        .expect("patch");
+
+        assert!(patch.contains("-line2"));
+        assert!(patch.contains("+line2_mod"));
+        assert!(!patch.contains("-line3"));
+        assert!(!patch.contains("+line3_mod"));
+        assert!(patch.contains(" line3_mod"));
     }
 
     #[test]

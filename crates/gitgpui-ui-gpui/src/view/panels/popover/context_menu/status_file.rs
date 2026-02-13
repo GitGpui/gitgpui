@@ -93,6 +93,26 @@ pub(super) fn model(
         },
     });
     items.push(ContextMenuItem::Entry {
+        label: "Open file".into(),
+        icon: Some("🗎".into()),
+        shortcut: None,
+        disabled: false,
+        action: ContextMenuAction::OpenFile {
+            repo_id,
+            path: path.clone(),
+        },
+    });
+    items.push(ContextMenuItem::Entry {
+        label: "Open file location".into(),
+        icon: Some("📂".into()),
+        shortcut: None,
+        disabled: false,
+        action: ContextMenuAction::OpenFileLocation {
+            repo_id,
+            path: path.clone(),
+        },
+    });
+    items.push(ContextMenuItem::Entry {
         label: "File history".into(),
         icon: Some("⟲".into()),
         shortcut: Some("H".into()),

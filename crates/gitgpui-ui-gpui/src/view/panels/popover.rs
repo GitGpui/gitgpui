@@ -1757,6 +1757,7 @@ impl PopoverHost {
                 hunk_patch,
                 hunks_count,
                 lines_patch,
+                discard_lines_patch,
                 lines_count,
                 copy_text,
             } => self
@@ -1768,6 +1769,7 @@ impl PopoverHost {
                         hunk_patch,
                         hunks_count,
                         lines_patch,
+                        discard_lines_patch,
                         lines_count,
                         copy_text,
                     },
@@ -1958,6 +1960,234 @@ mod tests {
 
             assert_eq!(rid, repo_id);
             assert_eq!(target, commit_id.as_ref().to_string());
+        });
+    }
+
+    #[gpui::test]
+    fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(2);
+        let commit_id = CommitId("deadbeefdeadbeef".to_string());
+        let path = std::path::PathBuf::from("src/main.rs");
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::CommitFileMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected commit file context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(3);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitgpui_ui_test_{}_status_menu_open_file",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("a.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, _cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitgpui_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitgpui_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitgpui_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        }],
+                    }
+                    .into(),
+                );
+
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitGpuiView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(4);
+        let path = std::path::PathBuf::from("a.txt");
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::DiffEditorMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: Some(path.clone()),
+                                hunk_patch: None,
+                                hunks_count: 0,
+                                lines_patch: None,
+                                discard_lines_patch: None,
+                                lines_count: 0,
+                                copy_text: Some("x".to_string()),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected diff editor context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some(action.clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
         });
     }
 

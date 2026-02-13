@@ -13,6 +13,129 @@ mod status_file;
 mod tag;
 
 impl PopoverHost {
+    fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
+        self.state
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| r.spec.workdir.clone())
+    }
+
+    fn resolve_workdir_path(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Result<std::path::PathBuf, String> {
+        if path.is_absolute()
+            || path.components().any(|c| {
+                matches!(
+                    c,
+                    std::path::Component::ParentDir
+                        | std::path::Component::Prefix(_)
+                        | std::path::Component::RootDir
+                )
+            })
+        {
+            return Err("Refusing to open path outside repository".to_string());
+        }
+
+        let workdir = self
+            .workdir_for_repo(repo_id)
+            .ok_or_else(|| "Repository is not available".to_string())?;
+        Ok(workdir.join(path))
+    }
+
+    fn open_path_default(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(path).spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(path)
+                .spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            match std::process::Command::new("xdg-open").arg(path).spawn() {
+                Ok(_) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    let _ = std::process::Command::new("gio")
+                        .args(["open"])
+                        .arg(path)
+                        .spawn()?;
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "freebsd"
+        )))]
+        {
+            let _ = path;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Opening files is not supported on this platform",
+            ))
+        }
+    }
+
+    fn open_file_location(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
+        if path.is_dir() {
+            return self.open_path_default(path);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg("-R")
+                .arg(path)
+                .spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(path.as_os_str());
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(arg)
+                .spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            let parent = path.parent().unwrap_or(path);
+            self.open_path_default(parent)
+        }
+
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "freebsd"
+        )))]
+        {
+            let _ = path;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Opening file locations is not supported on this platform",
+            ))
+        }
+    }
+
     fn take_status_paths_for_action(
         &mut self,
         repo_id: RepoId,
@@ -91,6 +214,7 @@ impl PopoverHost {
                 hunk_patch,
                 hunks_count,
                 lines_patch,
+                discard_lines_patch,
                 lines_count,
                 copy_text,
             } => Some(diff_editor::model(
@@ -100,6 +224,7 @@ impl PopoverHost {
                 hunk_patch,
                 *hunks_count,
                 lines_patch,
+                discard_lines_patch,
                 *lines_count,
                 copy_text,
             )),
@@ -119,6 +244,62 @@ impl PopoverHost {
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            ContextMenuAction::OpenFile { repo_id, path } => {
+                let full_path = match self.resolve_workdir_path(repo_id, &path) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.push_toast(zed::ToastKind::Error, err, cx);
+                        self.close_popover(cx);
+                        return;
+                    }
+                };
+
+                if !full_path.exists() {
+                    self.push_toast(
+                        zed::ToastKind::Error,
+                        format!("Path not found: {}", full_path.display()),
+                        cx,
+                    );
+                } else if let Err(err) = self.open_path_default(&full_path) {
+                    self.push_toast(zed::ToastKind::Error, format!("Failed to open: {err}"), cx);
+                }
+            }
+            ContextMenuAction::OpenFileLocation { repo_id, path } => {
+                let full_path = match self.resolve_workdir_path(repo_id, &path) {
+                    Ok(path) => path,
+                    Err(err) => {
+                        self.push_toast(zed::ToastKind::Error, err, cx);
+                        self.close_popover(cx);
+                        return;
+                    }
+                };
+
+                let target = if full_path.exists() {
+                    full_path
+                } else {
+                    full_path
+                        .parent()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| {
+                            self.workdir_for_repo(repo_id)
+                                .unwrap_or_else(|| full_path.clone())
+                        })
+                };
+
+                if !target.exists() {
+                    self.push_toast(
+                        zed::ToastKind::Error,
+                        format!("Path not found: {}", target.display()),
+                        cx,
+                    );
+                } else if let Err(err) = self.open_file_location(&target) {
+                    self.push_toast(
+                        zed::ToastKind::Error,
+                        format!("Failed to open location: {err}"),
+                        cx,
+                    );
+                }
             }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
                 self.store
