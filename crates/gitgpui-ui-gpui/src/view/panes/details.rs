@@ -1,4 +1,5 @@
 use super::super::*;
+use std::hash::{Hash, Hasher};
 
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
@@ -7,6 +8,7 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
+    notify_fingerprint: u64,
 
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
     pub(in super::super) staged_scroll: UniformListScrollHandle,
@@ -26,6 +28,54 @@ pub(in super::super) struct DetailsPaneView {
 }
 
 impl DetailsPaneView {
+    fn notify_fingerprint(state: &AppState) -> u64 {
+        fn hash_loadable_shared<T>(
+            value: &Loadable<Arc<T>>,
+            hasher: &mut std::collections::hash_map::DefaultHasher,
+        ) {
+            match value {
+                Loadable::NotLoaded => 0u8.hash(hasher),
+                Loadable::Loading => 1u8.hash(hasher),
+                Loadable::Ready(shared) => {
+                    2u8.hash(hasher);
+                    (Arc::as_ptr(shared) as usize).hash(hasher);
+                }
+                Loadable::Error(err) => {
+                    3u8.hash(hasher);
+                    err.hash(hasher);
+                }
+            }
+        }
+
+        fn hash_loadable_kind<T>(value: &Loadable<T>, hasher: &mut std::collections::hash_map::DefaultHasher) {
+            match value {
+                Loadable::NotLoaded => 0u8.hash(hasher),
+                Loadable::Loading => 1u8.hash(hasher),
+                Loadable::Ready(_) => 2u8.hash(hasher),
+                Loadable::Error(err) => {
+                    3u8.hash(hasher);
+                    err.hash(hasher);
+                }
+            }
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.active_repo.hash(&mut hasher);
+
+        if let Some(repo_id) = state.active_repo
+            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
+        {
+            hash_loadable_shared(&repo.status, &mut hasher);
+            repo.selected_commit.hash(&mut hasher);
+            hash_loadable_shared(&repo.commit_details, &mut hasher);
+
+            hash_loadable_kind(&repo.merge_commit_message, &mut hasher);
+            hash_loadable_kind(&repo.rebase_in_progress, &mut hasher);
+        }
+
+        hasher.finish()
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -36,8 +86,16 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let initial_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
+            let next_fingerprint = Self::notify_fingerprint(&next);
+            if next_fingerprint == this.notify_fingerprint {
+                this.state = next;
+                return;
+            }
+
+            this.notify_fingerprint = next_fingerprint;
             this.apply_state_snapshot(next, cx);
             cx.notify();
         });
@@ -77,6 +135,7 @@ impl DetailsPaneView {
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
+            notify_fingerprint: initial_fingerprint,
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),

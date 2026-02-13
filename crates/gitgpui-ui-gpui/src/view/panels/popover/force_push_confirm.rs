@@ -1,9 +1,9 @@
 use super::*;
 
 pub(super) fn panel(
-    _this: &mut GitGpuiView,
+    _this: &mut PopoverHost,
     repo_id: RepoId,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = _this.theme;
 

@@ -1,11 +1,11 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut GitGpuiView,
+    this: &mut PopoverHost,
     repo_id: RepoId,
     name: String,
     kind: RemoteUrlKind,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let kind_label = match kind {

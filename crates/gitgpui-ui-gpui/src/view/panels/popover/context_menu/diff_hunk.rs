@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn model(this: &GitGpuiView, repo_id: RepoId, src_ix: usize) -> ContextMenuModel {
+pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Hunk".into())];
     items.push(ContextMenuItem::Separator);
 

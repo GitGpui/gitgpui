@@ -1,4 +1,5 @@
 use super::*;
+use std::hash::{Hash, Hasher};
 
 pub(in super::super) struct RepoTabsBarView {
     store: Arc<AppStore>,
@@ -9,9 +10,21 @@ pub(in super::super) struct RepoTabsBarView {
     tooltip_host: WeakEntity<TooltipHost>,
 
     hovered_repo_tab: Option<RepoId>,
+    notify_fingerprint: u64,
 }
 
 impl RepoTabsBarView {
+    fn notify_fingerprint(state: &AppState) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.active_repo.hash(&mut hasher);
+        state.repos.len().hash(&mut hasher);
+        for repo in &state.repos {
+            repo.id.hash(&mut hasher);
+            repo.spec.workdir.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -21,9 +34,22 @@ impl RepoTabsBarView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let notify_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
-            this.state = Arc::clone(&model.read(cx).state);
-            cx.notify();
+            let next = Arc::clone(&model.read(cx).state);
+            let next_fingerprint = Self::notify_fingerprint(&next);
+
+            this.state = next;
+
+            if this.hovered_repo_tab.is_some_and(|id| !this.state.repos.iter().any(|r| r.id == id))
+            {
+                this.hovered_repo_tab = None;
+            }
+
+            if next_fingerprint != this.notify_fingerprint {
+                this.notify_fingerprint = next_fingerprint;
+                cx.notify();
+            }
         });
 
         Self {
@@ -34,6 +60,7 @@ impl RepoTabsBarView {
             root_view,
             tooltip_host,
             hovered_repo_tab: None,
+            notify_fingerprint,
         }
     }
 
@@ -204,12 +231,6 @@ impl Render for RepoTabsBarView {
             .style(zed::ButtonStyle::Subtle)
             .on_click(theme, cx, move |_this, e, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
-                    root.clone_repo_url_input.update(cx, |input, cx| {
-                        input.set_theme(theme, cx);
-                        input.set_text("", cx);
-                    });
-                    root.clone_repo_parent_dir_input
-                        .update(cx, |input, cx| input.set_theme(theme, cx));
                     root.open_popover_at(PopoverKind::CloneRepo, e.position(), window, cx);
                 });
             })

@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn model(
-    this: &GitGpuiView,
+    this: &PopoverHost,
     repo_id: RepoId,
     section: BranchSection,
     name: &String,

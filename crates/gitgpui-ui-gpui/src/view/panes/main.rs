@@ -14,6 +14,7 @@ pub(in super::super) struct MainPaneView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
+    notify_fingerprint: u64,
 
     pub(in super::super) last_window_size: Size<Pixels>,
 
@@ -120,6 +121,89 @@ pub(in super::super) struct MainPaneView {
 }
 
 impl MainPaneView {
+    fn notify_fingerprint(state: &AppState) -> u64 {
+        fn hash_diff_target(target: &DiffTarget, hasher: &mut std::collections::hash_map::DefaultHasher) {
+            match target {
+                DiffTarget::WorkingTree { path, area } => {
+                    0u8.hash(hasher);
+                    path.hash(hasher);
+                    match area {
+                        DiffArea::Staged => 0u8.hash(hasher),
+                        DiffArea::Unstaged => 1u8.hash(hasher),
+                    }
+                }
+                DiffTarget::Commit { commit_id, path } => {
+                    1u8.hash(hasher);
+                    commit_id.hash(hasher);
+                    path.hash(hasher);
+                }
+            }
+        }
+
+        fn hash_loadable_kind<T>(value: &Loadable<T>, hasher: &mut std::collections::hash_map::DefaultHasher) {
+            match value {
+                Loadable::NotLoaded => 0u8.hash(hasher),
+                Loadable::Loading => 1u8.hash(hasher),
+                Loadable::Ready(_) => 2u8.hash(hasher),
+                Loadable::Error(err) => {
+                    3u8.hash(hasher);
+                    err.hash(hasher);
+                }
+            }
+        }
+
+        fn hash_loadable_shared<T>(
+            value: &Loadable<Arc<T>>,
+            hasher: &mut std::collections::hash_map::DefaultHasher,
+        ) {
+            match value {
+                Loadable::NotLoaded => 0u8.hash(hasher),
+                Loadable::Loading => 1u8.hash(hasher),
+                Loadable::Ready(shared) => {
+                    2u8.hash(hasher);
+                    (Arc::as_ptr(shared) as usize).hash(hasher);
+                }
+                Loadable::Error(err) => {
+                    3u8.hash(hasher);
+                    err.hash(hasher);
+                }
+            }
+        }
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.active_repo.hash(&mut hasher);
+
+        if let Some(repo_id) = state.active_repo
+            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
+        {
+            repo.history_scope.hash(&mut hasher);
+            repo.head_branch_rev.hash(&mut hasher);
+            repo.branches_rev.hash(&mut hasher);
+            repo.remote_branches_rev.hash(&mut hasher);
+            repo.tags_rev.hash(&mut hasher);
+            repo.stashes_rev.hash(&mut hasher);
+
+            repo.selected_commit.hash(&mut hasher);
+            repo.log_loading_more.hash(&mut hasher);
+            hash_loadable_shared(&repo.log, &mut hasher);
+
+            repo.diff_rev.hash(&mut hasher);
+            repo.diff_target
+                .as_ref()
+                .map(|t| hash_diff_target(t, &mut hasher));
+            hash_loadable_shared(&repo.diff, &mut hasher);
+
+            repo.diff_file_rev.hash(&mut hasher);
+            hash_loadable_kind(&repo.diff_file, &mut hasher);
+            hash_loadable_kind(&repo.diff_file_image, &mut hasher);
+
+            repo.conflict_file_path.hash(&mut hasher);
+            hash_loadable_kind(&repo.conflict_file, &mut hasher);
+        }
+
+        hasher.finish()
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -131,8 +215,16 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let initial_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
+            let next_fingerprint = Self::notify_fingerprint(&next);
+            if next_fingerprint == this.notify_fingerprint {
+                this.state = next;
+                return;
+            }
+
+            this.notify_fingerprint = next_fingerprint;
             this.apply_state_snapshot(next, cx);
             cx.notify();
         });
@@ -230,6 +322,7 @@ impl MainPaneView {
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
+            notify_fingerprint: initial_fingerprint,
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
             diff_cache_repo_id: None,

@@ -1,11 +1,11 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut GitGpuiView,
+    this: &mut PopoverHost,
     repo_id: RepoId,
     path: std::path::PathBuf,
     rev: Option<String>,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
@@ -66,7 +66,7 @@ pub(super) fn panel(
             let list = uniform_list(
                 "blame_popover",
                 count,
-                cx.processor(GitGpuiView::render_blame_popover_rows),
+                cx.processor(PopoverHost::render_blame_popover_rows),
             )
             .h(px(360.0))
             .track_scroll(this.blame_scroll.clone());

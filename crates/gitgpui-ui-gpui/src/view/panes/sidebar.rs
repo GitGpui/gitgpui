@@ -10,6 +10,26 @@ pub(in super::super) struct SidebarPaneView {
     branch_sidebar_cache: Option<BranchSidebarCache>,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
+    notify_fingerprint: SidebarNotifyFingerprint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SidebarNotifyFingerprint {
+    active_repo_id: Option<RepoId>,
+    repo_fingerprint: Option<BranchSidebarFingerprint>,
+}
+
+impl SidebarNotifyFingerprint {
+    fn from_state(state: &AppState) -> Self {
+        let active_repo_id = state.active_repo;
+        let repo_fingerprint = active_repo_id
+            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
+            .map(BranchSidebarFingerprint::from_repo);
+        Self {
+            active_repo_id,
+            repo_fingerprint,
+        }
+    }
 }
 
 impl SidebarPaneView {
@@ -22,9 +42,18 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let initial_fingerprint = SidebarNotifyFingerprint::from_state(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
-            this.state = Arc::clone(&model.read(cx).state);
-            cx.notify();
+            let next = Arc::clone(&model.read(cx).state);
+            let next_fingerprint = SidebarNotifyFingerprint::from_state(&next);
+            let should_notify = next_fingerprint != this.notify_fingerprint;
+
+            this.notify_fingerprint = next_fingerprint;
+            this.state = next;
+
+            if should_notify {
+                cx.notify();
+            }
         });
 
         Self {
@@ -36,6 +65,7 @@ impl SidebarPaneView {
             branch_sidebar_cache: None,
             root_view,
             tooltip_host,
+            notify_fingerprint: initial_fingerprint,
         }
     }
 

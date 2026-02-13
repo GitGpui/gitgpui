@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn model(
-    _this: &GitGpuiView,
+    _this: &PopoverHost,
     repo_id: RepoId,
     commit_id: &CommitId,
     path: &std::path::PathBuf,

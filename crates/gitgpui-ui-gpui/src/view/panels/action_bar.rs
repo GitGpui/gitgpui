@@ -1,4 +1,5 @@
 use super::*;
+use std::hash::{Hash, Hasher};
 
 pub(in super::super) struct ActionBarView {
     store: Arc<AppStore>,
@@ -7,9 +8,60 @@ pub(in super::super) struct ActionBarView {
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
+    notify_fingerprint: u64,
 }
 
 impl ActionBarView {
+    fn notify_fingerprint(state: &AppState) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        state.active_repo.hash(&mut hasher);
+
+        if let Some(repo_id) = state.active_repo
+            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
+        {
+            repo.spec.workdir.hash(&mut hasher);
+            repo.head_branch_rev.hash(&mut hasher);
+            match &repo.head_branch {
+                Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                Loadable::Loading => 1u8.hash(&mut hasher),
+                Loadable::Error(err) => {
+                    2u8.hash(&mut hasher);
+                    err.hash(&mut hasher);
+                }
+                Loadable::Ready(name) => {
+                    3u8.hash(&mut hasher);
+                    name.hash(&mut hasher);
+                }
+            }
+
+            match &repo.upstream_divergence {
+                Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                Loadable::Loading => 1u8.hash(&mut hasher),
+                Loadable::Error(err) => {
+                    2u8.hash(&mut hasher);
+                    err.hash(&mut hasher);
+                }
+                Loadable::Ready(None) => 3u8.hash(&mut hasher),
+                Loadable::Ready(Some(div)) => {
+                    4u8.hash(&mut hasher);
+                    div.behind.hash(&mut hasher);
+                    div.ahead.hash(&mut hasher);
+                }
+            }
+
+            repo.pull_in_flight.hash(&mut hasher);
+            repo.push_in_flight.hash(&mut hasher);
+
+            let can_stash = match &repo.status {
+                Loadable::Ready(status) => !status.staged.is_empty() || !status.unstaged.is_empty(),
+                _ => false,
+            };
+            can_stash.hash(&mut hasher);
+        }
+
+        hasher.finish()
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -19,9 +71,16 @@ impl ActionBarView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
+        let notify_fingerprint = Self::notify_fingerprint(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
-            this.state = Arc::clone(&model.read(cx).state);
-            cx.notify();
+            let next = Arc::clone(&model.read(cx).state);
+            let next_fingerprint = Self::notify_fingerprint(&next);
+
+            this.state = next;
+            if next_fingerprint != this.notify_fingerprint {
+                this.notify_fingerprint = next_fingerprint;
+                cx.notify();
+            }
         });
 
         Self {
@@ -31,6 +90,7 @@ impl ActionBarView {
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
+            notify_fingerprint,
         }
     }
 
@@ -86,7 +146,6 @@ impl ActionBarView {
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.push_toast(kind, message, cx);
-            cx.notify();
         });
     }
 }
@@ -335,19 +394,12 @@ impl Render for ActionBarView {
                             };
 
                             if let Some(remote) = remote {
-                                let root_view = this.root_view.clone();
-                                let head = head.clone();
-                                let pos = e.position();
-                                let _ = root_view.update(cx, |root, cx| {
-                                    root.push_upstream_branch_input
-                                        .update(cx, |i, cx| i.set_text(head, cx));
-                                    root.open_popover_at(
-                                        PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
-                                        pos,
-                                        window,
-                                        cx,
-                                    );
-                                });
+                                this.open_popover_at(
+                                    PopoverKind::PushSetUpstreamPrompt { repo_id, remote },
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
                                 return;
                             }
 
@@ -442,4 +494,3 @@ impl Render for ActionBarView {
             )
     }
 }
-

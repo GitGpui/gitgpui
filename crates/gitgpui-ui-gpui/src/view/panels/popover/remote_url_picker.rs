@@ -1,10 +1,10 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut GitGpuiView,
+    this: &mut PopoverHost,
     repo_id: RepoId,
     kind: RemoteUrlKind,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));

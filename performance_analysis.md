@@ -276,13 +276,13 @@ These are the highest-value “Entity boundaries” in this repo (some already e
   - Move `hovered_repo_tab` and tab hover/close logic out of root so hovering tabs doesn’t re-render the full window.
 - [x] **Step 3: Extract `ActionBarView` entity**
   - Localize action-bar rendering (notify gating comes later in Step 8).
-- [ ] **Step 4: Extract `TitleBarView` entity**
+- [x] **Step 4: Extract `TitleBarView` entity**
   - Localize window-control rendering (and app-menu trigger) so window activation changes don’t force a full re-render.
-- [ ] **Step 5: Extract `ToastHost` entity**
+- [x] **Step 5: Extract `ToastHost` entity**
   - Move toast state + timers out of root (toasts should never imply a full relayout).
-- [ ] **Step 6: Popover host decoupling**
-  - Introduce a dedicated popover host entity or service so “open popover” doesn’t require updating the root view.
-- [ ] **Step 7: Remove root’s unconditional `AppUiModel` subscription notify**
-  - Root becomes a mostly-static compositor: panes + chrome + overlays.
-- [ ] **Step 8: Add per-entity notify gating**
-  - Each entity should `cx.notify()` only when its own render-relevant fingerprint changes.
+- [x] **Step 6: Popover host decoupling**
+  - Render popovers from a dedicated `PopoverHost` entity (root just composes it).
+- [x] **Step 7: Remove root’s unconditional `AppUiModel` subscription notify**
+  - Root is a mostly-static compositor; it only notifies on root-owned visual changes (e.g. error banner).
+- [x] **Step 8: Add per-entity notify gating**
+  - Each always-visible entity only notifies when its own render-relevant fingerprint changes.

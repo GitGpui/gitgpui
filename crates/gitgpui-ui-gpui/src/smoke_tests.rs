@@ -355,7 +355,7 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(),
+            !view.read(app).is_popover_open(app),
             "expected popover to close on click"
         );
     });
@@ -385,7 +385,10 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     cx.run_until_parked();
 
     cx.update(|_window, app| {
-        assert!(view.read(app).is_popover_open(), "expected popover to open");
+        assert!(
+            view.read(app).is_popover_open(app),
+            "expected popover to open"
+        );
     });
 
     // Click somewhere in the main content area (outside the popover).
@@ -397,7 +400,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_window, app| {
         assert!(
-            !view.read(app).is_popover_open(),
+            !view.read(app).is_popover_open(app),
             "expected popover to close when clicking outside"
         );
     });

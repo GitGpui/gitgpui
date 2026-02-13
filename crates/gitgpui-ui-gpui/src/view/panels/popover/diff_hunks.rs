@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>) -> gpui::Div {
+pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>) -> gpui::Div {
+pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let current = this.date_time_format;
     let preview_now = std::time::SystemTime::now();
@@ -69,9 +69,8 @@ pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>)
                             ),
                     )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.date_time_format = fmt_val;
                         this.settings_date_format_open = false;
-                        this.schedule_ui_settings_persist(cx);
+                        this.set_date_time_format(fmt_val, cx);
                         cx.notify();
                     })),
             );

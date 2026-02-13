@@ -3,6 +3,12 @@ use gpui::ObjectFit;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 
+pub(super) struct TitleBarView {
+    theme: AppTheme,
+    root_view: WeakEntity<GitGpuiView>,
+    title_should_move: bool,
+}
+
 fn titlebar_control_icon(theme: AppTheme, path: &'static str) -> gpui::Svg {
     gpui::svg()
         .path(path)
@@ -150,12 +156,35 @@ pub(super) fn resize_edge(
     }
 }
 
-impl GitGpuiView {
-    pub(super) fn title_bar(
+impl TitleBarView {
+    pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitGpuiView>) -> Self {
+        Self {
+            theme,
+            root_view,
+            title_should_move: false,
+        }
+    }
+
+    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    fn open_popover_at(
         &mut self,
+        kind: PopoverKind,
+        anchor: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_at(kind, anchor, window, cx);
+        });
+    }
+}
+
+impl Render for TitleBarView {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let bar_bg = if window.is_window_active() {
             lighten(
@@ -201,10 +230,8 @@ impl GitGpuiView {
                     .active(move |s| s.bg(theme.colors.active))
                     .child(titlebar_control_icon(theme, "icons/menu.svg")),
             )
-            .on_click(cx.listener(|this, e: &ClickEvent, _w, cx| {
-                this.popover = Some(PopoverKind::AppMenu);
-                this.popover_anchor = Some(e.position());
-                cx.notify();
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                this.open_popover_at(PopoverKind::AppMenu, e.position(), window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,

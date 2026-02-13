@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn model(this: &GitGpuiView) -> ContextMenuModel {
+pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let repo_id = this.active_repo_id();
     let disabled = repo_id.is_none();
     let repo_id = repo_id.unwrap_or(RepoId(0));

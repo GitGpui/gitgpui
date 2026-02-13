@@ -7,7 +7,8 @@ use gitgpui_core::domain::{
 use gitgpui_core::file_diff::FileDiffRow;
 use gitgpui_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitgpui_state::model::{
-    AppNotificationKind, AppState, CloneOpStatus, DiagnosticKind, Loadable, RepoId, RepoState,
+    AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
+    RepoState,
 };
 use gitgpui_state::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitgpui_state::session;
@@ -40,7 +41,6 @@ mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 mod history_graph;
-mod overlays;
 mod panels;
 mod panes;
 mod patch_split;
@@ -49,6 +49,7 @@ pub(crate) mod rows;
 mod state_apply;
 mod tooltip;
 mod tooltip_host;
+mod toast_host;
 mod word_diff;
 
 use app_model::AppUiModel;
@@ -57,7 +58,7 @@ use caches::{
     BranchSidebarCache, HistoryCache, HistoryCacheRequest, HistoryStashIdsCache,
     HistoryWorktreeSummaryCache,
 };
-use chrome::{CLIENT_SIDE_DECORATION_INSET, cursor_style_for_resize_edge, resize_edge};
+use chrome::{CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
 use date_time::{DateTimeFormat, format_datetime_utc};
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
@@ -75,7 +76,8 @@ use diff_utils::{
     scrollbar_markers_from_flags,
 };
 use panes::{DetailsPaneView, MainPaneView, SidebarPaneView};
-use panels::{ActionBarView, RepoTabsBarView};
+use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
+use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
 pub(crate) use chrome::window_frame;
@@ -476,12 +478,15 @@ pub struct GitGpuiView {
     _activation_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
     theme: AppTheme,
+    title_bar: Entity<TitleBarView>,
     sidebar_pane: Entity<SidebarPaneView>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
     repo_tabs_bar: Entity<RepoTabsBarView>,
     action_bar: Entity<ActionBarView>,
     tooltip_host: Entity<TooltipHost>,
+    toast_host: Entity<ToastHost>,
+    popover_host: Entity<PopoverHost>,
 
     diff_view: DiffViewMode,
     diff_cache_repo_id: Option<RepoId>,
@@ -511,8 +516,6 @@ pub struct GitGpuiView {
     diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     diff_text_layout_cache_epoch: u64,
     diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
-    diff_hunk_picker_search_input: Option<Entity<zed::TextInput>>,
-
     file_diff_cache_repo_id: Option<RepoId>,
     file_diff_cache_rev: u64,
     file_diff_cache_target: Option<DiffTarget>,
@@ -549,36 +552,15 @@ pub struct GitGpuiView {
     history_col_sha: Pixels,
     history_col_graph_auto: bool,
     history_col_resize: Option<HistoryColResizeState>,
-    repo_picker_search_input: Option<Entity<zed::TextInput>>,
-    branch_picker_search_input: Option<Entity<zed::TextInput>>,
-    remote_picker_search_input: Option<Entity<zed::TextInput>>,
-    file_history_search_input: Option<Entity<zed::TextInput>>,
-    worktree_picker_search_input: Option<Entity<zed::TextInput>>,
-    submodule_picker_search_input: Option<Entity<zed::TextInput>>,
     history_cache: Option<HistoryCache>,
     history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     history_stash_ids_cache: Option<HistoryStashIdsCache>,
 
     date_time_format: DateTimeFormat,
-    settings_date_format_open: bool,
 
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
-    clone_repo_url_input: Entity<zed::TextInput>,
-    clone_repo_parent_dir_input: Entity<zed::TextInput>,
     commit_message_input: Entity<zed::TextInput>,
-    rebase_onto_input: Entity<zed::TextInput>,
-    create_tag_input: Entity<zed::TextInput>,
-    remote_name_input: Entity<zed::TextInput>,
-    remote_url_input: Entity<zed::TextInput>,
-    remote_url_edit_input: Entity<zed::TextInput>,
-    create_branch_input: Entity<zed::TextInput>,
-    stash_message_input: Entity<zed::TextInput>,
-    push_upstream_branch_input: Entity<zed::TextInput>,
-    worktree_path_input: Entity<zed::TextInput>,
-    worktree_ref_input: Entity<zed::TextInput>,
-    submodule_url_input: Entity<zed::TextInput>,
-    submodule_path_input: Entity<zed::TextInput>,
     conflict_resolver_input: Entity<zed::TextInput>,
     conflict_resolver: ConflictResolverUiState,
     conflict_resolved_preview_path: Option<std::path::PathBuf>,
@@ -586,12 +568,6 @@ pub struct GitGpuiView {
     conflict_resolved_preview_lines: Vec<String>,
     conflict_resolved_preview_segments_cache: HashMap<usize, CachedDiffStyledText>,
 
-    popover: Option<PopoverKind>,
-    popover_anchor: Option<Point<Pixels>>,
-    context_menu_focus_handle: FocusHandle,
-    context_menu_selected_ix: Option<usize>,
-
-    title_should_move: bool,
     hover_resize_edge: Option<ResizeEdge>,
 
     history_scroll: UniformListScrollHandle,
@@ -601,7 +577,6 @@ pub struct GitGpuiView {
     conflict_resolver_diff_scroll: UniformListScrollHandle,
     conflict_resolved_preview_scroll: UniformListScrollHandle,
     commit_files_scroll: UniformListScrollHandle,
-    blame_scroll: UniformListScrollHandle,
     commit_scroll: ScrollHandle,
 
     sidebar_width: Pixels,
@@ -609,11 +584,6 @@ pub struct GitGpuiView {
     pane_resize: Option<PaneResizeState>,
 
     last_mouse_pos: Point<Pixels>,
-
-    toasts: Vec<ToastState>,
-    clone_progress_toast_id: Option<u64>,
-    clone_progress_last_seq: u64,
-    clone_progress_dest: Option<std::path::PathBuf>,
 
     status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
     status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
@@ -664,6 +634,21 @@ impl GitGpuiView {
         let tooltip = tooltip.clone();
         self.tooltip_host
             .update(cx, |tooltip_host, cx| tooltip_host.clear_tooltip_if_matches(&tooltip, cx))
+    }
+
+    pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.popover_host.update(cx, |host, cx| host.close_popover(cx));
+    }
+
+    pub(in crate::view) fn open_popover_at(
+        &mut self,
+        kind: PopoverKind,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.popover_host
+            .update(cx, |host, cx| host.open_popover_at(kind, anchor, window, cx));
     }
 
     fn is_file_preview_active(&self) -> bool {
@@ -843,14 +828,18 @@ impl GitGpuiView {
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            this.apply_state_snapshot(next, cx);
-            cx.notify();
+            let should_notify = this.apply_state_snapshot(next, cx);
+            if should_notify {
+                cx.notify();
+            }
         });
 
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
+        let title_bar = cx.new(|_cx| TitleBarView::new(initial_theme, weak_view.clone()));
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
+        let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, tooltip_host.downgrade()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
@@ -906,6 +895,21 @@ impl GitGpuiView {
             )
         });
 
+        let popover_host = cx.new(|cx| {
+            PopoverHost::new(
+                Arc::clone(&store),
+                ui_model.clone(),
+                initial_theme,
+                date_time_format,
+                weak_view.clone(),
+                toast_host.downgrade(),
+                main_pane.clone(),
+                details_pane.clone(),
+                window,
+                cx,
+            )
+        });
+
         let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
             if !window.is_window_active() {
                 return;
@@ -950,206 +954,10 @@ impl GitGpuiView {
             )
         });
 
-        let clone_repo_url_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let clone_repo_parent_dir_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "/path/to/parent/folder".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
         let commit_message_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
                     placeholder: "Enter commit message".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let rebase_onto_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "onto branch / tag / SHA (e.g. origin/main)".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let create_tag_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "tag-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let remote_name_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "remote name (e.g. origin)".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let remote_url_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "remote URL".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let remote_url_edit_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "new remote URL".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let create_branch_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "new-branch-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let stash_message_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Stash message".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let push_upstream_branch_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Remote branch name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let worktree_path_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Worktree folder".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let worktree_ref_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Branch / commit (optional)".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let submodule_url_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Submodule URL".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let submodule_path_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Submodule path (relative)".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -1217,7 +1025,6 @@ impl GitGpuiView {
         });
 
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
-        let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
@@ -1228,12 +1035,15 @@ impl GitGpuiView {
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
             theme: initial_theme,
+            title_bar,
             sidebar_pane,
             main_pane,
             details_pane,
             repo_tabs_bar,
             action_bar,
             tooltip_host,
+            toast_host,
+            popover_host,
             diff_view: DiffViewMode::Split,
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -1268,7 +1078,6 @@ impl GitGpuiView {
             diff_text_hitboxes: HashMap::new(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: HashMap::new(),
-            diff_hunk_picker_search_input: None,
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
             file_diff_cache_target: None,
@@ -1302,39 +1111,13 @@ impl GitGpuiView {
             history_col_sha: px(HISTORY_COL_SHA_PX),
             history_col_graph_auto: true,
             history_col_resize: None,
-            repo_picker_search_input: None,
-            branch_picker_search_input: None,
-            remote_picker_search_input: None,
-            file_history_search_input: None,
-            worktree_picker_search_input: None,
-            submodule_picker_search_input: None,
             history_cache: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             date_time_format,
-            settings_date_format_open: false,
             open_repo_panel: false,
             open_repo_input,
-            clone_repo_url_input,
-            clone_repo_parent_dir_input,
             commit_message_input,
-            rebase_onto_input,
-            create_tag_input,
-            remote_name_input,
-            remote_url_input,
-            remote_url_edit_input,
-            create_branch_input,
-            stash_message_input,
-            push_upstream_branch_input,
-            worktree_path_input,
-            worktree_ref_input,
-            submodule_url_input,
-            submodule_path_input,
-            popover: None,
-            popover_anchor: None,
-            context_menu_focus_handle,
-            context_menu_selected_ix: None,
-            title_should_move: false,
             hover_resize_edge: None,
             history_scroll: UniformListScrollHandle::default(),
             unstaged_scroll: UniformListScrollHandle::default(),
@@ -1343,7 +1126,6 @@ impl GitGpuiView {
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
-            blame_scroll: UniformListScrollHandle::default(),
             commit_scroll: ScrollHandle::new(),
             sidebar_width: restored_sidebar_width
                 .map(|w| px(w as f32))
@@ -1355,10 +1137,6 @@ impl GitGpuiView {
                 .max(px(DETAILS_MIN_PX)),
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
-            toasts: Vec::new(),
-            clone_progress_toast_id: None,
-            clone_progress_last_seq: 0,
-            clone_progress_dest: None,
             status_multi_selection: HashMap::new(),
             status_multi_selection_last_status: HashMap::new(),
             commit_details_message_input,
@@ -1378,6 +1156,8 @@ impl GitGpuiView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        self.title_bar
+            .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
             .update(cx, |pane, cx| pane.set_theme(theme, cx));
         self.main_pane
@@ -1390,40 +1170,16 @@ impl GitGpuiView {
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.tooltip_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
+        self.toast_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
+        self.popover_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
         self.diff_text_segments_cache.clear();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.clone_repo_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.clone_repo_parent_dir_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.rebase_onto_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.create_tag_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_name_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_url_edit_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.create_branch_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.stash_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.push_upstream_branch_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.worktree_path_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.worktree_ref_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_path_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1433,27 +1189,6 @@ impl GitGpuiView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        if let Some(input) = &self.repo_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.branch_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.remote_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.file_history_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.worktree_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.submodule_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.diff_hunk_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
     }
 
     fn pane_resize_handle(
@@ -2249,216 +1984,6 @@ impl GitGpuiView {
         }
 
         (show_date, show_sha)
-    }
-
-    fn ensure_repo_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.repo_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter repositories".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_branch_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.branch_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter branches".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_remote_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.remote_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter remotes".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_worktree_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.worktree_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter worktrees".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_submodule_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.submodule_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter submodules".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_file_history_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.file_history_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter commits".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
-    }
-
-    fn ensure_diff_hunk_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<zed::TextInput> {
-        let theme = self.theme;
-        let input = self.diff_hunk_picker_search_input.get_or_insert_with(|| {
-            cx.new(|cx| {
-                zed::TextInput::new(
-                    zed::TextInputOptions {
-                        placeholder: "Filter hunks".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
-                    window,
-                    cx,
-                )
-            })
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text("", cx);
-        });
-        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle);
-        input.clone()
     }
 
     #[cfg(test)]
@@ -3389,12 +2914,8 @@ impl GitGpuiView {
     }
 
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
-        let ttl = match kind {
-            zed::ToastKind::Error => Duration::from_secs(15),
-            zed::ToastKind::Warning => Duration::from_secs(10),
-            zed::ToastKind::Success => Duration::from_secs(6),
-        };
-        self.push_toast_inner(kind, message, Some(ttl), cx);
+        self.toast_host
+            .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
     fn push_persistent_toast(
@@ -3403,81 +2924,18 @@ impl GitGpuiView {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
-        self.push_toast_inner(kind, message, None, cx)
-    }
-
-    fn push_toast_inner(
-        &mut self,
-        kind: zed::ToastKind,
-        message: String,
-        ttl: Option<Duration>,
-        cx: &mut gpui::Context<Self>,
-    ) -> u64 {
-        let id = self
-            .toasts
-            .last()
-            .map(|t| t.id.wrapping_add(1))
-            .unwrap_or(1);
-        let theme = self.theme;
-        let input = cx.new(|cx| {
-            zed::TextInput::new_inert(
-                zed::TextInputOptions {
-                    placeholder: "".into(),
-                    multiline: true,
-                    read_only: true,
-                    chromeless: true,
-                    soft_wrap: true,
-                },
-                cx,
-            )
-        });
-        input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text(message, cx);
-            input.set_read_only(true, cx);
-        });
-
-        self.toasts.push(ToastState {
-            id,
-            kind,
-            input,
-            ttl,
-        });
-
-        if let Some(ttl) = ttl {
-            let lifetime = toast_total_lifetime(ttl);
-            cx.spawn(
-                async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
-                    Timer::after(lifetime).await;
-                    let _ = view.update(cx, |this, cx| {
-                        this.remove_toast(id, cx);
-                    });
-                },
-            )
-            .detach();
-        }
-
-        id
+        self.toast_host
+            .update(cx, |host, cx| host.push_persistent_toast(kind, message, cx))
     }
 
     fn update_toast_text(&mut self, id: u64, message: String, cx: &mut gpui::Context<Self>) {
-        let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
-            return;
-        };
-        let theme = self.theme;
-        toast.input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_text(message, cx);
-            input.set_read_only(true, cx);
-        });
+        self.toast_host
+            .update(cx, |host, cx| host.update_toast_text(id, message, cx));
     }
 
     fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
-        let before = self.toasts.len();
-        self.toasts.retain(|t| t.id != id);
-        if self.toasts.len() != before {
-            cx.notify();
-        }
+        self.toast_host
+            .update(cx, |host, cx| host.remove_toast(id, cx));
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -4058,8 +3516,8 @@ impl GitGpuiView {
     }
 
     #[cfg(test)]
-    pub(crate) fn is_popover_open(&self) -> bool {
-        self.popover.is_some()
+    pub(crate) fn is_popover_open(&self, app: &App) -> bool {
+        self.popover_host.read(app).is_open()
     }
 
     fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
@@ -4311,7 +3769,7 @@ impl Render for GitGpuiView {
             .flex_col()
             .size_full()
             .text_color(theme.colors.text)
-            .child(self.title_bar(window, cx))
+            .child(self.title_bar.clone())
                     .child(
                         div()
                             .flex()
@@ -4441,13 +3899,9 @@ impl Render for GitGpuiView {
 
         root = root.child(window_frame(theme, decorations, body.into_any_element()));
 
-        if !self.toasts.is_empty() {
-            root = root.child(self.toast_layer(cx));
-        }
+        root = root.child(self.toast_host.clone());
 
-        if self.popover.is_some() {
-            root = root.child(self.popover_layer(cx));
-        }
+        root = root.child(self.popover_host.clone());
 
         root = root.child(self.tooltip_host.clone());
 

@@ -195,6 +195,7 @@ mod popover;
 mod repo_tabs_bar;
 
 pub(in super) use action_bar::ActionBarView;
+pub(in super) use popover::PopoverHost;
 pub(in super) use repo_tabs_bar::RepoTabsBarView;
 
 #[cfg(test)]

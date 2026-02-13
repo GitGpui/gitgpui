@@ -287,6 +287,54 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 }
 
 #[test]
+fn diff_file_text_staged_add_and_delete_report_missing_sides() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    // Stage a new file (missing on HEAD) and delete the initial file (missing on disk + index).
+    write(repo, "b.txt", "new\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(repo, &["rm", "a.txt"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    let added = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("b.txt"),
+            area: DiffArea::Staged,
+        })
+        .unwrap()
+        .expect("file diff for staged added file");
+    assert_eq!(added.path, PathBuf::from("b.txt"));
+    assert_eq!(added.old.as_deref(), None);
+    assert_eq!(added.new.as_deref(), Some("new\n"));
+
+    let deleted = opened
+        .diff_file_text(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Staged,
+        })
+        .unwrap()
+        .expect("file diff for staged deleted file");
+    assert_eq!(deleted.path, PathBuf::from("a.txt"));
+    assert_eq!(deleted.old.as_deref(), Some("one\n"));
+    assert_eq!(deleted.new.as_deref(), None);
+}
+
+#[test]
 fn diff_file_text_returns_none_for_directories() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

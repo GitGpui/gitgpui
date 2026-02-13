@@ -475,10 +475,11 @@ fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<Stri
 }
 
 fn git_blob_missing_for_show(stderr: &str) -> bool {
-    let s = stderr;
+    let s = stderr.to_ascii_lowercase();
     s.contains("does not exist in") // `Path 'x' does not exist in 'REV'`
         || s.contains("exists on disk, but not in") // common suggestion text
-        || s.contains("Path '") && s.contains("' does not exist")
+        || (s.contains("path '") && s.contains("' does not exist"))
+        || s.contains("neither on disk nor in the index")
         || s.contains("fatal: invalid object name")
         || s.contains("bad object")
         || s.contains("unknown revision")

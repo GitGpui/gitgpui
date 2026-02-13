@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn model(this: &GitGpuiView, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
+pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
     let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
 

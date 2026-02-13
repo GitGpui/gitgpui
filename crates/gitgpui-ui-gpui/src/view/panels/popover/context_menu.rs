@@ -12,7 +12,7 @@ mod push;
 mod status_file;
 mod tag;
 
-impl GitGpuiView {
+impl PopoverHost {
     pub(super) fn context_menu_model(
         &self,
         kind: &PopoverKind,

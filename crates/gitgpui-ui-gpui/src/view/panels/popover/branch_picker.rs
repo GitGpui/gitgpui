@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn panel(this: &mut GitGpuiView, cx: &mut gpui::Context<GitGpuiView>) -> gpui::Div {
+pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
 

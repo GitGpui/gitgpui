@@ -1,11 +1,11 @@
 use super::*;
 
 pub(super) fn panel(
-    this: &mut GitGpuiView,
+    this: &mut PopoverHost,
     repo_id: RepoId,
     target: String,
     mode: ResetMode,
-    cx: &mut gpui::Context<GitGpuiView>,
+    cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let mode_label = match mode {

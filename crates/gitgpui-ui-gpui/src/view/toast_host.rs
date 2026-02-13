@@ -1,0 +1,318 @@
+use super::*;
+
+pub(super) struct ToastHost {
+    theme: AppTheme,
+    tooltip_host: WeakEntity<TooltipHost>,
+
+    toasts: Vec<ToastState>,
+    clone_progress_toast_id: Option<u64>,
+    clone_progress_last_seq: u64,
+    clone_progress_dest: Option<std::path::PathBuf>,
+}
+
+impl ToastHost {
+    pub(super) fn new(theme: AppTheme, tooltip_host: WeakEntity<TooltipHost>) -> Self {
+        Self {
+            theme,
+            tooltip_host,
+            toasts: Vec::new(),
+            clone_progress_toast_id: None,
+            clone_progress_last_seq: 0,
+            clone_progress_dest: None,
+        }
+    }
+
+    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        self.theme = theme;
+        cx.notify();
+    }
+
+    pub(super) fn push_toast(
+        &mut self,
+        kind: zed::ToastKind,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ttl = match kind {
+            zed::ToastKind::Error => Duration::from_secs(15),
+            zed::ToastKind::Warning => Duration::from_secs(10),
+            zed::ToastKind::Success => Duration::from_secs(6),
+        };
+        let _ = self.push_toast_inner(kind, message, Some(ttl), cx);
+    }
+
+    pub(super) fn push_persistent_toast(
+        &mut self,
+        kind: zed::ToastKind,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) -> u64 {
+        self.push_toast_inner(kind, message, None, cx)
+    }
+
+    fn push_toast_inner(
+        &mut self,
+        kind: zed::ToastKind,
+        message: String,
+        ttl: Option<Duration>,
+        cx: &mut gpui::Context<Self>,
+    ) -> u64 {
+        let id = self
+            .toasts
+            .last()
+            .map(|t| t.id.wrapping_add(1))
+            .unwrap_or(1);
+        let theme = self.theme;
+        let input = cx.new(|cx| {
+            zed::TextInput::new_inert(
+                zed::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: true,
+                    read_only: true,
+                    chromeless: true,
+                    soft_wrap: true,
+                },
+                cx,
+            )
+        });
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(message, cx);
+            input.set_read_only(true, cx);
+        });
+
+        self.toasts.push(ToastState {
+            id,
+            kind,
+            input,
+            ttl,
+        });
+        cx.notify();
+
+        if let Some(ttl) = ttl {
+            let lifetime = toast_total_lifetime(ttl);
+            cx.spawn(
+                async move |view: WeakEntity<ToastHost>, cx: &mut gpui::AsyncApp| {
+                    Timer::after(lifetime).await;
+                    let _ = view.update(cx, |this, cx| {
+                        this.remove_toast(id, cx);
+                    });
+                },
+            )
+            .detach();
+        }
+
+        id
+    }
+
+    pub(super) fn update_toast_text(&mut self, id: u64, message: String, cx: &mut gpui::Context<Self>) {
+        let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
+            return;
+        };
+        let theme = self.theme;
+        toast.input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(message, cx);
+            input.set_read_only(true, cx);
+        });
+    }
+
+    pub(super) fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| t.id != id);
+        if self.toasts.len() != before {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn sync_clone_progress(
+        &mut self,
+        next_clone: Option<&CloneOpState>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match next_clone {
+            Some(op) => match &op.status {
+                CloneOpStatus::Running => {
+                    let needs_reset = self.clone_progress_toast_id.is_none()
+                        || self.clone_progress_dest.as_ref() != Some(&op.dest);
+                    if needs_reset {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_last_seq = 0;
+                        self.clone_progress_dest = Some(op.dest.clone());
+
+                        let id = self.push_persistent_toast(
+                            zed::ToastKind::Success,
+                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display()),
+                            cx,
+                        );
+                        self.clone_progress_toast_id = Some(id);
+                    }
+
+                    if let Some(id) = self.clone_progress_toast_id
+                        && self.clone_progress_last_seq != op.seq
+                    {
+                        self.clone_progress_last_seq = op.seq;
+                        let tail_lines = op.output_tail.iter().rev().take(12).rev().cloned();
+                        let tail = tail_lines.collect::<Vec<_>>().join("\n");
+                        let message = if tail.is_empty() {
+                            format!("Cloning repository…\n{}\n→ {}", op.url, op.dest.display())
+                        } else {
+                            format!(
+                                "Cloning repository…\n{}\n→ {}\n\n{}",
+                                op.url,
+                                op.dest.display(),
+                                tail
+                            )
+                        };
+                        self.update_toast_text(id, message, cx);
+                    }
+                }
+                CloneOpStatus::FinishedOk => {
+                    if self.clone_progress_last_seq != op.seq {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_dest = None;
+                        self.clone_progress_last_seq = op.seq;
+                        self.push_toast(
+                            zed::ToastKind::Success,
+                            format!("Clone finished: {}", op.dest.display()),
+                            cx,
+                        );
+                    }
+                }
+                CloneOpStatus::FinishedErr(err) => {
+                    if self.clone_progress_last_seq != op.seq {
+                        if let Some(id) = self.clone_progress_toast_id.take() {
+                            self.remove_toast(id, cx);
+                        }
+                        self.clone_progress_dest = None;
+                        self.clone_progress_last_seq = op.seq;
+                        self.push_toast(zed::ToastKind::Error, format!("Clone failed: {err}"), cx);
+                    }
+                }
+            },
+            None => {
+                if let Some(id) = self.clone_progress_toast_id.take() {
+                    self.remove_toast(id, cx);
+                }
+                self.clone_progress_last_seq = 0;
+                self.clone_progress_dest = None;
+            }
+        }
+    }
+
+    fn set_tooltip_text_if_changed(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
+        false
+    }
+
+    fn clear_tooltip_if_matches(
+        &mut self,
+        tooltip: &SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let tooltip = tooltip.clone();
+        let _ = self
+            .tooltip_host
+            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
+        false
+    }
+}
+
+impl Render for ToastHost {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.toasts.is_empty() {
+            return div().into_any_element();
+        }
+        let theme = self.theme;
+
+        let progress_id = self.clone_progress_toast_id;
+        let max_other = if progress_id.is_some() { 2 } else { 3 };
+        let mut displayed = self
+            .toasts
+            .iter()
+            .rev()
+            .filter(|t| Some(t.id) != progress_id)
+            .take(max_other)
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Some(id) = progress_id
+            && let Some(progress) = self.toasts.iter().find(|t| t.id == id).cloned()
+        {
+            displayed.push(progress);
+        }
+
+        let fade_in = toast_fade_in_duration();
+        let fade_out = toast_fade_out_duration();
+        let children = displayed.into_iter().map(move |t| {
+            let animations = match t.ttl {
+                Some(ttl) => vec![
+                    Animation::new(fade_in).with_easing(gpui::quadratic),
+                    Animation::new(ttl),
+                    Animation::new(fade_out).with_easing(gpui::quadratic),
+                ],
+                None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
+            };
+
+            let close = zed::Button::new(format!("toast_close_{}", t.id), "✕")
+                .style(zed::ButtonStyle::Transparent)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    this.remove_toast(t.id, cx);
+                })
+                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                    let text: SharedString = "Dismiss notification".into();
+                    if *hovering {
+                        this.set_tooltip_text_if_changed(Some(text), cx);
+                    } else {
+                        this.clear_tooltip_if_matches(&text, cx);
+                    }
+                }));
+
+            div()
+                .relative()
+                .child(zed::toast(theme, t.kind, t.input.clone()))
+                .child(div().absolute().top(px(8.0)).right(px(8.0)).child(close))
+                .with_animations(
+                    ("toast", t.id),
+                    animations,
+                    move |toast, animation_ix, delta| {
+                        let opacity = match animation_ix {
+                            0 => delta,
+                            1 => 1.0,
+                            2 => 1.0 - delta,
+                            _ => 1.0,
+                        };
+                        let slide_x = match animation_ix {
+                            0 => (1.0 - delta) * TOAST_SLIDE_PX,
+                            2 => delta * TOAST_SLIDE_PX,
+                            _ => 0.0,
+                        };
+                        toast.opacity(opacity).relative().left(px(slide_x))
+                    },
+                )
+        });
+
+        div()
+            .id("toast_layer")
+            .absolute()
+            .right_0()
+            .bottom_0()
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .items_end()
+            .gap(px(12.0))
+            .children(children)
+            .into_any_element()
+    }
+}
+
