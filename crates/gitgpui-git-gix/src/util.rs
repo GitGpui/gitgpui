@@ -39,7 +39,7 @@ pub(crate) fn run_git_simple_with_paths(
         return run_git_simple(cmd, label);
     }
 
-    let mut batch: Vec<&Path> = Vec::new();
+    let mut batch: Vec<&Path> = Vec::with_capacity(paths.len().min(MAX_PATHS_PER_CMD));
     let mut bytes: usize = 0;
     for path in paths {
         let path_len = path.to_string_lossy().len() + 1;
@@ -123,7 +123,13 @@ pub(crate) fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
 }
 
 pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
-    let mut commits = Vec::new();
+    let approx_commits = output
+        .as_bytes()
+        .iter()
+        .filter(|&&b| b == b'\x1e')
+        .count()
+        .saturating_add(1);
+    let mut commits = Vec::with_capacity(approx_commits);
     for record in output.split('\u{001e}') {
         let record = record.trim();
         if record.is_empty() {
@@ -230,7 +236,13 @@ pub(crate) fn parse_reflog_index(selector: &str) -> Option<usize> {
 }
 
 pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
-    let mut branches = Vec::new();
+    let approx_branches = output
+        .as_bytes()
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        .saturating_add(1);
+    let mut branches = Vec::with_capacity(approx_branches);
     for line in output.lines() {
         let line = line.trim();
         if line.is_empty() {

@@ -1,5 +1,6 @@
 use crate::msg::Msg;
 use gitgpui_core::domain::{Diff, DiffArea, DiffTarget, LogCursor, LogScope};
+use gitgpui_core::error::ErrorKind;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -157,20 +158,34 @@ pub(super) fn schedule_load_conflict_file(
     path: PathBuf,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let ours_theirs = repo.diff_file_text(&DiffTarget::WorkingTree {
-            path: path.clone(),
-            area: DiffArea::Unstaged,
-        });
+        let stages = match repo.conflict_file_stages(&path) {
+            Ok(v) => Ok(v),
+            Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
+                .diff_file_text(&DiffTarget::WorkingTree {
+                    path: path.clone(),
+                    area: DiffArea::Unstaged,
+                })
+                .map(|opt| {
+                    opt.map(|d| gitgpui_core::services::ConflictFileStages {
+                        path: d.path,
+                        base: None,
+                        ours: d.old,
+                        theirs: d.new,
+                    })
+                }),
+            Err(e) => Err(e),
+        };
 
         let current = std::fs::read(repo.spec().workdir.join(&path))
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok());
 
-        let result = ours_theirs.map(|opt| {
+        let result = stages.map(|opt| {
             opt.map(|d| crate::model::ConflictFile {
                 path: d.path,
-                ours: d.old,
-                theirs: d.new,
+                base: d.base,
+                ours: d.ours,
+                theirs: d.theirs,
                 current,
             })
         });

@@ -48,6 +48,12 @@ pub fn context_menu_entry(
     has_submenu: bool,
 ) -> Stateful<Div> {
     let label: SharedString = label.into();
+    let icon_color = context_menu_icon_color(
+        theme,
+        disabled,
+        label.as_ref(),
+        icon.as_ref().map(|icon| icon.as_ref()),
+    );
 
     let mut row = div()
         .id(id)
@@ -81,7 +87,7 @@ pub fn context_menu_entry(
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(icon_color)
                                     .child(icon),
                             )
                         }),
@@ -117,4 +123,43 @@ pub fn context_menu_entry(
     }
 
     row
+}
+
+fn context_menu_icon_color(
+    theme: AppTheme,
+    disabled: bool,
+    label: &str,
+    icon: Option<&str>,
+) -> gpui::Rgba {
+    if disabled {
+        return theme.colors.text_muted;
+    }
+
+    if let Some(icon) = icon {
+        // Semantic-ish mapping for common actions.
+        if icon == "🗑"
+            || label.contains("Delete")
+            || label.contains("Drop")
+            || label.contains("Remove")
+        {
+            return theme.colors.danger;
+        }
+        if icon == "⚠" || label.contains("Force") || label.contains("Discard") {
+            return theme.colors.warning;
+        }
+        if icon == "↑" || icon == "⇡" || label.starts_with("Push") {
+            return theme.colors.success;
+        }
+        if icon == "↓" || label.starts_with("Pull") {
+            return theme.colors.warning;
+        }
+        if icon == "+" || label.starts_with("Stage") {
+            return theme.colors.success;
+        }
+        if icon == "−" || label.starts_with("Unstage") {
+            return theme.colors.warning;
+        }
+    }
+
+    theme.colors.accent
 }

@@ -14,6 +14,8 @@ impl SidebarPaneView {
             return Vec::new();
         };
         let theme = this.theme;
+        let icon_primary = theme.colors.accent;
+        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             gpui::svg()
@@ -60,7 +62,7 @@ impl SidebarPaneView {
                         .when(top_border, |d| {
                             d.border_t_1().border_color(theme.colors.border)
                         })
-                        .child(svg_icon(icon_path, theme.colors.text_muted, 14.0))
+                        .child(svg_icon(icon_path, icon_primary, 14.0))
                         .child(
                             div()
                                 .text_sm()
@@ -111,7 +113,7 @@ impl SidebarPaneView {
                     .when(top_border, |d| {
                         d.border_t_1().border_color(theme.colors.border)
                     })
-                    .child(svg_icon("icons/box.svg", theme.colors.text_muted, 14.0))
+                    .child(svg_icon("icons/box.svg", icon_primary, 14.0))
                     .child(
                         div()
                             .text_sm()
@@ -230,7 +232,7 @@ impl SidebarPaneView {
                         .w_full()
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))
-                        .child(svg_icon("icons/box.svg", theme.colors.text_muted, 12.0))
+                        .child(svg_icon("icons/box.svg", icon_primary, 12.0))
                         .child(
                             div()
                                 .flex_1()
@@ -293,9 +295,7 @@ impl SidebarPaneView {
                     .text_sm()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text)
-                    .child(
-                        svg_icon("icons/folder.svg", theme.colors.text_muted, 14.0).flex_shrink_0(),
-                    )
+                    .child(svg_icon("icons/folder.svg", icon_primary, 14.0).flex_shrink_0())
                     .child(name)
                     .into_any_element(),
                 BranchSidebarRow::GroupHeader { label, depth } => div()
@@ -310,9 +310,7 @@ impl SidebarPaneView {
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text_muted)
-                    .child(
-                        svg_icon("icons/folder.svg", theme.colors.text_muted, 14.0).flex_shrink_0(),
-                    )
+                    .child(svg_icon("icons/folder.svg", icon_primary, 14.0).flex_shrink_0())
                     .child(label)
                     .into_any_element(),
                 BranchSidebarRow::Branch {
@@ -330,11 +328,7 @@ impl SidebarPaneView {
                 } => {
                     let full_name_for_checkout: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
-                    let branch_icon_color = if muted {
-                        theme.colors.text_muted
-                    } else {
-                        theme.colors.text
-                    };
+                    let branch_icon_color = if muted { icon_muted } else { icon_primary };
                     let mut row = div()
                         .id(("branch_item", ix))
                         .h(if section == BranchSection::Local {

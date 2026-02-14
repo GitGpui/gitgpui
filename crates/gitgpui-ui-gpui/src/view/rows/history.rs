@@ -78,6 +78,7 @@ impl MainPaneView {
                     theme,
                     cx.entity(),
                     ix,
+                    px(0.0),
                     bar_color,
                     line_no,
                     styled,
@@ -103,9 +104,10 @@ impl MainPaneView {
         let theme = this.theme;
         let col_branch = this.history_col_branch;
         let col_graph = this.history_col_graph;
+        let col_author = this.history_col_author;
         let col_date = this.history_col_date;
         let col_sha = this.history_col_sha;
-        let (show_date, show_sha) = this.history_visible_columns();
+        let (show_author, show_date, show_sha) = this.history_visible_columns();
 
         let page = match &repo.log {
             Loadable::Ready(page) => Some(page),
@@ -128,8 +130,10 @@ impl MainPaneView {
                         theme,
                         col_branch,
                         col_graph,
+                        col_author,
                         col_date,
                         col_sha,
+                        show_author,
                         show_date,
                         show_sha,
                         worktree_node_color,
@@ -162,8 +166,10 @@ impl MainPaneView {
                     theme,
                     col_branch,
                     col_graph,
+                    col_author,
                     col_date,
                     col_sha,
+                    show_author,
                     show_date,
                     show_sha,
                     show_graph_color_marker,
@@ -174,6 +180,7 @@ impl MainPaneView {
                     connect_incoming_node,
                     Arc::clone(&row_vm.tag_names),
                     row_vm.branches_text.clone(),
+                    row_vm.author.clone(),
                     row_vm.summary.clone(),
                     row_vm.when.clone(),
                     row_vm.short_sha.clone(),
@@ -192,8 +199,10 @@ fn history_table_row(
     theme: AppTheme,
     col_branch: Pixels,
     col_graph: Pixels,
+    col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_author: bool,
     show_date: bool,
     show_sha: bool,
     show_graph_color_marker: bool,
@@ -204,6 +213,7 @@ fn history_table_row(
     connect_incoming_node: bool,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
+    author: SharedString,
     summary: SharedString,
     when: SharedString,
     short_sha: SharedString,
@@ -219,8 +229,10 @@ fn history_table_row(
         commit.id.clone(),
         col_branch,
         col_graph,
+        col_author,
         col_date,
         col_sha,
+        show_author,
         show_date,
         show_sha,
         show_graph_color_marker,
@@ -229,6 +241,7 @@ fn history_table_row(
         graph_row,
         tag_names,
         branches_text,
+        author,
         summary,
         when,
         short_sha,
@@ -262,8 +275,10 @@ fn working_tree_summary_history_row(
     theme: AppTheme,
     col_branch: Pixels,
     col_graph: Pixels,
+    col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_author: bool,
     show_date: bool,
     show_sha: bool,
     node_color: gpui::Rgba,
@@ -379,6 +394,7 @@ fn working_tree_summary_history_row(
                 .overflow_hidden()
                 .child(circle),
         )
+        .when(show_author, |row| row.child(div().w(col_author)))
         .child({
             let mut summary = div().flex_1().min_w(px(0.0)).flex().items_center().gap_2();
             summary = summary.child(

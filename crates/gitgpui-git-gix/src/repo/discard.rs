@@ -13,11 +13,14 @@ impl GixRepo {
         }
 
         let status = self.status_impl()?;
-        let selected: HashSet<&Path> = paths.iter().copied().collect();
+        let mut selected: HashSet<&Path> =
+            HashSet::with_capacity_and_hasher(paths.len(), Default::default());
+        selected.extend(paths.iter().copied());
 
-        let mut checkout_paths: Vec<&Path> = Vec::new();
-        let mut clean_paths: Vec<&Path> = Vec::new();
-        let mut unstaged_selected: HashSet<&Path> = HashSet::default();
+        let mut checkout_paths: Vec<&Path> = Vec::with_capacity(paths.len());
+        let mut clean_paths: Vec<&Path> = Vec::with_capacity(paths.len());
+        let mut unstaged_selected: HashSet<&Path> =
+            HashSet::with_capacity_and_hasher(paths.len(), Default::default());
         let mut has_conflicts = false;
 
         for entry in &status.unstaged {
@@ -34,7 +37,7 @@ impl GixRepo {
             }
         }
 
-        let mut remove_paths: Vec<&Path> = Vec::new();
+        let mut remove_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         for entry in &status.staged {
             let path = entry.path.as_path();
             if !selected.contains(path) {

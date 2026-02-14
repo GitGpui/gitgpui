@@ -1,6 +1,7 @@
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -41,6 +42,14 @@ impl CommandOutput {
 pub enum ConflictSide {
     Ours,
     Theirs,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConflictFileStages {
+    pub path: PathBuf,
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +117,12 @@ pub trait GitRepository: Send + Sync {
     fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "image diff view is not implemented for this backend",
+        )))
+    }
+
+    fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "conflict stage reading is not implemented for this backend",
         )))
     }
 

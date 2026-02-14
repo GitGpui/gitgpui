@@ -1,6 +1,7 @@
 use super::util::{
-    dedup_paths_in_order, diff_target_wants_image_preview, normalize_repo_path, push_diagnostic,
-    push_notification, refresh_full_effects, refresh_primary_effects,
+    dedup_paths_in_order, diff_target_wants_image_preview, format_failure_summary,
+    normalize_repo_path, push_diagnostic, push_notification, refresh_full_effects,
+    refresh_primary_effects,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
@@ -200,7 +201,7 @@ pub(super) fn clone_repo_finished(
         op.url = url;
         op.status = match result {
             Ok(_) => CloneOpStatus::FinishedOk,
-            Err(e) => CloneOpStatus::FinishedErr(e.to_string()),
+            Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
         };
         op.seq = op.seq.wrapping_add(1);
     } else {
@@ -209,7 +210,7 @@ pub(super) fn clone_repo_finished(
             dest,
             status: match result {
                 Ok(_) => CloneOpStatus::FinishedOk,
-                Err(e) => CloneOpStatus::FinishedErr(e.to_string()),
+                Err(e) => CloneOpStatus::FinishedErr(format_failure_summary("Clone", &e)),
             },
             seq: 1,
             output_tail: Vec::new(),

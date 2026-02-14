@@ -4,8 +4,8 @@ use gitgpui_core::domain::{
     UpstreamDivergence, Worktree,
 };
 use gitgpui_core::services::{
-    BlameLine, CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    Result,
+    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, PullMode,
+    RemoteUrlKind, ResetMode, Result,
 };
 use std::path::{Path, PathBuf};
 
@@ -117,6 +117,10 @@ impl GitRepository for GixRepo {
 
     fn diff_file_image(&self, target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         self.diff_file_image_impl(target)
+    }
+
+    fn conflict_file_stages(&self, path: &Path) -> Result<Option<ConflictFileStages>> {
+        self.conflict_file_stages_impl(path)
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {

@@ -3,6 +3,131 @@ use super::diff_text::*;
 use super::*;
 
 impl MainPaneView {
+    pub(in super::super) fn render_conflict_resolver_three_way_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .map(|ix| {
+                let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
+                let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
+                let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
+
+                let base = div()
+                    .id(("conflict_three_way_base", ix))
+                    .h(px(20.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .font_family("monospace")
+                    .text_xs()
+                    .text_color(if base_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .whitespace_nowrap()
+                    .child(
+                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                            line_number_string(
+                                base_line
+                                    .is_some()
+                                    .then(|| u32::try_from(ix + 1).ok())
+                                    .flatten(),
+                            ),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(base_line.cloned().unwrap_or_default()),
+                    );
+
+                let ours = div()
+                    .id(("conflict_three_way_ours", ix))
+                    .h(px(20.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .font_family("monospace")
+                    .text_xs()
+                    .text_color(if ours_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .whitespace_nowrap()
+                    .child(
+                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                            line_number_string(
+                                ours_line
+                                    .is_some()
+                                    .then(|| u32::try_from(ix + 1).ok())
+                                    .flatten(),
+                            ),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(ours_line.cloned().unwrap_or_default()),
+                    );
+
+                let theirs = div()
+                    .id(("conflict_three_way_theirs", ix))
+                    .h(px(20.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .font_family("monospace")
+                    .text_xs()
+                    .text_color(if theirs_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .whitespace_nowrap()
+                    .child(
+                        div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                            line_number_string(
+                                theirs_line
+                                    .is_some()
+                                    .then(|| u32::try_from(ix + 1).ok())
+                                    .flatten(),
+                            ),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(theirs_line.cloned().unwrap_or_default()),
+                    );
+
+                div()
+                    .id(("conflict_three_way_row", ix))
+                    .flex()
+                    .child(base)
+                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                    .child(ours)
+                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                    .child(theirs)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     pub(in super::super) fn render_conflict_compare_diff_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -89,6 +214,7 @@ impl MainPaneView {
                     theme,
                     cx.entity(),
                     ix,
+                    px(0.0),
                     None,
                     line_no,
                     styled,

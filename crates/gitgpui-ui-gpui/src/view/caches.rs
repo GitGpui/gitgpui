@@ -24,6 +24,7 @@ pub(super) struct HistoryCacheRequest {
 pub(super) struct HistoryCommitRowVm {
     pub(super) branches_text: SharedString,
     pub(super) tag_names: Arc<[SharedString]>,
+    pub(super) author: SharedString,
     pub(super) summary: SharedString,
     pub(super) when: SharedString,
     pub(super) short_sha: SharedString,
@@ -348,7 +349,11 @@ impl MainPaneView {
                     .and_then(|head| branches.iter().find(|b| b.name == head))
                     .map(|b| b.target.as_ref());
 
-                let mut branch_names_by_target: HashMap<&str, Vec<String>> = HashMap::default();
+                let mut branch_names_by_target: HashMap<&str, Vec<String>> =
+                    HashMap::with_capacity_and_hasher(
+                        branches.len() + remote_branches.len(),
+                        Default::default(),
+                    );
                 for branch in &branches {
                     let should_skip = head_branch
                         .as_ref()
@@ -373,7 +378,8 @@ impl MainPaneView {
                     names.dedup();
                 }
 
-                let mut tag_names_by_target: HashMap<&str, Vec<&str>> = HashMap::default();
+                let mut tag_names_by_target: HashMap<&str, Vec<&str>> =
+                    HashMap::with_capacity_and_hasher(tags.len(), Default::default());
                 for tag in &tags {
                     tag_names_by_target
                         .entry(tag.target.as_ref())
@@ -393,7 +399,11 @@ impl MainPaneView {
                         let commit_id = commit.id.as_ref();
 
                         let branches_text = {
-                            let mut names: Vec<String> = Vec::new();
+                            let has_head = head_target == Some(commit_id) && head_branch.is_some();
+                            let branch_count =
+                                branch_names_by_target.get(commit_id).map_or(0, |b| b.len());
+                            let mut names: Vec<String> =
+                                Vec::with_capacity(branch_count + usize::from(has_head));
                             if head_target == Some(commit_id)
                                 && let Some(head) = head_branch.as_ref()
                             {
@@ -423,6 +433,7 @@ impl MainPaneView {
                             },
                         );
 
+                        let author: SharedString = commit.author.clone().into();
                         let summary: SharedString = commit.summary.clone().into();
 
                         let when: SharedString =
@@ -436,6 +447,7 @@ impl MainPaneView {
                         HistoryCommitRowVm {
                             branches_text,
                             tag_names,
+                            author,
                             summary,
                             when,
                             short_sha,

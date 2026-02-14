@@ -7,6 +7,7 @@ mod commit_file;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
+mod history_column_settings;
 mod pull;
 mod push;
 mod status_file;
@@ -231,6 +232,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
             }
+            PopoverKind::HistoryColumnSettings => Some(history_column_settings::model(self, cx)),
             _ => None,
         }
     }
@@ -241,6 +243,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let mut close_after_action = true;
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
@@ -332,6 +335,20 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
+            }
+            ContextMenuAction::SetHistoryColumns {
+                show_author,
+                show_date,
+                show_sha,
+            } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.history_show_author = show_author;
+                    pane.history_show_date = show_date;
+                    pane.history_show_sha = show_sha;
+                    cx.notify();
+                });
+                self.schedule_ui_settings_persist(cx);
+                close_after_action = false;
             }
             ContextMenuAction::StagePath { repo_id, path } => {
                 self.store.dispatch(Msg::SelectDiff {
@@ -556,7 +573,11 @@ impl PopoverHost {
                 self.store.dispatch(Msg::DeleteTag { repo_id, name });
             }
         }
-        self.close_popover(cx);
+        if close_after_action {
+            self.close_popover(cx);
+        } else {
+            cx.notify();
+        }
     }
 
     pub(super) fn discard_worktree_changes_confirmed(

@@ -133,6 +133,7 @@ pub struct TextInput {
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
 
+    scroll_x: Pixels,
     last_layout: Option<TextInputLayout>,
     last_line_starts: Option<Vec<usize>>,
     last_bounds: Option<Bounds<Pixels>>,
@@ -161,6 +162,7 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
+            scroll_x: px(0.0),
             last_layout: None,
             last_line_starts: None,
             last_bounds: None,
@@ -187,6 +189,7 @@ impl TextInput {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
+            scroll_x: px(0.0),
             last_layout: None,
             last_line_starts: None,
             last_bounds: None,
@@ -224,6 +227,7 @@ impl TextInput {
         self.content = text;
         self.selected_range = self.content.len()..self.content.len();
         self.cursor_blink_visible = true;
+        self.scroll_x = px(0.0);
         cx.notify();
     }
 
@@ -232,6 +236,15 @@ impl TextInput {
             return;
         }
         self.read_only = read_only;
+        cx.notify();
+    }
+
+    pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
+        if self.soft_wrap == soft_wrap {
+            return;
+        }
+        self.soft_wrap = soft_wrap;
+        self.wrap_cache = None;
         cx.notify();
     }
 
@@ -456,7 +469,8 @@ impl TextInput {
                 let mut line_ix = ratio.floor() as isize;
                 line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
-                let local_ix = lines[line_ix].closest_index_for_x(position.x - bounds.left());
+                let local_x = position.x - bounds.left() + self.scroll_x;
+                let local_ix = lines[line_ix].closest_index_for_x(local_x);
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
@@ -671,7 +685,7 @@ impl EntityInputHandler for TextInput {
         let (x, y) = match layout {
             TextInputLayout::Plain(lines) => {
                 let line = lines.get(line_ix)?;
-                (line.x_for_index(local_ix), y_offset)
+                (line.x_for_index(local_ix) - self.scroll_x, y_offset)
             }
             TextInputLayout::Wrapped { lines, .. } => {
                 let line = lines.get(line_ix)?;
@@ -705,7 +719,7 @@ impl EntityInputHandler for TextInput {
                 line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
                 let line = lines.get(line_ix)?;
-                let local_x = local.x;
+                let local_x = local.x + self.scroll_x;
                 let idx = line.index_for_x(local_x).unwrap_or(line.len());
                 let doc_offset = starts.get(line_ix).copied().unwrap_or(0) + idx;
                 Some(self.offset_to_utf16(doc_offset))
@@ -753,6 +767,7 @@ struct PrepaintState {
     selections: Vec<PaintQuad>,
     line_starts: Option<Vec<usize>>,
     wrap_cache: Option<WrapCache>,
+    scroll_x: Pixels,
 }
 
 impl IntoElement for TextElement {
@@ -832,6 +847,11 @@ impl Element for TextElement {
             split_lines_with_starts(&display_text);
 
         if !soft_wrap {
+            let mut scroll_x = if input.multiline {
+                px(0.0)
+            } else {
+                input.scroll_x
+            };
             let mut lines = Vec::with_capacity(lines_text.len());
             for line_text in &lines_text {
                 let run = TextRun {
@@ -849,10 +869,29 @@ impl Element for TextElement {
                 lines.push(shaped);
             }
 
+            if !input.multiline && !lines.is_empty() {
+                let viewport_w = bounds.size.width.max(px(0.0));
+                let pad = px(8.0).min(viewport_w / 4.0);
+                let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
+                let cursor_x = lines[line_ix].x_for_index(local_ix);
+                let max_scroll_x = (lines[line_ix].width - viewport_w).max(px(0.0));
+
+                let left = scroll_x;
+                let right = scroll_x + viewport_w;
+                if cursor_x < left + pad {
+                    scroll_x = (cursor_x - pad).max(px(0.0));
+                } else if cursor_x > right - pad {
+                    scroll_x = (cursor_x + pad - viewport_w).max(px(0.0));
+                }
+                scroll_x = scroll_x.min(max_scroll_x);
+            } else {
+                scroll_x = px(0.0);
+            }
+
             let mut selections = Vec::new();
             let cursor_quad = if selected_range.is_empty() {
                 let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
-                let x = lines[line_ix].x_for_index(local_ix);
+                let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
                 let caret_inset_y = px(2.0);
                 let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
                 let top = bounds.top() + line_height * line_ix as f32 + caret_inset_y;
@@ -879,8 +918,8 @@ impl Element for TextElement {
                     let local_start = seg_start.min(line_end) - start;
                     let local_end = seg_end.min(line_end) - start;
 
-                    let x0 = lines[ix].x_for_index(local_start);
-                    let x1 = lines[ix].x_for_index(local_end);
+                    let x0 = lines[ix].x_for_index(local_start) - scroll_x;
+                    let x1 = lines[ix].x_for_index(local_end) - scroll_x;
                     let top = bounds.top() + line_height * ix as f32;
                     selections.push(fill(
                         Bounds::from_corners(
@@ -899,6 +938,7 @@ impl Element for TextElement {
                 selections,
                 line_starts: Some(line_starts),
                 wrap_cache: None,
+                scroll_x,
             };
         }
 
@@ -1015,6 +1055,7 @@ impl Element for TextElement {
             selections,
             line_starts: Some(line_starts),
             wrap_cache,
+            scroll_x: px(0.0),
         }
     }
 
@@ -1065,7 +1106,10 @@ impl Element for TextElement {
                 TextInputLayout::Plain(lines) => {
                     for (ix, line) in lines.iter().enumerate() {
                         line.paint(
-                            point(bounds.origin.x, bounds.origin.y + line_height * ix as f32),
+                            point(
+                                bounds.origin.x - prepaint.scroll_x,
+                                bounds.origin.y + line_height * ix as f32,
+                            ),
                             line_height,
                             window,
                             cx,
@@ -1103,6 +1147,7 @@ impl Element for TextElement {
             input.last_bounds = Some(bounds);
             input.last_line_height = line_height;
             input.wrap_cache = prepaint.wrap_cache;
+            input.scroll_x = prepaint.scroll_x;
         });
     }
 }
@@ -1199,6 +1244,7 @@ impl Render for TextInput {
                     .w_full()
                     .min_w(px(0.0))
                     .p(padding)
+                    .overflow_hidden()
                     .child(TextElement { input: cx.entity() }),
             );
 

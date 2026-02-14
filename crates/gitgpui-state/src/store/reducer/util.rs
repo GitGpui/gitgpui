@@ -4,7 +4,7 @@ use crate::model::{
 };
 use crate::msg::{Effect, RepoCommandKind};
 use gitgpui_core::domain::DiffTarget;
-use gitgpui_core::error::Error;
+use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::CommandOutput;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -258,7 +258,7 @@ pub(super) fn push_command_log(
         summary,
         stdout: output.stdout.clone(),
         stderr: if output.stderr.is_empty() {
-            error.map(|e| e.to_string()).unwrap_or_default()
+            error.map(format_error_for_user).unwrap_or_default()
         } else {
             output.stderr.clone()
         },
@@ -284,7 +284,7 @@ pub(super) fn push_action_log(
         command,
         summary,
         stdout: String::new(),
-        stderr: error.map(|e| e.to_string()).unwrap_or_default(),
+        stderr: error.map(format_error_for_user).unwrap_or_default(),
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -339,10 +339,16 @@ fn summarize_command(
                 }
             }
         };
+        if let Some(error) = error
+            && let Some((git_command, details)) = try_format_git_backend_error(error)
+        {
+            return (git_command, format!("{label} failed:\n\n{details}"));
+        }
+
         return (
             output.command.clone().if_empty_else(|| label.to_string()),
             error
-                .map(|e| format!("{label} failed: {e}"))
+                .map(|e| format!("{label} failed:\n\n{}", format_error_for_user(e)))
                 .unwrap_or_else(|| format!("{label} failed")),
         );
     }
@@ -482,6 +488,83 @@ fn summarize_command(
     };
 
     (output.command.clone(), summary)
+}
+
+pub(super) fn format_error_for_user(error: &Error) -> String {
+    match error.kind() {
+        ErrorKind::Backend(message) => message.clone(),
+        _ => error.to_string(),
+    }
+}
+
+pub(super) fn format_failure_summary(label: &str, error: &Error) -> String {
+    if let Some((_git_command, details)) = try_format_git_backend_error(error) {
+        return format!("{label} failed:\n\n{details}");
+    }
+    format!("{label} failed:\n\n{}", format_error_for_user(error))
+}
+
+fn try_format_git_backend_error(error: &Error) -> Option<(String, String)> {
+    let ErrorKind::Backend(message) = error.kind() else {
+        return None;
+    };
+    try_format_git_backend_error_message(message)
+}
+
+fn try_format_git_backend_error_message(message: &str) -> Option<(String, String)> {
+    let (command, output) = parse_failed_command_message(message)?;
+    if !command.trim_start().starts_with("git ") {
+        return None;
+    }
+
+    Some((
+        command.clone(),
+        render_command_and_output(&command, output.as_deref()),
+    ))
+}
+
+fn parse_failed_command_message(message: &str) -> Option<(String, Option<String>)> {
+    if let Some(idx) = message.find(" failed:") {
+        let command = message[..idx].trim_end().to_string();
+        let mut output = &message[(idx + " failed:".len())..];
+        if output.starts_with(' ') {
+            output = &output[1..];
+        }
+        let output = output.trim_end_matches(&['\r', '\n']).to_string();
+        return Some((command, (!output.is_empty()).then_some(output)));
+    }
+
+    let trimmed = message.trim_end_matches(&['\r', '\n']);
+    if let Some(command) = trimmed.strip_suffix(" failed") {
+        return Some((command.trim_end().to_string(), None));
+    }
+
+    None
+}
+
+fn render_command_and_output(command: &str, output: Option<&str>) -> String {
+    let command = command
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .trim()
+        .to_string();
+
+    let mut rendered = String::new();
+    rendered.push_str("```");
+    rendered.push('\n');
+    rendered.push_str(&command);
+    rendered.push('\n');
+    rendered.push_str("```");
+
+    if let Some(output) = output {
+        let output = output.trim_end_matches(&['\r', '\n']);
+        if !output.is_empty() {
+            rendered.push_str("\n\n");
+            rendered.push_str(output);
+        }
+    }
+
+    rendered
 }
 
 trait IfEmptyElse {

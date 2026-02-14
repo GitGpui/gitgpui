@@ -257,6 +257,37 @@ impl MainPaneView {
                         self.ensure_diff_visible_indices();
                         self.maybe_autoscroll_diff_to_first_change();
 
+                        if self.diff_word_wrap {
+                            let approx_len: usize = self
+                                .file_diff_inline_cache
+                                .iter()
+                                .map(|l| l.text.len().saturating_add(1))
+                                .sum();
+                            let mut raw = String::with_capacity(approx_len);
+                            for line in &self.file_diff_inline_cache {
+                                raw.push_str(line.text.as_ref());
+                                raw.push('\n');
+                            }
+                            self.diff_raw_input.update(cx, |input, cx| {
+                                input.set_theme(theme, cx);
+                                input.set_soft_wrap(true, cx);
+                                input.set_text(raw, cx);
+                                input.set_read_only(true, cx);
+                            });
+
+                            return div()
+                                .id("diff_word_wrap_scroll")
+                                .font_family("monospace")
+                                .bg(theme.colors.window_bg)
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_h(px(0.0))
+                                .overflow_y_scroll()
+                                .child(self.diff_raw_input.clone())
+                                .into_any_element();
+                        }
+
                         let total_len = match self.diff_view {
                             DiffViewMode::Inline => self.file_diff_inline_cache.len(),
                             DiffViewMode::Split => self.file_diff_cache_rows.len(),
@@ -277,7 +308,10 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone());
+                                    .track_scroll(self.diff_scroll.clone())
+                                    .with_horizontal_sizing_behavior(
+                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    );
                                     div()
                                         .id("diff_scroll_container")
                                         .relative()
@@ -286,10 +320,21 @@ impl MainPaneView {
                                         .bg(theme.colors.window_bg)
                                         .child(list)
                                         .child(
-                                            zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
+                                            zed::Scrollbar::new(
+                                                "diff_scrollbar",
+                                                scroll_handle.clone(),
+                                            )
+                                            .markers(markers)
+                                            .always_visible()
+                                            .render(theme),
+                                        )
+                                        .child(
+                                            zed::Scrollbar::horizontal(
+                                                "diff_hscrollbar",
+                                                scroll_handle,
+                                            )
+                                            .always_visible()
+                                            .render(theme),
                                         )
                                         .into_any_element()
                                 }
@@ -302,7 +347,10 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone());
+                                    .track_scroll(self.diff_scroll.clone())
+                                    .with_horizontal_sizing_behavior(
+                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    );
                                     let right = uniform_list(
                                         "diff_split_right",
                                         count,
@@ -310,7 +358,10 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone());
+                                    .track_scroll(self.diff_scroll.clone())
+                                    .with_horizontal_sizing_behavior(
+                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    );
 
                                     let columns_header = zed::split_columns_header(
                                         theme,
@@ -354,10 +405,21 @@ impl MainPaneView {
                                                 ),
                                         )
                                         .child(
-                                            zed::Scrollbar::new("diff_scrollbar", scroll_handle)
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
+                                            zed::Scrollbar::new(
+                                                "diff_scrollbar",
+                                                scroll_handle.clone(),
+                                            )
+                                            .markers(markers)
+                                            .always_visible()
+                                            .render(theme),
+                                        )
+                                        .child(
+                                            zed::Scrollbar::horizontal(
+                                                "diff_hscrollbar",
+                                                scroll_handle,
+                                            )
+                                            .always_visible()
+                                            .render(theme),
                                         )
                                         .into_any_element()
                                 }
@@ -757,6 +819,33 @@ impl MainPaneView {
                         })),
                 )
                 .child(
+                    zed::Button::new("diff_wrap", "Wrap")
+                        .style(if self.diff_word_wrap {
+                            zed::ButtonStyle::Filled
+                        } else {
+                            zed::ButtonStyle::Outlined
+                        })
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.diff_word_wrap = !this.diff_word_wrap;
+                            let handle = this.diff_scroll.0.borrow().base_handle.clone();
+                            let offset = handle.offset();
+                            handle.set_offset(point(px(0.0), offset.y));
+                            cx.notify();
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Toggle word wrap (Alt+W)".into();
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                        })),
+                )
+                .child(
                     zed::Button::new("diff_prev_hunk", "Prev")
                         .end_slot(diff_nav_hotkey_hint("F2"))
                         .style(zed::ButtonStyle::Outlined)
@@ -996,19 +1085,13 @@ impl MainPaneView {
                             zed::empty_state(theme, title, "No conflict data.").into_any_element()
                         }
                         Loadable::Ready(Some(file)) => {
-                            let ours = file.ours.clone().unwrap_or_default();
-                            let theirs = file.theirs.clone().unwrap_or_default();
+                            let base = file.base.clone().unwrap_or_default();
+                            let local = file.ours.clone().unwrap_or_default();
+                            let remote = file.theirs.clone().unwrap_or_default();
                             let has_current = file.current.is_some();
 
+                            let view_mode = self.conflict_resolver.view_mode;
                             let mode = self.conflict_resolver.diff_mode;
-                            let diff_len = match mode {
-                                ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
-                                ConflictDiffMode::Inline => {
-                                    self.conflict_resolver.inline_rows.len()
-                                }
-                            };
-
-                            let selection_empty = self.conflict_resolver_selection_is_empty();
 
                             let toggle_mode_split =
                                 |this: &mut Self,
@@ -1041,20 +1124,81 @@ impl MainPaneView {
                                     this.conflict_resolver_append_selection_to_output(cx);
                                 };
 
-                            let ours_for_btn = ours.clone();
-                            let set_output_ours = move |this: &mut Self,
-                                                        _e: &ClickEvent,
-                                                        _w: &mut Window,
-                                                        cx: &mut gpui::Context<Self>| {
-                                this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
-                            };
-                            let theirs_for_btn = theirs.clone();
-                            let set_output_theirs = move |this: &mut Self,
-                                                          _e: &ClickEvent,
-                                                          _w: &mut Window,
-                                                          cx: &mut gpui::Context<Self>| {
-                                this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
-                            };
+                            let set_view_three_way =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_set_view_mode(
+                                        ConflictResolverViewMode::ThreeWay,
+                                        cx,
+                                    );
+                                };
+                            let set_view_two_way =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_set_view_mode(
+                                        ConflictResolverViewMode::TwoWayDiff,
+                                        cx,
+                                    );
+                                };
+
+                            let base_for_btn = base.clone();
+                            let set_output_base =
+                                move |this: &mut Self,
+                                      _e: &ClickEvent,
+                                      _w: &mut Window,
+                                      cx: &mut gpui::Context<Self>| {
+                                    if this.conflict_resolver_conflict_count() > 0 {
+                                        this.conflict_resolver_pick_active_conflict(
+                                            conflict_resolver::ConflictChoice::Base,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.conflict_resolver_set_output(
+                                            base_for_btn.clone(),
+                                            cx,
+                                        );
+                                    }
+                                };
+                            let local_for_btn = local.clone();
+                            let set_output_local =
+                                move |this: &mut Self,
+                                      _e: &ClickEvent,
+                                      _w: &mut Window,
+                                      cx: &mut gpui::Context<Self>| {
+                                    if this.conflict_resolver_conflict_count() > 0 {
+                                        this.conflict_resolver_pick_active_conflict(
+                                            conflict_resolver::ConflictChoice::Ours,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.conflict_resolver_set_output(
+                                            local_for_btn.clone(),
+                                            cx,
+                                        );
+                                    }
+                                };
+                            let remote_for_btn = remote.clone();
+                            let set_output_remote =
+                                move |this: &mut Self,
+                                      _e: &ClickEvent,
+                                      _w: &mut Window,
+                                      cx: &mut gpui::Context<Self>| {
+                                    if this.conflict_resolver_conflict_count() > 0 {
+                                        this.conflict_resolver_pick_active_conflict(
+                                            conflict_resolver::ConflictChoice::Theirs,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.conflict_resolver_set_output(
+                                            remote_for_btn.clone(),
+                                            cx,
+                                        );
+                                    }
+                                };
                             let reset_from_markers =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1062,6 +1206,48 @@ impl MainPaneView {
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_reset_output_from_markers(cx);
                                 };
+
+                            let view_mode_controls = div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    zed::Button::new("conflict_view_three_way", "3-way")
+                                        .style(if view_mode == ConflictResolverViewMode::ThreeWay {
+                                            zed::ButtonStyle::Filled
+                                        } else {
+                                            zed::ButtonStyle::Outlined
+                                        })
+                                        .on_click(theme, cx, set_view_three_way),
+                                )
+                                .child(
+                                    zed::Button::new("conflict_view_two_way", "2-way")
+                                        .style(
+                                            if view_mode == ConflictResolverViewMode::TwoWayDiff {
+                                                zed::ButtonStyle::Filled
+                                            } else {
+                                                zed::ButtonStyle::Outlined
+                                            },
+                                        )
+                                        .on_click(theme, cx, set_view_two_way),
+                                );
+
+                            let diff_len = match view_mode {
+                                ConflictResolverViewMode::ThreeWay => {
+                                    self.conflict_resolver.three_way_len
+                                }
+                                ConflictResolverViewMode::TwoWayDiff => match mode {
+                                    ConflictDiffMode::Split => {
+                                        self.conflict_resolver.diff_rows.len()
+                                    }
+                                    ConflictDiffMode::Inline => {
+                                        self.conflict_resolver.inline_rows.len()
+                                    }
+                                },
+                            };
+
+                            let selection_empty = view_mode == ConflictResolverViewMode::ThreeWay
+                                || self.conflict_resolver_selection_is_empty();
 
                             let mode_controls = div()
                                 .flex()
@@ -1110,21 +1296,95 @@ impl MainPaneView {
                                         .on_click(theme, cx, clear_selection),
                                 );
 
+                            let conflict_count = self.conflict_resolver_conflict_count();
+                            let active_conflict = self.conflict_resolver.active_conflict;
+                            let has_conflicts = conflict_count > 0;
+
+                            let active_block_has_base = if has_conflicts {
+                                let mut seen = 0usize;
+                                self.conflict_resolver
+                                    .marker_segments
+                                    .iter()
+                                    .find_map(|seg| {
+                                        let conflict_resolver::ConflictSegment::Block(block) = seg
+                                        else {
+                                            return None;
+                                        };
+                                        let hit = seen == active_conflict;
+                                        seen += 1;
+                                        hit.then_some(block.base.is_some())
+                                    })
+                                    .unwrap_or(false)
+                            } else {
+                                file.base.is_some()
+                            };
+
+                            let prev_conflict =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_prev_conflict(cx);
+                                };
+                            let next_conflict =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_next_conflict(cx);
+                                };
+
                             let start_controls = div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
+                                .when(has_conflicts, |d| {
+                                    let label: SharedString = format!(
+                                        "Conflict {}/{}",
+                                        active_conflict + 1,
+                                        conflict_count
+                                    )
+                                    .into();
+                                    d.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .child(label),
+                                    )
+                                    .child(
+                                        zed::Button::new("conflict_pick_prev", "Prev")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .disabled(active_conflict == 0)
+                                            .on_click(theme, cx, prev_conflict),
+                                    )
+                                    .child(
+                                        zed::Button::new("conflict_pick_next", "Next")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .disabled(active_conflict + 1 >= conflict_count)
+                                            .on_click(theme, cx, next_conflict),
+                                    )
+                                })
                                 .child(
-                                    zed::Button::new("conflict_use_ours", "Use ours")
+                                    zed::Button::new("conflict_use_base", "A (base)")
                                         .style(zed::ButtonStyle::Transparent)
-                                        .disabled(file.ours.is_none())
-                                        .on_click(theme, cx, set_output_ours),
+                                        .disabled(if has_conflicts {
+                                            !active_block_has_base
+                                        } else {
+                                            file.base.is_none()
+                                        })
+                                        .on_click(theme, cx, set_output_base),
                                 )
                                 .child(
-                                    zed::Button::new("conflict_use_theirs", "Use theirs")
+                                    zed::Button::new("conflict_use_local", "B (local)")
                                         .style(zed::ButtonStyle::Transparent)
-                                        .disabled(file.theirs.is_none())
-                                        .on_click(theme, cx, set_output_theirs),
+                                        .disabled(!has_conflicts && file.ours.is_none())
+                                        .on_click(theme, cx, set_output_local),
+                                )
+                                .child(
+                                    zed::Button::new("conflict_use_remote", "C (remote)")
+                                        .style(zed::ButtonStyle::Transparent)
+                                        .disabled(!has_conflicts && file.theirs.is_none())
+                                        .on_click(theme, cx, set_output_remote),
                                 )
                                 .child(
                                     zed::Button::new(
@@ -1140,37 +1400,44 @@ impl MainPaneView {
                                     ),
                                 );
 
-                            let diff_header = div()
+                            let top_header = div()
                                 .flex()
                                 .items_center()
                                 .justify_between()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.text_muted)
-                                        .child("Diff (ours ↔ theirs)"),
-                                )
+                                .child(div().text_xs().text_color(theme.colors.text_muted).child(
+                                    match view_mode {
+                                        ConflictResolverViewMode::ThreeWay => {
+                                            "Merge inputs (base / local / remote)"
+                                        }
+                                        ConflictResolverViewMode::TwoWayDiff => {
+                                            "Diff (local ↔ remote)"
+                                        }
+                                    },
+                                ))
                                 .child(
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_2()
-                                        .child(mode_controls)
-                                        .child(selection_controls),
+                                        .child(view_mode_controls)
+                                        .when(
+                                            view_mode == ConflictResolverViewMode::TwoWayDiff,
+                                            |d| d.child(mode_controls).child(selection_controls),
+                                        ),
                                 );
 
-                            let diff_title_row = div()
+                            let top_title_row = div()
                                 .h(px(22.0))
                                 .flex()
                                 .items_center()
-                                .when(mode == ConflictDiffMode::Split, |d| {
+                                .when(view_mode == ConflictResolverViewMode::ThreeWay, |d| {
                                     d.child(
                                         div()
                                             .flex_1()
                                             .px_2()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
-                                            .child("Ours (index :2)"),
+                                            .child("Base (A, index :1)"),
                                     )
                                     .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                     .child(
@@ -1179,24 +1446,57 @@ impl MainPaneView {
                                             .px_2()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
-                                            .child("Theirs (index :3)"),
+                                            .child("Local (B, index :2)"),
+                                    )
+                                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .px_2()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .child("Remote (C, index :3)"),
                                     )
                                 })
-                                .when(mode == ConflictDiffMode::Inline, |d| d);
+                                .when(view_mode == ConflictResolverViewMode::TwoWayDiff, |d| {
+                                    d.when(mode == ConflictDiffMode::Split, |d| {
+                                        d.child(
+                                            div()
+                                                .flex_1()
+                                                .px_2()
+                                                .text_xs()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Local (index :2)"),
+                                        )
+                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .px_2()
+                                                .text_xs()
+                                                .text_color(theme.colors.text_muted)
+                                                .child("Remote (index :3)"),
+                                        )
+                                    })
+                                    .when(mode == ConflictDiffMode::Inline, |d| d)
+                                });
 
-                            let diff_body: AnyElement = if diff_len == 0 {
-                                zed::empty_state(
-                                    theme,
-                                    "Diff",
-                                    "Ours/Theirs content not available.",
-                                )
-                                .into_any_element()
+                            let top_body: AnyElement = if diff_len == 0 {
+                                zed::empty_state(theme, "Inputs", "Stage data not available.")
+                                    .into_any_element()
                             } else {
-                                let list = uniform_list(
-                                    "conflict_resolver_diff_list",
-                                    diff_len,
-                                    cx.processor(Self::render_conflict_resolver_diff_rows),
-                                )
+                                let list = match view_mode {
+                                    ConflictResolverViewMode::ThreeWay => uniform_list(
+                                        "conflict_resolver_three_way_list",
+                                        diff_len,
+                                        cx.processor(Self::render_conflict_resolver_three_way_rows),
+                                    ),
+                                    ConflictResolverViewMode::TwoWayDiff => uniform_list(
+                                        "conflict_resolver_diff_list",
+                                        diff_len,
+                                        cx.processor(Self::render_conflict_resolver_diff_rows),
+                                    ),
+                                }
                                 .h_full()
                                 .min_h(px(0.0))
                                 .track_scroll(self.conflict_resolver_diff_scroll.clone());
@@ -1293,7 +1593,7 @@ impl MainPaneView {
                                 .child(title.clone()),
                         )
                         .child(div().border_t_1().border_color(theme.colors.border))
-                        .child(diff_header)
+                        .child(top_header)
                         .child(
                             div()
                                 .h(px(240.0))
@@ -1304,9 +1604,9 @@ impl MainPaneView {
                                 .overflow_hidden()
                                 .flex()
                                 .flex_col()
-                                .child(diff_title_row)
+                                .child(top_title_row)
                                 .child(div().border_t_1().border_color(theme.colors.border))
-                                .child(diff_body),
+                                .child(top_body),
                         )
 	                        .child(div().border_t_1().border_color(theme.colors.border))
 	                        .child(output_header)
@@ -1429,7 +1729,10 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone());
+                                    .track_scroll(self.diff_scroll.clone())
+                                    .with_horizontal_sizing_behavior(
+                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    );
 
                                     div()
                                         .id("conflict_compare_container")
@@ -1450,6 +1753,14 @@ impl MainPaneView {
                                                 .child(
                                                     zed::Scrollbar::new(
                                                         "conflict_compare_scrollbar",
+                                                        scroll_handle.clone(),
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
+                                                )
+                                                .child(
+                                                    zed::Scrollbar::horizontal(
+                                                        "conflict_compare_hscrollbar",
                                                         scroll_handle,
                                                     )
                                                     .always_visible()
@@ -1498,123 +1809,179 @@ impl MainPaneView {
                         if wants_file_diff {
                             self.render_selected_file_diff(theme, cx)
                         } else {
-                            if self.diff_cache_repo_id != Some(repo.id)
-                                || self.diff_cache_rev != repo.diff_rev
-                                || self.diff_cache_target != repo.diff_target
-                                || self.diff_cache.len() != diff.lines.len()
-                            {
-                                self.rebuild_diff_cache(cx);
-                            }
-
-                            self.ensure_diff_visible_indices();
-                            self.maybe_autoscroll_diff_to_first_change();
-                            if self.diff_cache.is_empty() {
-                                zed::empty_state(theme, "Diff", "No differences.")
-                                    .into_any_element()
-                            } else if self.diff_visible_indices.is_empty() {
-                                zed::empty_state(theme, "Diff", "Nothing to render.")
+                            if self.diff_word_wrap {
+                                let approx_len: usize = diff
+                                    .lines
+                                    .iter()
+                                    .map(|l| l.text.len().saturating_add(1))
+                                    .sum();
+                                let mut raw = String::with_capacity(approx_len);
+                                for line in &diff.lines {
+                                    raw.push_str(line.text.as_ref());
+                                    raw.push('\n');
+                                }
+                                self.diff_raw_input.update(cx, |input, cx| {
+                                    input.set_theme(theme, cx);
+                                    input.set_soft_wrap(true, cx);
+                                    input.set_text(raw, cx);
+                                    input.set_read_only(true, cx);
+                                });
+                                div()
+                                    .id("diff_word_wrap_scroll")
+                                    .font_family("monospace")
+                                    .bg(theme.colors.window_bg)
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .overflow_y_scroll()
+                                    .child(self.diff_raw_input.clone())
                                     .into_any_element()
                             } else {
-                                let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
-                                let markers = self.diff_scrollbar_markers_cache.clone();
-                                match self.diff_view {
-                                    DiffViewMode::Inline => {
-                                        let list = uniform_list(
-                                            "diff",
-                                            self.diff_visible_indices.len(),
-                                            cx.processor(Self::render_diff_rows),
-                                        )
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .track_scroll(self.diff_scroll.clone());
-                                        div()
-                                            .id("diff_scroll_container")
-                                            .relative()
+                                if self.diff_cache_repo_id != Some(repo.id)
+                                    || self.diff_cache_rev != repo.diff_rev
+                                    || self.diff_cache_target != repo.diff_target
+                                    || self.diff_cache.len() != diff.lines.len()
+                                {
+                                    self.rebuild_diff_cache(cx);
+                                }
+
+                                self.ensure_diff_visible_indices();
+                                self.maybe_autoscroll_diff_to_first_change();
+                                if self.diff_cache.is_empty() {
+                                    zed::empty_state(theme, "Diff", "No differences.")
+                                        .into_any_element()
+                                } else if self.diff_visible_indices.is_empty() {
+                                    zed::empty_state(theme, "Diff", "Nothing to render.")
+                                        .into_any_element()
+                                } else {
+                                    let scroll_handle =
+                                        self.diff_scroll.0.borrow().base_handle.clone();
+                                    let markers = self.diff_scrollbar_markers_cache.clone();
+                                    match self.diff_view {
+                                        DiffViewMode::Inline => {
+                                            let list = uniform_list(
+                                                "diff",
+                                                self.diff_visible_indices.len(),
+                                                cx.processor(Self::render_diff_rows),
+                                            )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .bg(theme.colors.window_bg)
-                                            .child(list)
-                                            .child(
-                                                zed::Scrollbar::new(
-                                                    "diff_scrollbar",
-                                                    scroll_handle,
+                                            .track_scroll(self.diff_scroll.clone())
+                                            .with_horizontal_sizing_behavior(
+                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                            );
+                                            div()
+                                                .id("diff_scroll_container")
+                                                .relative()
+                                                .h_full()
+                                                .min_h(px(0.0))
+                                                .bg(theme.colors.window_bg)
+                                                .child(list)
+                                                .child(
+                                                    zed::Scrollbar::new(
+                                                        "diff_scrollbar",
+                                                        scroll_handle.clone(),
+                                                    )
+                                                    .markers(markers)
+                                                    .always_visible()
+                                                    .render(theme),
                                                 )
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
+                                                .child(
+                                                    zed::Scrollbar::horizontal(
+                                                        "diff_hscrollbar",
+                                                        scroll_handle,
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
+                                                )
+                                                .into_any_element()
+                                        }
+                                        DiffViewMode::Split => {
+                                            let count = self.diff_visible_indices.len();
+                                            let left = uniform_list(
+                                                "diff_split_left",
+                                                count,
+                                                cx.processor(Self::render_diff_split_left_rows),
                                             )
-                                            .into_any_element()
-                                    }
-                                    DiffViewMode::Split => {
-                                        let count = self.diff_visible_indices.len();
-                                        let left = uniform_list(
-                                            "diff_split_left",
-                                            count,
-                                            cx.processor(Self::render_diff_split_left_rows),
-                                        )
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .track_scroll(self.diff_scroll.clone());
-                                        let right = uniform_list(
-                                            "diff_split_right",
-                                            count,
-                                            cx.processor(Self::render_diff_split_right_rows),
-                                        )
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .track_scroll(self.diff_scroll.clone());
-
-                                        let columns_header = zed::split_columns_header(
-                                            theme,
-                                            "A (local / before)",
-                                            "B (remote / after)",
-                                        );
-
-                                        div()
-                                            .id("diff_split_scroll_container")
-                                            .relative()
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .flex()
-                                            .flex_col()
-                                            .bg(theme.colors.window_bg)
-                                            .child(columns_header)
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_h(px(0.0))
-                                                    .flex()
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .min_w(px(0.0))
-                                                            .h_full()
-                                                            .child(left),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .w(px(1.0))
-                                                            .h_full()
-                                                            .bg(theme.colors.border),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_1()
-                                                            .min_w(px(0.0))
-                                                            .h_full()
-                                                            .child(right),
-                                                    ),
+                                            .track_scroll(self.diff_scroll.clone())
+                                            .with_horizontal_sizing_behavior(
+                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                            );
+                                            let right = uniform_list(
+                                                "diff_split_right",
+                                                count,
+                                                cx.processor(Self::render_diff_split_right_rows),
                                             )
-                                            .child(
-                                                zed::Scrollbar::new(
-                                                    "diff_scrollbar",
-                                                    scroll_handle,
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .track_scroll(self.diff_scroll.clone())
+                                            .with_horizontal_sizing_behavior(
+                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                            );
+
+                                            let columns_header = zed::split_columns_header(
+                                                theme,
+                                                "A (local / before)",
+                                                "B (remote / after)",
+                                            );
+
+                                            div()
+                                                .id("diff_split_scroll_container")
+                                                .relative()
+                                                .h_full()
+                                                .min_h(px(0.0))
+                                                .flex()
+                                                .flex_col()
+                                                .bg(theme.colors.window_bg)
+                                                .child(columns_header)
+                                                .child(
+                                                    div()
+                                                        .flex_1()
+                                                        .min_h(px(0.0))
+                                                        .flex()
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w(px(0.0))
+                                                                .h_full()
+                                                                .child(left),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w(px(1.0))
+                                                                .h_full()
+                                                                .bg(theme.colors.border),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w(px(0.0))
+                                                                .h_full()
+                                                                .child(right),
+                                                        ),
                                                 )
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
-                                            )
-                                            .into_any_element()
+                                                .child(
+                                                    zed::Scrollbar::new(
+                                                        "diff_scrollbar",
+                                                        scroll_handle.clone(),
+                                                    )
+                                                    .markers(markers)
+                                                    .always_visible()
+                                                    .render(theme),
+                                                )
+                                                .child(
+                                                    zed::Scrollbar::horizontal(
+                                                        "diff_hscrollbar",
+                                                        scroll_handle,
+                                                    )
+                                                    .always_visible()
+                                                    .render(theme),
+                                                )
+                                                .into_any_element()
+                                        }
                                     }
                                 }
                             }
@@ -1893,6 +2260,15 @@ impl MainPaneView {
                                 this.diff_text_segments_cache.clear();
                             }
                             handled = true;
+                        }
+                        "w" => {
+                            if !conflict_resolver_active {
+                                this.diff_word_wrap = !this.diff_word_wrap;
+                                let handle = this.diff_scroll.0.borrow().base_handle.clone();
+                                let offset = handle.offset();
+                                handle.set_offset(point(px(0.0), offset.y));
+                                handled = true;
+                            }
                         }
                         "h" => {
                             let is_file_preview = this.untracked_worktree_preview_path().is_some()

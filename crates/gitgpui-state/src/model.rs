@@ -109,6 +109,7 @@ impl RepoLoadsInFlight {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFile {
     pub path: PathBuf,
+    pub base: Option<String>,
     pub ours: Option<String>,
     pub theirs: Option<String>,
     pub current: Option<String>,

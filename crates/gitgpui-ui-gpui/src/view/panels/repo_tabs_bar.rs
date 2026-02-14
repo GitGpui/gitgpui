@@ -208,7 +208,7 @@ impl Render for RepoTabsBarView {
                 .path(path)
                 .w(px(14.0))
                 .h(px(14.0))
-                .text_color(theme.colors.text)
+                .text_color(theme.colors.accent)
         };
 
         let root_view = self.root_view.clone();

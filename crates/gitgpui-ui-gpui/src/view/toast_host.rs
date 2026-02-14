@@ -195,7 +195,7 @@ impl ToastHost {
                         }
                         self.clone_progress_dest = None;
                         self.clone_progress_last_seq = op.seq;
-                        self.push_toast(zed::ToastKind::Error, format!("Clone failed: {err}"), cx);
+                        self.push_toast(zed::ToastKind::Error, err.clone(), cx);
                     }
                 }
             },

@@ -1,8 +1,8 @@
 use super::util::{
-    diff_target_wants_image_preview, push_action_log, push_command_log, push_diagnostic,
+    diff_target_wants_image_preview, format_failure_summary, push_action_log, push_command_log,
     refresh_full_effects, refresh_primary_effects,
 };
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoId};
+use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{Effect, RepoCommandKind};
 use gitgpui_core::domain::DiffTarget;
 use gitgpui_core::error::Error;
@@ -349,15 +349,9 @@ pub(super) fn commit_finished(
                 );
             }
             Err(e) => {
-                repo_state.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                push_action_log(
-                    repo_state,
-                    false,
-                    "Commit".to_string(),
-                    format!("Commit failed: {e}"),
-                    Some(&e),
-                );
+                let summary = format_failure_summary("Commit", &e);
+                repo_state.last_error = Some(summary.clone());
+                push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
             }
         }
     }
@@ -389,15 +383,9 @@ pub(super) fn commit_amend_finished(
                 );
             }
             Err(e) => {
-                repo_state.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                push_action_log(
-                    repo_state,
-                    false,
-                    "Amend".to_string(),
-                    format!("Amend failed: {e}"),
-                    Some(&e),
-                );
+                let summary = format_failure_summary("Amend", &e);
+                repo_state.last_error = Some(summary.clone());
+                push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
             }
         }
     }
@@ -446,8 +434,6 @@ pub(super) fn repo_command_finished(
                 push_command_log(repo_state, true, &command, &output, None);
             }
             Err(e) => {
-                repo_state.last_error = Some(e.to_string());
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 push_command_log(
                     repo_state,
                     false,
@@ -455,6 +441,10 @@ pub(super) fn repo_command_finished(
                     &CommandOutput::default(),
                     Some(&e),
                 );
+                repo_state.last_error = repo_state
+                    .command_log
+                    .last()
+                    .map(|entry| entry.summary.clone());
             }
         }
     }

@@ -19,6 +19,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) last_window_size: Size<Pixels>,
 
     pub(in super::super) diff_view: DiffViewMode,
+    pub(in super::super) diff_word_wrap: bool,
+    pub(in super::super) diff_horizontal_min_width: Pixels,
     pub(in super::super) diff_cache_repo_id: Option<RepoId>,
     pub(in super::super) diff_cache_rev: u64,
     pub(in super::super) diff_cache_target: Option<DiffTarget>,
@@ -105,8 +107,12 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) history_cache_inflight: Option<HistoryCacheRequest>,
     pub(in super::super) history_col_branch: Pixels,
     pub(in super::super) history_col_graph: Pixels,
+    pub(in super::super) history_col_author: Pixels,
     pub(in super::super) history_col_date: Pixels,
     pub(in super::super) history_col_sha: Pixels,
+    pub(in super::super) history_show_author: bool,
+    pub(in super::super) history_show_date: bool,
+    pub(in super::super) history_show_sha: bool,
     pub(in super::super) history_col_graph_auto: bool,
     pub(in super::super) history_col_resize: Option<HistoryColResizeState>,
     pub(in super::super) history_cache: Option<HistoryCache>,
@@ -217,6 +223,9 @@ impl MainPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         date_time_format: DateTimeFormat,
+        history_show_author: bool,
+        history_show_date: bool,
+        history_show_sha: bool,
         root_view: WeakEntity<GitGpuiView>,
         tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
@@ -333,6 +342,8 @@ impl MainPaneView {
             notify_fingerprint: initial_fingerprint,
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
+            diff_word_wrap: false,
+            diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
             diff_cache_target: None,
@@ -411,8 +422,12 @@ impl MainPaneView {
             history_cache_inflight: None,
             history_col_branch: px(HISTORY_COL_BRANCH_PX),
             history_col_graph: px(HISTORY_COL_GRAPH_PX),
+            history_col_author: px(HISTORY_COL_AUTHOR_PX),
             history_col_date: px(HISTORY_COL_DATE_PX),
             history_col_sha: px(HISTORY_COL_SHA_PX),
+            history_show_author,
+            history_show_date,
+            history_show_sha,
             history_col_graph_auto: true,
             history_col_resize: None,
             history_cache: None,
@@ -472,6 +487,14 @@ impl MainPaneView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn history_visible_column_preferences(&self) -> (bool, bool, bool) {
+        (
+            self.history_show_author,
+            self.history_show_date,
+            self.history_show_sha,
+        )
     }
 
     pub(in super::super) fn open_popover_at(
@@ -985,36 +1008,68 @@ impl MainPaneView {
         None
     }
 
-    pub(in super::super) fn history_visible_columns(&self) -> (bool, bool) {
-        // Prefer keeping commit message visible. Hide SHA first, then date.
+    pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
+        // Prefer keeping commit message visible. Hide SHA first, then date, then author.
         let mut available = self.last_window_size.width;
         available -= px(280.0);
         available -= px(420.0);
         available -= px(64.0);
         if available <= px(0.0) {
-            return (false, false);
+            return (false, false, false);
         }
 
         let min_message = px(220.0);
 
+        let mut show_author = self.history_show_author;
+        let mut show_date = self.history_show_date;
+        let mut show_sha = self.history_show_sha;
+
         // Always show Branch + Graph; Message is flex.
         let fixed_base = self.history_col_branch + self.history_col_graph;
-
-        // Show both by default.
-        let mut show_date = true;
-        let mut show_sha = true;
-        let mut fixed = fixed_base + self.history_col_date + self.history_col_sha;
+        let mut fixed = fixed_base
+            + if show_author {
+                self.history_col_author
+            } else {
+                px(0.0)
+            }
+            + if show_date {
+                self.history_col_date
+            } else {
+                px(0.0)
+            }
+            + if show_sha {
+                self.history_col_sha
+            } else {
+                px(0.0)
+            };
 
         if available - fixed < min_message {
-            show_sha = false;
-            fixed -= self.history_col_sha;
+            if show_sha {
+                show_sha = false;
+                fixed -= self.history_col_sha;
+            }
         }
         if available - fixed < min_message {
+            if show_date {
+                show_date = false;
+                fixed -= self.history_col_date;
+            }
+            show_sha = false;
+        }
+        if available - fixed < min_message {
+            if show_author {
+                show_author = false;
+                fixed -= self.history_col_author;
+            }
+        }
+
+        if available - fixed < min_message {
+            show_author = false;
             show_date = false;
             show_sha = false;
         }
 
-        (show_date, show_sha)
+        (show_author, show_date, show_sha)
     }
 }
 
@@ -1257,8 +1312,31 @@ impl MainPaneView {
             return;
         };
 
-        self.conflict_resolver_diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::TwoWayDiff => self
+                .conflict_resolver_diff_scroll
+                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::ThreeWay => {
+                let line_ix = match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                    ConflictDiffMode::Inline => self
+                        .conflict_resolver
+                        .inline_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                };
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
+            }
+        }
         self.conflict_resolver.nav_anchor = Some(target);
     }
 
@@ -1273,8 +1351,31 @@ impl MainPaneView {
             return;
         };
 
-        self.conflict_resolver_diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::TwoWayDiff => self
+                .conflict_resolver_diff_scroll
+                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::ThreeWay => {
+                let line_ix = match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                    ConflictDiffMode::Inline => self
+                        .conflict_resolver
+                        .inline_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                };
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
+            }
+        }
         self.conflict_resolver.nav_anchor = Some(target);
     }
 
@@ -1388,6 +1489,7 @@ impl MainPaneView {
         }
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        file.base.hash(&mut hasher);
         file.ours.hash(&mut hasher);
         file.theirs.hash(&mut hasher);
         file.current.hash(&mut hasher);
@@ -1404,24 +1506,54 @@ impl MainPaneView {
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_segments_cache_inline.clear();
 
-        let resolved = if let Some(cur) = file.current.as_deref() {
+        let (marker_segments, resolved) = if let Some(cur) = file.current.as_deref() {
             let segments = conflict_resolver::parse_conflict_markers(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
-                conflict_resolver::generate_resolved_text(&segments)
+                let resolved = conflict_resolver::generate_resolved_text(&segments);
+                (segments, resolved)
             } else {
-                cur.to_string()
+                (Vec::new(), cur.to_string())
             }
         } else if let Some(ours) = file.ours.as_deref() {
-            ours.to_string()
+            (Vec::new(), ours.to_string())
         } else if let Some(theirs) = file.theirs.as_deref() {
-            theirs.to_string()
+            (Vec::new(), theirs.to_string())
         } else {
-            String::new()
+            (Vec::new(), String::new())
         };
         let ours_text = file.ours.as_deref().unwrap_or("");
         let theirs_text = file.theirs.as_deref().unwrap_or("");
+        let base_text = file.base.as_deref().unwrap_or("");
         let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+
+        fn split_lines_shared(text: &str) -> Vec<SharedString> {
+            if text.is_empty() {
+                return Vec::new();
+            }
+            let mut out =
+                Vec::with_capacity(text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1);
+            out.extend(text.lines().map(|line| line.to_string().into()));
+            out
+        }
+
+        let three_way_base_lines = split_lines_shared(base_text);
+        let three_way_ours_lines = split_lines_shared(ours_text);
+        let three_way_theirs_lines = split_lines_shared(theirs_text);
+        let three_way_len = three_way_base_lines
+            .len()
+            .max(three_way_ours_lines.len())
+            .max(three_way_theirs_lines.len());
+
+        let view_mode = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.view_mode
+        } else if file.base.is_some() {
+            ConflictResolverViewMode::ThreeWay
+        } else {
+            ConflictResolverViewMode::TwoWayDiff
+        };
 
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
@@ -1437,14 +1569,33 @@ impl MainPaneView {
         } else {
             None
         };
+        let active_conflict = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            let total = conflict_resolver::conflict_count(&marker_segments);
+            if total == 0 {
+                0
+            } else {
+                self.conflict_resolver.active_conflict.min(total - 1)
+            }
+        } else {
+            0
+        };
 
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
             source_hash: Some(source_hash),
             current: file.current.clone(),
+            marker_segments,
+            active_conflict,
+            view_mode,
             diff_rows,
             inline_rows,
+            three_way_base_lines,
+            three_way_ours_lines,
+            three_way_theirs_lines,
+            three_way_len,
             diff_mode,
             nav_anchor,
             split_selected: std::collections::BTreeSet::new(),
@@ -1477,6 +1628,20 @@ impl MainPaneView {
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
+        cx.notify();
+    }
+
+    pub(in super::super) fn conflict_resolver_set_view_mode(
+        &mut self,
+        view_mode: ConflictResolverViewMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.view_mode == view_mode {
+            return;
+        }
+        self.conflict_resolver.view_mode = view_mode;
+        self.conflict_resolver.split_selected.clear();
+        self.conflict_resolver.inline_selected.clear();
         cx.notify();
     }
 
@@ -1578,7 +1743,81 @@ impl MainPaneView {
         if conflict_resolver::conflict_count(&segments) == 0 {
             return;
         }
-        let resolved = conflict_resolver::generate_resolved_text(&segments);
+        self.conflict_resolver.marker_segments = segments;
+        self.conflict_resolver.active_conflict = 0;
+        let resolved =
+            conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
+        self.conflict_resolver_set_output(resolved, cx);
+        cx.notify();
+    }
+
+    pub(in super::super) fn conflict_resolver_conflict_count(&self) -> usize {
+        conflict_resolver::conflict_count(&self.conflict_resolver.marker_segments)
+    }
+
+    fn conflict_resolver_active_block_mut(
+        &mut self,
+    ) -> Option<&mut conflict_resolver::ConflictBlock> {
+        let target = self.conflict_resolver.active_conflict;
+        let mut seen = 0usize;
+        for seg in &mut self.conflict_resolver.marker_segments {
+            let conflict_resolver::ConflictSegment::Block(block) = seg else {
+                continue;
+            };
+            if seen == target {
+                return Some(block);
+            }
+            seen += 1;
+        }
+        None
+    }
+
+    pub(in super::super) fn conflict_resolver_prev_conflict(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver_conflict_count() == 0 {
+            return;
+        }
+        if self.conflict_resolver.active_conflict == 0 {
+            return;
+        }
+        self.conflict_resolver.active_conflict -= 1;
+        cx.notify();
+    }
+
+    pub(in super::super) fn conflict_resolver_next_conflict(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let total = self.conflict_resolver_conflict_count();
+        if total == 0 {
+            return;
+        }
+        if self.conflict_resolver.active_conflict + 1 >= total {
+            return;
+        }
+        self.conflict_resolver.active_conflict += 1;
+        cx.notify();
+    }
+
+    pub(in super::super) fn conflict_resolver_pick_active_conflict(
+        &mut self,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver_conflict_count() == 0 {
+            return;
+        }
+        let Some(block) = self.conflict_resolver_active_block_mut() else {
+            return;
+        };
+        if matches!(choice, conflict_resolver::ConflictChoice::Base) && block.base.is_none() {
+            return;
+        }
+        block.choice = choice;
+        let resolved =
+            conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
     }
 }

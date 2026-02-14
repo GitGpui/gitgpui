@@ -155,6 +155,8 @@ impl Render for ActionBarView {
         let theme = self.theme;
         let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
         let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
+        let icon_primary = theme.colors.accent;
+        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let icon = |path: &'static str, color: gpui::Rgba| {
             gpui::svg()
                 .path(path)
@@ -296,7 +298,7 @@ impl Render for ActionBarView {
         let pull_color = if pull_count > 0 {
             theme.colors.warning
         } else {
-            theme.colors.text
+            icon_muted
         };
         let mut pull_main = zed::Button::new("pull_main", "Pull")
             .start_slot(if pull_loading {
@@ -309,7 +311,7 @@ impl Render for ActionBarView {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
         }
         let pull_menu = zed::Button::new("pull_menu", "")
-            .start_slot(icon("icons/chevron_down.svg", theme.colors.text))
+            .start_slot(icon("icons/chevron_down.svg", icon_muted))
             .style(zed::ButtonStyle::Subtle);
 
         let pull = div()
@@ -343,7 +345,7 @@ impl Render for ActionBarView {
         let push_color = if push_count > 0 {
             theme.colors.success
         } else {
-            theme.colors.text
+            icon_muted
         };
         let mut push_main = zed::Button::new("push", "Push")
             .start_slot(if push_loading {
@@ -356,7 +358,7 @@ impl Render for ActionBarView {
             push_main = push_main.end_slot(count_badge(push_count, push_color));
         }
         let push_menu = zed::Button::new("push_menu", "")
-            .start_slot(icon("icons/chevron_down.svg", theme.colors.text))
+            .start_slot(icon("icons/chevron_down.svg", icon_muted))
             .style(zed::ButtonStyle::Subtle);
 
         let push = div()
@@ -435,7 +437,7 @@ impl Render for ActionBarView {
             }));
 
         let stash = zed::Button::new("stash", "Stash")
-            .start_slot(icon("icons/box.svg", theme.colors.text))
+            .start_slot(icon("icons/box.svg", icon_primary))
             .style(zed::ButtonStyle::Outlined)
             .disabled(!can_stash)
             .on_click(theme, cx, |this, e, window, cx| {
@@ -455,7 +457,7 @@ impl Render for ActionBarView {
             }));
 
         let create_branch = zed::Button::new("create_branch", "Branch")
-            .start_slot(icon("icons/git_branch.svg", theme.colors.text))
+            .start_slot(icon("icons/git_branch.svg", icon_primary))
             .style(zed::ButtonStyle::Outlined)
             .on_click(theme, cx, |this, e, window, cx| {
                 this.open_popover_at(PopoverKind::CreateBranch, e.position(), window, cx);

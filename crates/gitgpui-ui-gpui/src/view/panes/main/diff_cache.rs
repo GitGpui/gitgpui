@@ -133,8 +133,10 @@ impl MainPaneView {
                 let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
                     vec![None; rows.len()];
 
-                let mut inline_rows: Vec<AnnotatedDiffLine> = Vec::new();
-                let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> = Vec::new();
+                let mut inline_rows: Vec<AnnotatedDiffLine> =
+                    Vec::with_capacity(rows.len().saturating_mul(2));
+                let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
+                    Vec::with_capacity(rows.len().saturating_mul(2));
                 for (row_ix, row) in rows.iter().enumerate() {
                     use gitgpui_core::file_diff::FileDiffRowKind as K;
                     match row.kind {
@@ -642,6 +644,7 @@ impl MainPaneView {
         self.diff_visible_cache_len = current_len;
         self.diff_visible_view = self.diff_view;
         self.diff_visible_is_file_view = is_file_view;
+        self.diff_horizontal_min_width = px(0.0);
 
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();

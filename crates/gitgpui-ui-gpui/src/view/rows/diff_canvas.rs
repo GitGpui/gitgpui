@@ -22,6 +22,7 @@ pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
     visible_ix: usize,
+    min_width: Pixels,
     selected: bool,
     old: SharedString,
     new: SharedString,
@@ -175,6 +176,7 @@ pub(super) fn inline_diff_line_row_canvas(
         },
     )
     .h(px(20.0))
+    .min_w(min_width)
     .w_full()
     .bg(bg)
     .font_family("monospace")
@@ -187,6 +189,7 @@ pub(super) fn split_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
     visible_ix: usize,
+    min_width: Pixels,
     selected: bool,
     old: SharedString,
     new: SharedString,
@@ -386,6 +389,7 @@ pub(super) fn split_diff_line_row_canvas(
         },
     )
     .h(px(20.0))
+    .min_w(min_width)
     .w_full()
     .font_family("monospace")
     .text_xs()
@@ -398,6 +402,7 @@ pub(super) fn patch_split_column_row_canvas(
     view: Entity<MainPaneView>,
     column: super::diff::PatchSplitColumn,
     visible_ix: usize,
+    min_width: Pixels,
     selected: bool,
     bg: gpui::Rgba,
     fg: gpui::Rgba,
@@ -547,6 +552,7 @@ pub(super) fn patch_split_column_row_canvas(
         },
     )
     .h(px(20.0))
+    .min_w(min_width)
     .w_full()
     .font_family("monospace")
     .text_xs()
@@ -558,6 +564,7 @@ pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
     ix: usize,
+    min_width: Pixels,
     bar_color: Option<gpui::Rgba>,
     line_no: SharedString,
     styled: &CachedDiffStyledText,
@@ -681,6 +688,7 @@ pub(super) fn worktree_preview_row_canvas(
         },
     )
     .h(px(20.0))
+    .min_w(min_width)
     .w_full()
     .font_family("monospace")
     .text_xs()
@@ -889,6 +897,14 @@ fn paint_selectable_diff_text(
         cx,
     );
 
+    let pad = px_2(window);
+    let gutter_total = gutter_cell_total_width(window, pad);
+    let row_extra = match region {
+        DiffTextRegion::Inline => gutter_total * 2.0 + pad * 2.0,
+        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => gutter_total + pad * 2.0,
+    };
+    let required_row_w = (row_extra + layout.width + px(16.0)).round();
+
     if let Some(r) = selection {
         let x0 = layout.x_for_index(r.start.min(text.len()));
         let x1 = layout.x_for_index(r.end.min(text.len()));
@@ -910,9 +926,13 @@ fn paint_selectable_diff_text(
         text_len: text.len(),
     };
 
-    view.update(cx, |this, _cx| {
+    view.update(cx, |this, cx| {
         this.set_diff_text_hitbox(visible_ix, region, hitbox);
         this.touch_diff_text_layout_cache(layout_key, shaped_new);
+        if required_row_w > this.diff_horizontal_min_width {
+            this.diff_horizontal_min_width = required_row_w;
+            cx.notify();
+        }
     });
 
     if text.is_empty() {
@@ -997,7 +1017,7 @@ fn compute_runs(
     default_style: &TextStyle,
     highlights: &[(Range<usize>, HighlightStyle)],
 ) -> Vec<TextRun> {
-    let mut runs = Vec::new();
+    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
     let mut ix = 0usize;
     for (range, highlight) in highlights {
         if ix < range.start {

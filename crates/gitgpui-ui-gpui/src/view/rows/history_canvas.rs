@@ -79,7 +79,7 @@ fn layout_chip_bounds(
 ) -> Vec<Bounds<Pixels>> {
     let y = row_bounds.top() + (row_bounds.size.height - chip_height).max(px(0.0)) * 0.5;
     let mut x = branch_bounds.left();
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(chip_widths.len());
     for w in chip_widths {
         let w = (*w).max(px(0.0));
         if x + w > branch_bounds.right() {
@@ -106,8 +106,10 @@ pub(super) fn history_commit_row_canvas(
     commit_id: CommitId,
     col_branch: Pixels,
     col_graph: Pixels,
+    col_author: Pixels,
     col_date: Pixels,
     col_sha: Pixels,
+    show_author: bool,
     show_date: bool,
     show_sha: bool,
     show_graph_color_marker: bool,
@@ -116,6 +118,7 @@ pub(super) fn history_commit_row_canvas(
     graph_row: Arc<history_graph::GraphRow>,
     tag_names: Arc<[SharedString]>,
     branches_text: SharedString,
+    author: SharedString,
     summary: SharedString,
     when: SharedString,
     short_sha: SharedString,
@@ -160,6 +163,16 @@ pub(super) fn history_commit_row_canvas(
                 size(col_graph.max(px(0.0)), bounds.size.height),
             );
             x += col_graph;
+            let author_bounds = if show_author {
+                let bounds = Bounds::new(
+                    point(x, bounds.top()),
+                    size(col_author.max(px(0.0)), bounds.size.height),
+                );
+                x += col_author;
+                bounds
+            } else {
+                Bounds::new(point(x, bounds.top()), size(px(0.0), bounds.size.height))
+            };
 
             let right_total = (if show_date { col_date } else { px(0.0) })
                 + (if show_sha { col_sha } else { px(0.0) });
@@ -212,7 +225,7 @@ pub(super) fn history_commit_row_canvas(
             let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);
             let chip_gap = px(HISTORY_TAG_CHIP_GAP_PX);
 
-            let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::new();
+            let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::with_capacity(tag_names.len());
             if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
                 window.with_content_mask(
                     Some(ContentMask {
@@ -360,6 +373,31 @@ pub(super) fn history_commit_row_canvas(
                         let _ = shaped.paint(
                             point(summary_text_bounds.left(), center_y(sm_line_height)),
                             sm_line_height,
+                            window,
+                            cx,
+                        );
+                    },
+                );
+            }
+
+            if show_author && !author.as_ref().is_empty() {
+                let shaped = shape_truncated_line_cached(
+                    window,
+                    &base_style,
+                    xs_font,
+                    &author,
+                    author_bounds.size.width.max(px(0.0)),
+                    theme.colors.text_muted,
+                    None,
+                );
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: author_bounds,
+                    }),
+                    |window| {
+                        let _ = shaped.paint(
+                            point(author_bounds.left(), center_y(xs_line_height)),
+                            xs_line_height,
                             window,
                             cx,
                         );

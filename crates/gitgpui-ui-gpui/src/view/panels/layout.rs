@@ -590,7 +590,7 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("unstaged_actions_spinner", repo_key),
-                        theme.colors.text_muted,
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
                     )
                     .into_any_element(),
                 );
@@ -607,7 +607,7 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("staged_actions_spinner", repo_key),
-                        theme.colors.text_muted,
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
                     )
                     .into_any_element(),
                 );

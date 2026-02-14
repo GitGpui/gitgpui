@@ -189,7 +189,13 @@ pub enum DiffLineKind {
 
 impl Diff {
     pub fn from_unified(target: DiffTarget, text: &str) -> Self {
-        let mut lines = Vec::new();
+        let approx_lines = text
+            .as_bytes()
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            .saturating_add(1);
+        let mut lines = Vec::with_capacity(approx_lines);
 
         for raw in text.lines() {
             let kind = if raw.starts_with("@@") {

@@ -45,6 +45,11 @@ enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitgpui_core::domain::LogScope,
     },
+    SetHistoryColumns {
+        show_author: bool,
+        show_date: bool,
+        show_sha: bool,
+    },
     StagePath {
         repo_id: RepoId,
         path: std::path::PathBuf,

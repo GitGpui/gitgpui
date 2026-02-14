@@ -9,12 +9,12 @@ pub(super) struct TitleBarView {
     title_should_move: bool,
 }
 
-fn titlebar_control_icon(theme: AppTheme, path: &'static str) -> gpui::Svg {
+fn titlebar_control_icon(path: &'static str, color: gpui::Rgba) -> gpui::Svg {
     gpui::svg()
         .path(path)
         .w(px(16.0))
         .h(px(16.0))
-        .text_color(theme.colors.text)
+        .text_color(color)
 }
 
 fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
@@ -40,7 +40,7 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
                                     .path("icons/gitgpui_mark.svg")
                                     .w(px(16.0))
                                     .h(px(16.0))
-                                    .text_color(theme.colors.text)
+                                    .text_color(theme.colors.accent)
                                     .into_any_element()
                             }
                         }),
@@ -228,7 +228,7 @@ impl Render for TitleBarView {
                     .rounded(px(theme.radii.pill))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
-                    .child(titlebar_control_icon(theme, "icons/menu.svg")),
+                    .child(titlebar_control_icon("icons/menu.svg", theme.colors.accent)),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::AppMenu, e.position(), window, cx);
@@ -293,7 +293,7 @@ impl Render for TitleBarView {
         let min = titlebar_control_button(
             theme,
             "win_min_btn",
-            titlebar_control_icon(theme, "icons/generic_minimize.svg"),
+            titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
             min_hover,
             min_active,
         )
@@ -314,7 +314,7 @@ impl Render for TitleBarView {
         let max = titlebar_control_button(
             theme,
             "win_max_btn",
-            titlebar_control_icon(theme, max_icon),
+            titlebar_control_icon(max_icon, theme.colors.accent),
             max_hover,
             max_active,
         )
@@ -330,7 +330,7 @@ impl Render for TitleBarView {
         let close = titlebar_control_button(
             theme,
             "win_close_btn",
-            titlebar_control_icon(theme, "icons/generic_close.svg"),
+            titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
             close_hover,
             close_active,
         )
@@ -416,7 +416,7 @@ mod tests {
                 let _ = titlebar_control_button(
                     theme,
                     "test_btn_1",
-                    titlebar_control_icon(theme, "icons/generic_minimize.svg"),
+                    titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
                     theme.colors.hover,
                     theme.colors.active,
                 );
@@ -428,7 +428,7 @@ mod tests {
                 let _ = titlebar_control_button(
                     theme,
                     "test_btn_2",
-                    titlebar_control_icon(theme, "icons/generic_close.svg"),
+                    titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
                     with_alpha(theme.colors.danger, 0.25),
                     with_alpha(theme.colors.danger, 0.35),
                 );

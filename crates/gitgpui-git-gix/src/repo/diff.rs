@@ -2,7 +2,7 @@ use super::GixRepo;
 use crate::util::run_git_capture;
 use gitgpui_core::domain::{DiffArea, DiffTarget, FileDiffImage, FileDiffText};
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::Result;
+use gitgpui_core::services::{ConflictFileStages, Result};
 use std::path::Path;
 use std::process::Command;
 use std::str;
@@ -301,6 +301,47 @@ impl GixRepo {
             }
         }
     }
+
+    pub(super) fn conflict_file_stages_impl(
+        &self,
+        path: &Path,
+    ) -> Result<Option<ConflictFileStages>> {
+        let full_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.spec.workdir.join(path)
+        };
+        if std::fs::metadata(&full_path).is_ok_and(|m| m.is_dir()) {
+            return Ok(None);
+        }
+
+        let path_str = path.to_string_lossy();
+        let base = git_show_path_utf8_optional_unmerged_stage(
+            &self.spec.workdir,
+            ":1:",
+            path_str.as_ref(),
+            1,
+        )?;
+        let ours = git_show_path_utf8_optional_unmerged_stage(
+            &self.spec.workdir,
+            ":2:",
+            path_str.as_ref(),
+            2,
+        )?;
+        let theirs = git_show_path_utf8_optional_unmerged_stage(
+            &self.spec.workdir,
+            ":3:",
+            path_str.as_ref(),
+            3,
+        )?;
+
+        Ok(Some(ConflictFileStages {
+            path: path.to_path_buf(),
+            base,
+            ours,
+            theirs,
+        }))
+    }
 }
 
 fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {
@@ -370,6 +411,7 @@ fn git_show_unmerged_stage0(stderr: &str) -> bool {
 fn git_show_unmerged_stage_missing(stderr: &str, stage: u8) -> bool {
     let s = stderr;
     match stage {
+        1 => s.contains("is in the index, but not at stage 1"),
         2 => s.contains("is in the index, but not at stage 2"),
         3 => s.contains("is in the index, but not at stage 3"),
         _ => false,

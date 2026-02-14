@@ -414,6 +414,7 @@ impl PopoverHost {
             PopoverKind::PullPicker
                 | PopoverKind::PushPicker
                 | PopoverKind::HistoryBranchFilter { .. }
+                | PopoverKind::HistoryColumnSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::CommitMenu { .. }
@@ -933,7 +934,9 @@ impl Render for PopoverHost {
 impl MainPaneView {
     pub(super) fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
-        let (show_date, show_sha) = self.history_visible_columns();
+        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let (show_author, show_date, show_sha) = self.history_visible_columns();
+        let col_author = self.history_col_author;
         let col_date = self.history_col_date;
         let col_sha = self.history_col_sha;
         let handle_w = px(HISTORY_COL_HANDLE_PX);
@@ -947,6 +950,40 @@ impl MainPaneView {
             .unwrap_or_else(|| "Current branch".to_string())
             .into();
         let scope_repo_id = self.active_repo_id();
+        let open_column_settings = cx.listener(|this, e: &ClickEvent, window, cx| {
+            this.open_popover_at(PopoverKind::HistoryColumnSettings, e.position(), window, cx);
+        });
+        let column_settings_btn = div()
+            .id("history_columns_settings_btn")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(18.0))
+            .h(px(18.0))
+            .rounded(px(theme.radii.row))
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .active(move |s| s.bg(theme.colors.active))
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                gpui::svg()
+                    .path("icons/cog.svg")
+                    .w(px(12.0))
+                    .h(px(12.0))
+                    .text_color(icon_muted),
+            )
+            .on_click(open_column_settings)
+            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                let text: SharedString = "History columns".into();
+                let mut changed = false;
+                if *hovering {
+                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                } else {
+                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                }
+                if changed {
+                    cx.notify();
+                }
+            }));
 
         let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
             div()
@@ -1076,7 +1113,7 @@ impl MainPaneView {
                                     .path("icons/chevron_down.svg")
                                     .w(px(12.0))
                                     .h(px(12.0))
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(icon_muted)
                                     .flex_shrink_0(),
                             )
                             .when_some(scope_repo_id, |this, repo_id| {
@@ -1118,12 +1155,26 @@ impl MainPaneView {
                     .whitespace_nowrap()
                     .child("GRAPH"),
             )
+            .when(show_author, |header| {
+                header.child(
+                    div()
+                        .w(col_author)
+                        .flex()
+                        .items_center()
+                        .whitespace_nowrap()
+                        .child("AUTHOR"),
+                )
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
                     .whitespace_nowrap()
-                    .child("COMMIT MESSAGE"),
+                    .child("COMMIT MESSAGE")
+                    .child(column_settings_btn),
             );
 
         if show_date {
@@ -1321,7 +1372,8 @@ impl PopoverHost {
             | PopoverKind::SubmoduleRemoveConfirm { .. }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
-            | PopoverKind::HistoryBranchFilter { .. } => Corner::TopRight,
+            | PopoverKind::HistoryBranchFilter { .. }
+            | PopoverKind::HistoryColumnSettings => Corner::TopRight,
             _ => Corner::TopLeft,
         };
 
@@ -1735,6 +1787,10 @@ impl PopoverHost {
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(220.0)),
+            PopoverKind::HistoryColumnSettings => self
+                .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
                 .min_w(px(160.0))
                 .max_w(px(220.0)),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),

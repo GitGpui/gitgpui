@@ -103,6 +103,48 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
 }
 
 #[test]
+fn pull_error_is_formatted_as_command_and_output() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let message = "git pull --no-rebase origin main failed: From https://example.com\n * branch main -> FETCH_HEAD\nfatal: refusing to merge unrelated histories".to_string();
+    let error = Error::new(ErrorKind::Backend(message));
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PullBranch {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            },
+            result: Err(error),
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(repo_state.diagnostics.is_empty());
+    assert_eq!(repo_state.command_log.len(), 1);
+
+    let summary = &repo_state.command_log[0].summary;
+    assert!(summary.starts_with("Pull failed:\n\n```"));
+    assert!(summary.contains("```\ngit pull --no-rebase origin main\n```"));
+    assert!(summary.contains("\n\nFrom https://example.com\n * branch main -> FETCH_HEAD\nfatal: refusing to merge unrelated histories"));
+    assert!(!summary.contains("\\n"));
+    assert_eq!(repo_state.last_error.as_deref(), Some(summary.as_str()));
+}
+
+#[test]
 fn commit_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

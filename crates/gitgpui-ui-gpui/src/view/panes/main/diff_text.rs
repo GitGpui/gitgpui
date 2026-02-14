@@ -523,9 +523,16 @@ impl MainPaneView {
                 // Git diffs use forward slashes even on Windows.
                 let rel_str = file_rel.to_string_lossy().replace('\\', "/");
 
-                let mut add_by_new_line: HashMap<u32, usize> = HashMap::default();
-                let mut remove_by_old_line: HashMap<u32, usize> = HashMap::default();
-                let mut context_by_old_line: HashMap<u32, usize> = HashMap::default();
+                let approx_map_len = match self.diff_view {
+                    DiffViewMode::Inline => self.file_diff_inline_cache.len(),
+                    DiffViewMode::Split => self.file_diff_cache_rows.len(),
+                };
+                let mut add_by_new_line: HashMap<u32, usize> =
+                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
+                let mut remove_by_old_line: HashMap<u32, usize> =
+                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
+                let mut context_by_old_line: HashMap<u32, usize> =
+                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
 
                 for (ix, line) in self.diff_cache.iter().enumerate() {
                     if self.diff_file_for_src_ix.get(ix).and_then(|p| p.as_deref())
@@ -616,7 +623,7 @@ impl MainPaneView {
                                 .into_iter()
                                 .collect(),
                             gitgpui_core::file_diff::FileDiffRowKind::Modify => {
-                                let mut out = Vec::new();
+                                let mut out = Vec::with_capacity(2);
                                 if let Some(o) = row.old_line
                                     && let Some(ix) = lookup.remove_by_old_line.get(&o).copied()
                                 {
@@ -665,8 +672,14 @@ impl MainPaneView {
 
         let (hunks_count, hunk_patch, lines_count, lines_patch, discard_lines_patch) =
             if allow_patch_actions && let Some((sel_a, sel_b)) = selection {
-                let mut selected_src_ixs: HashSet<usize> = HashSet::default();
-                let mut selected_change_src_ixs: HashSet<usize> = HashSet::default();
+                let approx_selected = sel_b
+                    .saturating_sub(sel_a)
+                    .saturating_add(1)
+                    .saturating_mul(2);
+                let mut selected_src_ixs: HashSet<usize> =
+                    HashSet::with_capacity_and_hasher(approx_selected, Default::default());
+                let mut selected_change_src_ixs: HashSet<usize> =
+                    HashSet::with_capacity_and_hasher(approx_selected, Default::default());
 
                 for vix in sel_a..=sel_b {
                     for src_ix in src_ixs_for_visible_ix(vix) {

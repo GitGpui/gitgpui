@@ -1,7 +1,8 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictChoice {
-    Ours,
     #[allow(dead_code)]
+    Base,
+    Ours,
     Theirs,
 }
 
@@ -9,6 +10,12 @@ pub enum ConflictChoice {
 pub enum ConflictDiffMode {
     Split,
     Inline,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictResolverViewMode {
+    ThreeWay,
+    TwoWayDiff,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
@@ -19,6 +26,7 @@ pub enum ConflictPickSide {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictBlock {
+    pub base: Option<String>,
     pub ours: String,
     pub theirs: String,
     pub choice: ConflictChoice,
@@ -57,11 +65,27 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
 
         let start_marker = line;
 
+        let mut base_marker_line: Option<&str> = None;
+        let mut base: Option<String> = None;
         let mut ours = String::new();
         let mut found_sep = false;
-        for l in it.by_ref() {
+
+        while let Some(l) = it.next() {
             if l.starts_with("=======") {
                 found_sep = true;
+                break;
+            }
+            if l.starts_with("|||||||") {
+                base_marker_line = Some(l);
+                let mut base_buf = String::new();
+                while let Some(l) = it.next() {
+                    if l.starts_with("=======") {
+                        found_sep = true;
+                        break;
+                    }
+                    base_buf.push_str(l);
+                }
+                base = Some(base_buf);
                 break;
             }
             ours.push_str(l);
@@ -71,6 +95,12 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
             // Malformed marker; preserve as plain text.
             buf.push_str(start_marker);
             buf.push_str(&ours);
+            if let Some(base_marker_line) = base_marker_line {
+                buf.push_str(base_marker_line);
+            }
+            if let Some(base) = base.as_deref() {
+                buf.push_str(base);
+            }
             break;
         }
 
@@ -94,6 +124,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
         }
 
         segments.push(ConflictSegment::Block(ConflictBlock {
+            base,
             ours,
             theirs,
             choice: ConflictChoice::Ours,
@@ -115,11 +146,27 @@ pub fn conflict_count(segments: &[ConflictSegment]) -> usize {
 }
 
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
-    let mut out = String::new();
+    let approx_len: usize = segments
+        .iter()
+        .map(|seg| match seg {
+            ConflictSegment::Text(t) => t.len(),
+            ConflictSegment::Block(block) => match block.choice {
+                ConflictChoice::Base => block.base.as_ref().map_or(0, |b| b.len()),
+                ConflictChoice::Ours => block.ours.len(),
+                ConflictChoice::Theirs => block.theirs.len(),
+            },
+        })
+        .sum();
+    let mut out = String::with_capacity(approx_len);
     for seg in segments {
         match seg {
             ConflictSegment::Text(t) => out.push_str(t),
             ConflictSegment::Block(block) => match block.choice {
+                ConflictChoice::Base => {
+                    if let Some(base) = block.base.as_deref() {
+                        out.push_str(base)
+                    }
+                }
                 ConflictChoice::Ours => out.push_str(&block.ours),
                 ConflictChoice::Theirs => out.push_str(&block.theirs),
             },
@@ -132,7 +179,8 @@ pub fn build_inline_rows(rows: &[gitgpui_core::file_diff::FileDiffRow]) -> Vec<C
     use gitgpui_core::domain::DiffLineKind as K;
     use gitgpui_core::file_diff::FileDiffRowKind as RK;
 
-    let mut out: Vec<ConflictInlineRow> = Vec::new();
+    let extra = rows.iter().filter(|r| matches!(r.kind, RK::Modify)).count();
+    let mut out: Vec<ConflictInlineRow> = Vec::with_capacity(rows.len() + extra);
     for row in rows {
         match row.kind {
             RK::Context => out.push(ConflictInlineRow {
@@ -181,7 +229,7 @@ pub fn collect_split_selection(
     rows: &[gitgpui_core::file_diff::FileDiffRow],
     selected: &std::collections::BTreeSet<(usize, ConflictPickSide)>,
 ) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::with_capacity(selected.len());
     for &(row_ix, side) in selected {
         let Some(row) = rows.get(row_ix) else {
             continue;
@@ -206,7 +254,7 @@ pub fn collect_inline_selection(
     rows: &[ConflictInlineRow],
     selected: &std::collections::BTreeSet<usize>,
 ) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut out: Vec<String> = Vec::with_capacity(selected.len());
     for &ix in selected {
         if let Some(row) = rows.get(ix) {
             out.push(row.content.clone());
@@ -220,7 +268,13 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
         return output.to_string();
     }
 
-    let mut out = output.to_string();
+    let needs_leading_nl = !output.is_empty() && !output.ends_with('\n');
+    let extra_len: usize = lines.iter().map(|l| l.len()).sum::<usize>()
+        + lines.len()
+        + 1
+        + usize::from(needs_leading_nl);
+    let mut out = String::with_capacity(output.len() + extra_len);
+    out.push_str(output);
     if !out.is_empty() && !out.ends_with('\n') {
         out.push('\n');
     }
@@ -260,6 +314,25 @@ mod tests {
 
         let theirs = generate_resolved_text(&segments);
         assert_eq!(theirs, "a\nuno\ndos\nb\n");
+    }
+
+    #[test]
+    fn parses_diff3_style_markers() {
+        let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+
+        let ConflictSegment::Block(block) = segments
+            .iter()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+            .unwrap()
+        else {
+            panic!("expected a conflict block");
+        };
+
+        assert_eq!(block.ours, "one\n");
+        assert_eq!(block.base.as_deref(), Some("orig\n"));
+        assert_eq!(block.theirs, "uno\n");
     }
 
     #[test]

@@ -8,7 +8,7 @@ impl GitGpuiView {
         cx.spawn(
             async move |view: WeakEntity<GitGpuiView>, cx: &mut gpui::AsyncApp| {
                 Timer::after(Duration::from_millis(250)).await;
-                let _ = view.update(cx, |this, _cx| {
+                let _ = view.update(cx, |this, cx| {
                     if this.ui_settings_persist_seq != seq {
                         return;
                     }
@@ -21,6 +21,9 @@ impl GitGpuiView {
                     let sidebar_width: f32 = this.sidebar_width.round().into();
                     let details_width: f32 = this.details_width.round().into();
 
+                    let (history_show_author, history_show_date, history_show_sha) =
+                        this.main_pane.read(cx).history_visible_column_preferences();
+
                     let settings = session::UiSettings {
                         window_width,
                         window_height,
@@ -29,6 +32,9 @@ impl GitGpuiView {
                         details_width: (details_width.is_finite() && details_width >= 1.0)
                             .then_some(details_width as u32),
                         date_time_format: Some(this.date_time_format.key().to_string()),
+                        history_show_author: Some(history_show_author),
+                        history_show_date: Some(history_show_date),
+                        history_show_sha: Some(history_show_sha),
                     };
 
                     let _ = session::persist_ui_settings(settings);

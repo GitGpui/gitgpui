@@ -62,7 +62,9 @@ use caches::{
 use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
-use conflict_resolver::{ConflictDiffMode, ConflictInlineRow, ConflictPickSide};
+use conflict_resolver::{
+    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
+};
 use date_time::{DateTimeFormat, format_datetime_utc};
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
 use patch_split::build_patch_split_rows;
@@ -90,6 +92,7 @@ use color::with_alpha;
 const HISTORY_COL_BRANCH_PX: f32 = 130.0;
 const HISTORY_COL_GRAPH_PX: f32 = 80.0;
 const HISTORY_COL_GRAPH_MAX_PX: f32 = 240.0;
+const HISTORY_COL_AUTHOR_PX: f32 = 140.0;
 const HISTORY_COL_DATE_PX: f32 = 160.0;
 const HISTORY_COL_SHA_PX: f32 = 88.0;
 const HISTORY_COL_HANDLE_PX: f32 = 8.0;
@@ -285,8 +288,15 @@ struct ConflictResolverUiState {
     path: Option<std::path::PathBuf>,
     source_hash: Option<u64>,
     current: Option<String>,
+    marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    active_conflict: usize,
+    view_mode: ConflictResolverViewMode,
     diff_rows: Vec<FileDiffRow>,
     inline_rows: Vec<ConflictInlineRow>,
+    three_way_base_lines: Vec<SharedString>,
+    three_way_ours_lines: Vec<SharedString>,
+    three_way_theirs_lines: Vec<SharedString>,
+    three_way_len: usize,
     diff_mode: ConflictDiffMode,
     nav_anchor: Option<usize>,
     split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
@@ -300,8 +310,15 @@ impl Default for ConflictResolverUiState {
             path: None,
             source_hash: None,
             current: None,
+            marker_segments: Vec::new(),
+            active_conflict: 0,
+            view_mode: ConflictResolverViewMode::TwoWayDiff,
             diff_rows: Vec::new(),
             inline_rows: Vec::new(),
+            three_way_base_lines: Vec::new(),
+            three_way_ours_lines: Vec::new(),
+            three_way_theirs_lines: Vec::new(),
+            three_way_len: 0,
             diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
             split_selected: std::collections::BTreeSet::new(),
@@ -445,6 +462,7 @@ enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
+    HistoryColumnSettings,
 }
 
 #[cfg(test)]
@@ -823,6 +841,10 @@ impl GitGpuiView {
             .and_then(DateTimeFormat::from_key)
             .unwrap_or(DateTimeFormat::YmdHm);
 
+        let history_show_author = ui_session.history_show_author.unwrap_or(true);
+        let history_show_date = ui_session.history_show_date.unwrap_or(true);
+        let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+
         if !ui_session.open_repos.is_empty() {
             store.dispatch(Msg::RestoreSession {
                 open_repos: ui_session.open_repos,
@@ -886,6 +908,9 @@ impl GitGpuiView {
                 ui_model.clone(),
                 initial_theme,
                 date_time_format,
+                history_show_author,
+                history_show_date,
+                history_show_sha,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 window,
@@ -3451,8 +3476,31 @@ impl GitGpuiView {
             return;
         };
 
-        self.conflict_resolver_diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::TwoWayDiff => self
+                .conflict_resolver_diff_scroll
+                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::ThreeWay => {
+                let line_ix = match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                    ConflictDiffMode::Inline => self
+                        .conflict_resolver
+                        .inline_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                };
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
+            }
+        }
         self.conflict_resolver.nav_anchor = Some(target);
     }
 
@@ -3467,8 +3515,31 @@ impl GitGpuiView {
             return;
         };
 
-        self.conflict_resolver_diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::TwoWayDiff => self
+                .conflict_resolver_diff_scroll
+                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::ThreeWay => {
+                let line_ix = match self.conflict_resolver.diff_mode {
+                    ConflictDiffMode::Split => self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                    ConflictDiffMode::Inline => self
+                        .conflict_resolver
+                        .inline_rows
+                        .get(target)
+                        .and_then(|r| r.old_line.or(r.new_line))
+                        .and_then(|n| usize::try_from(n.saturating_sub(1)).ok())
+                        .unwrap_or(0),
+                };
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(line_ix, gpui::ScrollStrategy::Center);
+            }
+        }
         self.conflict_resolver.nav_anchor = Some(target);
     }
 
@@ -3583,6 +3654,7 @@ impl GitGpuiView {
         }
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        file.base.hash(&mut hasher);
         file.ours.hash(&mut hasher);
         file.theirs.hash(&mut hasher);
         file.current.hash(&mut hasher);
@@ -3596,24 +3668,54 @@ impl GitGpuiView {
             return;
         }
 
-        let resolved = if let Some(cur) = file.current.as_deref() {
+        let (marker_segments, resolved) = if let Some(cur) = file.current.as_deref() {
             let segments = conflict_resolver::parse_conflict_markers(cur);
             if conflict_resolver::conflict_count(&segments) > 0 {
-                conflict_resolver::generate_resolved_text(&segments)
+                let resolved = conflict_resolver::generate_resolved_text(&segments);
+                (segments, resolved)
             } else {
-                cur.to_string()
+                (Vec::new(), cur.to_string())
             }
         } else if let Some(ours) = file.ours.as_deref() {
-            ours.to_string()
+            (Vec::new(), ours.to_string())
         } else if let Some(theirs) = file.theirs.as_deref() {
-            theirs.to_string()
+            (Vec::new(), theirs.to_string())
         } else {
-            String::new()
+            (Vec::new(), String::new())
         };
         let ours_text = file.ours.as_deref().unwrap_or("");
         let theirs_text = file.theirs.as_deref().unwrap_or("");
+        let base_text = file.base.as_deref().unwrap_or("");
         let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+
+        fn split_lines_shared(text: &str) -> Vec<SharedString> {
+            if text.is_empty() {
+                return Vec::new();
+            }
+            let mut out =
+                Vec::with_capacity(text.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1);
+            out.extend(text.lines().map(|line| line.to_string().into()));
+            out
+        }
+
+        let three_way_base_lines = split_lines_shared(base_text);
+        let three_way_ours_lines = split_lines_shared(ours_text);
+        let three_way_theirs_lines = split_lines_shared(theirs_text);
+        let three_way_len = three_way_base_lines
+            .len()
+            .max(three_way_ours_lines.len())
+            .max(three_way_theirs_lines.len());
+
+        let view_mode = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.view_mode
+        } else if file.base.is_some() {
+            ConflictResolverViewMode::ThreeWay
+        } else {
+            ConflictResolverViewMode::TwoWayDiff
+        };
 
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
@@ -3629,6 +3731,18 @@ impl GitGpuiView {
         } else {
             None
         };
+        let active_conflict = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            let total = conflict_resolver::conflict_count(&marker_segments);
+            if total == 0 {
+                0
+            } else {
+                self.conflict_resolver.active_conflict.min(total - 1)
+            }
+        } else {
+            0
+        };
 
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
@@ -3641,8 +3755,15 @@ impl GitGpuiView {
             path: Some(path),
             source_hash: Some(source_hash),
             current: file.current.clone(),
+            marker_segments,
+            active_conflict,
+            view_mode,
             diff_rows,
             inline_rows,
+            three_way_base_lines,
+            three_way_ours_lines,
+            three_way_theirs_lines,
+            three_way_len,
             diff_mode,
             nav_anchor,
             split_selected: std::collections::BTreeSet::new(),

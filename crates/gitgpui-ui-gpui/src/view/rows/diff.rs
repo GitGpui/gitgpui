@@ -9,6 +9,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let min_width = this.diff_horizontal_min_width;
         let query = if this.diff_search_active {
             this.diff_search_query.clone()
         } else {
@@ -111,6 +112,7 @@ impl MainPaneView {
                         DiffClickKind::Line,
                         selected,
                         DiffViewMode::Inline,
+                        min_width,
                         line,
                         None,
                         None,
@@ -235,6 +237,7 @@ impl MainPaneView {
                     click_kind,
                     selected,
                     DiffViewMode::Inline,
+                    min_width,
                     line,
                     file_stat,
                     header_display,
@@ -251,6 +254,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let min_width = this.diff_horizontal_min_width;
         let query = if this.diff_search_active {
             this.diff_search_query.clone()
         } else {
@@ -348,6 +352,7 @@ impl MainPaneView {
                         PatchSplitColumn::Left,
                         visible_ix,
                         selected,
+                        min_width,
                         row,
                         styled,
                         cx,
@@ -467,6 +472,7 @@ impl MainPaneView {
                             PatchSplitColumn::Left,
                             visible_ix,
                             selected,
+                            min_width,
                             row,
                             styled,
                             cx,
@@ -522,6 +528,7 @@ impl MainPaneView {
                             visible_ix,
                             click_kind,
                             selected,
+                            min_width,
                             line,
                             file_stat,
                             this.diff_header_display_cache.get(&src_ix).cloned(),
@@ -540,6 +547,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let min_width = this.diff_horizontal_min_width;
         let query = if this.diff_search_active {
             this.diff_search_query.clone()
         } else {
@@ -637,6 +645,7 @@ impl MainPaneView {
                         PatchSplitColumn::Right,
                         visible_ix,
                         selected,
+                        min_width,
                         row,
                         styled,
                         cx,
@@ -756,6 +765,7 @@ impl MainPaneView {
                             PatchSplitColumn::Right,
                             visible_ix,
                             selected,
+                            min_width,
                             row,
                             styled,
                             cx,
@@ -811,6 +821,7 @@ impl MainPaneView {
                             visible_ix,
                             click_kind,
                             selected,
+                            min_width,
                             line,
                             file_stat,
                             this.diff_header_display_cache.get(&src_ix).cloned(),
@@ -830,6 +841,7 @@ fn diff_row(
     click_kind: DiffClickKind,
     selected: bool,
     mode: DiffViewMode,
+    min_width: Pixels,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
@@ -850,6 +862,8 @@ fn diff_row(
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
             .h(px(28.0))
+            .w_full()
+            .min_w(min_width)
             .flex()
             .items_center()
             .justify_between()
@@ -891,6 +905,8 @@ fn diff_row(
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
             .h(px(24.0))
+            .w_full()
+            .min_w(min_width)
             .flex()
             .items_center()
             .px_2()
@@ -953,6 +969,7 @@ fn diff_row(
             theme,
             cx.entity(),
             visible_ix,
+            min_width,
             selected,
             old,
             new,
@@ -993,6 +1010,7 @@ fn diff_row(
                 theme,
                 cx.entity(),
                 visible_ix,
+                min_width,
                 selected,
                 old,
                 new,
@@ -1020,6 +1038,7 @@ fn patch_split_column_row(
     column: PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
+    min_width: Pixels,
     row: &gitgpui_core::file_diff::FileDiffRow,
     styled: Option<&CachedDiffStyledText>,
     cx: &mut gpui::Context<MainPaneView>,
@@ -1055,6 +1074,7 @@ fn patch_split_column_row(
         cx.entity(),
         column,
         visible_ix,
+        min_width,
         selected,
         bg,
         fg,
@@ -1070,6 +1090,7 @@ fn patch_split_header_row(
     visible_ix: usize,
     click_kind: DiffClickKind,
     selected: bool,
+    min_width: Pixels,
     line: &AnnotatedDiffLine,
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
@@ -1101,6 +1122,8 @@ fn patch_split_header_row(
                     visible_ix,
                 ))
                 .h(px(28.0))
+                .w_full()
+                .min_w(min_width)
                 .flex()
                 .items_center()
                 .justify_between()
@@ -1147,6 +1170,8 @@ fn patch_split_header_row(
                     visible_ix,
                 ))
                 .h(px(24.0))
+                .w_full()
+                .min_w(min_width)
                 .flex()
                 .items_center()
                 .px_2()
