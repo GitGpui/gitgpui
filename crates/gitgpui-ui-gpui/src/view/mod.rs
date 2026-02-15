@@ -99,6 +99,7 @@ const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
 const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
+const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
 const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
 
@@ -132,8 +133,9 @@ fn toast_total_lifetime(ttl: Duration) -> Duration {
 enum HistoryColResizeHandle {
     Branch,
     Graph,
-    Message,
+    Author,
     Date,
+    Sha,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -142,6 +144,7 @@ struct HistoryColResizeState {
     start_x: Pixels,
     start_branch: Pixels,
     start_graph: Pixels,
+    start_author: Pixels,
     start_date: Pixels,
     start_sha: Pixels,
 }

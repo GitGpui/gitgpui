@@ -1014,6 +1014,7 @@ impl MainPaneView {
                             start_x: e.position.x,
                             start_branch: this.history_col_branch,
                             start_graph: this.history_col_graph,
+                            start_author: this.history_col_author,
                             start_date: this.history_col_date,
                             start_sha: this.history_col_sha,
                         });
@@ -1039,18 +1040,17 @@ impl MainPaneView {
                                 this.history_col_graph =
                                     (state.start_graph + dx).max(px(HISTORY_COL_GRAPH_MIN_PX));
                             }
-                            HistoryColResizeHandle::Message => {
+                            HistoryColResizeHandle::Author => {
+                                this.history_col_author =
+                                    (state.start_author - dx).max(px(HISTORY_COL_AUTHOR_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Date => {
                                 this.history_col_date =
                                     (state.start_date - dx).max(px(HISTORY_COL_DATE_MIN_PX));
                             }
-                            HistoryColResizeHandle::Date => {
-                                let total = state.start_date + state.start_sha;
-                                let min_date = px(HISTORY_COL_DATE_MIN_PX);
-                                let min_sha = px(HISTORY_COL_SHA_MIN_PX);
-                                let max_date = (total - min_sha).max(min_date);
-                                this.history_col_date =
-                                    (state.start_date + dx).max(min_date).min(max_date);
-                                this.history_col_sha = (total - this.history_col_date).max(min_sha);
+                            HistoryColResizeHandle::Sha => {
+                                this.history_col_sha =
+                                    (state.start_sha - dx).max(px(HISTORY_COL_SHA_MIN_PX));
                             }
                         }
                         cx.notify();
@@ -1162,6 +1162,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_between()
+                    .pr(handle_w)
                     .whitespace_nowrap()
                     .child("COMMIT MESSAGE")
                     .child(column_settings_btn),
@@ -1210,20 +1211,27 @@ impl MainPaneView {
                 ),
             );
 
+        if show_author {
+            let right_fixed = col_author
+                + if show_date { col_date } else { px(0.0) }
+                + if show_sha { col_sha } else { px(0.0) };
+            header_with_handles = header_with_handles.child(
+                resize_handle("history_col_resize_author", HistoryColResizeHandle::Author)
+                    .right((right_fixed - handle_half).max(px(0.0))),
+            );
+        }
+
         if show_date {
             let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
             header_with_handles = header_with_handles.child(
-                resize_handle(
-                    "history_col_resize_message",
-                    HistoryColResizeHandle::Message,
-                )
-                .right((right_fixed - handle_half).max(px(0.0))),
+                resize_handle("history_col_resize_date", HistoryColResizeHandle::Date)
+                    .right((right_fixed - handle_half).max(px(0.0))),
             );
         }
 
         if show_sha {
             header_with_handles = header_with_handles.child(
-                resize_handle("history_col_resize_date", HistoryColResizeHandle::Date)
+                resize_handle("history_col_resize_sha", HistoryColResizeHandle::Sha)
                     .right((col_sha - handle_half).max(px(0.0))),
             );
         }
@@ -1796,12 +1804,14 @@ impl PopoverHost {
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
             PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
-            PopoverKind::CommitMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
-            }
-            PopoverKind::TagMenu { repo_id, commit_id } => {
-                self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
-            }
+            PopoverKind::CommitMenu { repo_id, commit_id } => self
+                .context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::TagMenu { repo_id, commit_id } => self
+                .context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => self
                 .context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
                 .min_w(px(160.0))
