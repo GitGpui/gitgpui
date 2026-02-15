@@ -134,7 +134,6 @@ impl MainPaneView {
                     });
                     div()
                         .id("diff_file_image_error_scroll")
-                        .font_family("monospace")
                         .bg(theme.colors.window_bg)
                         .flex()
                         .flex_col()
@@ -237,7 +236,6 @@ impl MainPaneView {
                     });
                     div()
                         .id("diff_file_error_scroll")
-                        .font_family("monospace")
                         .bg(theme.colors.window_bg)
                         .flex()
                         .flex_col()
@@ -277,7 +275,6 @@ impl MainPaneView {
 
                             return div()
                                 .id("diff_word_wrap_scroll")
-                                .font_family("monospace")
                                 .bg(theme.colors.window_bg)
                                 .flex()
                                 .flex_col()
@@ -363,11 +360,135 @@ impl MainPaneView {
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
 
-                                    let columns_header = zed::split_columns_header(
-                                        theme,
-                                        "A (local / before)",
-                                        "B (remote / after)",
-                                    );
+                                    let handle_w = px(PANE_RESIZE_HANDLE_PX);
+                                    let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+                                    let main_w = self.main_pane_content_width(cx);
+                                    let available = (main_w - handle_w).max(px(0.0));
+                                    let left_w = if available <= min_col_w * 2.0 {
+                                        available * 0.5
+                                    } else {
+                                        (available * self.diff_split_ratio)
+                                            .max(min_col_w)
+                                            .min(available - min_col_w)
+                                    };
+                                    let right_w = available - left_w;
+
+                                    let resize_handle = |id: &'static str| {
+                                        div()
+                                            .id(id)
+                                            .w(handle_w)
+                                            .h_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor(CursorStyle::ResizeLeftRight)
+                                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
+                                            .active(move |s| s.bg(theme.colors.active))
+                                            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                            .on_drag(
+                                                DiffSplitResizeHandle::Divider,
+                                                |_handle, _offset, _window, cx| {
+                                                    cx.new(|_cx| DiffSplitResizeDragGhost)
+                                                },
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(
+                                                    move |this, e: &MouseDownEvent, _w, cx| {
+                                                        cx.stop_propagation();
+                                                        this.diff_split_resize =
+                                                            Some(DiffSplitResizeState {
+                                                                handle:
+                                                                    DiffSplitResizeHandle::Divider,
+                                                                start_x: e.position.x,
+                                                                start_ratio: this.diff_split_ratio,
+                                                            });
+                                                        cx.notify();
+                                                    },
+                                                ),
+                                            )
+                                            .on_drag_move(cx.listener(
+                                                move |this,
+                                                      e: &gpui::DragMoveEvent<
+                                                    DiffSplitResizeHandle,
+                                                >,
+                                                      _w,
+                                                      cx| {
+                                                    let Some(state) = this.diff_split_resize else {
+                                                        return;
+                                                    };
+                                                    if state.handle != *e.drag(cx) {
+                                                        return;
+                                                    }
+
+                                                    let main_w =
+                                                        this.main_pane_content_width(cx);
+                                                    let available =
+                                                        (main_w - handle_w).max(px(0.0));
+                                                    if available <= min_col_w * 2.0 {
+                                                        this.diff_split_ratio = 0.5;
+                                                        cx.notify();
+                                                        return;
+                                                    }
+
+                                                    let dx =
+                                                        e.event.position.x - state.start_x;
+                                                    let max_left = available - min_col_w;
+                                                    let mut next_left =
+                                                        (available * state.start_ratio) + dx;
+                                                    next_left =
+                                                        next_left.max(min_col_w).min(max_left);
+
+                                                    this.diff_split_ratio =
+                                                        (next_left / available).clamp(0.0, 1.0);
+                                                    cx.notify();
+                                                },
+                                            ))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _e, _w, cx| {
+                                                    this.diff_split_resize = None;
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_mouse_up_out(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _e, _w, cx| {
+                                                    this.diff_split_resize = None;
+                                                    cx.notify();
+                                                }),
+                                            )
+                                    };
+
+                                    let columns_header = div()
+                                        .id("diff_split_columns_header")
+                                        .h(px(zed::CONTROL_HEIGHT_PX))
+                                        .flex()
+                                        .items_center()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .bg(theme.colors.surface_bg_elevated)
+                                        .border_b_1()
+                                        .border_color(theme.colors.border)
+                                        .child(
+                                            div()
+                                                .w(left_w)
+                                                .min_w(px(0.0))
+                                                .px_2()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .child("A (local / before)"),
+                                        )
+                                        .child(resize_handle("diff_split_resize_handle_header"))
+                                        .child(
+                                            div()
+                                                .w(right_w)
+                                                .min_w(px(0.0))
+                                                .px_2()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .child("B (remote / after)"),
+                                        );
 
                                     div()
                                         .id("diff_split_scroll_container")
@@ -385,20 +506,15 @@ impl MainPaneView {
                                                 .flex()
                                                 .child(
                                                     div()
-                                                        .flex_1()
+                                                        .w(left_w)
                                                         .min_w(px(0.0))
                                                         .h_full()
                                                         .child(left),
                                                 )
+                                                .child(resize_handle("diff_split_resize_handle_body"))
                                                 .child(
                                                     div()
-                                                        .w(px(1.0))
-                                                        .h_full()
-                                                        .bg(theme.colors.border),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .flex_1()
+                                                        .w(right_w)
                                                         .min_w(px(0.0))
                                                         .h_full()
                                                         .child(right),
@@ -563,7 +679,6 @@ impl MainPaneView {
 
         let diff_nav_hotkey_hint = |label: &'static str| {
             div()
-                .font_family("monospace")
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .child(label)
@@ -966,7 +1081,6 @@ impl MainPaneView {
                 )
                 .child(
                     div()
-                        .font_family("monospace")
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .child(match_label),
@@ -1023,7 +1137,6 @@ impl MainPaneView {
                     });
                     div()
                         .id("worktree_preview_error_scroll")
-                        .font_family("monospace")
                         .flex()
                         .flex_col()
                         .flex_1()
@@ -1796,7 +1909,6 @@ impl MainPaneView {
                         });
                         div()
                             .id("diff_error_scroll")
-                            .font_family("monospace")
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -1828,7 +1940,6 @@ impl MainPaneView {
                                 });
                                 div()
                                     .id("diff_word_wrap_scroll")
-                                    .font_family("monospace")
                                     .bg(theme.colors.window_bg)
                                     .flex()
                                     .flex_col()
@@ -1922,11 +2033,153 @@ impl MainPaneView {
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
 
-                                            let columns_header = zed::split_columns_header(
-                                                theme,
-                                                "A (local / before)",
-                                                "B (remote / after)",
-                                            );
+                                            let handle_w = px(PANE_RESIZE_HANDLE_PX);
+                                            let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+                                            let main_w = self.main_pane_content_width(cx);
+                                            let available = (main_w - handle_w).max(px(0.0));
+                                            let left_w = if available <= min_col_w * 2.0 {
+                                                available * 0.5
+                                            } else {
+                                                (available * self.diff_split_ratio)
+                                                    .max(min_col_w)
+                                                    .min(available - min_col_w)
+                                            };
+                                            let right_w = available - left_w;
+
+                                            let resize_handle = |id: &'static str| {
+                                                div()
+                                                    .id(id)
+                                                    .w(handle_w)
+                                                    .h_full()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .cursor(CursorStyle::ResizeLeftRight)
+                                                    .hover(move |s| {
+                                                        s.bg(with_alpha(theme.colors.hover, 0.65))
+                                                    })
+                                                    .active(move |s| s.bg(theme.colors.active))
+                                                    .child(
+                                                        div()
+                                                            .w(px(1.0))
+                                                            .h_full()
+                                                            .bg(theme.colors.border),
+                                                    )
+                                                    .on_drag(
+                                                        DiffSplitResizeHandle::Divider,
+                                                        |_handle, _offset, _window, cx| {
+                                                            cx.new(|_cx| DiffSplitResizeDragGhost)
+                                                        },
+                                                    )
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            move |this,
+                                                                  e: &MouseDownEvent,
+                                                                  _w,
+                                                                  cx| {
+                                                                cx.stop_propagation();
+                                                                this.diff_split_resize = Some(
+                                                                    DiffSplitResizeState {
+                                                                        handle:
+                                                                            DiffSplitResizeHandle::Divider,
+                                                                        start_x: e.position.x,
+                                                                        start_ratio: this
+                                                                            .diff_split_ratio,
+                                                                    },
+                                                                );
+                                                                cx.notify();
+                                                            },
+                                                        ),
+                                                    )
+                                                    .on_drag_move(cx.listener(
+                                                        move |this,
+                                                              e: &gpui::DragMoveEvent<
+                                                            DiffSplitResizeHandle,
+                                                        >,
+                                                              _w,
+                                                              cx| {
+                                                            let Some(state) = this.diff_split_resize
+                                                            else {
+                                                                return;
+                                                            };
+                                                            if state.handle != *e.drag(cx) {
+                                                                return;
+                                                            }
+
+                                                            let main_w = this
+                                                                .main_pane_content_width(cx);
+                                                            let available =
+                                                                (main_w - handle_w).max(px(0.0));
+                                                            if available <= min_col_w * 2.0 {
+                                                                this.diff_split_ratio = 0.5;
+                                                                cx.notify();
+                                                                return;
+                                                            }
+
+                                                            let dx =
+                                                                e.event.position.x - state.start_x;
+                                                            let max_left = available - min_col_w;
+                                                            let mut next_left = (available
+                                                                * state.start_ratio)
+                                                                + dx;
+                                                            next_left = next_left
+                                                                .max(min_col_w)
+                                                                .min(max_left);
+
+                                                            this.diff_split_ratio =
+                                                                (next_left / available)
+                                                                    .clamp(0.0, 1.0);
+                                                            cx.notify();
+                                                        },
+                                                    ))
+                                                    .on_mouse_up(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, _e, _w, cx| {
+                                                            this.diff_split_resize = None;
+                                                            cx.notify();
+                                                        }),
+                                                    )
+                                                    .on_mouse_up_out(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, _e, _w, cx| {
+                                                            this.diff_split_resize = None;
+                                                            cx.notify();
+                                                        }),
+                                                    )
+                                            };
+
+                                            let columns_header = div()
+                                                .id("diff_split_columns_header")
+                                                .h(px(zed::CONTROL_HEIGHT_PX))
+                                                .flex()
+                                                .items_center()
+                                                .text_xs()
+                                                .text_color(theme.colors.text_muted)
+                                                .bg(theme.colors.surface_bg_elevated)
+                                                .border_b_1()
+                                                .border_color(theme.colors.border)
+                                                .child(
+                                                    div()
+                                                        .w(left_w)
+                                                        .min_w(px(0.0))
+                                                        .px_2()
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .child("A (local / before)"),
+                                                )
+                                                .child(
+                                                    resize_handle("diff_split_resize_handle_header"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .w(right_w)
+                                                        .min_w(px(0.0))
+                                                        .px_2()
+                                                        .overflow_hidden()
+                                                        .whitespace_nowrap()
+                                                        .child("B (remote / after)"),
+                                                );
 
                                             div()
                                                 .id("diff_split_scroll_container")
@@ -1944,20 +2197,17 @@ impl MainPaneView {
                                                         .flex()
                                                         .child(
                                                             div()
-                                                                .flex_1()
+                                                                .w(left_w)
                                                                 .min_w(px(0.0))
                                                                 .h_full()
                                                                 .child(left),
                                                         )
+                                                        .child(resize_handle(
+                                                            "diff_split_resize_handle_body",
+                                                        ))
                                                         .child(
                                                             div()
-                                                                .w(px(1.0))
-                                                                .h_full()
-                                                                .bg(theme.colors.border),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
+                                                                .w(right_w)
                                                                 .min_w(px(0.0))
                                                                 .h_full()
                                                                 .child(right),

@@ -941,6 +941,7 @@ impl MainPaneView {
         let col_sha = self.history_col_sha;
         let handle_w = px(HISTORY_COL_HANDLE_PX);
         let handle_half = px(HISTORY_COL_HANDLE_PX / 2.0);
+        let cell_pad = handle_half;
         let scope_label: SharedString = self
             .active_repo()
             .map(|r| match r.history_scope {
@@ -1089,6 +1090,7 @@ impl MainPaneView {
                     .items_center()
                     .gap_1()
                     .min_w(px(0.0))
+                    .pr(cell_pad)
                     .child(
                         div()
                             .id("history_scope_header")
@@ -1152,6 +1154,8 @@ impl MainPaneView {
                     .w(self.history_col_graph)
                     .flex()
                     .justify_center()
+                    .px(cell_pad)
+                    .font_family(".SystemUIFont")
                     .whitespace_nowrap()
                     .child("GRAPH"),
             )
@@ -1162,9 +1166,9 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .pr(handle_w)
+                    .px(cell_pad)
                     .whitespace_nowrap()
-                    .child("COMMIT MESSAGE")
+                    .child(div().flex_1().min_w(px(0.0)).child("COMMIT MESSAGE"))
                     .child(column_settings_btn),
             )
             .when(show_author, |header| {
@@ -1173,6 +1177,7 @@ impl MainPaneView {
                         .w(col_author)
                         .flex()
                         .items_center()
+                        .px(cell_pad)
                         .whitespace_nowrap()
                         .child("AUTHOR"),
                 )
@@ -1184,7 +1189,9 @@ impl MainPaneView {
                     .w(col_date)
                     .flex()
                     .justify_end()
+                    .px(cell_pad)
                     .whitespace_nowrap()
+                    .font_family("monospace")
                     .child("Commit date"),
             );
         }
@@ -1195,7 +1202,9 @@ impl MainPaneView {
                     .w(col_sha)
                     .flex()
                     .justify_end()
+                    .px(cell_pad)
                     .whitespace_nowrap()
+                    .font_family("monospace")
                     .child("SHA"),
             );
         }

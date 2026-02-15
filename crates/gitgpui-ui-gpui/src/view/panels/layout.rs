@@ -177,12 +177,12 @@ impl DetailsPaneView {
                                         .w_full()
                                         .min_w(px(0.0))
                                         .child(message)
-                                        .child(zed::key_value(
+                                        .child(zed::key_value_monospace_value(
                                             theme,
                                             "Commit SHA",
                                             details.id.as_ref().to_string(),
                                         ))
-                                        .child(zed::key_value(
+                                        .child(zed::key_value_monospace_value(
                                             theme,
                                             "Commit date",
                                             details.committed_at.clone(),
@@ -201,6 +201,7 @@ impl DetailsPaneView {
                                                 .child(
                                                     div()
                                                         .text_sm()
+                                                        .font_family("monospace")
                                                         .whitespace_nowrap()
                                                         .line_clamp(1)
                                                         .child(parent),
@@ -319,12 +320,12 @@ impl DetailsPaneView {
                                     .w_full()
                                     .min_w(px(0.0))
                                     .child(message)
-                                    .child(zed::key_value(
+                                    .child(zed::key_value_monospace_value(
                                         theme,
                                         "Commit SHA",
                                         details.id.as_ref().to_string(),
                                     ))
-                                    .child(zed::key_value(
+                                    .child(zed::key_value_monospace_value(
                                         theme,
                                         "Commit date",
                                         details.committed_at.clone(),
@@ -343,6 +344,7 @@ impl DetailsPaneView {
                                             .child(
                                                 div()
                                                     .text_sm()
+                                                    .font_family("monospace")
                                                     .whitespace_nowrap()
                                                     .line_clamp(1)
                                                     .child(parent),

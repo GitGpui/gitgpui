@@ -111,6 +111,8 @@ const SIDEBAR_MIN_PX: f32 = 200.0;
 const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
 
+const DIFF_SPLIT_COL_MIN_PX: f32 = 160.0;
+
 const DIFF_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 4000;
 const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
@@ -194,6 +196,26 @@ struct PaneResizeState {
 struct PaneResizeDragGhost;
 
 impl Render for PaneResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffSplitResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DiffSplitResizeState {
+    handle: DiffSplitResizeHandle,
+    start_x: Pixels,
+    start_ratio: f32,
+}
+
+struct DiffSplitResizeDragGhost;
+
+impl Render for DiffSplitResizeDragGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div().w(px(0.0)).h(px(0.0))
     }

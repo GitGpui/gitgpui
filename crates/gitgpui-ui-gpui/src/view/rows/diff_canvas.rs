@@ -179,7 +179,6 @@ pub(super) fn inline_diff_line_row_canvas(
     .min_w(min_width)
     .w_full()
     .bg(bg)
-    .font_family("monospace")
     .text_xs()
     .whitespace_nowrap()
     .into_any_element()
@@ -391,7 +390,6 @@ pub(super) fn split_diff_line_row_canvas(
     .h(px(20.0))
     .min_w(min_width)
     .w_full()
-    .font_family("monospace")
     .text_xs()
     .whitespace_nowrap()
     .into_any_element()
@@ -554,7 +552,6 @@ pub(super) fn patch_split_column_row_canvas(
     .h(px(20.0))
     .min_w(min_width)
     .w_full()
-    .font_family("monospace")
     .text_xs()
     .whitespace_nowrap()
     .into_any_element()
@@ -690,7 +687,6 @@ pub(super) fn worktree_preview_row_canvas(
     .h(px(20.0))
     .min_w(min_width)
     .w_full()
-    .font_family("monospace")
     .text_xs()
     .whitespace_nowrap()
     .into_any_element()
@@ -743,7 +739,6 @@ struct LineMetrics {
 
 fn diff_text_style(window: &Window) -> TextStyle {
     let mut style = window.text_style();
-    style.font_family = "monospace".into();
     style.font_weight = FontWeight::NORMAL;
     style
 }

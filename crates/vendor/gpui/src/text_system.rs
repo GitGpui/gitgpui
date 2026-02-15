@@ -987,6 +987,27 @@ pub(crate) fn font_name_with_fallbacks<'a>(name: &'a str, system: &'a str) -> &'
         ".SystemUIFont" => system,
         ".ZedSans" | "Zed Plex Sans" => "IBM Plex Sans",
         ".ZedMono" | "Zed Plex Mono" => "Lilex",
+        // "monospace" is a generic font family name in many UI toolkits, but it is not a font
+        // family that necessarily exists on the host OS. Map it to a common monospace font so
+        // that apps can use "monospace" portably.
+        "monospace" => {
+            #[cfg(target_os = "macos")]
+            {
+                "Menlo"
+            }
+            #[cfg(target_os = "windows")]
+            {
+                "Consolas"
+            }
+            #[cfg(target_os = "linux")]
+            {
+                "DejaVu Sans Mono"
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+            {
+                name
+            }
+        }
         _ => name,
     }
 }

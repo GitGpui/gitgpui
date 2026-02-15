@@ -75,7 +75,7 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
-pub fn key_value(
+pub fn key_value_monospace_value(
     theme: AppTheme,
     key: impl Into<SharedString>,
     value: impl Into<SharedString>,
@@ -91,7 +91,7 @@ pub fn key_value(
                 .text_color(theme.colors.text_muted)
                 .child(key.into()),
         )
-        .child(div().text_sm().child(value.into()))
+        .child(div().text_sm().font_family("monospace").child(value.into()))
 }
 
 pub fn empty_state(
@@ -131,7 +131,6 @@ pub fn split_columns_header(
         .h(px(CONTROL_HEIGHT_PX))
         .flex()
         .items_center()
-        .font_family("monospace")
         .text_xs()
         .text_color(theme.colors.text_muted)
         .bg(theme.colors.surface_bg_elevated)

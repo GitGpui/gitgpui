@@ -288,6 +288,7 @@ fn working_tree_summary_history_row(
     counts: (usize, usize, usize),
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
+    let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
     let icon_count = |icon: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
@@ -420,6 +421,7 @@ fn working_tree_summary_history_row(
                     .w(col_date)
                     .flex()
                     .justify_end()
+                    .px(cell_pad_x)
                     .text_xs()
                     .text_color(theme.colors.text_muted)
                     .whitespace_nowrap()

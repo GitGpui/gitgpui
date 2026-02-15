@@ -23,7 +23,6 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .font_family("monospace")
                     .text_xs()
                     .text_color(if base_line.is_some() {
                         theme.colors.text
@@ -56,7 +55,6 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .font_family("monospace")
                     .text_xs()
                     .text_color(if ours_line.is_some() {
                         theme.colors.text
@@ -89,7 +87,6 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .font_family("monospace")
                     .text_xs()
                     .text_color(if theirs_line.is_some() {
                         theme.colors.text
@@ -234,7 +231,6 @@ impl MainPaneView {
                 .id(("conflict_compare_split_oob", row_ix))
                 .h(px(20.0))
                 .px_2()
-                .font_family("monospace")
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .child("")
@@ -306,7 +302,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(left_bg)
             .text_color(if row.old.is_some() {
@@ -330,7 +325,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(right_bg)
             .text_color(if row.new.is_some() {
@@ -367,7 +361,6 @@ impl MainPaneView {
                 .id(("conflict_compare_inline_oob", ix))
                 .h(px(20.0))
                 .px_2()
-                .font_family("monospace")
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .child("")
@@ -416,7 +409,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(bg)
             .text_color(theme.colors.text)
@@ -454,7 +446,6 @@ impl MainPaneView {
                 .id(("conflict_diff_split_oob", row_ix))
                 .h(px(20.0))
                 .px_2()
-                .font_family("monospace")
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .child("")
@@ -542,7 +533,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(left_bg)
             .text_color(theme.colors.text)
@@ -571,7 +561,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(right_bg)
             .text_color(theme.colors.text)
@@ -613,7 +602,6 @@ impl MainPaneView {
                 .id(("conflict_diff_inline_oob", ix))
                 .h(px(20.0))
                 .px_2()
-                .font_family("monospace")
                 .text_xs()
                 .text_color(theme.colors.text_muted)
                 .child("")
@@ -663,7 +651,6 @@ impl MainPaneView {
             .flex()
             .items_center()
             .gap_2()
-            .font_family("monospace")
             .text_xs()
             .bg(bg)
             .text_color(theme.colors.text)

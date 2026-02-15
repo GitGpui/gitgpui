@@ -395,7 +395,7 @@ pub(crate) fn window_frame(
         .size_full()
         .bg(theme.colors.window_bg)
         .border_1()
-        .border_color(with_alpha(theme.colors.border, 0.9))
+        .border_color(gpui::rgba(0x5a5d63ff))
         .rounded(px(theme.radii.panel))
         .shadow_lg()
         .overflow_hidden()

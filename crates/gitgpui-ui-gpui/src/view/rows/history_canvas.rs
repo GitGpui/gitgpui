@@ -155,6 +155,11 @@ pub(super) fn history_commit_row_canvas(
             let xs_line_height = base_style
                 .line_height
                 .to_pixels(xs_font.into(), window.rem_size());
+            let xxs_font = sm_font * 0.78;
+            let xxs_line_height = base_style
+                .line_height
+                .to_pixels(xxs_font.into(), window.rem_size());
+            let cell_pad_x = px(HISTORY_COL_HANDLE_PX / 2.0);
 
             let center_y = |line_height: Pixels| {
                 let extra = (bounds.size.height - line_height).max(px(0.0));
@@ -356,9 +361,13 @@ pub(super) fn history_commit_row_canvas(
             };
 
             let summary_text_bounds = Bounds::new(
-                point(summary_bounds.left() + summary_left_offset, bounds.top()),
+                point(
+                    summary_bounds.left() + summary_left_offset + cell_pad_x,
+                    bounds.top(),
+                ),
                 size(
-                    (summary_bounds.size.width - summary_left_offset).max(px(0.0)),
+                    (summary_bounds.size.width - summary_left_offset - cell_pad_x * 2.0)
+                        .max(px(0.0)),
                     bounds.size.height,
                 ),
             );
@@ -388,22 +397,29 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_author && !author.as_ref().is_empty() {
+                let author_text_bounds = Bounds::new(
+                    point(author_bounds.left() + cell_pad_x, author_bounds.top()),
+                    size(
+                        (author_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                        author_bounds.size.height,
+                    ),
+                );
                 let shaped = shape_truncated_line_cached(
                     window,
                     &base_style,
                     xs_font,
                     &author,
-                    author_bounds.size.width.max(px(0.0)),
+                    author_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     None,
                 );
                 window.with_content_mask(
                     Some(ContentMask {
-                        bounds: author_bounds,
+                        bounds: author_text_bounds,
                     }),
                     |window| {
                         let _ = shaped.paint(
-                            point(author_bounds.left(), center_y(xs_line_height)),
+                            point(author_text_bounds.left(), center_y(xs_line_height)),
                             xs_line_height,
                             window,
                             cx,
@@ -413,24 +429,32 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_date && !when.as_ref().is_empty() {
+                let date_text_bounds = Bounds::new(
+                    point(date_bounds.left() + cell_pad_x, date_bounds.top()),
+                    size(
+                        (date_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                        date_bounds.size.height,
+                    ),
+                );
                 let shaped = shape_truncated_line_cached(
                     window,
                     &base_style,
-                    xs_font,
+                    xxs_font,
                     &when,
-                    date_bounds.size.width.max(px(0.0)),
+                    date_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     Some("monospace"),
                 );
-                let origin_x = (date_bounds.right() - shaped.width).max(date_bounds.left());
+                let origin_x =
+                    (date_text_bounds.right() - shaped.width).max(date_text_bounds.left());
                 window.with_content_mask(
                     Some(ContentMask {
-                        bounds: date_bounds,
+                        bounds: date_text_bounds,
                     }),
                     |window| {
                         let _ = shaped.paint(
-                            point(origin_x, center_y(xs_line_height)),
-                            xs_line_height,
+                            point(origin_x, center_y(xxs_line_height)),
+                            xxs_line_height,
                             window,
                             cx,
                         );
@@ -439,20 +463,27 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_sha && !short_sha.as_ref().is_empty() {
+                let sha_text_bounds = Bounds::new(
+                    point(sha_bounds.left() + cell_pad_x, sha_bounds.top()),
+                    size(
+                        (sha_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                        sha_bounds.size.height,
+                    ),
+                );
                 let shaped = shape_truncated_line_cached(
                     window,
                     &base_style,
-                    xs_font,
+                    xxs_font,
                     &short_sha,
-                    sha_bounds.size.width.max(px(0.0)),
+                    sha_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
                     Some("monospace"),
                 );
-                let origin_x = (sha_bounds.right() - shaped.width).max(sha_bounds.left());
-                window.with_content_mask(Some(ContentMask { bounds: sha_bounds }), |window| {
+                let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
+                window.with_content_mask(Some(ContentMask { bounds: sha_text_bounds }), |window| {
                     let _ = shaped.paint(
-                        point(origin_x, center_y(xs_line_height)),
-                        xs_line_height,
+                        point(origin_x, center_y(xxs_line_height)),
+                        xxs_line_height,
                         window,
                         cx,
                     );

@@ -20,6 +20,8 @@ pub(in super::super) struct MainPaneView {
 
     pub(in super::super) diff_view: DiffViewMode,
     pub(in super::super) diff_word_wrap: bool,
+    pub(in super::super) diff_split_ratio: f32,
+    pub(in super::super) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in super::super) diff_horizontal_min_width: Pixels,
     pub(in super::super) diff_cache_repo_id: Option<RepoId>,
     pub(in super::super) diff_cache_rev: u64,
@@ -343,6 +345,8 @@ impl MainPaneView {
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
             diff_word_wrap: false,
+            diff_split_ratio: 0.5,
+            diff_split_resize: None,
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -1018,6 +1022,21 @@ impl MainPaneView {
             }
         }
         None
+    }
+
+    pub(in super::super) fn main_pane_content_width(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> Pixels {
+        let fallback_sidebar = px(280.0);
+        let fallback_details = px(420.0);
+        let (sidebar_w, details_w) = self
+            .root_view
+            .update(cx, |root, _cx| (root.sidebar_width, root.details_width))
+            .unwrap_or((fallback_sidebar, fallback_details));
+
+        let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
+        (self.last_window_size.width - sidebar_w - details_w - handles_w).max(px(0.0))
     }
 
     pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
