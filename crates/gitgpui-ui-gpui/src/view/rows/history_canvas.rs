@@ -237,20 +237,28 @@ pub(super) fn history_commit_row_canvas(
             let chip_pad_x = px(HISTORY_TAG_CHIP_PADDING_X_PX);
             let chip_gap = px(HISTORY_TAG_CHIP_GAP_PX);
 
+            let branch_content_bounds = Bounds::new(
+                point(branch_bounds.left() + cell_pad_x, branch_bounds.top()),
+                size(
+                    (branch_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                    branch_bounds.size.height,
+                ),
+            );
+
             let mut tag_chip_bounds: Vec<Bounds<Pixels>> = Vec::with_capacity(tag_names.len());
             if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
                 window.with_content_mask(
                     Some(ContentMask {
-                        bounds: branch_bounds,
+                        bounds: branch_content_bounds,
                     }),
                     |window| {
-                        let mut x = branch_bounds.left();
+                        let mut x = branch_content_bounds.left();
                         let mut chip_widths: Vec<Pixels> = Vec::with_capacity(tag_names.len());
                         let mut chip_texts: Vec<gpui::ShapedLine> =
                             Vec::with_capacity(tag_names.len());
 
                         for name in tag_names.iter() {
-                            let remaining = (branch_bounds.right() - x).max(px(0.0));
+                            let remaining = (branch_content_bounds.right() - x).max(px(0.0));
                             if remaining <= chip_pad_x * 2.0 {
                                 break;
                             }
@@ -270,13 +278,13 @@ pub(super) fn history_commit_row_canvas(
                             chip_texts.push(shaped);
 
                             x += chip_w + chip_gap;
-                            if x >= branch_bounds.right() {
+                            if x >= branch_content_bounds.right() {
                                 break;
                             }
                         }
 
                         tag_chip_bounds = layout_chip_bounds(
-                            branch_bounds,
+                            branch_content_bounds,
                             bounds,
                             chip_height,
                             chip_gap,
@@ -311,13 +319,15 @@ pub(super) fn history_commit_row_canvas(
                         }
 
                         let x = if let Some(last) = tag_chip_bounds.last() {
-                            (last.right() + chip_gap).min(branch_bounds.right())
+                            (last.right() + chip_gap).min(branch_content_bounds.right())
                         } else {
-                            branch_bounds.left()
+                            branch_content_bounds.left()
                         };
 
-                        if !branches_text.as_ref().trim().is_empty() && x < branch_bounds.right() {
-                            let remaining = (branch_bounds.right() - x).max(px(0.0));
+                        if !branches_text.as_ref().trim().is_empty()
+                            && x < branch_content_bounds.right()
+                        {
+                            let remaining = (branch_content_bounds.right() - x).max(px(0.0));
                             let shaped = shape_truncated_line_cached(
                                 window,
                                 &base_style,
@@ -344,7 +354,7 @@ pub(super) fn history_commit_row_canvas(
                 .map(|l| l.color)
                 .unwrap_or(theme.colors.text_muted);
 
-            let summary_left_offset = if show_graph_color_marker {
+            if show_graph_color_marker {
                 let marker_w = px(2.0);
                 let marker_h = px(12.0);
                 let y = bounds.top() + (bounds.size.height - marker_h) * 0.5;
@@ -355,19 +365,12 @@ pub(super) fn history_commit_row_canvas(
                     )
                     .corner_radii(px(999.0)),
                 );
-                marker_w + window.rem_size() * 0.5
-            } else {
-                px(0.0)
-            };
+            }
 
             let summary_text_bounds = Bounds::new(
-                point(
-                    summary_bounds.left() + summary_left_offset + cell_pad_x,
-                    bounds.top(),
-                ),
+                point(summary_bounds.left() + cell_pad_x, bounds.top()),
                 size(
-                    (summary_bounds.size.width - summary_left_offset - cell_pad_x * 2.0)
-                        .max(px(0.0)),
+                    (summary_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
                     bounds.size.height,
                 ),
             );
@@ -413,13 +416,15 @@ pub(super) fn history_commit_row_canvas(
                     theme.colors.text_muted,
                     None,
                 );
+                let origin_x =
+                    (author_text_bounds.right() - shaped.width).max(author_text_bounds.left());
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: author_text_bounds,
                     }),
                     |window| {
                         let _ = shaped.paint(
-                            point(author_text_bounds.left(), center_y(xs_line_height)),
+                            point(origin_x, center_y(xs_line_height)),
                             xs_line_height,
                             window,
                             cx,
@@ -480,14 +485,19 @@ pub(super) fn history_commit_row_canvas(
                     Some("monospace"),
                 );
                 let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
-                window.with_content_mask(Some(ContentMask { bounds: sha_text_bounds }), |window| {
-                    let _ = shaped.paint(
-                        point(origin_x, center_y(xxs_line_height)),
-                        xxs_line_height,
-                        window,
-                        cx,
-                    );
-                });
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: sha_text_bounds,
+                    }),
+                    |window| {
+                        let _ = shaped.paint(
+                            point(origin_x, center_y(xxs_line_height)),
+                            xxs_line_height,
+                            window,
+                            cx,
+                        );
+                    },
+                );
             }
 
             window.on_mouse_event({

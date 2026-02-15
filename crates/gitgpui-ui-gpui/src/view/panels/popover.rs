@@ -1090,7 +1090,8 @@ impl MainPaneView {
                     .items_center()
                     .gap_1()
                     .min_w(px(0.0))
-                    .pr(cell_pad)
+                    .px(cell_pad)
+                    .overflow_hidden()
                     .child(
                         div()
                             .id("history_scope_header")
@@ -1157,6 +1158,7 @@ impl MainPaneView {
                     .px(cell_pad)
                     .font_family(".SystemUIFont")
                     .whitespace_nowrap()
+                    .overflow_hidden()
                     .child("GRAPH"),
             )
             .child(
@@ -1168,7 +1170,15 @@ impl MainPaneView {
                     .justify_between()
                     .px(cell_pad)
                     .whitespace_nowrap()
-                    .child(div().flex_1().min_w(px(0.0)).child("COMMIT MESSAGE"))
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child("COMMIT MESSAGE"),
+                    )
                     .child(column_settings_btn),
             )
             .when(show_author, |header| {
@@ -1177,8 +1187,10 @@ impl MainPaneView {
                         .w(col_author)
                         .flex()
                         .items_center()
+                        .justify_end()
                         .px(cell_pad)
                         .whitespace_nowrap()
+                        .overflow_hidden()
                         .child("AUTHOR"),
                 )
             });
@@ -1188,9 +1200,11 @@ impl MainPaneView {
                 div()
                     .w(col_date)
                     .flex()
+                    .items_center()
                     .justify_end()
                     .px(cell_pad)
                     .whitespace_nowrap()
+                    .overflow_hidden()
                     .font_family("monospace")
                     .child("Commit date"),
             );
@@ -1201,9 +1215,11 @@ impl MainPaneView {
                 div()
                     .w(col_sha)
                     .flex()
+                    .items_center()
                     .justify_end()
                     .px(cell_pad)
                     .whitespace_nowrap()
+                    .overflow_hidden()
                     .font_family("monospace")
                     .child("SHA"),
             );

@@ -399,7 +399,13 @@ fn working_tree_summary_history_row(
                 .child(circle),
         )
         .child({
-            let mut summary = div().flex_1().min_w(px(0.0)).flex().items_center().gap_2();
+            let mut summary = div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                .px(cell_pad_x);
             summary = summary.child(
                 div()
                     .flex_1()
