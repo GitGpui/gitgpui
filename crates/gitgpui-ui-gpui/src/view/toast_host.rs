@@ -282,9 +282,15 @@ impl Render for ToastHost {
                     }
                 }));
 
+            let message = div()
+                .id(("toast_message_scroll", t.id))
+                .max_h(px(200.0))
+                .overflow_y_scroll()
+                .child(t.input.clone());
+
             div()
                 .relative()
-                .child(zed::toast(theme, t.kind, t.input.clone()))
+                .child(zed::toast(theme, t.kind, message))
                 .child(div().absolute().top(px(8.0)).right(px(8.0)).child(close))
                 .with_animations(
                     ("toast", t.id),

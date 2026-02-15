@@ -52,6 +52,12 @@ pub(super) fn reduce(
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::DismissRepoError { repo_id } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.last_error = None;
+            }
+            Vec::new()
+        }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
         Msg::RepoExternallyChanged { repo_id, change } => {

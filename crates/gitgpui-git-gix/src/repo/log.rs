@@ -46,6 +46,20 @@ impl<'a> CursorGate<'a> {
     }
 }
 
+fn repo_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {
+    match repo.head_id() {
+        Ok(id) => Ok(Some(id.detach())),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("does not have any commits") || msg.contains("doesn't have any commits")
+            {
+                return Ok(None);
+            }
+            Err(Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))
+        }
+    }
+}
+
 fn commit_from_walk_info<'repo>(
     info: &gix::revision::walk::Info<'repo>,
     id: String,
@@ -127,10 +141,12 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
         let repo = self._repo.to_thread_local();
-        let head_id = repo
-            .head_id()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))?
-            .detach();
+        let Some(head_id) = repo_head_id_or_none(&repo)? else {
+            return Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            });
+        };
 
         let walk = repo
             .rev_walk([head_id])
@@ -149,10 +165,7 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
         let repo = self._repo.to_thread_local();
-        let head_id = repo
-            .head_id()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_id: {e}"))))?
-            .detach();
+        let head_id = repo_head_id_or_none(&repo)?;
 
         let refs = repo
             .references()
@@ -163,8 +176,10 @@ impl GixRepo {
         // `refs/branch-heads/*`.
         let mut tips = Vec::new();
         let mut seen = HashSet::default();
-        tips.push(head_id);
-        seen.insert(head_id);
+        if let Some(head_id) = head_id {
+            tips.push(head_id);
+            seen.insert(head_id);
+        }
 
         let iter = refs
             .all()
@@ -184,6 +199,13 @@ impl GixRepo {
             if seen.insert(id) {
                 tips.push(id);
             }
+        }
+
+        if tips.is_empty() {
+            return Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            });
         }
 
         let walk = repo

@@ -3962,7 +3962,8 @@ impl Render for GitGpuiView {
                     ),
             );
 
-        if let Some(repo) = self.active_repo()
+        if let Some(repo_id) = self.active_repo_id()
+            && let Some(repo) = self.active_repo()
             && let Some(err) = repo.last_error.as_ref()
         {
             self.error_banner_input.update(cx, |input, cx| {
@@ -3970,15 +3971,32 @@ impl Render for GitGpuiView {
                 input.set_text(err.clone(), cx);
                 input.set_read_only(true, cx);
             });
+
+            let dismiss = zed::Button::new("repo_error_banner_close", "✕")
+                .style(zed::ButtonStyle::Transparent)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    this.store.dispatch(Msg::DismissRepoError { repo_id });
+                    cx.notify();
+                });
+
             body = body.child(
                 div()
+                    .relative()
                     .px_2()
                     .py_1()
+                    .pr(px(40.0))
                     .bg(with_alpha(theme.colors.danger, 0.15))
                     .border_1()
                     .border_color(with_alpha(theme.colors.danger, 0.3))
                     .rounded(px(theme.radii.panel))
-                    .child(self.error_banner_input.clone()),
+                    .child(
+                        div()
+                            .id("repo_error_banner_scroll")
+                            .max_h(px(140.0))
+                            .overflow_y_scroll()
+                            .child(self.error_banner_input.clone()),
+                    )
+                    .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),
             );
         }
 

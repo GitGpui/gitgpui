@@ -182,3 +182,24 @@ fn log_all_branches_does_not_include_tag_only_tips() {
         "all-branches log should not be expanded by tag-only tips"
     );
 }
+
+#[test]
+fn empty_repo_log_and_head_branch_do_not_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    assert_eq!(opened.current_branch().unwrap(), "main");
+    assert!(opened.log_head_page(200, None).unwrap().commits.is_empty());
+    assert!(
+        opened
+            .log_all_branches_page(200, None)
+            .unwrap()
+            .commits
+            .is_empty()
+    );
+}

@@ -387,7 +387,7 @@ impl SidebarPaneView {
                                 .px(px(3.0))
                                 .py(px(0.0))
                                 .rounded(px(999.0))
-                                .text_xs()
+                                .text_size(px(11.0))
                                 .text_color(theme.colors.text_muted)
                                 .bg(with_alpha(
                                     theme.colors.accent,

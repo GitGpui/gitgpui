@@ -7,6 +7,20 @@ use std::str;
 
 impl GixRepo {
     pub(super) fn current_branch_impl(&self) -> Result<String> {
+        // Prefer `symbolic-ref` so unborn branches (e.g. a fresh `git init`) work. Fall back to
+        // `rev-parse` for detached HEAD.
+        {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("symbolic-ref")
+                .arg("--short")
+                .arg("HEAD");
+            if let Ok(stdout) = run_git_capture(cmd, "git symbolic-ref --short HEAD") {
+                return Ok(stdout.trim().to_string());
+            }
+        }
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)

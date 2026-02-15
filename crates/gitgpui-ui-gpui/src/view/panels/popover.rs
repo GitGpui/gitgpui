@@ -900,7 +900,7 @@ impl PopoverHost {
 }
 
 impl Render for PopoverHost {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let Some(kind) = self.popover.clone() else {
             return div().into_any_element();
         };
@@ -917,7 +917,7 @@ impl Render for PopoverHost {
             .occlude()
             .on_any_mouse_down(close);
 
-        let popover = self.popover_view(kind, cx).into_any_element();
+        let popover = self.popover_view(kind, window, cx).into_any_element();
 
         div()
             .id("popover_layer")
@@ -1347,6 +1347,7 @@ impl PopoverHost {
     pub(in super::super) fn popover_view(
         &mut self,
         kind: PopoverKind,
+        window: &Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
@@ -1355,7 +1356,23 @@ impl PopoverHost {
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
-        let anchor_corner = match &kind {
+        let is_context_menu = matches!(
+            &kind,
+            PopoverKind::PullPicker
+                | PopoverKind::PushPicker
+                | PopoverKind::HistoryBranchFilter { .. }
+                | PopoverKind::HistoryColumnSettings
+                | PopoverKind::DiffHunkMenu { .. }
+                | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::CommitMenu { .. }
+                | PopoverKind::TagMenu { .. }
+                | PopoverKind::StatusFileMenu { .. }
+                | PopoverKind::BranchMenu { .. }
+                | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::CommitFileMenu { .. }
+        );
+
+        let mut anchor_corner = match &kind {
             PopoverKind::PullPicker
             | PopoverKind::Settings
             | PopoverKind::PushPicker
@@ -1885,12 +1902,58 @@ impl PopoverHost {
             PopoverKind::AppMenu => app_menu::panel(self, cx),
         };
 
-        let offset_y = if is_app_menu {
+        let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
+        let gap_y = if is_app_menu {
             px(40.0)
-        } else if matches!(anchor_corner, Corner::TopRight) {
+        } else if is_right {
             px(10.0)
         } else {
             px(8.0)
+        };
+
+        let window_h = window.window_bounds().get_bounds().size.height;
+        let margin_y = px(16.0);
+
+        let mut context_menu_max_panel_h: Option<Pixels> = None;
+        if is_context_menu {
+            let below = (window_h - margin_y) - (anchor.y + gap_y);
+            let above = (anchor.y - gap_y) - margin_y;
+            if below < px(240.0) && above > below {
+                anchor_corner = match anchor_corner {
+                    Corner::TopLeft => Corner::BottomLeft,
+                    Corner::TopRight => Corner::BottomRight,
+                    corner => corner,
+                };
+            }
+
+            let popover_edge_y = match anchor_corner {
+                Corner::TopLeft | Corner::TopRight => anchor.y + gap_y,
+                Corner::BottomLeft | Corner::BottomRight => anchor.y - gap_y,
+            };
+            let max_popover_h = match anchor_corner {
+                Corner::TopLeft | Corner::TopRight => (window_h - margin_y) - popover_edge_y,
+                Corner::BottomLeft | Corner::BottomRight => popover_edge_y - margin_y,
+            }
+            .max(px(0.0));
+            let max_panel_h = (max_popover_h - px(12.0)).max(px(0.0));
+            context_menu_max_panel_h = Some(max_panel_h);
+        }
+
+        let offset_y = match anchor_corner {
+            Corner::TopLeft | Corner::TopRight => gap_y,
+            Corner::BottomLeft | Corner::BottomRight => -gap_y,
+        };
+
+        let panel = if let Some(max_panel_h) = context_menu_max_panel_h {
+            div()
+                .id("context_menu_scroll")
+                .min_h(px(0.0))
+                .max_h(max_panel_h)
+                .overflow_y_scroll()
+                .child(panel)
+                .into_any_element()
+        } else {
+            panel.into_any_element()
         };
 
         anchored()

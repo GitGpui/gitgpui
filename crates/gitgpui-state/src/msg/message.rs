@@ -18,6 +18,9 @@ pub enum Msg {
     CloseRepo {
         repo_id: RepoId,
     },
+    DismissRepoError {
+        repo_id: RepoId,
+    },
     SetActiveRepo {
         repo_id: RepoId,
     },

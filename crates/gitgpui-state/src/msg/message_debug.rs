@@ -16,6 +16,10 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("CloseRepo")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::DismissRepoError { repo_id } => f
+                .debug_struct("DismissRepoError")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::SetActiveRepo { repo_id } => f
                 .debug_struct("SetActiveRepo")
                 .field("repo_id", repo_id)
