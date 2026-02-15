@@ -107,8 +107,8 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     let repo_id = repo_state.id;
     let mut effects = Vec::new();
 
-    // Keep ordering stable with historical `refresh_effects` to minimize behavioral churn and
-    // make the refresh fan-out predictable.
+    // Prioritize UI-critical loads (status + log) early. The executor is a FIFO queue, so this
+    // ordering can materially impact perceived responsiveness when switching repositories.
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::HEAD_BRANCH)
@@ -120,6 +120,24 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
         .request(RepoLoadsInFlight::UPSTREAM_DIVERGENCE)
     {
         effects.push(Effect::LoadUpstreamDivergence { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STATUS)
+    {
+        effects.push(Effect::LoadStatus { repo_id });
+    }
+    if repo_state
+        .loads_in_flight
+        .request_log(repo_state.history_scope, 200, None)
+    {
+        repo_state.log_loading_more = false;
+        effects.push(Effect::LoadLog {
+            repo_id,
+            scope: repo_state.history_scope,
+            limit: 200,
+            cursor: None,
+        });
     }
     if repo_state
         .loads_in_flight
@@ -144,24 +162,9 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::STATUS)
-    {
-        effects.push(Effect::LoadStatus { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
         .request(RepoLoadsInFlight::STASHES)
     {
         effects.push(Effect::LoadStashes { repo_id, limit: 50 });
-    }
-    if repo_state
-        .loads_in_flight
-        .request(RepoLoadsInFlight::REFLOG)
-    {
-        effects.push(Effect::LoadReflog {
-            repo_id,
-            limit: 200,
-        });
     }
     if repo_state
         .loads_in_flight
@@ -174,18 +177,6 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
         .request(RepoLoadsInFlight::MERGE_COMMIT_MESSAGE)
     {
         effects.push(Effect::LoadMergeCommitMessage { repo_id });
-    }
-    if repo_state
-        .loads_in_flight
-        .request_log(repo_state.history_scope, 200, None)
-    {
-        repo_state.log_loading_more = false;
-        effects.push(Effect::LoadLog {
-            repo_id,
-            scope: repo_state.history_scope,
-            limit: 200,
-            cursor: None,
-        });
     }
 
     effects

@@ -23,6 +23,13 @@ fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
     }
 }
 
+fn begin_commit_action(state: &mut AppState, repo_id: RepoId) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_add(1);
+        repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_add(1);
+    }
+}
+
 #[cfg(test)]
 pub(super) fn push_diagnostic(
     repo_state: &mut crate::model::RepoState,
@@ -174,8 +181,12 @@ pub(super) fn reduce(
             contents,
             stage,
         } => actions_emit_effects::save_worktree_file(repo_id, path, contents, stage),
-        Msg::Commit { repo_id, message } => actions_emit_effects::commit(repo_id, message),
+        Msg::Commit { repo_id, message } => {
+            begin_commit_action(state, repo_id);
+            actions_emit_effects::commit(repo_id, message)
+        }
         Msg::CommitAmend { repo_id, message } => {
+            begin_commit_action(state, repo_id);
             actions_emit_effects::commit_amend(repo_id, message)
         }
         Msg::FetchAll { repo_id } => actions_emit_effects::fetch_all(repos, state, repo_id),

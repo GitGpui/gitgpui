@@ -69,6 +69,8 @@ impl DetailsPaneView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             hash_loadable_shared(&repo.status, &mut hasher);
+            repo.local_actions_in_flight.hash(&mut hasher);
+            repo.commit_in_flight.hash(&mut hasher);
             repo.selected_commit.hash(&mut hasher);
             hash_loadable_shared(&repo.commit_details, &mut hasher);
 

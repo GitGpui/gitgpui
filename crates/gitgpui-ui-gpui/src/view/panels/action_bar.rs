@@ -20,6 +20,15 @@ impl ActionBarView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.spec.workdir.hash(&mut hasher);
+            match &repo.open {
+                Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                Loadable::Loading => 1u8.hash(&mut hasher),
+                Loadable::Ready(()) => 2u8.hash(&mut hasher),
+                Loadable::Error(err) => {
+                    3u8.hash(&mut hasher);
+                    err.hash(&mut hasher);
+                }
+            }
             repo.head_branch_rev.hash(&mut hasher);
             match &repo.head_branch {
                 Loadable::NotLoaded => 0u8.hash(&mut hasher),
@@ -51,6 +60,9 @@ impl ActionBarView {
 
             repo.pull_in_flight.hash(&mut hasher);
             repo.push_in_flight.hash(&mut hasher);
+            repo.loads_in_flight.any_in_flight().hash(&mut hasher);
+            repo.local_actions_in_flight.hash(&mut hasher);
+            repo.commit_in_flight.hash(&mut hasher);
 
             let can_stash = match &repo.status {
                 Loadable::Ready(status) => !status.staged.is_empty() || !status.unstaged.is_empty(),
@@ -225,6 +237,14 @@ impl Render for ActionBarView {
             })
             .unwrap_or(false);
 
+        let repo_busy = self.active_repo().is_some_and(|repo| {
+            matches!(repo.open, Loadable::Loading)
+                || repo.loads_in_flight.any_in_flight()
+                || repo.local_actions_in_flight > 0
+                || repo.pull_in_flight > 0
+                || repo.push_in_flight > 0
+        });
+
         let repo_picker = div()
             .id("repo_picker")
             .debug_selector(|| "repo_picker".to_string())
@@ -244,10 +264,31 @@ impl Render for ActionBarView {
             )
             .child(
                 div()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
-                    .line_clamp(1)
-                    .child(repo_title),
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w(px(0.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(repo_title),
+                    )
+                    .when(repo_busy, |d| {
+                        d.child(
+                            spinner(
+                                ("repo_busy_spinner", active_repo_key),
+                                with_alpha(
+                                    theme.colors.text,
+                                    if theme.is_dark { 0.72 } else { 0.62 },
+                                ),
+                            )
+                            .into_any_element(),
+                        )
+                    }),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);

@@ -22,6 +22,23 @@ impl RepoTabsBarView {
             repo.id.hash(&mut hasher);
             repo.spec.workdir.hash(&mut hasher);
         }
+        if let Some(repo_id) = state.active_repo
+            && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
+        {
+            match &repo.open {
+                Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                Loadable::Loading => 1u8.hash(&mut hasher),
+                Loadable::Ready(()) => 2u8.hash(&mut hasher),
+                Loadable::Error(err) => {
+                    3u8.hash(&mut hasher);
+                    err.hash(&mut hasher);
+                }
+            }
+            repo.loads_in_flight.any_in_flight().hash(&mut hasher);
+            repo.local_actions_in_flight.hash(&mut hasher);
+            repo.pull_in_flight.hash(&mut hasher);
+            repo.push_in_flight.hash(&mut hasher);
+        }
         hasher.finish()
     }
 
@@ -105,11 +122,32 @@ impl Render for RepoTabsBarView {
         let active = self.active_repo_id();
         let repos_len = self.state.repos.len();
         let active_ix = active.and_then(|id| self.state.repos.iter().position(|r| r.id == id));
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            gpui::svg()
+                .path("icons/spinner.svg")
+                .w(px(12.0))
+                .h(px(12.0))
+                .text_color(color)
+                .with_animation(
+                    id,
+                    Animation::new(std::time::Duration::from_millis(850)).repeat(),
+                    |svg, delta| {
+                        svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
+        };
 
         let mut bar = zed::TabBar::new("repo_tab_bar");
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
             let is_active = Some(repo_id) == active;
+            let is_busy = matches!(repo.open, Loadable::Loading)
+                || repo.loads_in_flight.any_in_flight()
+                || repo.local_actions_in_flight > 0
+                || repo.pull_in_flight > 0
+                || repo.push_in_flight > 0;
             let show_close = self.hovered_repo_tab == Some(repo_id);
             let label: SharedString = repo
                 .spec
@@ -178,8 +216,31 @@ impl Render for RepoTabsBarView {
                 tab = tab.end_slot(close_button);
             }
 
+            let tab_label = div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_sm()
+                        .line_clamp(1)
+                        .child(label),
+                )
+                .when(is_active && is_busy, |d| {
+                    d.child(
+                        spinner(
+                            ("repo_tab_busy_spinner", repo_id.0),
+                            with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 }),
+                        )
+                        .into_any_element(),
+                    )
+                });
+
             let tab = tab
-                .child(div().text_sm().line_clamp(1).child(label))
+                .child(tab_label)
                 .render(theme)
                 .on_hover(cx.listener({
                     move |this, hovering: &bool, _w, cx| {

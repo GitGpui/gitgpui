@@ -758,6 +758,37 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
         let theme = self.theme;
+        let commit_in_flight = self
+            .active_repo()
+            .is_some_and(|repo| repo.commit_in_flight > 0);
+        let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
+        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+            gpui::svg()
+                .path("icons/spinner.svg")
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(color)
+                .with_animation(
+                    id,
+                    gpui::Animation::new(std::time::Duration::from_millis(850)).repeat(),
+                    |svg, delta| {
+                        svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
+        };
+        let button_slot = |spinner_id: &'static str, loading: bool| {
+            if loading {
+                spinner(
+                    (spinner_id, repo_key),
+                    with_alpha(theme.colors.text, if theme.is_dark { 0.92 } else { 0.80 }),
+                )
+                .into_any_element()
+            } else {
+                div().w(px(14.0)).h(px(14.0)).into_any_element()
+            }
+        };
         if let Some(message) =
             self.active_repo()
                 .and_then(|repo| match &repo.merge_commit_message {
@@ -797,8 +828,12 @@ impl DetailsPaneView {
                             .gap_2()
                             .child(
                                 zed::Button::new("amend", "Amend")
+                                    .start_slot(button_slot(
+                                        "commit_amend_spinner",
+                                        commit_in_flight,
+                                    ))
                                     .style(zed::ButtonStyle::Outlined)
-                                    .disabled(!can_amend)
+                                    .disabled(!can_amend || commit_in_flight)
                                     .on_click(theme, cx, |this, _e, _w, cx| {
                                         let Some(repo_id) = this.active_repo_id() else {
                                             return;
@@ -833,8 +868,9 @@ impl DetailsPaneView {
                             )
                             .child(
                                 zed::Button::new("commit", "Commit")
+                                    .start_slot(button_slot("commit_spinner", commit_in_flight))
                                     .style(zed::ButtonStyle::Filled)
-                                    .disabled(!can_commit)
+                                    .disabled(!can_commit || commit_in_flight)
                                     .on_click(theme, cx, |this, _e, _w, cx| {
                                         let Some(repo_id) = this.active_repo_id() else {
                                             return;

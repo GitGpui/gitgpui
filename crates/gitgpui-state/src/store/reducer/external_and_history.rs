@@ -21,7 +21,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.log = Loadable::Loading;
     repo_state.log_loading_more = false;
     repo_state.set_stashes(Loadable::Loading);
-    repo_state.reflog = Loadable::Loading;
+    repo_state.reflog = Loadable::NotLoaded;
     repo_state.rebase_in_progress = Loadable::Loading;
     repo_state.merge_commit_message = Loadable::Loading;
     repo_state.file_history_path = None;

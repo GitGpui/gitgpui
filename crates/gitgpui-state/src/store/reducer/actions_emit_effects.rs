@@ -333,6 +333,8 @@ pub(super) fn commit_finished(
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
+        repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
         match result {
             Ok(()) => {
                 repo_state.last_error = None;
@@ -367,6 +369,8 @@ pub(super) fn commit_amend_finished(
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
+        repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
         match result {
             Ok(()) => {
                 repo_state.last_error = None;

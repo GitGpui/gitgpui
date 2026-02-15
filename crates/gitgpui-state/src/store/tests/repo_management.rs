@@ -369,7 +369,7 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.status.is_loading());
     assert!(repo_state.log.is_loading());
     assert!(repo_state.stashes.is_loading());
-    assert!(repo_state.reflog.is_loading());
+    assert!(matches!(repo_state.reflog, Loadable::NotLoaded));
     assert!(repo_state.upstream_divergence.is_loading());
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
@@ -380,16 +380,15 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         [
             Effect::LoadHeadBranch { .. },
             Effect::LoadUpstreamDivergence { .. },
+            Effect::LoadStatus { .. },
+            Effect::LoadLog { .. },
             Effect::LoadBranches { .. },
             Effect::LoadTags { .. },
             Effect::LoadRemotes { .. },
             Effect::LoadRemoteBranches { .. },
-            Effect::LoadStatus { .. },
             Effect::LoadStashes { .. },
-            Effect::LoadReflog { .. },
             Effect::LoadRebaseState { .. },
             Effect::LoadMergeCommitMessage { .. },
-            Effect::LoadLog { .. }
         ]
     ));
 }

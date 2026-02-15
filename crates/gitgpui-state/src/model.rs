@@ -38,6 +38,10 @@ impl RepoLoadsInFlight {
         (self.in_flight & flag) != 0
     }
 
+    pub fn any_in_flight(&self) -> bool {
+        self.in_flight != 0
+    }
+
     /// For non-log loads: starts immediately if not in flight, otherwise coalesces by remembering
     /// one pending refresh for the same kind.
     pub fn request(&mut self, flag: u32) -> bool {
@@ -172,6 +176,7 @@ pub struct RepoState {
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
     pub local_actions_in_flight: u32,
+    pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
     pub history_scope: LogScope,
@@ -229,6 +234,7 @@ impl RepoState {
             pull_in_flight: 0,
             push_in_flight: 0,
             local_actions_in_flight: 0,
+            commit_in_flight: 0,
             open: Loadable::Loading,
             history_scope: LogScope::CurrentBranch,
             head_branch: Loadable::NotLoaded,
