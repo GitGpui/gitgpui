@@ -10,9 +10,11 @@ use super::{CONTROL_HEIGHT_PX, CONTROL_PAD_X_PX, CONTROL_PAD_Y_PX, ICON_PAD_X_PX
 pub enum ButtonStyle {
     Filled,
     Outlined,
+    Solid,
     Subtle,
     Transparent,
     Danger,
+    DangerSolid,
 }
 
 pub struct Button {
@@ -106,6 +108,37 @@ impl Button {
                 ),
                 theme.colors.text,
             ),
+            ButtonStyle::Solid => {
+                let bg = theme.colors.surface_bg_elevated;
+                let hover_bg = mix(
+                    bg,
+                    theme.colors.text,
+                    if theme.is_dark { 0.06 } else { 0.03 },
+                );
+                let active_bg = mix(
+                    bg,
+                    theme.colors.text,
+                    if theme.is_dark { 0.10 } else { 0.05 },
+                );
+                (
+                    bg,
+                    hover_bg,
+                    active_bg,
+                    with_alpha(
+                        theme.colors.text_muted,
+                        if theme.is_dark { 0.34 } else { 0.26 },
+                    ),
+                    with_alpha(
+                        theme.colors.text_muted,
+                        if theme.is_dark { 0.55 } else { 0.40 },
+                    ),
+                    with_alpha(
+                        theme.colors.text_muted,
+                        if theme.is_dark { 0.62 } else { 0.46 },
+                    ),
+                    theme.colors.text,
+                )
+            }
             ButtonStyle::Subtle => (
                 transparent,
                 hover_overlay,
@@ -145,6 +178,21 @@ impl Button {
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.52 } else { 0.42 }),
                 theme.colors.text,
             ),
+            ButtonStyle::DangerSolid => {
+                let bg = theme.colors.danger;
+                let black = gpui::rgba(0x000000ff);
+                let hover_bg = mix(bg, black, if theme.is_dark { 0.16 } else { 0.12 });
+                let active_bg = mix(bg, black, if theme.is_dark { 0.26 } else { 0.18 });
+                (
+                    bg,
+                    hover_bg,
+                    active_bg,
+                    mix(bg, black, if theme.is_dark { 0.34 } else { 0.26 }),
+                    mix(bg, black, if theme.is_dark { 0.40 } else { 0.32 }),
+                    mix(bg, black, if theme.is_dark { 0.48 } else { 0.40 }),
+                    gpui::rgba(0xffffffff),
+                )
+            }
         };
 
         let label = self.label.to_string();
@@ -207,4 +255,14 @@ fn looks_like_icon_button(label: &str) -> bool {
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
     color
+}
+
+fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
+    let t = t.clamp(0.0, 1.0);
+    gpui::Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
 }

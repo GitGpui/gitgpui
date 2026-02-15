@@ -174,7 +174,7 @@ impl SidebarPaneView {
 
                     let apply_tooltip: SharedString = "Apply stash".into();
                     let apply_button = zed::Button::new(apply_button_id, "Apply")
-                        .style(zed::ButtonStyle::Outlined)
+                        .style(zed::ButtonStyle::Solid)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::ApplyStash { repo_id, index });
                             cx.notify();
@@ -194,7 +194,7 @@ impl SidebarPaneView {
 
                     let pop_tooltip: SharedString = "Pop stash".into();
                     let pop_button = zed::Button::new(pop_button_id, "Pop")
-                        .style(zed::ButtonStyle::Filled)
+                        .style(zed::ButtonStyle::Solid)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::PopStash { repo_id, index });
                             cx.notify();
@@ -214,7 +214,7 @@ impl SidebarPaneView {
 
                     let drop_tooltip: SharedString = "Drop stash".into();
                     let drop_button = zed::Button::new(drop_button_id, "Drop")
-                        .style(zed::ButtonStyle::Danger)
+                        .style(zed::ButtonStyle::DangerSolid)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::DropStash { repo_id, index });
                             cx.notify();

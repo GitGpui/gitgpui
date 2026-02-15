@@ -303,7 +303,7 @@ fn status_row(
     };
 
     let stage_button = zed::Button::new(format!("stage_btn_{ix}"), stage_label)
-        .style(zed::ButtonStyle::Outlined)
+        .style(zed::ButtonStyle::Solid)
         .on_click(theme, cx, move |this, e, window, cx| {
             cx.stop_propagation();
             this.focus_diff_panel(window, cx);
