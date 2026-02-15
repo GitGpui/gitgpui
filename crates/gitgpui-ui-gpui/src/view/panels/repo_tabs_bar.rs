@@ -266,12 +266,20 @@ impl Render for RepoTabsBarView {
                 .justify_center()
                 .size(px(14.0))
                 .rounded(px(theme.radii.row))
-                .text_xs()
-                .text_color(theme.colors.danger)
                 .cursor_pointer()
                 .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
                 .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
-                .child("✕")
+                .child(
+                    gpui::svg()
+                        .path("icons/generic_close.svg")
+                        .w(px(12.0))
+                        .h(px(12.0))
+                        .with_transformation(gpui::Transformation::translate(point(
+                            px(0.0),
+                            px(0.5),
+                        )))
+                        .text_color(theme.colors.danger),
+                )
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
                     this.hovered_repo_tab = None;

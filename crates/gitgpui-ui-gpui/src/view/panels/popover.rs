@@ -1211,9 +1211,7 @@ impl MainPaneView {
             );
 
         if show_date {
-            let right_fixed = (if show_author { col_author } else { px(0.0) })
-                + col_date
-                + if show_sha { col_sha } else { px(0.0) };
+            let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
             header_with_handles = header_with_handles.child(
                 resize_handle(
                     "history_col_resize_message",
