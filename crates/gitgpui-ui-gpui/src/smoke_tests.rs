@@ -3,7 +3,9 @@ use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, Result};
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
-use gpui::{Decorations, Modifiers, MouseButton, ScrollHandle, Tiling, div, px};
+use gpui::{
+    ClipboardItem, Decorations, KeyBinding, Modifiers, MouseButton, ScrollHandle, Tiling, div, px,
+};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -204,6 +206,62 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
         })
         .unwrap();
     });
+}
+
+#[gpui::test]
+fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("ctrl-a", crate::kit::SelectAll, Some("TextInput")),
+            KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+            KeyBinding::new("ctrl-x", crate::kit::Cut, Some("TextInput")),
+            KeyBinding::new("ctrl-v", crate::kit::Paste, Some("TextInput")),
+            KeyBinding::new(
+                "ctrl-shift-left",
+                crate::kit::SelectWordLeft,
+                Some("TextInput"),
+            ),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello world", cx));
+        });
+    });
+
+    cx.simulate_keystrokes("ctrl-a ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("hello world".into())
+    );
+
+    cx.simulate_keystrokes("ctrl-x");
+    let text = cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(text, "");
+
+    cx.write_to_clipboard(ClipboardItem::new_string("abc".to_string()));
+    cx.simulate_keystrokes("ctrl-v");
+    let text = cx.update(|_window, app| view.read(app).input.read(app).text().to_string());
+    assert_eq!(text, "abc");
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello world", cx));
+        });
+    });
+    cx.simulate_keystrokes("ctrl-shift-left ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("world".into())
+    );
 }
 
 struct TestBackend;

@@ -18,8 +18,12 @@ actions!(
         Delete,
         Left,
         Right,
+        WordLeft,
+        WordRight,
         SelectLeft,
         SelectRight,
+        SelectWordLeft,
+        SelectWordRight,
         SelectAll,
         Home,
         End,
@@ -280,12 +284,36 @@ impl TextInput {
         }
     }
 
+    fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.move_to(self.previous_word_start(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selected_range.start, cx)
+        }
+    }
+
+    fn word_right(&mut self, _: &WordRight, _: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_range.is_empty() {
+            self.move_to(self.next_word_end(self.cursor_offset()), cx);
+        } else {
+            self.move_to(self.selected_range.end, cx)
+        }
+    }
+
     fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.previous_boundary(self.cursor_offset()), cx);
     }
 
     fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
         self.select_to(self.next_boundary(self.cursor_offset()), cx);
+    }
+
+    fn select_word_left(&mut self, _: &SelectWordLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.previous_word_start(self.cursor_offset()), cx);
+    }
+
+    fn select_word_right(&mut self, _: &SelectWordRight, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.next_word_end(self.cursor_offset()), cx);
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
@@ -400,6 +428,86 @@ impl TextInput {
             .grapheme_indices(true)
             .find_map(|(idx, _)| (idx > offset).then_some(idx))
             .unwrap_or(self.content.len())
+    }
+
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
+    }
+
+    fn skip_left_while(
+        s: &str,
+        mut offset: usize,
+        mut predicate: impl FnMut(char) -> bool,
+    ) -> usize {
+        offset = offset.min(s.len());
+        while offset > 0 {
+            let Some((idx, ch)) = s[..offset].char_indices().next_back() else {
+                return 0;
+            };
+            if !predicate(ch) {
+                break;
+            }
+            offset = idx;
+        }
+        offset
+    }
+
+    fn skip_right_while(
+        s: &str,
+        mut offset: usize,
+        mut predicate: impl FnMut(char) -> bool,
+    ) -> usize {
+        offset = offset.min(s.len());
+        while offset < s.len() {
+            let Some(ch) = s[offset..].chars().next() else {
+                break;
+            };
+            if !predicate(ch) {
+                break;
+            }
+            offset += ch.len_utf8();
+        }
+        offset
+    }
+
+    fn previous_word_start(&self, offset: usize) -> usize {
+        let s = self.content.as_ref();
+        let mut offset = offset.min(s.len());
+
+        // Skip any whitespace to the left of the cursor.
+        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+
+        // Skip punctuation/symbols (e.g. '.' '/' '-') so word navigation doesn't get stuck on them.
+        offset = Self::skip_left_while(s, offset, |ch| {
+            !ch.is_whitespace() && !Self::is_word_char(ch)
+        });
+
+        // Skip any whitespace again, then skip the word itself.
+        offset = Self::skip_left_while(s, offset, |ch| ch.is_whitespace());
+        Self::skip_left_while(s, offset, Self::is_word_char)
+    }
+
+    fn next_word_end(&self, offset: usize) -> usize {
+        let s = self.content.as_ref();
+        let offset = offset.min(s.len());
+        if offset >= s.len() {
+            return s.len();
+        }
+
+        let Some(ch) = s[offset..].chars().next() else {
+            return s.len();
+        };
+
+        if ch.is_whitespace() {
+            return Self::skip_right_while(s, offset, |ch| ch.is_whitespace());
+        }
+        if Self::is_word_char(ch) {
+            return Self::skip_right_while(s, offset, Self::is_word_char);
+        }
+
+        Self::skip_right_while(s, offset, |ch| {
+            !ch.is_whitespace() && !Self::is_word_char(ch)
+        })
     }
 
     fn on_mouse_down(
@@ -1212,8 +1320,12 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::word_left))
+            .on_action(cx.listener(Self::word_right))
             .on_action(cx.listener(Self::select_left))
             .on_action(cx.listener(Self::select_right))
+            .on_action(cx.listener(Self::select_word_left))
+            .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
             .on_action(cx.listener(Self::end))

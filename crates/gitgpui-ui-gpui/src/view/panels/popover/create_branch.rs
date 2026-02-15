@@ -6,7 +6,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     div()
         .flex()
         .flex_col()
-        .min_w(px(260.0))
+        .w(px(420.0))
         .child(
             div()
                 .px_2()

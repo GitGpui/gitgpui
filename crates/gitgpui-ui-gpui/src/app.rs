@@ -27,6 +27,31 @@ pub fn run(backend: Arc<dyn GitBackend>) {
                 KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
                 KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
                 KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+                // Word navigation (Ctrl on Windows/Linux, Option on macOS)
+                KeyBinding::new("ctrl-left", crate::kit::WordLeft, Some("TextInput")),
+                KeyBinding::new("ctrl-right", crate::kit::WordRight, Some("TextInput")),
+                KeyBinding::new(
+                    "ctrl-shift-left",
+                    crate::kit::SelectWordLeft,
+                    Some("TextInput"),
+                ),
+                KeyBinding::new(
+                    "ctrl-shift-right",
+                    crate::kit::SelectWordRight,
+                    Some("TextInput"),
+                ),
+                KeyBinding::new("alt-left", crate::kit::WordLeft, Some("TextInput")),
+                KeyBinding::new("alt-right", crate::kit::WordRight, Some("TextInput")),
+                KeyBinding::new(
+                    "alt-shift-left",
+                    crate::kit::SelectWordLeft,
+                    Some("TextInput"),
+                ),
+                KeyBinding::new(
+                    "alt-shift-right",
+                    crate::kit::SelectWordRight,
+                    Some("TextInput"),
+                ),
                 KeyBinding::new("shift-left", crate::kit::SelectLeft, Some("TextInput")),
                 KeyBinding::new("shift-right", crate::kit::SelectRight, Some("TextInput")),
                 KeyBinding::new("home", crate::kit::Home, Some("TextInput")),

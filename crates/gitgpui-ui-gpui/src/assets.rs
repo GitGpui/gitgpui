@@ -44,6 +44,9 @@ impl GitGpuiAssets {
             "icons/generic_close.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/generic_close.svg"
             ))),
+            "icons/repo_tab_close.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/repo_tab_close.svg"
+            ))),
             "icons/git_branch.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/git_branch.svg"
             ))),
@@ -78,6 +81,7 @@ impl GitGpuiAssets {
                 "icons/generic_maximize.svg".into(),
                 "icons/generic_restore.svg".into(),
                 "icons/generic_close.svg".into(),
+                "icons/repo_tab_close.svg".into(),
                 "icons/git_branch.svg".into(),
                 "icons/gitgpui_mark.svg".into(),
                 "icons/menu.svg".into(),

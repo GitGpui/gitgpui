@@ -271,13 +271,9 @@ impl Render for RepoTabsBarView {
                 .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
                 .child(
                     gpui::svg()
-                        .path("icons/generic_close.svg")
+                        .path("icons/repo_tab_close.svg")
                         .w(px(12.0))
                         .h(px(12.0))
-                        .with_transformation(gpui::Transformation::translate(point(
-                            px(0.0),
-                            px(0.5),
-                        )))
                         .text_color(theme.colors.danger),
                 )
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
