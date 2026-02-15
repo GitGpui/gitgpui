@@ -223,21 +223,32 @@ impl Render for RepoTabsBarView {
                 .min_w(px(0.0))
                 .child(
                     div()
+                        .w(px(12.0))
+                        .h(px(12.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when(is_active && is_busy, |d| {
+                            d.child(
+                                spinner(
+                                    ("repo_tab_busy_spinner", repo_id.0),
+                                    with_alpha(
+                                        theme.colors.text,
+                                        if theme.is_dark { 0.72 } else { 0.62 },
+                                    ),
+                                )
+                                .into_any_element(),
+                            )
+                        }),
+                )
+                .child(
+                    div()
                         .flex_1()
                         .min_w(px(0.0))
                         .text_sm()
                         .line_clamp(1)
                         .child(label),
-                )
-                .when(is_active && is_busy, |d| {
-                    d.child(
-                        spinner(
-                            ("repo_tab_busy_spinner", repo_id.0),
-                            with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 }),
-                        )
-                        .into_any_element(),
-                    )
-                });
+                );
 
             let tab = tab
                 .child(tab_label)

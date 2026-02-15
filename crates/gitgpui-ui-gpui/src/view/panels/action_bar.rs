@@ -270,25 +270,33 @@ impl Render for ActionBarView {
                     .min_w(px(0.0))
                     .child(
                         div()
+                            .w(px(14.0))
+                            .h(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(if repo_busy {
+                                spinner(
+                                    ("repo_busy_spinner", active_repo_key),
+                                    with_alpha(
+                                        theme.colors.text,
+                                        if theme.is_dark { 0.72 } else { 0.62 },
+                                    ),
+                                )
+                                .into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }),
+                    )
+                    .child(
+                        div()
                             .flex_1()
                             .min_w(px(0.0))
                             .text_sm()
                             .text_color(theme.colors.text_muted)
                             .line_clamp(1)
                             .child(repo_title),
-                    )
-                    .when(repo_busy, |d| {
-                        d.child(
-                            spinner(
-                                ("repo_busy_spinner", active_repo_key),
-                                with_alpha(
-                                    theme.colors.text,
-                                    if theme.is_dark { 0.72 } else { 0.62 },
-                                ),
-                            )
-                            .into_any_element(),
-                        )
-                    }),
+                    ),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);

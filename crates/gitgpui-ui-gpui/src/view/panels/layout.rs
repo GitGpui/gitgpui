@@ -762,12 +762,20 @@ impl DetailsPaneView {
             .active_repo()
             .is_some_and(|repo| repo.commit_in_flight > 0);
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
+        let icon_color = theme.colors.accent;
+        let icon = |path: &'static str| {
+            gpui::svg()
+                .path(path)
+                .w(px(14.0))
+                .h(px(14.0))
+                .text_color(icon_color)
+        };
+        let spinner = |id: (&'static str, u64)| {
             gpui::svg()
                 .path("icons/spinner.svg")
                 .w(px(14.0))
                 .h(px(14.0))
-                .text_color(color)
+                .text_color(icon_color)
                 .with_animation(
                     id,
                     gpui::Animation::new(std::time::Duration::from_millis(850)).repeat(),
@@ -777,17 +785,6 @@ impl DetailsPaneView {
                         )))
                     },
                 )
-        };
-        let button_slot = |spinner_id: &'static str, loading: bool| {
-            if loading {
-                spinner(
-                    (spinner_id, repo_key),
-                    with_alpha(theme.colors.text, if theme.is_dark { 0.92 } else { 0.80 }),
-                )
-                .into_any_element()
-            } else {
-                div().w(px(14.0)).h(px(14.0)).into_any_element()
-            }
         };
         if let Some(message) =
             self.active_repo()
@@ -802,9 +799,6 @@ impl DetailsPaneView {
                     .update(cx, |i, cx| i.set_text(message, cx));
             }
         }
-        let can_amend = self.active_repo().is_some_and(
-            |repo| matches!(&repo.log, Loadable::Ready(page) if !page.commits.is_empty()),
-        );
         div()
             .flex()
             .flex_col()
@@ -822,86 +816,44 @@ impl DetailsPaneView {
                             .child("Commit staged changes"),
                     )
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                zed::Button::new("amend", "Amend")
-                                    .start_slot(button_slot(
-                                        "commit_amend_spinner",
-                                        commit_in_flight,
-                                    ))
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .disabled(!can_amend || commit_in_flight)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        let Some(repo_id) = this.active_repo_id() else {
-                                            return;
-                                        };
-                                        let message = this
-                                            .commit_message_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        if message.is_empty() {
-                                            return;
-                                        }
-                                        this.store.dispatch(Msg::CommitAmend { repo_id, message });
-                                        this.commit_message_input
-                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
+                        div().flex().items_center().gap_2().child(
+                            zed::Button::new("commit", "Commit")
+                                .start_slot(if commit_in_flight {
+                                    spinner(("commit_spinner", repo_key)).into_any_element()
+                                } else {
+                                    icon("icons/check.svg").into_any_element()
+                                })
+                                .style(zed::ButtonStyle::Filled)
+                                .disabled(!can_commit || commit_in_flight)
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    let Some(repo_id) = this.active_repo_id() else {
+                                        return;
+                                    };
+                                    let message = this
+                                        .commit_message_input
+                                        .read_with(cx, |i, _| i.text().trim().to_string());
+                                    if message.is_empty() {
+                                        return;
+                                    }
+                                    this.store.dispatch(Msg::Commit { repo_id, message });
+                                    this.commit_message_input
+                                        .update(cx, |i, cx| i.set_text(String::new(), cx));
+                                    cx.notify();
+                                })
+                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                    let text: SharedString = "Commit staged changes".into();
+                                    let mut changed = false;
+                                    if *hovering {
+                                        changed |= this
+                                            .set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                    } else {
+                                        changed |= this.clear_tooltip_if_matches(&text, cx);
+                                    }
+                                    if changed {
                                         cx.notify();
-                                    })
-                                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                        let text: SharedString =
-                                            "Amend last commit (message + staged changes)".into();
-                                        let mut changed = false;
-                                        if *hovering {
-                                            changed |= this.set_tooltip_text_if_changed(
-                                                Some(text.clone()),
-                                                cx,
-                                            );
-                                        } else {
-                                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                                        }
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    })),
-                            )
-                            .child(
-                                zed::Button::new("commit", "Commit")
-                                    .start_slot(button_slot("commit_spinner", commit_in_flight))
-                                    .style(zed::ButtonStyle::Filled)
-                                    .disabled(!can_commit || commit_in_flight)
-                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                        let Some(repo_id) = this.active_repo_id() else {
-                                            return;
-                                        };
-                                        let message = this
-                                            .commit_message_input
-                                            .read_with(cx, |i, _| i.text().trim().to_string());
-                                        if message.is_empty() {
-                                            return;
-                                        }
-                                        this.store.dispatch(Msg::Commit { repo_id, message });
-                                        this.commit_message_input
-                                            .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                        cx.notify();
-                                    })
-                                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                        let text: SharedString = "Commit staged changes".into();
-                                        let mut changed = false;
-                                        if *hovering {
-                                            changed |= this.set_tooltip_text_if_changed(
-                                                Some(text.clone()),
-                                                cx,
-                                            );
-                                        } else {
-                                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                                        }
-                                        if changed {
-                                            cx.notify();
-                                        }
-                                    })),
-                            ),
+                                    }
+                                })),
+                        ),
                     ),
             )
     }
