@@ -1,5 +1,8 @@
 use super::*;
-use gpui::{Bounds, ContentMask, DispatchPhase, MouseButton, fill, point, px, size};
+use gpui::{
+    Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, fill, point, px,
+    size,
+};
 use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 
@@ -134,9 +137,15 @@ pub(super) fn history_commit_row_canvas(
                     bounds.size.height,
                 ),
             );
-            (inner, pad)
+            let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+            (inner, pad, hitbox)
         },
-        move |bounds, (inner, _pad), window, cx| {
+        move |bounds, (inner, _pad, hitbox), window, cx| {
+            if hitbox.is_hovered(window) {
+                window.paint_quad(fill(bounds, theme.colors.hover));
+            }
+            window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+
             let base_style = window.text_style();
             let sm_font = base_style.font_size.to_pixels(window.rem_size());
             let sm_line_height = base_style

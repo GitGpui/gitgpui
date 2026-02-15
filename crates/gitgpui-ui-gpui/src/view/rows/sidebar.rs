@@ -59,6 +59,9 @@ impl SidebarPaneView {
                         .items_center()
                         .gap_1()
                         .bg(theme.colors.surface_bg_elevated)
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| {
                             d.border_t_1().border_color(theme.colors.border)
                         })
@@ -81,6 +84,15 @@ impl SidebarPaneView {
                             if changed {
                                 cx.notify();
                             }
+                        }))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.open_popover_at(
+                                PopoverKind::BranchSectionMenu { repo_id, section },
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                            cx.notify();
                         }))
                         .on_mouse_down(
                             MouseButton::Right,
@@ -547,6 +559,7 @@ impl DetailsPaneView {
                     .px_2()
                     .w_full()
                     .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
                     .child(

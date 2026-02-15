@@ -253,6 +253,7 @@ fn history_table_row(
         .relative()
         .h(px(HISTORY_ROW_HEIGHT_PX))
         .w_full()
+        .cursor(CursorStyle::PointingHand)
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
@@ -365,7 +366,8 @@ fn working_tree_summary_history_row(
         },
     )
     .w_full()
-    .h_full();
+    .h_full()
+    .cursor(CursorStyle::PointingHand);
 
     let mut row = div()
         .id(("history_worktree_summary", repo_id.0))
@@ -374,6 +376,7 @@ fn working_tree_summary_history_row(
         .w_full()
         .items_center()
         .px_2()
+        .cursor(CursorStyle::PointingHand)
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
         .child(
