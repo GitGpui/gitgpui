@@ -336,6 +336,13 @@ impl MainPaneView {
                                         .into_any_element()
                                 }
                                 DiffViewMode::Split => {
+                                    self.sync_diff_split_vertical_scroll();
+                                    let right_scroll_handle = self
+                                        .diff_split_right_scroll
+                                        .0
+                                        .borrow()
+                                        .base_handle
+                                        .clone();
                                     let count = self.diff_visible_indices.len();
                                     let left = uniform_list(
                                         "diff_split_left",
@@ -355,7 +362,7 @@ impl MainPaneView {
                                     )
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone())
+                                    .track_scroll(self.diff_split_right_scroll.clone())
                                     .with_horizontal_sizing_behavior(
                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                     );
@@ -506,18 +513,36 @@ impl MainPaneView {
                                                 .flex()
                                                 .child(
                                                     div()
+                                                        .relative()
                                                         .w(left_w)
                                                         .min_w(px(0.0))
                                                         .h_full()
-                                                        .child(left),
+                                                        .child(left)
+                                                        .child(
+                                                            zed::Scrollbar::horizontal(
+                                                                "diff_split_left_hscrollbar",
+                                                                scroll_handle.clone(),
+                                                            )
+                                                            .always_visible()
+                                                            .render(theme),
+                                                        ),
                                                 )
                                                 .child(resize_handle("diff_split_resize_handle_body"))
                                                 .child(
                                                     div()
+                                                        .relative()
                                                         .w(right_w)
                                                         .min_w(px(0.0))
                                                         .h_full()
-                                                        .child(right),
+                                                        .child(right)
+                                                        .child(
+                                                            zed::Scrollbar::horizontal(
+                                                                "diff_split_right_hscrollbar",
+                                                                right_scroll_handle,
+                                                            )
+                                                            .always_visible()
+                                                            .render(theme),
+                                                        ),
                                                 ),
                                         )
                                         .child(
@@ -526,14 +551,6 @@ impl MainPaneView {
                                                 scroll_handle.clone(),
                                             )
                                             .markers(markers)
-                                            .always_visible()
-                                            .render(theme),
-                                        )
-                                        .child(
-                                            zed::Scrollbar::horizontal(
-                                                "diff_hscrollbar",
-                                                scroll_handle,
-                                            )
                                             .always_visible()
                                             .render(theme),
                                         )
@@ -922,33 +939,6 @@ impl MainPaneView {
                         })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString = "Split diff view (Alt+S)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    zed::Button::new("diff_wrap", "Wrap")
-                        .style(if self.diff_word_wrap {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_word_wrap = !this.diff_word_wrap;
-                            let handle = this.diff_scroll.0.borrow().base_handle.clone();
-                            let offset = handle.offset();
-                            handle.set_offset(point(px(0.0), offset.y));
-                            cx.notify();
-                        })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Toggle word wrap (Alt+W)".into();
                             let mut changed = false;
                             if *hovering {
                                 changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
@@ -2009,6 +1999,13 @@ impl MainPaneView {
                                                 .into_any_element()
                                         }
                                         DiffViewMode::Split => {
+                                            self.sync_diff_split_vertical_scroll();
+                                            let right_scroll_handle = self
+                                                .diff_split_right_scroll
+                                                .0
+                                                .borrow()
+                                                .base_handle
+                                                .clone();
                                             let count = self.diff_visible_indices.len();
                                             let left = uniform_list(
                                                 "diff_split_left",
@@ -2028,7 +2025,7 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .track_scroll(self.diff_scroll.clone())
+                                            .track_scroll(self.diff_split_right_scroll.clone())
                                             .with_horizontal_sizing_behavior(
                                                 gpui::ListHorizontalSizingBehavior::Unconstrained,
                                             );
@@ -2197,20 +2194,38 @@ impl MainPaneView {
                                                         .flex()
                                                         .child(
                                                             div()
+                                                                .relative()
                                                                 .w(left_w)
                                                                 .min_w(px(0.0))
                                                                 .h_full()
-                                                                .child(left),
+                                                                .child(left)
+                                                                .child(
+                                                                    zed::Scrollbar::horizontal(
+                                                                        "diff_split_left_hscrollbar",
+                                                                        scroll_handle.clone(),
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                ),
                                                         )
                                                         .child(resize_handle(
                                                             "diff_split_resize_handle_body",
                                                         ))
                                                         .child(
                                                             div()
+                                                                .relative()
                                                                 .w(right_w)
                                                                 .min_w(px(0.0))
                                                                 .h_full()
-                                                                .child(right),
+                                                                .child(right)
+                                                                .child(
+                                                                    zed::Scrollbar::horizontal(
+                                                                        "diff_split_right_hscrollbar",
+                                                                        right_scroll_handle,
+                                                                    )
+                                                                    .always_visible()
+                                                                    .render(theme),
+                                                                ),
                                                         ),
                                                 )
                                                 .child(
@@ -2219,14 +2234,6 @@ impl MainPaneView {
                                                         scroll_handle.clone(),
                                                     )
                                                     .markers(markers)
-                                                    .always_visible()
-                                                    .render(theme),
-                                                )
-                                                .child(
-                                                    zed::Scrollbar::horizontal(
-                                                        "diff_hscrollbar",
-                                                        scroll_handle,
-                                                    )
                                                     .always_visible()
                                                     .render(theme),
                                                 )
@@ -2510,15 +2517,6 @@ impl MainPaneView {
                                 this.diff_text_segments_cache.clear();
                             }
                             handled = true;
-                        }
-                        "w" => {
-                            if !conflict_resolver_active {
-                                this.diff_word_wrap = !this.diff_word_wrap;
-                                let handle = this.diff_scroll.0.borrow().base_handle.clone();
-                                let offset = handle.offset();
-                                handle.set_offset(point(px(0.0), offset.y));
-                                handled = true;
-                            }
                         }
                         "h" => {
                             let is_file_preview = this.untracked_worktree_preview_path().is_some()

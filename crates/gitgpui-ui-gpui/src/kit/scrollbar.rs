@@ -198,6 +198,7 @@ impl Scrollbar {
                     cx,
                     |_window, _cx| ScrollbarInteractionState::default(),
                 );
+                let current_view = window.current_view();
 
                 let capture_phase = if interaction.read(cx).drag_offset.is_some() {
                     DispatchPhase::Capture
@@ -400,6 +401,7 @@ impl Scrollbar {
                                 ScrollbarAxis::Horizontal => point(new_offset, current.y),
                             };
                             handle.set_offset(next);
+                            cx.notify(current_view);
                         }
 
                         window.refresh();
@@ -452,6 +454,7 @@ impl Scrollbar {
                             ScrollbarAxis::Horizontal => point(new_offset, current.y),
                         };
                         handle.set_offset(next);
+                        cx.notify(current_view);
                         interaction.update(cx, |state, _cx| state.showing = true);
                         window.refresh();
                         cx.stop_propagation();

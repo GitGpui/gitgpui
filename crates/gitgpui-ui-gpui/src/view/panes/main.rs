@@ -22,6 +22,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_word_wrap: bool,
     pub(in super::super) diff_split_ratio: f32,
     pub(in super::super) diff_split_resize: Option<DiffSplitResizeState>,
+    pub(in super::super) diff_split_last_synced_y: Pixels,
     pub(in super::super) diff_horizontal_min_width: Pixels,
     pub(in super::super) diff_cache_repo_id: Option<RepoId>,
     pub(in super::super) diff_cache_rev: u64,
@@ -123,6 +124,7 @@ pub(in super::super) struct MainPaneView {
 
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) diff_scroll: UniformListScrollHandle,
+    pub(in super::super) diff_split_right_scroll: UniformListScrollHandle,
     pub(in super::super) conflict_resolver_diff_scroll: UniformListScrollHandle,
     pub(in super::super) conflict_resolved_preview_scroll: UniformListScrollHandle,
     pub(in super::super) worktree_preview_scroll: UniformListScrollHandle,
@@ -347,6 +349,7 @@ impl MainPaneView {
             diff_word_wrap: false,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
+            diff_split_last_synced_y: px(0.0),
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -439,6 +442,7 @@ impl MainPaneView {
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
             diff_scroll: UniformListScrollHandle::default(),
+            diff_split_right_scroll: UniformListScrollHandle::default(),
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
@@ -1022,6 +1026,33 @@ impl MainPaneView {
             }
         }
         None
+    }
+
+    pub(in super::super) fn sync_diff_split_vertical_scroll(&mut self) {
+        let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
+        let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
+        let left_offset = left_handle.offset();
+        let right_offset = right_handle.offset();
+
+        if left_offset.y == right_offset.y {
+            self.diff_split_last_synced_y = left_offset.y;
+            return;
+        }
+
+        let last_synced_y = self.diff_split_last_synced_y;
+        let left_changed = left_offset.y != last_synced_y;
+        let right_changed = right_offset.y != last_synced_y;
+
+        let master_y = match (left_changed, right_changed) {
+            (true, false) => left_offset.y,
+            (false, true) => right_offset.y,
+            // If both changed (or neither changed), prefer the left scroll (the vertical scrollbar).
+            _ => left_offset.y,
+        };
+
+        left_handle.set_offset(point(left_offset.x, master_y));
+        right_handle.set_offset(point(right_offset.x, master_y));
+        self.diff_split_last_synced_y = master_y;
     }
 
     pub(in super::super) fn main_pane_content_width(
