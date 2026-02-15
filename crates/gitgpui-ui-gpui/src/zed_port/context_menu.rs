@@ -2,7 +2,7 @@
 
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{Div, ElementId, FontWeight, SharedString, Stateful, div, px};
+use gpui::{CursorStyle, Div, ElementId, FontWeight, SharedString, Stateful, div, px};
 
 use super::CONTROL_HEIGHT_MD_PX;
 
@@ -67,8 +67,11 @@ pub fn context_menu_entry(
         .rounded(px(theme.radii.row))
         .text_color(theme.colors.text)
         .when(selected, |s| s.bg(theme.colors.hover))
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
+        .when(!disabled, |s| {
+            s.cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .active(move |s| s.bg(theme.colors.active))
+        })
         .child(
             div()
                 .flex()
@@ -119,7 +122,9 @@ pub fn context_menu_entry(
     row = row.child(end);
 
     if disabled {
-        row = row.text_color(theme.colors.text_muted);
+        row = row
+            .text_color(theme.colors.text_muted)
+            .cursor(CursorStyle::Arrow);
     }
 
     row

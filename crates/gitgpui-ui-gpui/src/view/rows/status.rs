@@ -360,6 +360,7 @@ fn status_row(
         .h(px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
         .when(selected, |s| s.bg(theme.colors.hover))
         .hover(move |s| s.bg(theme.colors.hover))
         .active(move |s| s.bg(theme.colors.active))
@@ -378,16 +379,38 @@ fn status_row(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                let clicked_path = (*path_for_menu).clone();
+                let clicked_in_multiselect = this
+                    .status_selected_paths_for_area(repo_id, area)
+                    .iter()
+                    .any(|p| p == &clicked_path);
+                if !clicked_in_multiselect {
+                    this.status_selection_apply_click(
+                        repo_id,
+                        area,
+                        clicked_path.clone(),
+                        gpui::Modifiers::default(),
+                        None,
+                    );
+                }
+                this.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: clicked_path.clone(),
+                        area,
+                    },
+                });
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
-                        path: (*path_for_menu).clone(),
+                        path: clicked_path,
                     },
                     e.position,
                     window,
                     cx,
                 );
+                cx.notify();
             }),
         )
         .child(

@@ -474,6 +474,10 @@ pub(super) fn history_commit_row_canvas(
 
                     let is_tag = hit_test_any(&tag_chip_bounds, event.position);
                     view.update(cx, |this, cx| {
+                        this.store.dispatch(Msg::SelectCommit {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        });
                         let kind = if is_tag {
                             PopoverKind::TagMenu {
                                 repo_id,

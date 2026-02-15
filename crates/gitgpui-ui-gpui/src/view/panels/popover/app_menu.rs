@@ -45,10 +45,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .px_2()
             .py_1()
             .when(!disabled, |d| {
-                d.hover(move |s| s.bg(theme.colors.hover))
+                d.cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
             })
-            .when(disabled, |d| d.text_color(theme.colors.text_muted))
+            .when(disabled, |d| {
+                d.text_color(theme.colors.text_muted)
+                    .cursor(CursorStyle::Arrow)
+            })
             .child(label)
     };
 
@@ -57,8 +61,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .debug_selector(|| "app_menu_install_desktop".to_string())
         .px_2()
         .py_1()
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
         .child("Install desktop integration");
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -69,11 +71,17 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             this.popover_anchor = None;
             cx.notify();
         }));
+        install_desktop = install_desktop
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(theme.colors.hover))
+            .active(move |s| s.bg(theme.colors.active));
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
-        install_desktop = install_desktop.text_color(theme.colors.text_muted);
+        install_desktop = install_desktop
+            .text_color(theme.colors.text_muted)
+            .cursor(CursorStyle::Arrow);
     }
 
     div()

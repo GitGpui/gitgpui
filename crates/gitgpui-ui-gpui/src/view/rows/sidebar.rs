@@ -612,6 +612,13 @@ impl DetailsPaneView {
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
+                        this.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::Commit {
+                                commit_id: commit_id_for_menu.clone(),
+                                path: Some(path_for_menu.clone()),
+                            },
+                        });
                         this.open_popover_at(
                             PopoverKind::CommitFileMenu {
                                 repo_id,
@@ -622,6 +629,7 @@ impl DetailsPaneView {
                             window,
                             cx,
                         );
+                        cx.notify();
                     }),
                 );
 
