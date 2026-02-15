@@ -16,6 +16,13 @@ enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenRepo {
+        path: std::path::PathBuf,
+    },
+    ExportPatch {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -93,6 +100,9 @@ enum ContextMenuAction {
         side: gitgpui_core::services::ConflictSide,
     },
     FetchAll {
+        repo_id: RepoId,
+    },
+    UpdateSubmodules {
         repo_id: RepoId,
     },
     Pull {

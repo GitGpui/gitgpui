@@ -77,13 +77,14 @@ pub(super) fn worktrees_loaded(
     result: std::result::Result<Vec<Worktree>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.worktrees = match result {
+        let worktrees = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
+        repo_state.set_worktrees(worktrees);
     }
     Vec::new()
 }
@@ -94,13 +95,14 @@ pub(super) fn submodules_loaded(
     result: std::result::Result<Vec<Submodule>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.submodules = match result {
+        let submodules = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
+        repo_state.set_submodules(submodules);
     }
     Vec::new()
 }
@@ -229,7 +231,7 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.worktrees = Loadable::Loading;
+    repo_state.set_worktrees(Loadable::Loading);
     vec![Effect::LoadWorktrees { repo_id }]
 }
 
@@ -237,7 +239,7 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.submodules = Loadable::Loading;
+    repo_state.set_submodules(Loadable::Loading);
     vec![Effect::LoadSubmodules { repo_id }]
 }
 

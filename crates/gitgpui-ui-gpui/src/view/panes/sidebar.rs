@@ -92,6 +92,16 @@ impl SidebarPaneView {
             return None;
         }
 
+        if let Some(repo) = repo {
+            if matches!(repo.worktrees, Loadable::NotLoaded) {
+                self.store.dispatch(Msg::LoadWorktrees { repo_id: repo.id });
+            }
+            if matches!(repo.submodules, Loadable::NotLoaded) {
+                self.store
+                    .dispatch(Msg::LoadSubmodules { repo_id: repo.id });
+            }
+        }
+
         let (repo_id, fingerprint, rows) = {
             let repo = repo?;
             let fingerprint = BranchSidebarFingerprint::from_repo(repo);

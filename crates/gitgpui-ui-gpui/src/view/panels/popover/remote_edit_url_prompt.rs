@@ -38,6 +38,7 @@ pub(super) fn panel(
             div()
                 .px_2()
                 .pb_1()
+                .w_full()
                 .min_w(px(0.0))
                 .child(this.remote_url_edit_input.clone()),
         )

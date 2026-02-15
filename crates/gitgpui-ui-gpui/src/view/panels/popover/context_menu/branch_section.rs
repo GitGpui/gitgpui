@@ -23,6 +23,15 @@ pub(super) fn model(
 
     if section == BranchSection::Remote {
         items.push(ContextMenuItem::Entry {
+            label: "Add remote…".into(),
+            icon: Some("+".into()),
+            shortcut: None,
+            disabled: false,
+            action: ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RemoteAddPrompt { repo_id },
+            },
+        });
+        items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),
             icon: Some("↓".into()),
             shortcut: Some("F".into()),

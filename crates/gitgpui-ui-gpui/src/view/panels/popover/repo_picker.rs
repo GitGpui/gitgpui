@@ -27,10 +27,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     cx.notify();
                 }),
         )
-        .min_w(px(260.0))
-        .max_w(px(420.0))
+        .min_w(px(420.0))
+        .max_w(px(820.0))
     } else {
-        let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+        let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));
         for repo in this.state.repos.iter() {
             let id = repo.id;
             let label: SharedString = repo.spec.workdir.display().to_string().into();

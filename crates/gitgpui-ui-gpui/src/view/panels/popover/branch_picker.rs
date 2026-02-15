@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let mut menu = div().flex().flex_col().min_w(px(240.0)).max_w(px(420.0));
+    let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));
 
     if let Some(repo) = this.active_repo() {
         match &repo.branches {
@@ -73,6 +73,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     }
 
     zed::context_menu(theme, menu)
-        .min_w(px(240.0))
-        .max_w(px(420.0))
+        .min_w(px(420.0))
+        .max_w(px(820.0))
 }

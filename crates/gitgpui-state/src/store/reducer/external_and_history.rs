@@ -29,8 +29,8 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.blame_path = None;
     repo_state.blame_rev = None;
     repo_state.blame = Loadable::NotLoaded;
-    repo_state.worktrees = Loadable::NotLoaded;
-    repo_state.submodules = Loadable::NotLoaded;
+    repo_state.set_worktrees(Loadable::NotLoaded);
+    repo_state.set_submodules(Loadable::NotLoaded);
     repo_state.selected_commit = None;
     repo_state.commit_details = Loadable::NotLoaded;
 

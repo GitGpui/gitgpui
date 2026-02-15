@@ -37,6 +37,28 @@ pub(super) enum BranchSidebarRow {
         is_head: bool,
         is_upstream: bool,
     },
+    WorktreesHeader {
+        top_border: bool,
+    },
+    WorktreePlaceholder {
+        message: SharedString,
+    },
+    WorktreeItem {
+        path: std::path::PathBuf,
+        label: SharedString,
+        tooltip: SharedString,
+    },
+    SubmodulesHeader {
+        top_border: bool,
+    },
+    SubmodulePlaceholder {
+        message: SharedString,
+    },
+    SubmoduleItem {
+        path: std::path::PathBuf,
+        label: SharedString,
+        tooltip: SharedString,
+    },
     StashHeader {
         top_border: bool,
     },
@@ -144,6 +166,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
     });
 
     let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut remote_section_is_loading_or_error = false;
     match &repo.remote_branches {
         Loadable::Ready(branches) => {
             for branch in branches {
@@ -158,14 +181,14 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
                 section: BranchSection::Remote,
                 message: "Loading".into(),
             });
-            return rows;
+            remote_section_is_loading_or_error = true;
         }
         Loadable::Error(e) => {
             rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Remote,
                 message: e.clone().into(),
             });
-            return rows;
+            remote_section_is_loading_or_error = true;
         }
         Loadable::NotLoaded => {
             if let Loadable::Ready(known) = &repo.remotes {
@@ -176,39 +199,112 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
         }
     }
 
-    if remotes.is_empty() {
-        rows.push(BranchSidebarRow::Placeholder {
-            section: BranchSection::Remote,
-            message: "No remotes".into(),
-        });
-        return rows;
+    if !remote_section_is_loading_or_error {
+        if remotes.is_empty() {
+            rows.push(BranchSidebarRow::Placeholder {
+                section: BranchSection::Remote,
+                message: "No remotes".into(),
+            });
+        } else {
+            for (remote, mut branches) in remotes {
+                branches.sort();
+                branches.dedup();
+                rows.push(BranchSidebarRow::RemoteHeader {
+                    name: remote.clone().into(),
+                });
+                if branches.is_empty() {
+                    continue;
+                }
+
+                let mut tree = SlashTree::default();
+                for branch in branches {
+                    tree.insert(&branch);
+                }
+                let name_prefix = format!("{remote}/");
+                push_slash_tree_rows(
+                    &tree,
+                    &mut rows,
+                    None,
+                    head_upstream_full.as_deref(),
+                    1,
+                    true,
+                    BranchSection::Remote,
+                    &name_prefix,
+                );
+            }
+        }
     }
 
-    for (remote, mut branches) in remotes {
-        branches.sort();
-        branches.dedup();
-        rows.push(BranchSidebarRow::RemoteHeader {
-            name: remote.clone().into(),
-        });
-        if branches.is_empty() {
-            continue;
-        }
+    rows.push(BranchSidebarRow::SectionSpacer);
+    rows.push(BranchSidebarRow::WorktreesHeader { top_border: true });
 
-        let mut tree = SlashTree::default();
-        for branch in branches {
-            tree.insert(&branch);
+    match &repo.worktrees {
+        Loadable::Ready(worktrees) => {
+            let workdir = repo.spec.workdir.clone();
+            let other_worktrees = worktrees.iter().filter(|w| w.path != workdir);
+            let mut any = false;
+            for worktree in other_worktrees {
+                any = true;
+                let label: SharedString = if let Some(branch) = &worktree.branch {
+                    format!("{branch}  {}", worktree.path.display()).into()
+                } else if worktree.detached {
+                    format!("(detached)  {}", worktree.path.display()).into()
+                } else {
+                    worktree.path.display().to_string().into()
+                };
+                let tooltip: SharedString = worktree.path.display().to_string().into();
+                rows.push(BranchSidebarRow::WorktreeItem {
+                    path: worktree.path.clone(),
+                    label,
+                    tooltip,
+                });
+            }
+            if !any {
+                rows.push(BranchSidebarRow::WorktreePlaceholder {
+                    message: "No worktrees".into(),
+                });
+            }
         }
-        let name_prefix = format!("{remote}/");
-        push_slash_tree_rows(
-            &tree,
-            &mut rows,
-            None,
-            head_upstream_full.as_deref(),
-            1,
-            true,
-            BranchSection::Remote,
-            &name_prefix,
-        );
+        Loadable::Loading => rows.push(BranchSidebarRow::WorktreePlaceholder {
+            message: "Loading".into(),
+        }),
+        Loadable::NotLoaded => rows.push(BranchSidebarRow::WorktreePlaceholder {
+            message: "Not loaded".into(),
+        }),
+        Loadable::Error(e) => rows.push(BranchSidebarRow::WorktreePlaceholder {
+            message: e.clone().into(),
+        }),
+    }
+
+    rows.push(BranchSidebarRow::SectionSpacer);
+    rows.push(BranchSidebarRow::SubmodulesHeader { top_border: true });
+
+    match &repo.submodules {
+        Loadable::Ready(submodules) if submodules.is_empty() => {
+            rows.push(BranchSidebarRow::SubmodulePlaceholder {
+                message: "No submodules".into(),
+            });
+        }
+        Loadable::Ready(submodules) => {
+            for submodule in submodules {
+                let label: SharedString = submodule.path.display().to_string().into();
+                let tooltip: SharedString = submodule.path.display().to_string().into();
+                rows.push(BranchSidebarRow::SubmoduleItem {
+                    path: submodule.path.clone(),
+                    label,
+                    tooltip,
+                });
+            }
+        }
+        Loadable::Loading => rows.push(BranchSidebarRow::SubmodulePlaceholder {
+            message: "Loading".into(),
+        }),
+        Loadable::NotLoaded => rows.push(BranchSidebarRow::SubmodulePlaceholder {
+            message: "Not loaded".into(),
+        }),
+        Loadable::Error(e) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
+            message: e.clone().into(),
+        }),
     }
 
     rows.push(BranchSidebarRow::SectionSpacer);

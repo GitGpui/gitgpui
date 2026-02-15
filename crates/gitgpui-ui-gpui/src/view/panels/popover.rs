@@ -421,6 +421,11 @@ impl PopoverHost {
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
                 | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::WorktreeSectionMenu { .. }
+                | PopoverKind::WorktreeMenu { .. }
+                | PopoverKind::SubmoduleSectionMenu { .. }
+                | PopoverKind::SubmoduleMenu { .. }
                 | PopoverKind::CommitFileMenu { .. }
                 | PopoverKind::TagMenu { .. }
         );
@@ -529,11 +534,21 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::RemoteEditUrlPrompt { .. } => {
+                PopoverKind::RemoteEditUrlPrompt { repo_id, name, .. } => {
                     let theme = self.theme;
                     let text = self
-                        .remote_url_edit_input
-                        .read_with(cx, |i, _| i.text().to_string());
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == *repo_id)
+                        .and_then(|r| match &r.remotes {
+                            Loadable::Ready(remotes) => remotes
+                                .iter()
+                                .find(|remote| remote.name.as_str() == name.as_str())
+                                .and_then(|remote| remote.url.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
                     self.remote_url_edit_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text(text, cx);
@@ -1394,6 +1409,11 @@ impl PopoverHost {
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
                 | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::WorktreeSectionMenu { .. }
+                | PopoverKind::WorktreeMenu { .. }
+                | PopoverKind::SubmoduleSectionMenu { .. }
+                | PopoverKind::SubmoduleMenu { .. }
                 | PopoverKind::CommitFileMenu { .. }
         );
 
@@ -1912,6 +1932,26 @@ impl PopoverHost {
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             }
+            PopoverKind::RemoteMenu { repo_id, name } => self
+                .context_menu_view(PopoverKind::RemoteMenu { repo_id, name }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::WorktreeSectionMenu { repo_id } => self
+                .context_menu_view(PopoverKind::WorktreeSectionMenu { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::WorktreeMenu { repo_id, path } => self
+                .context_menu_view(PopoverKind::WorktreeMenu { repo_id, path }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::SubmoduleSectionMenu { repo_id } => self
+                .context_menu_view(PopoverKind::SubmoduleSectionMenu { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::SubmoduleMenu { repo_id, path } => self
+                .context_menu_view(PopoverKind::SubmoduleMenu { repo_id, path }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,

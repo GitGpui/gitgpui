@@ -205,7 +205,9 @@ pub struct RepoState {
     pub blame_rev: Option<String>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
     pub worktrees: Loadable<Vec<Worktree>>,
+    pub worktrees_rev: u64,
     pub submodules: Loadable<Vec<Submodule>>,
+    pub submodules_rev: u64,
 
     pub selected_commit: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
@@ -262,7 +264,9 @@ impl RepoState {
             blame_rev: None,
             blame: Loadable::NotLoaded,
             worktrees: Loadable::NotLoaded,
+            worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
+            submodules_rev: 0,
             selected_commit: None,
             commit_details: Loadable::NotLoaded,
             diff_target: None,
@@ -307,6 +311,16 @@ impl RepoState {
     pub(crate) fn set_stashes(&mut self, stashes: Loadable<Vec<StashEntry>>) {
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
+        self.worktrees = worktrees;
+        self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {
+        self.submodules = submodules;
+        self.submodules_rev = self.submodules_rev.wrapping_add(1);
     }
 }
 

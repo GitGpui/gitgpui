@@ -391,6 +391,24 @@ enum PopoverKind {
         repo_id: RepoId,
         name: String,
     },
+    RemoteMenu {
+        repo_id: RepoId,
+        name: String,
+    },
+    WorktreeSectionMenu {
+        repo_id: RepoId,
+    },
+    WorktreeMenu {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    SubmoduleSectionMenu {
+        repo_id: RepoId,
+    },
+    SubmoduleMenu {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     WorktreeAddPrompt {
         repo_id: RepoId,
     },

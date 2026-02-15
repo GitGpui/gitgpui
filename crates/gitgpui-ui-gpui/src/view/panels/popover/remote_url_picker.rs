@@ -57,10 +57,10 @@ pub(super) fn panel(
                     );
                 }),
         )
-        .min_w(px(260.0))
-        .max_w(px(420.0))
+        .min_w(px(420.0))
+        .max_w(px(820.0))
     } else {
-        let mut menu = div().flex().flex_col().min_w(px(260.0)).max_w(px(420.0));
+        let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));
         for (ix, item) in items.into_iter().enumerate() {
             let name = names.get(ix).cloned().unwrap_or_default();
             menu = menu.child(

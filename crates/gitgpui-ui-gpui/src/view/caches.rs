@@ -36,6 +36,8 @@ pub(super) struct BranchSidebarFingerprint {
     branches_rev: u64,
     remotes_rev: u64,
     remote_branches_rev: u64,
+    worktrees_rev: u64,
+    submodules_rev: u64,
     stashes_rev: u64,
 }
 
@@ -46,6 +48,8 @@ impl BranchSidebarFingerprint {
             branches_rev: repo.branches_rev,
             remotes_rev: repo.remotes_rev,
             remote_branches_rev: repo.remote_branches_rev,
+            worktrees_rev: repo.worktrees_rev,
+            submodules_rev: repo.submodules_rev,
             stashes_rev: repo.stashes_rev,
         }
     }
