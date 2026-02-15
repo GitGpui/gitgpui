@@ -10,7 +10,15 @@ pub(in super::super) struct RepoTabsBarView {
     tooltip_host: WeakEntity<TooltipHost>,
 
     hovered_repo_tab: Option<RepoId>,
+    repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
+    repo_tab_spinner_delay_seq: u64,
     notify_fingerprint: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RepoTabSpinnerDelayState {
+    repo_id: RepoId,
+    show_spinner: bool,
 }
 
 impl RepoTabsBarView {
@@ -42,6 +50,14 @@ impl RepoTabsBarView {
         hasher.finish()
     }
 
+    fn is_repo_busy(repo: &RepoState) -> bool {
+        matches!(repo.open, Loadable::Loading)
+            || repo.loads_in_flight.any_in_flight()
+            || repo.local_actions_in_flight > 0
+            || repo.pull_in_flight > 0
+            || repo.push_in_flight > 0
+    }
+
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -57,6 +73,7 @@ impl RepoTabsBarView {
             let next_fingerprint = Self::notify_fingerprint(&next);
 
             this.state = next;
+            this.update_repo_tab_spinner_delay(cx);
 
             if this
                 .hovered_repo_tab
@@ -71,7 +88,7 @@ impl RepoTabsBarView {
             }
         });
 
-        Self {
+        let mut this = Self {
             store,
             state,
             theme,
@@ -79,8 +96,12 @@ impl RepoTabsBarView {
             root_view,
             tooltip_host,
             hovered_repo_tab: None,
+            repo_tab_spinner_delay: None,
+            repo_tab_spinner_delay_seq: 0,
             notify_fingerprint,
-        }
+        };
+        this.update_repo_tab_spinner_delay(cx);
+        this
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -114,6 +135,68 @@ impl RepoTabsBarView {
             .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
         false
     }
+
+    fn update_repo_tab_spinner_delay(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            self.repo_tab_spinner_delay = None;
+            return;
+        };
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            self.repo_tab_spinner_delay = None;
+            return;
+        };
+
+        if !Self::is_repo_busy(repo) {
+            self.repo_tab_spinner_delay = None;
+            return;
+        }
+
+        let same_repo = self
+            .repo_tab_spinner_delay
+            .as_ref()
+            .is_some_and(|s| s.repo_id == repo_id);
+        if same_repo {
+            return;
+        }
+
+        self.repo_tab_spinner_delay_seq = self.repo_tab_spinner_delay_seq.wrapping_add(1);
+        let seq = self.repo_tab_spinner_delay_seq;
+        self.repo_tab_spinner_delay = Some(RepoTabSpinnerDelayState {
+            repo_id,
+            show_spinner: false,
+        });
+
+        cx.spawn(
+            async move |view: WeakEntity<RepoTabsBarView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(100)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.repo_tab_spinner_delay_seq != seq {
+                        return;
+                    }
+                    let Some(active_repo_id) = this.active_repo_id() else {
+                        return;
+                    };
+                    if active_repo_id != repo_id {
+                        return;
+                    }
+                    let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
+                        return;
+                    };
+                    if !Self::is_repo_busy(repo) {
+                        return;
+                    }
+                    if let Some(state) = this.repo_tab_spinner_delay.as_mut()
+                        && state.repo_id == repo_id
+                        && !state.show_spinner
+                    {
+                        state.show_spinner = true;
+                        cx.notify();
+                    }
+                });
+            },
+        )
+        .detach();
+    }
 }
 
 impl Render for RepoTabsBarView {
@@ -143,11 +226,13 @@ impl Render for RepoTabsBarView {
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
             let is_active = Some(repo_id) == active;
-            let is_busy = matches!(repo.open, Loadable::Loading)
-                || repo.loads_in_flight.any_in_flight()
-                || repo.local_actions_in_flight > 0
-                || repo.pull_in_flight > 0
-                || repo.push_in_flight > 0;
+            let is_busy = Self::is_repo_busy(repo);
+            let show_spinner = is_active
+                && is_busy
+                && self
+                    .repo_tab_spinner_delay
+                    .as_ref()
+                    .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
             let show_close = self.hovered_repo_tab == Some(repo_id);
             let label: SharedString = repo
                 .spec
@@ -182,10 +267,10 @@ impl Render for RepoTabsBarView {
                 .size(px(14.0))
                 .rounded(px(theme.radii.row))
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.danger)
                 .cursor_pointer()
-                .hover(move |s| s.bg(theme.colors.hover).text_color(theme.colors.text))
-                .active(move |s| s.bg(theme.colors.active).text_color(theme.colors.text))
+                .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
+                .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
                 .child("✕")
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
@@ -219,7 +304,7 @@ impl Render for RepoTabsBarView {
             let tab_label = div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap(px(6.0))
                 .min_w(px(0.0))
                 .child(
                     div()
@@ -228,7 +313,7 @@ impl Render for RepoTabsBarView {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(is_active && is_busy, |d| {
+                        .when(show_spinner, |d| {
                             d.child(
                                 spinner(
                                     ("repo_tab_busy_spinner", repo_id.0),

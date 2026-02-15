@@ -172,52 +172,50 @@ pub(super) fn history_commit_row_canvas(
                 size(col_graph.max(px(0.0)), bounds.size.height),
             );
             x += col_graph;
-            let author_bounds = if show_author {
-                let bounds = Bounds::new(
-                    point(x, bounds.top()),
-                    size(col_author.max(px(0.0)), bounds.size.height),
-                );
-                x += col_author;
-                bounds
-            } else {
-                Bounds::new(point(x, bounds.top()), size(px(0.0), bounds.size.height))
-            };
 
-            let right_total = (if show_date { col_date } else { px(0.0) })
-                + (if show_sha { col_sha } else { px(0.0) });
-            let summary_right = (inner.right() - right_total).max(x);
-            let summary_bounds = Bounds::new(
-                point(x, bounds.top()),
-                size((summary_right - x).max(px(0.0)), bounds.size.height),
-            );
-
+            let mut right_x = inner.right();
             let sha_bounds = if show_sha {
+                right_x -= col_sha;
                 Bounds::new(
-                    point(inner.right() - col_sha, bounds.top()),
+                    point(right_x, bounds.top()),
                     size(col_sha.max(px(0.0)), bounds.size.height),
                 )
             } else {
                 Bounds::new(
-                    point(inner.right(), bounds.top()),
+                    point(right_x, bounds.top()),
                     size(px(0.0), bounds.size.height),
                 )
             };
             let date_bounds = if show_date {
-                let right = if show_sha {
-                    sha_bounds.left()
-                } else {
-                    inner.right()
-                };
+                right_x -= col_date;
                 Bounds::new(
-                    point(right - col_date, bounds.top()),
+                    point(right_x, bounds.top()),
                     size(col_date.max(px(0.0)), bounds.size.height),
                 )
             } else {
                 Bounds::new(
-                    point(sha_bounds.left(), bounds.top()),
+                    point(right_x, bounds.top()),
                     size(px(0.0), bounds.size.height),
                 )
             };
+            let author_bounds = if show_author {
+                right_x -= col_author;
+                Bounds::new(
+                    point(right_x, bounds.top()),
+                    size(col_author.max(px(0.0)), bounds.size.height),
+                )
+            } else {
+                Bounds::new(
+                    point(right_x, bounds.top()),
+                    size(px(0.0), bounds.size.height),
+                )
+            };
+
+            let summary_right = right_x.max(x);
+            let summary_bounds = Bounds::new(
+                point(x, bounds.top()),
+                size((summary_right - x).max(px(0.0)), bounds.size.height),
+            );
 
             window.paint_layer(graph_bounds, |window| {
                 super::history_graph_paint::paint_history_graph(

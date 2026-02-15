@@ -1155,16 +1155,6 @@ impl MainPaneView {
                     .whitespace_nowrap()
                     .child("GRAPH"),
             )
-            .when(show_author, |header| {
-                header.child(
-                    div()
-                        .w(col_author)
-                        .flex()
-                        .items_center()
-                        .whitespace_nowrap()
-                        .child("AUTHOR"),
-                )
-            })
             .child(
                 div()
                     .flex_1()
@@ -1175,7 +1165,17 @@ impl MainPaneView {
                     .whitespace_nowrap()
                     .child("COMMIT MESSAGE")
                     .child(column_settings_btn),
-            );
+            )
+            .when(show_author, |header| {
+                header.child(
+                    div()
+                        .w(col_author)
+                        .flex()
+                        .items_center()
+                        .whitespace_nowrap()
+                        .child("AUTHOR"),
+                )
+            });
 
         if show_date {
             header = header.child(
@@ -1211,7 +1211,9 @@ impl MainPaneView {
             );
 
         if show_date {
-            let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
+            let right_fixed = (if show_author { col_author } else { px(0.0) })
+                + col_date
+                + if show_sha { col_sha } else { px(0.0) };
             header_with_handles = header_with_handles.child(
                 resize_handle(
                     "history_col_resize_message",

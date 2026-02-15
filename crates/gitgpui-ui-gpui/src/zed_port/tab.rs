@@ -20,7 +20,6 @@ pub struct Tab {
 }
 
 impl Tab {
-    const START_TAB_SLOT_SIZE: gpui::Pixels = px(12.0);
     const END_TAB_SLOT_SIZE: gpui::Pixels = px(14.0);
 
     pub fn new(id: impl Into<ElementId>) -> Self {
@@ -64,10 +63,13 @@ impl Tab {
         } else {
             (theme.colors.text_muted, theme.colors.surface_bg)
         };
-        let hover_bg = theme.colors.hover;
+        let inactive_hover_bg = if theme.is_dark {
+            with_alpha(theme.colors.hover, 0.65)
+        } else {
+            theme.colors.hover
+        };
         let active_bg = theme.colors.active;
-
-        let start_slot = div().flex_none().size(Self::START_TAB_SLOT_SIZE);
+        let focus_ring = theme.colors.focus_ring;
 
         let end_slot = div()
             .flex_none()
@@ -81,13 +83,12 @@ impl Tab {
             .div
             .group("tab")
             .tab_index(0)
+            .relative()
             .h(Self::container_height())
             .bg(tab_bg)
             .border_color(theme.colors.border)
             .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .active(move |s| s.bg(active_bg))
-            .focus(move |s| s.border_color(theme.colors.focus_ring))
+            .focus(move |s| s.border_color(focus_ring))
             .on_key_down(|event, window, cx| {
                 if event.keystroke.modifiers.modified() {
                     return;
@@ -104,18 +105,44 @@ impl Tab {
                     _ => {}
                 }
             })
+            .when(self.selected, |tab| {
+                let thickness = px(1.0);
+                tab.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(thickness)
+                        .bg(focus_ring),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .w(thickness)
+                        .bg(focus_ring),
+                )
+            })
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
+                    .gap_1()
                     .h(px(31.0))
-                    .px_2()
+                    .px_1()
                     .text_color(text_color)
-                    .child(start_slot)
                     .children(self.children)
                     .child(end_slot),
             );
+
+        if !self.selected {
+            base = base
+                .hover(move |s| s.bg(inactive_hover_bg))
+                .active(move |s| s.bg(active_bg));
+        }
 
         base = match self.position {
             TabPosition::First => {
@@ -145,4 +172,9 @@ impl Tab {
 
         base
     }
+}
+
+fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
+    color.a = alpha;
+    color
 }

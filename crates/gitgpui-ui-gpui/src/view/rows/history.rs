@@ -397,7 +397,6 @@ fn working_tree_summary_history_row(
                 .overflow_hidden()
                 .child(circle),
         )
-        .when(show_author, |row| row.child(div().w(col_author)))
         .child({
             let mut summary = div().flex_1().min_w(px(0.0)).flex().items_center().gap_2();
             summary = summary.child(
@@ -414,6 +413,7 @@ fn working_tree_summary_history_row(
             }
             summary
         })
+        .when(show_author, |row| row.child(div().w(col_author)))
         .when(show_date, |row| {
             row.child(
                 div()
