@@ -36,6 +36,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_split_cache: Vec<PatchSplitRow>,
     pub(in super::super) diff_split_cache_len: usize,
     pub(in super::super) diff_panel_focus_handle: FocusHandle,
+    pub(in super::super) history_panel_focus_handle: FocusHandle,
     pub(in super::super) diff_autoscroll_pending: bool,
     pub(in super::super) diff_raw_input: Entity<zed::TextInput>,
     pub(in super::super) diff_visible_indices: Vec<usize>,
@@ -335,6 +336,7 @@ impl MainPaneView {
         });
 
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
         let mut pane = Self {
             store,
@@ -364,6 +366,7 @@ impl MainPaneView {
             diff_split_cache: Vec::new(),
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
+            history_panel_focus_handle,
             diff_autoscroll_pending: false,
             diff_raw_input,
             diff_visible_indices: Vec::new(),

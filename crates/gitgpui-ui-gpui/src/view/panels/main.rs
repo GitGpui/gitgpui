@@ -71,6 +71,33 @@ impl MainPaneView {
             .h_full()
             .min_h(px(0.0))
             .bg(bg)
+            .track_focus(&self.history_panel_focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
+                    window.focus(&this.history_panel_focus_handle);
+                }),
+            )
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
+                let key = e.keystroke.key.as_str();
+                let mods = e.keystroke.modifiers;
+
+                let handled = !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                    && !mods.shift
+                    && match key {
+                        "up" => this.history_select_adjacent_commit(-1, cx),
+                        "down" => this.history_select_adjacent_commit(1, cx),
+                        _ => false,
+                    };
+
+                if handled {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .child(
                 self.history_column_headers(cx)
                     .bg(bg)
@@ -78,6 +105,103 @@ impl MainPaneView {
                     .border_color(theme.colors.border),
             )
             .child(div().flex_1().min_h(px(0.0)).child(body))
+    }
+
+    fn history_select_adjacent_commit(
+        &mut self,
+        direction: i8,
+        _cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let offset = usize::from(show_working_tree_summary_row);
+
+        let (selected_commit, page) = match self.active_repo() {
+            Some(repo) => {
+                let page = match &repo.log {
+                    Loadable::Ready(page) => Arc::clone(page),
+                    _ => return false,
+                };
+                (repo.selected_commit.clone(), page)
+            }
+            None => return false,
+        };
+
+        let cache = self
+            .history_cache
+            .as_ref()
+            .filter(|c| c.request.repo_id == repo_id);
+        let Some(cache) = cache else {
+            return false;
+        };
+
+        let total_commits = cache.visible_indices.len();
+        if total_commits == 0 {
+            return false;
+        }
+
+        let list_len = total_commits + offset;
+
+        let current_list_ix = if show_working_tree_summary_row && selected_commit.is_none() {
+            Some(0)
+        } else if let Some(selected_id) = selected_commit.as_ref() {
+            cache
+                .visible_indices
+                .iter()
+                .position(|&commit_ix| {
+                    page.commits
+                        .get(commit_ix)
+                        .is_some_and(|c| &c.id == selected_id)
+                })
+                .map(|ix| ix + offset)
+        } else {
+            None
+        };
+
+        let next_list_ix = match (current_list_ix, direction.is_negative()) {
+            (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
+            (Some(current_list_ix), false) => {
+                let next = current_list_ix + 1;
+                if next < list_len {
+                    next
+                } else {
+                    current_list_ix
+                }
+            }
+            (None, true) => list_len.saturating_sub(1),
+            (None, false) => offset,
+        };
+
+        if current_list_ix.is_some_and(|ix| ix == next_list_ix) {
+            return true;
+        }
+
+        if show_working_tree_summary_row && next_list_ix == 0 {
+            self.store.dispatch(Msg::ClearCommitSelection { repo_id });
+            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            self.history_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+            return true;
+        }
+
+        let visible_ix = next_list_ix.saturating_sub(offset);
+        let Some(&commit_ix) = cache.visible_indices.get(visible_ix) else {
+            return false;
+        };
+        let Some(commit) = page.commits.get(commit_ix) else {
+            return false;
+        };
+
+        self.store.dispatch(Msg::SelectCommit {
+            repo_id,
+            commit_id: commit.id.clone(),
+        });
+        self.history_scroll
+            .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+        true
     }
 
     pub(in super::super) fn conflict_requires_resolver(
