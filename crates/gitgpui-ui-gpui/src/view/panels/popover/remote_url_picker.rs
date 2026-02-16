@@ -57,7 +57,7 @@ pub(super) fn panel(
                     );
                 }),
         )
-        .min_w(px(520.0))
+        .w(px(520.0))
         .max_w(px(820.0))
     } else {
         let mut menu = div().flex().flex_col().min_w(px(520.0)).max_w(px(820.0));

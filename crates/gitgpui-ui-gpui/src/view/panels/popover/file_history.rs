@@ -105,7 +105,7 @@ pub(super) fn panel(
         div()
             .flex()
             .flex_col()
-            .min_w(px(520.0))
+            .w(px(520.0))
             .max_w(px(820.0))
             .child(header)
             .child(div().border_t_1().border_color(theme.colors.border))

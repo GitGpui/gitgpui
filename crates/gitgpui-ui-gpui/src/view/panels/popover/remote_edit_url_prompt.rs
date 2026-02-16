@@ -16,7 +16,7 @@ pub(super) fn panel(
     div()
         .flex()
         .flex_col()
-        .min_w(px(640.0))
+        .w(px(640.0))
         .child(
             div()
                 .px_2()

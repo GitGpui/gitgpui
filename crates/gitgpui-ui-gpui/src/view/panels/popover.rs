@@ -1394,6 +1394,11 @@ impl PopoverHost {
         let anchor = self
             .popover_anchor
             .unwrap_or_else(|| point(px(64.0), px(64.0)));
+        let window_bounds = window.window_bounds().get_bounds();
+        let window_w = window_bounds.size.width;
+        let window_h = window_bounds.size.height;
+        let margin_x = px(16.0);
+        let margin_y = px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let is_context_menu = matches!(
@@ -1446,6 +1451,28 @@ impl PopoverHost {
             | PopoverKind::HistoryColumnSettings => Corner::TopRight,
             _ => Corner::TopLeft,
         };
+
+        // Some popovers have large minimum widths. If the anchor is close to the edge, the popover
+        // can end up constrained to a very narrow width (making inputs unusably small). Prefer the
+        // side with more horizontal space in those cases.
+        let min_preferred_w = px(640.0);
+        let space_left = (anchor.x - margin_x).max(px(0.0));
+        let space_right = (window_w - margin_x - anchor.x).max(px(0.0));
+        match anchor_corner {
+            Corner::TopRight if space_left < min_preferred_w && space_right > space_left => {
+                anchor_corner = Corner::TopLeft;
+            }
+            Corner::BottomRight if space_left < min_preferred_w && space_right > space_left => {
+                anchor_corner = Corner::BottomLeft;
+            }
+            Corner::TopLeft if space_right < min_preferred_w && space_left > space_right => {
+                anchor_corner = Corner::TopRight;
+            }
+            Corner::BottomLeft if space_right < min_preferred_w && space_left > space_right => {
+                anchor_corner = Corner::BottomRight;
+            }
+            _ => {}
+        }
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
@@ -1975,9 +2002,6 @@ impl PopoverHost {
         } else {
             px(8.0)
         };
-
-        let window_h = window.window_bounds().get_bounds().size.height;
-        let margin_y = px(16.0);
 
         let mut context_menu_max_panel_h: Option<Pixels> = None;
         if is_context_menu {

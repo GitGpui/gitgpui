@@ -27,7 +27,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     cx.notify();
                 }),
         )
-        .min_w(px(420.0))
+        .w(px(420.0))
         .max_w(px(820.0))
     } else {
         let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));

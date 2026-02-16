@@ -84,7 +84,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 this.popover_anchor = None;
                 cx.notify();
             })
-            .min_w(px(520.0))
+            .w(px(520.0))
             .child(div().border_t_1().border_color(theme.colors.border))
             .child(
                 div()
