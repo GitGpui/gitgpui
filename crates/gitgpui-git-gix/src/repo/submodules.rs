@@ -1,6 +1,7 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output};
+use crate::util::run_git_with_output;
 use gitgpui_core::domain::{CommitId, Submodule};
+use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{CommandOutput, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,8 +14,26 @@ impl GixRepo {
             .arg("submodule")
             .arg("status")
             .arg("--recursive");
-        let output = run_git_capture(cmd, "git submodule status --recursive")?;
-        Ok(parse_git_submodule_status(&output))
+        let output = cmd
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let parsed = parse_git_submodule_status(&stdout);
+        if output.status.success() || !parsed.is_empty() {
+            return Ok(parsed);
+        }
+
+        let stderr = std::str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
+        // Some repositories may contain gitlinks without corresponding .gitmodules entries.
+        // `git submodule status` treats this as fatal; for UI purposes we just show an empty list.
+        if stderr.contains("no submodule mapping found in .gitmodules for path") {
+            return Ok(Vec::new());
+        }
+
+        Err(Error::new(ErrorKind::Backend(format!(
+            "git submodule status --recursive failed: {stderr}"
+        ))))
     }
 
     pub(super) fn add_submodule_with_output_impl(
