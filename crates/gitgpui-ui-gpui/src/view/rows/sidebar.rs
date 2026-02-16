@@ -309,7 +309,9 @@ impl SidebarPaneView {
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
-                    .when(top_border, |d| d.border_t_1().border_color(theme.colors.border))
+                    .when(top_border, |d| {
+                        d.border_t_1().border_color(theme.colors.border)
+                    })
                     .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
                     .child(
                         div()
@@ -442,7 +444,9 @@ impl SidebarPaneView {
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
-                    .when(top_border, |d| d.border_t_1().border_color(theme.colors.border))
+                    .when(top_border, |d| {
+                        d.border_t_1().border_color(theme.colors.border)
+                    })
                     .child(svg_icon("icons/box.svg", icon_primary, 14.0))
                     .child(
                         div()
@@ -535,7 +539,8 @@ impl SidebarPaneView {
                             let Some(base) = repo_workdir_for_open.clone() else {
                                 return;
                             };
-                            this.store.dispatch(Msg::OpenRepo(base.join(&path_for_open)));
+                            this.store
+                                .dispatch(Msg::OpenRepo(base.join(&path_for_open)));
                             cx.notify();
                         }))
                         .on_mouse_down(

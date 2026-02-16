@@ -19,6 +19,12 @@ fn is_supported_image_path(path: &Path) -> bool {
     )
 }
 
+fn is_svg_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+}
+
 pub(super) fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
     match target {
         DiffTarget::WorkingTree { path, .. } => is_supported_image_path(path),
@@ -29,12 +35,23 @@ pub(super) fn diff_target_wants_image_preview(target: &DiffTarget) -> bool {
     }
 }
 
+pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
+    match target {
+        DiffTarget::WorkingTree { path, .. } => is_svg_path(path),
+        DiffTarget::Commit {
+            path: Some(path), ..
+        } => is_svg_path(path),
+        _ => false,
+    }
+}
+
 pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {
     let supports_file = matches!(
         &target,
         DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
     );
     let wants_image = diff_target_wants_image_preview(&target);
+    let is_svg = diff_target_is_svg(&target);
 
     let mut effects = vec![Effect::LoadDiff {
         repo_id,
@@ -42,8 +59,12 @@ pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Ef
     }];
     if supports_file {
         if wants_image {
-            effects.push(Effect::LoadDiffFileImage { repo_id, target });
-        } else {
+            effects.push(Effect::LoadDiffFileImage {
+                repo_id,
+                target: target.clone(),
+            });
+        }
+        if !wants_image || is_svg {
             effects.push(Effect::LoadDiffFile { repo_id, target });
         }
     }

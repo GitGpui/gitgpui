@@ -11,9 +11,9 @@ mod history_column_settings;
 mod pull;
 mod push;
 mod remote;
+mod status_file;
 mod submodule;
 mod submodule_section;
-mod status_file;
 mod tag;
 mod worktree;
 mod worktree_section;
@@ -205,15 +205,9 @@ impl PopoverHost {
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
-            PopoverKind::RemoteMenu { repo_id, name } => {
-                Some(remote::model(self, *repo_id, name))
-            }
-            PopoverKind::WorktreeSectionMenu { repo_id } => {
-                Some(worktree_section::model(*repo_id))
-            }
-            PopoverKind::WorktreeMenu { repo_id, path } => {
-                Some(worktree::model(*repo_id, path))
-            }
+            PopoverKind::RemoteMenu { repo_id, name } => Some(remote::model(self, *repo_id, name)),
+            PopoverKind::WorktreeSectionMenu { repo_id } => Some(worktree_section::model(*repo_id)),
+            PopoverKind::WorktreeMenu { repo_id, path } => Some(worktree::model(*repo_id, path)),
             PopoverKind::SubmoduleSectionMenu { repo_id } => {
                 Some(submodule_section::model(*repo_id))
             }

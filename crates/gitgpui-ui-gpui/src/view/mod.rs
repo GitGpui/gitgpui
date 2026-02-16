@@ -173,10 +173,32 @@ fn scroll_is_near_bottom(handle: &ScrollHandle, threshold: Pixels) -> bool {
     (max_offset - scroll_y) <= threshold
 }
 
+fn is_svg_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
+}
+
+fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
+    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    match ext.to_ascii_lowercase().as_str() {
+        "png" | "jpg" | "jpeg" | "webp" | "svg" => true,
+        _ => false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DiffViewMode {
     Inline,
     Split,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SvgDiffViewMode {
+    Image,
+    Code,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

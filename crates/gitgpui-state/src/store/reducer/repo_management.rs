@@ -1,7 +1,7 @@
 use super::util::{
-    dedup_paths_in_order, diff_target_wants_image_preview, format_failure_summary,
-    normalize_repo_path, push_diagnostic, push_notification, refresh_full_effects,
-    refresh_primary_effects,
+    dedup_paths_in_order, diff_target_is_svg, diff_target_wants_image_preview,
+    format_failure_summary, normalize_repo_path, push_diagnostic, push_notification,
+    refresh_full_effects, refresh_primary_effects,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
@@ -141,14 +141,19 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
             DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
         );
         let wants_image = diff_target_wants_image_preview(&target);
+        let is_svg = diff_target_is_svg(&target);
         effects.push(Effect::LoadDiff {
             repo_id,
             target: target.clone(),
         });
         if supports_file {
             if wants_image {
-                effects.push(Effect::LoadDiffFileImage { repo_id, target });
-            } else {
+                effects.push(Effect::LoadDiffFileImage {
+                    repo_id,
+                    target: target.clone(),
+                });
+            }
+            if !wants_image || is_svg {
                 effects.push(Effect::LoadDiffFile { repo_id, target });
             }
         }

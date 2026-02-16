@@ -314,6 +314,8 @@ impl Render for ToastHost {
 
         div()
             .id("toast_layer")
+            .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+            .occlude()
             .absolute()
             .right_0()
             .bottom_0()

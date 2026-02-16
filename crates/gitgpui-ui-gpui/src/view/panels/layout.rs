@@ -796,7 +796,8 @@ impl DetailsPaneView {
                 })
         {
             let current = self.commit_message_input.read(cx).text();
-            if current.trim().is_empty() {
+            if current.trim().is_empty() && !self.commit_message_user_edited {
+                self.commit_message_programmatic_change = true;
                 self.commit_message_input
                     .update(cx, |i, cx| i.set_text(message, cx));
             }
@@ -838,6 +839,7 @@ impl DetailsPaneView {
                                         return;
                                     }
                                     this.store.dispatch(Msg::Commit { repo_id, message });
+                                    this.commit_message_programmatic_change = true;
                                     this.commit_message_input
                                         .update(cx, |i, cx| i.set_text(String::new(), cx));
                                     cx.notify();

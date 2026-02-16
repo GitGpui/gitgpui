@@ -6,6 +6,7 @@ pub(in super::super) struct DetailsPaneView {
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
+    _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
@@ -17,6 +18,9 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<zed::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<zed::TextInput>,
+    pub(in super::super) commit_message_user_edited: bool,
+    pub(in super::super) commit_message_last_text: SharedString,
+    pub(in super::super) commit_message_programmatic_change: bool,
 
     pub(in super::super) status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
     pub(in super::super) status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
@@ -133,11 +137,26 @@ impl DetailsPaneView {
             )
         });
 
+        let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
+            let next: SharedString = input.read(cx).text().to_string().into();
+            if this.commit_message_programmatic_change {
+                this.commit_message_programmatic_change = false;
+                this.commit_message_last_text = next;
+                return;
+            }
+
+            if this.commit_message_last_text != next {
+                this.commit_message_last_text = next;
+                this.commit_message_user_edited = true;
+            }
+        });
+
         let mut pane = Self {
             store,
             state,
             theme,
             _ui_model_subscription: subscription,
+            _commit_message_input_subscription: commit_message_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -147,6 +166,9 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
+            commit_message_user_edited: false,
+            commit_message_last_text: SharedString::default(),
+            commit_message_programmatic_change: false,
             status_multi_selection: HashMap::default(),
             status_multi_selection_last_status: HashMap::default(),
             commit_details_delay: None,
@@ -247,6 +269,10 @@ impl DetailsPaneView {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+            self.commit_message_user_edited = false;
+            self.commit_message_programmatic_change = false;
+            self.commit_message_last_text =
+                self.commit_message_input.read(cx).text().to_string().into();
         } else if prev_selected_commit != next_selected_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll

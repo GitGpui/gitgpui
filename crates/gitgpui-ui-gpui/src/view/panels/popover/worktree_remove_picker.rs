@@ -44,7 +44,7 @@ pub(super) fn panel(
                                 );
                             }),
                     )
-                    .min_w(px(420.0))
+                    .min_w(px(520.0))
                     .max_w(px(820.0))
                 } else {
                     zed::context_menu_label(theme, "Search input not initialized")

@@ -27,4 +27,3 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::PathBuf) -> ContextMenuMo
 
     ContextMenuModel::new(items)
 }
-

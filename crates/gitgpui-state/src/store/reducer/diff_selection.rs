@@ -1,4 +1,4 @@
-use super::util::diff_target_wants_image_preview;
+use super::util::{diff_target_is_svg, diff_target_wants_image_preview};
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
 use gitgpui_core::domain::{Diff, DiffTarget, FileDiffImage, FileDiffText};
@@ -21,7 +21,8 @@ pub(super) fn select_diff(
         DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
     );
     let wants_image = diff_target_wants_image_preview(&target);
-    repo_state.diff_file = if supports_file && !wants_image {
+    let is_svg = diff_target_is_svg(&target);
+    repo_state.diff_file = if supports_file && (!wants_image || is_svg) {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
@@ -32,27 +33,23 @@ pub(super) fn select_diff(
         Loadable::NotLoaded
     };
 
+    let mut effects = Vec::new();
     if supports_file {
         if wants_image {
-            vec![
-                Effect::LoadDiffFileImage {
-                    repo_id,
-                    target: target.clone(),
-                },
-                Effect::LoadDiff { repo_id, target },
-            ]
-        } else {
-            vec![
-                Effect::LoadDiffFile {
-                    repo_id,
-                    target: target.clone(),
-                },
-                Effect::LoadDiff { repo_id, target },
-            ]
+            effects.push(Effect::LoadDiffFileImage {
+                repo_id,
+                target: target.clone(),
+            });
         }
-    } else {
-        vec![Effect::LoadDiff { repo_id, target }]
+        if !wants_image || is_svg {
+            effects.push(Effect::LoadDiffFile {
+                repo_id,
+                target: target.clone(),
+            });
+        }
     }
+    effects.push(Effect::LoadDiff { repo_id, target });
+    effects
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

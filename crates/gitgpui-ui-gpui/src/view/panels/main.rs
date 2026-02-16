@@ -94,9 +94,22 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let wants_image = self
+        let (wants_image, is_svg) = self
             .active_repo()
-            .is_some_and(|repo| !matches!(repo.diff_file_image, Loadable::NotLoaded));
+            .map(|repo| {
+                let is_svg = match repo.diff_target.as_ref() {
+                    Some(DiffTarget::WorkingTree { path, .. }) => super::super::is_svg_path(path),
+                    Some(DiffTarget::Commit {
+                        path: Some(path), ..
+                    }) => super::super::is_svg_path(path),
+                    _ => false,
+                };
+                let has_image = !matches!(repo.diff_file_image, Loadable::NotLoaded);
+                let wants_image =
+                    has_image && (!is_svg || self.svg_diff_view_mode == SvgDiffViewMode::Image);
+                (wants_image, is_svg)
+            })
+            .unwrap_or((false, false));
 
         if wants_image {
             enum DiffFileImageState {
@@ -220,6 +233,11 @@ impl MainPaneView {
                 },
             };
 
+            if is_svg && matches!(diff_file_state, DiffFileState::NotLoaded) {
+                return zed::empty_state(theme, "Diff", "SVG code view is not available.")
+                    .into_any_element();
+            }
+
             self.ensure_file_diff_cache(cx);
             match diff_file_state {
                 DiffFileState::NotLoaded => {
@@ -337,12 +355,8 @@ impl MainPaneView {
                                 }
                                 DiffViewMode::Split => {
                                     self.sync_diff_split_vertical_scroll();
-                                    let right_scroll_handle = self
-                                        .diff_split_right_scroll
-                                        .0
-                                        .borrow()
-                                        .base_handle
-                                        .clone();
+                                    let right_scroll_handle =
+                                        self.diff_split_right_scroll.0.borrow().base_handle.clone();
                                     let count = self.diff_visible_indices.len();
                                     let left = uniform_list(
                                         "diff_split_left",
@@ -527,7 +541,9 @@ impl MainPaneView {
                                                             .render(theme),
                                                         ),
                                                 )
-                                                .child(resize_handle("diff_split_resize_handle_body"))
+                                                .child(resize_handle(
+                                                    "diff_split_resize_handle_body",
+                                                ))
                                                 .child(
                                                     div()
                                                         .relative()
@@ -655,15 +671,20 @@ impl MainPaneView {
         let added_preview_path = self.added_file_preview_abs_path();
         let deleted_preview_path = self.deleted_file_preview_abs_path();
 
-        if let Some(path) = untracked_preview_path.clone() {
-            self.ensure_worktree_preview_loaded(path, cx);
-        } else if let Some(path) = added_preview_path.clone().or(deleted_preview_path.clone()) {
-            self.ensure_preview_loading(path);
-        }
+        let preview_path = untracked_preview_path
+            .as_deref()
+            .or(added_preview_path.as_deref())
+            .or(deleted_preview_path.as_deref());
+        let is_file_preview = preview_path
+            .is_some_and(|p| !super::super::should_bypass_text_file_preview_for_path(p));
 
-        let is_file_preview = untracked_preview_path.is_some()
-            || added_preview_path.is_some()
-            || deleted_preview_path.is_some();
+        if is_file_preview {
+            if let Some(path) = untracked_preview_path.clone() {
+                self.ensure_worktree_preview_loaded(path, cx);
+            } else if let Some(path) = added_preview_path.clone().or(deleted_preview_path.clone()) {
+                self.ensure_preview_loading(path);
+            }
+        }
         let wants_file_diff = !is_file_preview
             && self
                 .active_repo()
@@ -693,6 +714,21 @@ impl MainPaneView {
             .unwrap_or((None, None));
         let is_conflict_resolver = Self::conflict_requires_resolver(conflict_kind);
         let is_conflict_compare = conflict_target_path.is_some() && !is_conflict_resolver;
+
+        let diff_target_path = repo.and_then(|repo| match repo.diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
+            DiffTarget::Commit {
+                path: Some(path), ..
+            } => Some(path.as_path()),
+            _ => None,
+        });
+        let is_svg_diff_target = diff_target_path.is_some_and(super::super::is_svg_path);
+        let show_svg_view_toggle = wants_file_diff && is_svg_diff_target;
+        let is_image_diff_loaded =
+            repo.is_some_and(|repo| !matches!(repo.diff_file_image, Loadable::NotLoaded));
+        let is_image_diff_view = wants_file_diff
+            && is_image_diff_loaded
+            && (!is_svg_diff_target || self.svg_diff_view_mode == SvgDiffViewMode::Image);
 
         let diff_nav_hotkey_hint = |label: &'static str| {
             div()
@@ -882,134 +918,62 @@ impl MainPaneView {
                     });
             }
         } else if !is_file_preview {
-            let nav_entries = self.diff_nav_entries();
-            let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
-            let can_nav_prev =
-                diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-            let can_nav_next =
-                diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+            if show_svg_view_toggle {
+                controls = controls
+                    .child(
+                        zed::Button::new("svg_diff_view_image", "Image")
+                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Image {
+                                zed::ButtonStyle::Filled
+                            } else {
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.svg_diff_view_mode = SvgDiffViewMode::Image;
+                                cx.notify();
+                            }),
+                    )
+                    .child(
+                        zed::Button::new("svg_diff_view_code", "Code")
+                            .style(if self.svg_diff_view_mode == SvgDiffViewMode::Code {
+                                zed::ButtonStyle::Filled
+                            } else {
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.svg_diff_view_mode = SvgDiffViewMode::Code;
+                                cx.notify();
+                            }),
+                    );
+            }
 
-            controls = controls
-                .child(
-                    zed::Button::new("diff_inline", "Inline")
-                        .style(if self.diff_view == DiffViewMode::Inline {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_view = DiffViewMode::Inline;
-                            this.diff_text_segments_cache.clear();
-                            if this.diff_search_active
-                                && !this.diff_search_query.as_ref().trim().is_empty()
-                            {
-                                this.diff_search_recompute_matches();
-                            }
-                            cx.notify();
-                        })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Inline diff view (Alt+I)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+            if !is_image_diff_view {
+                let nav_entries = self.diff_nav_entries();
+                let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
+                let can_nav_prev =
+                    diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
+                let can_nav_next =
+                    diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+
+                controls = controls
+                    .child(
+                        zed::Button::new("diff_inline", "Inline")
+                            .style(if self.diff_view == DiffViewMode::Inline {
+                                zed::ButtonStyle::Filled
                             } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    zed::Button::new("diff_split", "Split")
-                        .style(if self.diff_view == DiffViewMode::Split {
-                            zed::ButtonStyle::Filled
-                        } else {
-                            zed::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_view = DiffViewMode::Split;
-                            this.diff_text_segments_cache.clear();
-                            if this.diff_search_active
-                                && !this.diff_search_query.as_ref().trim().is_empty()
-                            {
-                                this.diff_search_recompute_matches();
-                            }
-                            cx.notify();
-                        })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Split diff view (Alt+S)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    zed::Button::new("diff_prev_hunk", "Prev")
-                        .end_slot(diff_nav_hotkey_hint("F2"))
-                        .style(zed::ButtonStyle::Outlined)
-                        .disabled(!can_nav_prev)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_jump_prev();
-                            cx.notify();
-                        })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString =
-                                "Previous change (F2 / Shift+F7 / Alt+Up)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
-                )
-                .child(
-                    zed::Button::new("diff_next_hunk", "Next")
-                        .end_slot(diff_nav_hotkey_hint("F3"))
-                        .style(zed::ButtonStyle::Outlined)
-                        .disabled(!can_nav_next)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.diff_jump_next();
-                            cx.notify();
-                        })
-                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                            let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
-                            let mut changed = false;
-                            if *hovering {
-                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                            } else {
-                                changed |= this.clear_tooltip_if_matches(&text, cx);
-                            }
-                            if changed {
-                                cx.notify();
-                            }
-                        })),
-                )
-                .when(!wants_file_diff, |controls| {
-                    controls.child(
-                        zed::Button::new("diff_hunks", "Hunks")
-                            .style(zed::ButtonStyle::Outlined)
-                            .on_click(theme, cx, |this, e, window, cx| {
-                                this.open_popover_at(
-                                    PopoverKind::DiffHunks,
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.diff_view = DiffViewMode::Inline;
+                                this.diff_text_segments_cache.clear();
+                                if this.diff_search_active
+                                    && !this.diff_search_query.as_ref().trim().is_empty()
+                                {
+                                    this.diff_search_recompute_matches();
+                                }
                                 cx.notify();
                             })
                             .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Jump to hunk (Alt+H)".into();
+                                let text: SharedString = "Inline diff view (Alt+I)".into();
                                 let mut changed = false;
                                 if *hovering {
                                     changed |=
@@ -1022,7 +986,113 @@ impl MainPaneView {
                                 }
                             })),
                     )
-                });
+                    .child(
+                        zed::Button::new("diff_split", "Split")
+                            .style(if self.diff_view == DiffViewMode::Split {
+                                zed::ButtonStyle::Filled
+                            } else {
+                                zed::ButtonStyle::Outlined
+                            })
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.diff_view = DiffViewMode::Split;
+                                this.diff_text_segments_cache.clear();
+                                if this.diff_search_active
+                                    && !this.diff_search_query.as_ref().trim().is_empty()
+                                {
+                                    this.diff_search_recompute_matches();
+                                }
+                                cx.notify();
+                            })
+                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                let text: SharedString = "Split diff view (Alt+S)".into();
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(
+                        zed::Button::new("diff_prev_hunk", "Prev")
+                            .end_slot(diff_nav_hotkey_hint("F2"))
+                            .style(zed::ButtonStyle::Outlined)
+                            .disabled(!can_nav_prev)
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.diff_jump_prev();
+                                cx.notify();
+                            })
+                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                let text: SharedString =
+                                    "Previous change (F2 / Shift+F7 / Alt+Up)".into();
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .child(
+                        zed::Button::new("diff_next_hunk", "Next")
+                            .end_slot(diff_nav_hotkey_hint("F3"))
+                            .style(zed::ButtonStyle::Outlined)
+                            .disabled(!can_nav_next)
+                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                this.diff_jump_next();
+                                cx.notify();
+                            })
+                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            })),
+                    )
+                    .when(!wants_file_diff, |controls| {
+                        controls.child(
+                            zed::Button::new("diff_hunks", "Hunks")
+                                .style(zed::ButtonStyle::Outlined)
+                                .on_click(theme, cx, |this, e, window, cx| {
+                                    this.open_popover_at(
+                                        PopoverKind::DiffHunks,
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                    cx.notify();
+                                })
+                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                                    let text: SharedString = "Jump to hunk (Alt+H)".into();
+                                    let mut changed = false;
+                                    if *hovering {
+                                        changed |= this
+                                            .set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                    } else {
+                                        changed |= this.clear_tooltip_if_matches(&text, cx);
+                                    }
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                })),
+                        )
+                    });
+            }
         }
 
         if let Some(repo_id) = repo_id {
@@ -2165,9 +2235,9 @@ impl MainPaneView {
                                                         .whitespace_nowrap()
                                                         .child("A (local / before)"),
                                                 )
-                                                .child(
-                                                    resize_handle("diff_split_resize_handle_header"),
-                                                )
+                                                .child(resize_handle(
+                                                    "diff_split_resize_handle_header",
+                                                ))
                                                 .child(
                                                     div()
                                                         .w(right_w)

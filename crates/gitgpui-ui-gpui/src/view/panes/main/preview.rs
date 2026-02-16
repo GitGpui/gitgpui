@@ -9,9 +9,15 @@ impl MainPaneView {
     }
 
     pub(super) fn is_file_preview_active(&self) -> bool {
-        self.untracked_worktree_preview_path().is_some()
-            || self.added_file_preview_abs_path().is_some()
-            || self.deleted_file_preview_abs_path().is_some()
+        let preview_path = self
+            .untracked_worktree_preview_path()
+            .or_else(|| self.added_file_preview_abs_path())
+            .or_else(|| self.deleted_file_preview_abs_path());
+
+        let Some(path) = preview_path else {
+            return false;
+        };
+        !super::super::super::should_bypass_text_file_preview_for_path(&path)
     }
 
     pub(super) fn worktree_preview_line_count(&self) -> Option<usize> {

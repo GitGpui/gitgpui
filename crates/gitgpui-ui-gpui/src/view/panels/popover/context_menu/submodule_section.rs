@@ -40,4 +40,3 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
 
     ContextMenuModel::new(items)
 }
-

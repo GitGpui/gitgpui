@@ -42,4 +42,3 @@ pub(super) fn model(
 
     ContextMenuModel::new(items)
 }
-

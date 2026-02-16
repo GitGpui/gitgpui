@@ -1,6 +1,6 @@
 use super::util::{
-    diff_target_wants_image_preview, format_failure_summary, push_action_log, push_command_log,
-    refresh_full_effects, refresh_primary_effects,
+    diff_target_is_svg, diff_target_wants_image_preview, format_failure_summary, push_action_log,
+    push_command_log, refresh_full_effects, refresh_primary_effects,
 };
 use crate::model::{AppState, Loadable, RepoId};
 use crate::msg::{Effect, RepoCommandKind};
@@ -467,7 +467,8 @@ pub(super) fn repo_command_finished(
             DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
         );
         let wants_image = diff_target_wants_image_preview(&target);
-        repo_state.diff_file = if supports_file && !wants_image {
+        let is_svg = diff_target_is_svg(&target);
+        repo_state.diff_file = if supports_file && (!wants_image || is_svg) {
             Loadable::Loading
         } else {
             Loadable::NotLoaded
@@ -483,8 +484,12 @@ pub(super) fn repo_command_finished(
         });
         if supports_file {
             if wants_image {
-                extra_effects.push(Effect::LoadDiffFileImage { repo_id, target });
-            } else {
+                extra_effects.push(Effect::LoadDiffFileImage {
+                    repo_id,
+                    target: target.clone(),
+                });
+            }
+            if !wants_image || is_svg {
                 extra_effects.push(Effect::LoadDiffFile { repo_id, target });
             }
         }

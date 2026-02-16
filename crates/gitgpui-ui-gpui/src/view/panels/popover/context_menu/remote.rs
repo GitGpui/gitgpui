@@ -40,4 +40,3 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &String) -> Cont
 
     ContextMenuModel::new(items)
 }
-

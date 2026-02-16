@@ -209,15 +209,15 @@ impl MainPaneView {
                     .flatten();
 
                 let Some(line) = this.diff_cache.get(src_ix) else {
-                return div()
-                    .id(("diff_oob", visible_ix))
-                    .h(px(20.0))
-                    .px_2()
-                    .text_xs()
-                    .text_color(theme.colors.text_muted)
-                    .child("")
-                    .into_any_element();
-            };
+                    return div()
+                        .id(("diff_oob", visible_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("")
+                        .into_any_element();
+                };
 
                 let header_display = matches!(
                     click_kind,

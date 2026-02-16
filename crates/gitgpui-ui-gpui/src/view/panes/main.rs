@@ -19,6 +19,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) last_window_size: Size<Pixels>,
 
     pub(in super::super) diff_view: DiffViewMode,
+    pub(in super::super) svg_diff_view_mode: SvgDiffViewMode,
     pub(in super::super) diff_word_wrap: bool,
     pub(in super::super) diff_split_ratio: f32,
     pub(in super::super) diff_split_resize: Option<DiffSplitResizeState>,
@@ -346,6 +347,7 @@ impl MainPaneView {
             notify_fingerprint: initial_fingerprint,
             last_window_size: size(px(0.0), px(0.0)),
             diff_view: DiffViewMode::Split,
+            svg_diff_view_mode: SvgDiffViewMode::Image,
             diff_word_wrap: false,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
@@ -1055,10 +1057,7 @@ impl MainPaneView {
         self.diff_split_last_synced_y = master_y;
     }
 
-    pub(in super::super) fn main_pane_content_width(
-        &self,
-        cx: &mut gpui::Context<Self>,
-    ) -> Pixels {
+    pub(in super::super) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
         let fallback_sidebar = px(280.0);
         let fallback_details = px(420.0);
         let (sidebar_w, details_w) = self
