@@ -26,7 +26,13 @@ actions!(
         SelectWordRight,
         SelectAll,
         Home,
+        SelectHome,
         End,
+        SelectEnd,
+        PageUp,
+        SelectPageUp,
+        PageDown,
+        SelectPageDown,
         Paste,
         Cut,
         Copy,
@@ -321,12 +327,177 @@ impl TextInput {
         self.select_to(self.content.len(), cx)
     }
 
+    fn row_start(&self, offset: usize) -> usize {
+        self.row_boundaries(offset).0
+    }
+
+    fn row_end(&self, offset: usize) -> usize {
+        self.row_boundaries(offset).1
+    }
+
+    fn logical_row_boundaries(&self, offset: usize) -> (usize, usize) {
+        let s = self.content.as_ref();
+        let offset = offset.min(s.len());
+        let start = s[..offset].rfind('\n').map(|ix| ix + 1).unwrap_or(0);
+        let rel_end = s[offset..].find('\n').unwrap_or(s.len() - offset);
+        let end = offset + rel_end;
+        (start, end)
+    }
+
+    fn row_boundaries(&self, offset: usize) -> (usize, usize) {
+        let offset = offset.min(self.content.len());
+        if self.content.is_empty() {
+            return (0, 0);
+        }
+        if !(self.multiline && self.soft_wrap) {
+            return self.logical_row_boundaries(offset);
+        }
+
+        let Some(TextInputLayout::Wrapped { lines, .. }) = self.last_layout.as_ref() else {
+            return self.logical_row_boundaries(offset);
+        };
+        let Some(starts) = self.last_line_starts.as_ref() else {
+            return self.logical_row_boundaries(offset);
+        };
+        let Some(line) = lines
+            .get(starts.partition_point(|&s| s <= offset).saturating_sub(1))
+            .or_else(|| lines.first())
+        else {
+            return self.logical_row_boundaries(offset);
+        };
+
+        let mut ix = starts.partition_point(|&s| s <= offset);
+        if ix == 0 {
+            ix = 1;
+        }
+        let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+        let line_start = starts.get(line_ix).copied().unwrap_or(0);
+        let line = lines.get(line_ix).unwrap_or(line);
+        let local = offset.saturating_sub(line_start).min(line.len());
+
+        let mut row_end_indices: Vec<usize> = Vec::with_capacity(line.wrap_boundaries().len() + 1);
+        for boundary in line.wrap_boundaries() {
+            let Some(run) = line.unwrapped_layout.runs.get(boundary.run_ix) else {
+                continue;
+            };
+            let Some(glyph) = run.glyphs.get(boundary.glyph_ix) else {
+                continue;
+            };
+            row_end_indices.push(glyph.index);
+        }
+        row_end_indices.sort_unstable();
+        row_end_indices.dedup();
+        row_end_indices.push(line.len());
+
+        let row_ix = row_end_indices
+            .iter()
+            .position(|&end| local <= end)
+            .unwrap_or_else(|| row_end_indices.len().saturating_sub(1));
+        let row_start_local = if row_ix == 0 {
+            0
+        } else {
+            row_end_indices[row_ix - 1]
+        };
+        let row_end_local = row_end_indices[row_ix];
+        (
+            (line_start + row_start_local).min(self.content.len()),
+            (line_start + row_end_local).min(self.content.len()),
+        )
+    }
+
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
+        self.move_to(self.row_start(self.cursor_offset()), cx);
+    }
+
+    fn select_home(&mut self, _: &SelectHome, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.row_start(self.cursor_offset()), cx);
     }
 
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.content.len(), cx);
+        self.move_to(self.row_end(self.cursor_offset()), cx);
+    }
+
+    fn select_end(&mut self, _: &SelectEnd, _: &mut Window, cx: &mut Context<Self>) {
+        self.select_to(self.row_end(self.cursor_offset()), cx);
+    }
+
+    fn caret_point_for_hit_testing(&self, cursor: usize) -> Option<Point<Pixels>> {
+        let bounds = self.last_bounds?;
+        let layout = self.last_layout.as_ref()?;
+        let starts = self.last_line_starts.as_ref()?;
+        let line_height = if self.last_line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.last_line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts, lines, cursor);
+                let line = lines.get(line_ix)?;
+                let x = line.x_for_index(local_ix) - self.scroll_x;
+                let y = line_height * line_ix as f32 + line_height / 2.0;
+                Some(point(bounds.left() + x, bounds.top() + y))
+            }
+            TextInputLayout::Wrapped { lines, y_offsets } => {
+                let mut ix = starts.partition_point(|&s| s <= cursor);
+                if ix == 0 {
+                    ix = 1;
+                }
+                let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+                let line = lines.get(line_ix)?;
+                let start = starts.get(line_ix).copied().unwrap_or(0);
+                let local = cursor.saturating_sub(start).min(line.len());
+                let pos = line
+                    .position_for_index(local, line_height)
+                    .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
+                let y = y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO)
+                    + pos.y
+                    + line_height / 2.0;
+                Some(point(bounds.left() + pos.x, bounds.top() + y))
+            }
+        }
+    }
+
+    fn page_move_target(&self, cursor: usize, direction: f32) -> Option<usize> {
+        let bounds = self.last_bounds?;
+        let line_height = if self.last_line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.last_line_height
+        };
+        let page_height = bounds.size.height.max(line_height);
+        let caret_point = self.caret_point_for_hit_testing(cursor)?;
+        let target = point(caret_point.x, caret_point.y + page_height * direction);
+        Some(self.index_for_position(target))
+    }
+
+    fn page_up(&mut self, _: &PageUp, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.page_move_target(self.cursor_offset(), -1.0) else {
+            return;
+        };
+        self.move_to(target, cx);
+    }
+
+    fn select_page_up(&mut self, _: &SelectPageUp, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.page_move_target(self.cursor_offset(), -1.0) else {
+            return;
+        };
+        self.select_to(target, cx);
+    }
+
+    fn page_down(&mut self, _: &PageDown, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.page_move_target(self.cursor_offset(), 1.0) else {
+            return;
+        };
+        self.move_to(target, cx);
+    }
+
+    fn select_page_down(&mut self, _: &SelectPageDown, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.page_move_target(self.cursor_offset(), 1.0) else {
+            return;
+        };
+        self.select_to(target, cx);
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -564,6 +735,65 @@ impl TextInput {
         if position.y > bounds.bottom() {
             return self.content.len();
         }
+
+        let line_height = if self.last_line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.last_line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
+                let mut line_ix = ratio.floor() as isize;
+                line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
+                let line_ix = line_ix as usize;
+                let local_x = position.x - bounds.left() + self.scroll_x;
+                let local_ix = lines[line_ix].closest_index_for_x(local_x);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
+                doc_ix.min(self.content.len())
+            }
+            TextInputLayout::Wrapped { lines, y_offsets } => {
+                let local_y = position.y - bounds.top();
+                let mut line_ix = 0usize;
+                for (ix, line) in lines.iter().enumerate() {
+                    let y0 = y_offsets.get(ix).copied().unwrap_or(Pixels::ZERO);
+                    let rows = line.wrap_boundaries().len().saturating_add(1);
+                    let y1 = y0 + line_height * rows as f32;
+                    if local_y >= y0 && local_y < y1 {
+                        line_ix = ix;
+                        break;
+                    }
+                    if local_y >= y1 {
+                        line_ix = ix;
+                    }
+                }
+                let line_ix = line_ix.min(lines.len().saturating_sub(1));
+                let local_x = position.x - bounds.left();
+                let local_y_in_line =
+                    local_y - y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO);
+                let line = &lines[line_ix];
+                let local = line
+                    .closest_index_for_position(point(local_x, local_y_in_line), line_height)
+                    .unwrap_or_else(|ix| ix);
+                let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
+                doc_ix.min(self.content.len())
+            }
+        }
+    }
+
+    fn index_for_position(&self, position: Point<Pixels>) -> usize {
+        if self.content.is_empty() {
+            return 0;
+        }
+
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.last_bounds.as_ref(),
+            self.last_layout.as_ref(),
+            self.last_line_starts.as_ref(),
+        ) else {
+            return 0;
+        };
 
         let line_height = if self.last_line_height.is_zero() {
             px(16.0)
@@ -1328,7 +1558,13 @@ impl Render for TextInput {
             .on_action(cx.listener(Self::select_word_right))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::home))
+            .on_action(cx.listener(Self::select_home))
             .on_action(cx.listener(Self::end))
+            .on_action(cx.listener(Self::select_end))
+            .on_action(cx.listener(Self::page_up))
+            .on_action(cx.listener(Self::select_page_up))
+            .on_action(cx.listener(Self::page_down))
+            .on_action(cx.listener(Self::select_page_down))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))

@@ -268,6 +268,91 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
     );
 }
 
+#[gpui::test]
+fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+            KeyBinding::new("shift-home", crate::kit::SelectHome, Some("TextInput")),
+            KeyBinding::new("shift-end", crate::kit::SelectEnd, Some("TextInput")),
+            KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("abcde\n12345", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("left left shift-home ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("123".into())
+    );
+
+    cx.simulate_keystrokes("right shift-end ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("45".into())
+    );
+}
+
+#[gpui::test]
+fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("home", crate::kit::Home, Some("TextInput")),
+            KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+            KeyBinding::new("shift-pageup", crate::kit::SelectPageUp, Some("TextInput")),
+            KeyBinding::new(
+                "shift-pagedown",
+                crate::kit::SelectPageDown,
+                Some("TextInput"),
+            ),
+            KeyBinding::new("ctrl-c", crate::kit::Copy, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("abcde\n12345\nxyz", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    // Move the cursor to the start of the second line.
+    cx.simulate_keystrokes("home left home");
+
+    cx.simulate_keystrokes("shift-pageup ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("abcde\n".into())
+    );
+
+    // Collapse selection back to the start of the second line.
+    cx.simulate_keystrokes("right");
+
+    cx.simulate_keystrokes("shift-pagedown ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("12345\n".into())
+    );
+}
+
 struct TestBackend;
 
 impl GitBackend for TestBackend {
