@@ -54,6 +54,9 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) diff_text_selecting: bool,
     pub(in super::super) diff_text_anchor: Option<DiffTextPos>,
     pub(in super::super) diff_text_head: Option<DiffTextPos>,
+    diff_text_autoscroll_seq: u64,
+    diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
+    diff_text_last_mouse_pos: Point<Pixels>,
     pub(in super::super) diff_suppress_clicks_remaining: u8,
     pub(in super::super) diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     pub(in super::super) diff_text_layout_cache_epoch: u64,
@@ -132,6 +135,14 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) worktree_preview_scroll: UniformListScrollHandle,
 
     path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffTextAutoscrollTarget {
+    DiffLeftOrInline,
+    DiffSplitRight,
+    WorktreePreview,
+    ConflictResolvedPreview,
 }
 
 impl MainPaneView {
@@ -384,6 +395,9 @@ impl MainPaneView {
             diff_text_selecting: false,
             diff_text_anchor: None,
             diff_text_head: None,
+            diff_text_autoscroll_seq: 0,
+            diff_text_autoscroll_target: None,
+            diff_text_last_mouse_pos: point(px(0.0), px(0.0)),
             diff_suppress_clicks_remaining: 0,
             diff_text_hitboxes: HashMap::default(),
             diff_text_layout_cache_epoch: 0,

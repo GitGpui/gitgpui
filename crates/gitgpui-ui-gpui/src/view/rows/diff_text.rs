@@ -304,6 +304,7 @@ pub(super) fn selectable_cached_diff_text(
                     return;
                 }
                 this.begin_diff_text_selection(visible_ix, region, e.position);
+                this.begin_diff_text_scroll_tracking(e.position, cx);
                 cx.notify();
             }),
         )
