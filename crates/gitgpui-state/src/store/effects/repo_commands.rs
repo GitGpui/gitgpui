@@ -341,6 +341,26 @@ pub(super) fn schedule_push_set_upstream(
     });
 }
 
+pub(super) fn schedule_delete_remote_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    remote: String,
+    branch: String,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let _ = msg_tx.send(Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::DeleteRemoteBranch {
+                remote: remote.clone(),
+                branch: branch.clone(),
+            },
+            result: repo.delete_remote_branch_with_output(&remote, &branch),
+        });
+    });
+}
+
 pub(super) fn schedule_reset(
     executor: &TaskExecutor,
     repos: &RepoMap,

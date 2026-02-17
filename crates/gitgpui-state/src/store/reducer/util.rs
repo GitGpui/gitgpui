@@ -321,6 +321,7 @@ fn summarize_command(
             RepoCommandKind::Push => "Push",
             RepoCommandKind::ForcePush => "Force push",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
+            RepoCommandKind::DeleteRemoteBranch { .. } => "Delete remote branch",
             RepoCommandKind::Reset { .. } => "Reset",
             RepoCommandKind::Rebase { .. } => "Rebase",
             RepoCommandKind::RebaseContinue => "Rebase",
@@ -433,6 +434,9 @@ fn summarize_command(
                 "Completed"
             };
             format!("Push -u {remote}/{branch}: {base}")
+        }
+        RepoCommandKind::DeleteRemoteBranch { remote, branch } => {
+            format!("Remote branch {remote}/{branch}: Deleted")
         }
         RepoCommandKind::CheckoutConflict { side, .. } => match side {
             ConflictSide::Ours => "Resolved using ours".to_string(),

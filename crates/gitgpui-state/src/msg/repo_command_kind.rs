@@ -21,6 +21,10 @@ pub enum RepoCommandKind {
         remote: String,
         branch: String,
     },
+    DeleteRemoteBranch {
+        remote: String,
+        branch: String,
+    },
     Reset {
         mode: ResetMode,
         target: String,

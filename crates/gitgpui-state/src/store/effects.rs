@@ -130,6 +130,9 @@ pub(super) fn schedule_effect(
         Effect::DeleteBranch { repo_id, name } => {
             repo_actions::schedule_delete_branch(executor, repos, msg_tx, repo_id, name);
         }
+        Effect::ForceDeleteBranch { repo_id, name } => {
+            repo_actions::schedule_force_delete_branch(executor, repos, msg_tx, repo_id, name);
+        }
         Effect::CloneRepo { url, dest } => clone::schedule_clone_repo(executor, msg_tx, url, dest),
         Effect::ExportPatch {
             repo_id,
@@ -224,6 +227,13 @@ pub(super) fn schedule_effect(
             remote,
             branch,
         } => repo_commands::schedule_push_set_upstream(
+            executor, repos, msg_tx, repo_id, remote, branch,
+        ),
+        Effect::DeleteRemoteBranch {
+            repo_id,
+            remote,
+            branch,
+        } => repo_commands::schedule_delete_remote_branch(
             executor, repos, msg_tx, repo_id, remote, branch,
         ),
         Effect::Reset {

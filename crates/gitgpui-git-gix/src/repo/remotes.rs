@@ -102,9 +102,14 @@ impl GixRepo {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
-            PullMode::Default => {}
+            // Be explicit about ff behavior so we don't create merge commits when a fast-forward
+            // is possible, even if the user's git config disables ff.
+            PullMode::Default => {
+                cmd.arg("--ff");
+            }
             PullMode::Merge => {
                 cmd.arg("--no-rebase");
+                cmd.arg("--ff");
             }
             PullMode::FastForwardIfPossible => {
                 cmd.arg("--ff");
@@ -149,9 +154,14 @@ impl GixRepo {
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
-            PullMode::Default => {}
+            // Be explicit about ff behavior so we don't create merge commits when a fast-forward
+            // is possible, even if the user's git config disables ff.
+            PullMode::Default => {
+                cmd.arg("--ff");
+            }
             PullMode::Merge => {
                 cmd.arg("--no-rebase");
+                cmd.arg("--ff");
             }
             PullMode::FastForwardIfPossible => {
                 cmd.arg("--ff");
@@ -235,7 +245,7 @@ impl GixRepo {
         remote: &str,
         branch: &str,
     ) -> Result<CommandOutput> {
-        let command_str = format!("git pull --no-rebase {remote} {branch}");
+        let command_str = format!("git pull --no-rebase --ff {remote} {branch}");
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
@@ -244,13 +254,14 @@ impl GixRepo {
             .arg("--no-pager")
             .arg("pull")
             .arg("--no-rebase")
+            .arg("--ff")
             .arg(remote)
             .arg(branch);
         run_git_with_output(cmd, &command_str)
     }
 
     pub(super) fn merge_ref_with_output_impl(&self, reference: &str) -> Result<CommandOutput> {
-        let command_str = format!("git merge --no-edit {reference}");
+        let command_str = format!("git merge --ff --no-edit {reference}");
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
@@ -258,6 +269,7 @@ impl GixRepo {
             .arg("color.ui=false")
             .arg("--no-pager")
             .arg("merge")
+            .arg("--ff")
             .arg("--no-edit")
             .arg(reference);
         run_git_with_output(cmd, &command_str)
@@ -343,5 +355,33 @@ impl GixRepo {
             cmd,
             &format!("git push --set-upstream {remote} HEAD:refs/heads/{branch}"),
         )
+    }
+
+    pub(super) fn delete_remote_branch_with_output_impl(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<CommandOutput> {
+        let label = format!("git push {remote} --delete {branch}");
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("push")
+            .arg(remote)
+            .arg("--delete")
+            .arg(branch);
+        let output = run_git_with_output(cmd, &label)?;
+
+        let refname = format!("refs/remotes/{remote}/{branch}");
+        let mut prune = Command::new("git");
+        prune
+            .arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("update-ref")
+            .arg("-d")
+            .arg(refname);
+        let _ = prune.output();
+
+        Ok(output)
     }
 }

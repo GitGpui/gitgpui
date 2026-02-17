@@ -163,6 +163,21 @@ pub(super) fn load_stashes(state: &mut AppState, repo_id: RepoId) -> Vec<Effect>
     }
 }
 
+pub(super) fn refresh_branches(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::BRANCHES)
+    {
+        vec![Effect::LoadBranches { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) fn load_conflict_file(
     state: &mut AppState,
     repo_id: RepoId,

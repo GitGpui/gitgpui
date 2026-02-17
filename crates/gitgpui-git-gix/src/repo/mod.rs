@@ -131,6 +131,10 @@ impl GitRepository for GixRepo {
         self.delete_branch_impl(name)
     }
 
+    fn delete_branch_force(&self, name: &str) -> Result<()> {
+        self.delete_branch_force_impl(name)
+    }
+
     fn checkout_branch(&self, name: &str) -> Result<()> {
         self.checkout_branch_impl(name)
     }
@@ -270,6 +274,14 @@ impl GitRepository for GixRepo {
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
         self.push_set_upstream_with_output_impl(remote, branch)
+    }
+
+    fn delete_remote_branch_with_output(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<CommandOutput> {
+        self.delete_remote_branch_with_output_impl(remote, branch)
     }
 
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {

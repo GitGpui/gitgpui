@@ -98,6 +98,20 @@ pub(super) fn model(
                 },
             });
             items.push(ContextMenuItem::Separator);
+            items.push(ContextMenuItem::Entry {
+                label: "Delete remote branch…".into(),
+                icon: Some("🗑".into()),
+                shortcut: None,
+                disabled: false,
+                action: ContextMenuAction::OpenPopover {
+                    kind: PopoverKind::DeleteRemoteBranchConfirm {
+                        repo_id,
+                        remote: remote.to_string(),
+                        branch: branch.to_string(),
+                    },
+                },
+            });
+            items.push(ContextMenuItem::Separator);
         }
         items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),

@@ -7,9 +7,11 @@ mod clone_repo;
 mod context_menu;
 mod create_branch;
 mod create_tag_prompt;
+mod delete_remote_branch_confirm;
 mod diff_hunks;
 mod discard_changes_confirm;
 mod file_history;
+mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
@@ -1448,6 +1450,7 @@ impl PopoverHost {
             | PopoverKind::SubmoduleRemoveConfirm { .. }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::HistoryColumnSettings => Corner::TopRight,
@@ -1879,6 +1882,14 @@ impl PopoverHost {
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
             }
+            PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
+                force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            }
+            PopoverKind::DeleteRemoteBranchConfirm {
+                repo_id,
+                remote,
+                branch,
+            } => delete_remote_branch_confirm::panel(self, repo_id, remote, branch, cx),
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,

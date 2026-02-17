@@ -30,6 +30,16 @@ impl GixRepo {
         run_git_simple(cmd, "git branch -d")
     }
 
+    pub(super) fn delete_branch_force_impl(&self, name: &str) -> Result<()> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("branch")
+            .arg("-D")
+            .arg(name);
+        run_git_simple(cmd, "git branch -D")
+    }
+
     pub(super) fn checkout_branch_impl(&self, name: &str) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")

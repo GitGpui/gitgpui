@@ -473,6 +473,15 @@ enum PopoverKind {
     ForcePushConfirm {
         repo_id: RepoId,
     },
+    ForceDeleteBranchConfirm {
+        repo_id: RepoId,
+        name: String,
+    },
+    DeleteRemoteBranchConfirm {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
     DiscardChangesConfirm {
         repo_id: RepoId,
         area: DiffArea,
@@ -676,6 +685,7 @@ pub struct GitGpuiView {
 
     last_mouse_pos: Point<Pixels>,
     pending_pull_reconcile_prompt: Option<RepoId>,
+    pending_force_delete_branch_prompt: Option<(RepoId, String)>,
 
     status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
     status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
@@ -1241,6 +1251,7 @@ impl GitGpuiView {
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
+            pending_force_delete_branch_prompt: None,
             status_multi_selection: HashMap::default(),
             status_multi_selection_last_status: HashMap::default(),
             commit_details_message_input,
@@ -3977,6 +3988,17 @@ impl Render for GitGpuiView {
             if self.active_repo_id() == Some(repo_id) {
                 self.open_popover_at(
                     PopoverKind::PullReconcilePrompt { repo_id },
+                    self.last_mouse_pos,
+                    window,
+                    cx,
+                );
+            }
+        }
+
+        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take() {
+            if self.active_repo_id() == Some(repo_id) {
+                self.open_popover_at(
+                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
                     self.last_mouse_pos,
                     window,
                     cx,

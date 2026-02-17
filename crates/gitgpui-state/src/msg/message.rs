@@ -82,6 +82,9 @@ pub enum Msg {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    RefreshBranches {
+        repo_id: RepoId,
+    },
     StageHunk {
         repo_id: RepoId,
         patch: String,
@@ -125,6 +128,10 @@ pub enum Msg {
         name: String,
     },
     DeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    ForceDeleteBranch {
         repo_id: RepoId,
         name: String,
     },
@@ -232,6 +239,11 @@ pub enum Msg {
         repo_id: RepoId,
     },
     PushSetUpstream {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    DeleteRemoteBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,

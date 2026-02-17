@@ -90,6 +90,7 @@ pub(super) fn reduce(
         Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
+        Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
         Msg::StageHunk { repo_id, patch } => diff_selection::stage_hunk(repo_id, patch),
         Msg::UnstageHunk { repo_id, patch } => diff_selection::unstage_hunk(repo_id, patch),
         Msg::ApplyWorktreePatch {
@@ -133,6 +134,10 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::delete_branch(repo_id, name)
         }
+        Msg::ForceDeleteBranch { repo_id, name } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::force_delete_branch(repo_id, name)
+        }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
         Msg::CloneRepoProgress { dest, line } => {
             repo_management::clone_repo_progress(state, dest, line)
@@ -150,8 +155,18 @@ pub(super) fn reduce(
             repo_id,
             path,
             reference,
-        } => actions_emit_effects::add_worktree(repo_id, path, reference),
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.worktrees_in_flight =
+                    repo_state.worktrees_in_flight.saturating_add(1);
+            }
+            actions_emit_effects::add_worktree(repo_id, path, reference)
+        }
         Msg::RemoveWorktree { repo_id, path } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.worktrees_in_flight =
+                    repo_state.worktrees_in_flight.saturating_add(1);
+            }
             actions_emit_effects::remove_worktree(repo_id, path)
         }
         Msg::AddSubmodule { repo_id, url, path } => {
@@ -214,6 +229,11 @@ pub(super) fn reduce(
             remote,
             branch,
         } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        Msg::DeleteRemoteBranch {
+            repo_id,
+            remote,
+            branch,
+        } => actions_emit_effects::delete_remote_branch(repos, state, repo_id, remote, branch),
         Msg::Reset {
             repo_id,
             target,

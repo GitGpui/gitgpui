@@ -45,6 +45,11 @@ impl GitGpuiView {
                 .map(|d| d.message.clone())
                 .collect::<Vec<_>>();
             for msg in new_diag_messages {
+                if self.pending_force_delete_branch_prompt.is_none()
+                    && let Some(name) = parse_force_delete_branch_name(&msg)
+                {
+                    self.pending_force_delete_branch_prompt = Some((next_repo.id, name));
+                }
                 self.push_toast(zed::ToastKind::Error, msg, cx);
             }
 
@@ -95,4 +100,16 @@ impl GitGpuiView {
 
         prev_error != next_error
     }
+}
+
+fn parse_force_delete_branch_name(message: &str) -> Option<String> {
+    if !message.contains("git branch -d failed:") {
+        return None;
+    }
+    let needle = "run 'git branch -D ";
+    let start = message.find(needle)? + needle.len();
+    let rest = &message[start..];
+    let end = rest.find('\'')?;
+    let name = rest[..end].trim();
+    (!name.is_empty()).then(|| name.to_string())
 }

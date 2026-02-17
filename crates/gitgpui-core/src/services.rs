@@ -128,6 +128,11 @@ pub trait GitRepository: Send + Sync {
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
     fn delete_branch(&self, name: &str) -> Result<()>;
+    fn delete_branch_force(&self, _name: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "force branch deletion is not implemented for this backend",
+        )))
+    }
     fn checkout_branch(&self, name: &str) -> Result<()>;
     fn checkout_remote_branch(&self, _remote: &str, _branch: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
@@ -245,6 +250,16 @@ pub trait GitRepository: Send + Sync {
         self.push_set_upstream(remote, branch)?;
         Ok(CommandOutput::empty_success(format!(
             "git push --set-upstream {remote} HEAD:refs/heads/{branch}"
+        )))
+    }
+
+    fn delete_remote_branch_with_output(
+        &self,
+        _remote: &str,
+        _branch: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "remote branch deletion is not implemented for this backend",
         )))
     }
 

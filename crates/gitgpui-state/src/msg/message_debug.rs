@@ -105,6 +105,10 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("LoadSubmodules")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::RefreshBranches { repo_id } => f
+                .debug_struct("RefreshBranches")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::StageHunk { repo_id, patch } => f
                 .debug_struct("StageHunk")
                 .field("repo_id", repo_id)
@@ -167,6 +171,11 @@ impl std::fmt::Debug for Msg {
                 .finish(),
             Msg::DeleteBranch { repo_id, name } => f
                 .debug_struct("DeleteBranch")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .finish(),
+            Msg::ForceDeleteBranch { repo_id, name } => f
+                .debug_struct("ForceDeleteBranch")
                 .field("repo_id", repo_id)
                 .field("name", name)
                 .finish(),
@@ -318,6 +327,16 @@ impl std::fmt::Debug for Msg {
                 branch,
             } => f
                 .debug_struct("PushSetUpstream")
+                .field("repo_id", repo_id)
+                .field("remote", remote)
+                .field("branch", branch)
+                .finish(),
+            Msg::DeleteRemoteBranch {
+                repo_id,
+                remote,
+                branch,
+            } => f
+                .debug_struct("DeleteRemoteBranch")
                 .field("repo_id", repo_id)
                 .field("remote", remote)
                 .field("branch", branch)

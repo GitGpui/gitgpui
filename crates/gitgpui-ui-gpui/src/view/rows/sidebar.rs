@@ -17,6 +17,9 @@ impl SidebarPaneView {
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let show_worktrees_spinner = this.active_repo().is_some_and(|r| {
+            r.worktrees_in_flight > 0 || matches!(r.worktrees, Loadable::Loading)
+        });
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             gpui::svg()
@@ -25,6 +28,23 @@ impl SidebarPaneView {
                 .h(px(size_px))
                 .text_color(color)
                 .flex_shrink_0()
+        };
+        let svg_spinner = |id: (&'static str, u64), color: gpui::Rgba, size_px: f32| {
+            gpui::svg()
+                .path("icons/spinner.svg")
+                .w(px(size_px))
+                .h(px(size_px))
+                .text_color(color)
+                .flex_shrink_0()
+                .with_animation(
+                    id,
+                    Animation::new(Duration::from_millis(850)).repeat(),
+                    |svg, delta| {
+                        svg.with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            delta * std::f32::consts::TAU,
+                        )))
+                    },
+                )
         };
 
         fn indent_px(depth: usize) -> Pixels {
@@ -315,11 +335,23 @@ impl SidebarPaneView {
                     .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
                     .child(
                         div()
+                            .flex_1()
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.colors.text)
                             .child("Worktrees"),
                     )
+                    .when(show_worktrees_spinner, |d| {
+                        d.child(
+                            div()
+                                .debug_selector(move || format!("worktrees_spinner_{}", repo_id.0))
+                                .child(svg_spinner(
+                                    ("worktrees_spinner", repo_id.0),
+                                    icon_muted,
+                                    12.0,
+                                )),
+                        )
+                    })
                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                         let text: SharedString = "Worktrees (Add / Refresh / Open / Remove)".into();
                         let mut changed = false;

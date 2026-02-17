@@ -29,10 +29,12 @@ pub(super) fn schedule_checkout_remote_branch(
     name: String,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoActionFinished {
-            repo_id,
-            result: repo.checkout_remote_branch(&remote, &name),
-        });
+        let result = repo.checkout_remote_branch(&remote, &name);
+        let refresh = result.is_ok();
+        if refresh {
+            let _ = msg_tx.send(Msg::RefreshBranches { repo_id });
+        }
+        let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
     });
 }
 
@@ -90,10 +92,12 @@ pub(super) fn schedule_create_branch(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let target = gitgpui_core::domain::CommitId("HEAD".to_string());
-        let _ = msg_tx.send(Msg::RepoActionFinished {
-            repo_id,
-            result: repo.create_branch(&name, &target),
-        });
+        let result = repo.create_branch(&name, &target);
+        let refresh = result.is_ok();
+        if refresh {
+            let _ = msg_tx.send(Msg::RefreshBranches { repo_id });
+        }
+        let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
     });
 }
 
@@ -106,9 +110,12 @@ pub(super) fn schedule_create_branch_and_checkout(
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let target = gitgpui_core::domain::CommitId("HEAD".to_string());
-        let result = repo
-            .create_branch(&name, &target)
-            .and_then(|()| repo.checkout_branch(&name));
+        let created = repo.create_branch(&name, &target);
+        let refresh = created.is_ok();
+        let result = created.and_then(|()| repo.checkout_branch(&name));
+        if refresh {
+            let _ = msg_tx.send(Msg::RefreshBranches { repo_id });
+        }
         let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
     });
 }
@@ -121,10 +128,29 @@ pub(super) fn schedule_delete_branch(
     name: String,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let _ = msg_tx.send(Msg::RepoActionFinished {
-            repo_id,
-            result: repo.delete_branch(&name),
-        });
+        let result = repo.delete_branch(&name);
+        let refresh = result.is_ok();
+        if refresh {
+            let _ = msg_tx.send(Msg::RefreshBranches { repo_id });
+        }
+        let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
+    });
+}
+
+pub(super) fn schedule_force_delete_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    name: String,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.delete_branch_force(&name);
+        let refresh = result.is_ok();
+        if refresh {
+            let _ = msg_tx.send(Msg::RefreshBranches { repo_id });
+        }
+        let _ = msg_tx.send(Msg::RepoActionFinished { repo_id, result });
     });
 }
 

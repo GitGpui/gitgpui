@@ -371,6 +371,7 @@ impl Render for RepoTabsBarView {
             let tab = tab
                 .child(tab_label)
                 .render(theme)
+                .debug_selector(move || format!("repo_tab_{}", repo_id.0))
                 .on_drag(
                     RepoTabDrag {
                         repo_id,
@@ -383,23 +384,39 @@ impl Render for RepoTabsBarView {
                         })
                     },
                 )
-                .can_drop(move |dragged, _window, _cx| {
-                    dragged
-                        .downcast_ref::<RepoTabDrag>()
-                        .is_some_and(|drag| drag.repo_id != repo_id)
-                })
-                .drag_over::<RepoTabDrag>(move |s, _drag, _window, _cx| {
+                .can_drop(move |dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
+                .drag_over::<RepoTabDrag>(move |s, drag, _window, _cx| {
+                    if drag.repo_id == repo_id {
+                        return s;
+                    }
+
                     s.bg(with_alpha(
                         theme.colors.accent,
                         if theme.is_dark { 0.14 } else { 0.10 },
                     ))
                     .border_color(theme.colors.accent)
                 })
-                .on_drop(cx.listener(move |this, drag: &RepoTabDrag, _w, cx| {
+                .on_drag_move(cx.listener(move |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _w, cx| {
+                    let dragged_repo_id = e.drag(cx).repo_id;
+                    if dragged_repo_id == repo_id {
+                        return;
+                    }
+
+                    let Some(insert_before) = repo_tab_insert_before_for_drop(
+                        &this.state.repos,
+                        repo_id,
+                        e.event.position,
+                        e.bounds,
+                    ) else {
+                        return;
+                    };
+
                     this.store.dispatch(Msg::ReorderRepoTabs {
-                        repo_id: drag.repo_id,
-                        insert_before: Some(repo_id),
+                        repo_id: dragged_repo_id,
+                        insert_before,
                     });
+                }))
+                .on_drop(cx.listener(move |this, _drag: &RepoTabDrag, _w, cx| {
                     this.hovered_repo_tab = None;
                     cx.notify();
                 }))
@@ -490,4 +507,28 @@ impl Render for RepoTabsBarView {
             cx.notify();
         }))
     }
+}
+
+fn repo_tab_insert_before_for_drop(
+    repos: &[RepoState],
+    target_repo_id: RepoId,
+    pos: Point<Pixels>,
+    bounds: Bounds<Pixels>,
+) -> Option<Option<RepoId>> {
+    // Use exclusive right/bottom edges so adjacent tabs don't both match when the cursor is
+    // exactly on the boundary.
+    if pos.x < bounds.left()
+        || pos.x >= bounds.right()
+        || pos.y < bounds.top()
+        || pos.y >= bounds.bottom()
+    {
+        return None;
+    }
+
+    let target_ix = repos.iter().position(|r| r.id == target_repo_id)?;
+    if pos.x <= bounds.center().x {
+        return Some(Some(target_repo_id));
+    }
+
+    Some(repos.get(target_ix + 1).map(|r| r.id))
 }

@@ -37,6 +37,18 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::DeleteRemoteBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 2);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::FetchAll,
@@ -67,6 +79,23 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
             repo_id,
             command: RepoCommandKind::Push,
             result: Ok(CommandOutput::empty_success("git push")),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::DeleteRemoteBranch {
+                remote: "origin".to_string(),
+                branch: "feature".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git push origin --delete feature",
+            )),
         },
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
@@ -505,6 +534,20 @@ fn create_and_delete_branch_emit_effects() {
     assert!(matches!(
         effects.as_slice(),
         [Effect::DeleteBranch { repo_id: RepoId(1), name }] if name == "feature"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ForceDeleteBranch {
+            repo_id: RepoId(1),
+            name: "feature".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ForceDeleteBranch { repo_id: RepoId(1), name }] if name == "feature"
     ));
 }
 

@@ -126,6 +126,10 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
     },
+    ForceDeleteBranch {
+        repo_id: RepoId,
+        name: String,
+    },
     CloneRepo {
         url: String,
         dest: PathBuf,
@@ -228,6 +232,11 @@ pub enum Effect {
         repo_id: RepoId,
     },
     PushSetUpstream {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
+    DeleteRemoteBranch {
         repo_id: RepoId,
         remote: String,
         branch: String,

@@ -1253,6 +1253,63 @@ fn merge_creates_merge_commit_when_branches_diverged() {
 }
 
 #[test]
+fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "b.txt", "feature\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["config", "merge.ff", "false"]);
+
+    let backend = GixBackend::default();
+    let opened = backend.open(repo).unwrap();
+
+    opened.merge_ref_with_output("feature").unwrap();
+
+    let parents = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .output()
+        .expect("rev-list --parents");
+    assert!(parents.status.success());
+    let parent_count = String::from_utf8(parents.stdout)
+        .unwrap()
+        .split_whitespace()
+        .count()
+        .saturating_sub(1);
+    assert_eq!(parent_count, 1, "expected fast-forward");
+
+    let msg = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["log", "-1", "--pretty=%B"])
+        .output()
+        .expect("git log to run");
+    assert!(msg.status.success());
+    assert_eq!(String::from_utf8(msg.stdout).unwrap().trim(), "feature");
+}
+
+#[test]
 fn merge_commit_message_is_available_during_conflict() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -1722,6 +1779,98 @@ fn pull_with_output_fast_forwards_from_remote() {
     assert!(head_b.status.success());
     let head_b = String::from_utf8(head_b.stdout).unwrap().trim().to_string();
     assert_eq!(head_b, head_origin);
+}
+
+#[test]
+fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin = dir.path().join("origin.git");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    fs::create_dir_all(&origin).unwrap();
+    fs::create_dir_all(&repo_a).unwrap();
+
+    run_git(&origin, &["init", "--bare"]);
+
+    run_git(&repo_a, &["init"]);
+    run_git(&repo_a, &["config", "user.email", "you@example.com"]);
+    run_git(&repo_a, &["config", "user.name", "You"]);
+    run_git(&repo_a, &["config", "commit.gpgsign", "false"]);
+    write(&repo_a, "a.txt", "one\n");
+    run_git(&repo_a, &["add", "a.txt"]);
+    run_git(
+        &repo_a,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    run_git(
+        &repo_a,
+        &["remote", "add", "origin", origin.to_string_lossy().as_ref()],
+    );
+    run_git(&repo_a, &["push", "-u", "origin", "master"]);
+
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            origin.to_string_lossy().as_ref(),
+            repo_b.to_string_lossy().as_ref(),
+        ],
+    );
+
+    run_git(&repo_b, &["config", "user.email", "you@example.com"]);
+    run_git(&repo_b, &["config", "user.name", "You"]);
+    run_git(&repo_b, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo_b, &["config", "pull.ff", "false"]);
+
+    write(&repo_a, "a.txt", "one\ntwo\n");
+    run_git(&repo_a, &["add", "a.txt"]);
+    run_git(
+        &repo_a,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+    run_git(&repo_a, &["push"]);
+
+    let head_origin = Command::new("git")
+        .arg("-C")
+        .arg(&origin)
+        .args(["rev-parse", "refs/heads/master"])
+        .output()
+        .expect("rev-parse origin");
+    assert!(head_origin.status.success());
+    let head_origin = String::from_utf8(head_origin.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+
+    let backend = GixBackend::default();
+    let opened_b = backend.open(&repo_b).unwrap();
+    opened_b
+        .pull_with_output(gitgpui_core::services::PullMode::Merge)
+        .unwrap();
+
+    let head_b = Command::new("git")
+        .arg("-C")
+        .arg(&repo_b)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse b");
+    assert!(head_b.status.success());
+    let head_b = String::from_utf8(head_b.stdout).unwrap().trim().to_string();
+    assert_eq!(head_b, head_origin);
+
+    let parents = Command::new("git")
+        .arg("-C")
+        .arg(&repo_b)
+        .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .output()
+        .expect("rev-list --parents");
+    assert!(parents.status.success());
+    let parent_count = String::from_utf8(parents.stdout)
+        .unwrap()
+        .split_whitespace()
+        .count()
+        .saturating_sub(1);
+    assert_eq!(parent_count, 1, "expected fast-forward");
 }
 
 #[test]

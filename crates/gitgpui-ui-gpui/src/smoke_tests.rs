@@ -1,13 +1,17 @@
 use crate::{theme::AppTheme, view, zed_port as zed};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, Result};
+use gitgpui_state::msg::Msg;
+use gitgpui_state::model::RepoId;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     ClipboardItem, Decorations, KeyBinding, Modifiers, MouseButton, ScrollHandle, Tiling, div, px,
 };
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn assert_no_panic(label: &str, f: impl FnOnce()) {
     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_err() {
@@ -274,6 +278,85 @@ impl GitBackend for TestBackend {
     }
 }
 
+fn repo_tab_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_{}", repo_id.0).into_boxed_str())
+}
+
+fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn wait_for_repo_count(store: &AppStore, expected: usize) -> gitgpui_state::model::AppState {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = store.snapshot();
+        if state.repos.len() == expected {
+            return state;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for store repos len {expected}, got {}",
+                state.repos.len()
+            );
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_repo_order(store: &AppStore, expected: &[RepoId]) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = store.snapshot();
+        let got = state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
+        if got == expected {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for repo order {expected:?}, got {got:?}");
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn restore_session_and_draw(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    repos: Vec<PathBuf>,
+) -> Vec<RepoId> {
+    store.dispatch(Msg::RestoreSession {
+        open_repos: repos.clone(),
+        active_repo: repos.first().cloned(),
+    });
+
+    let state = wait_for_repo_count(store, repos.len());
+    let ids = state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
+    let selectors = ids.iter().copied().map(repo_tab_selector).collect::<Vec<_>>();
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if selectors.iter().all(|selector| cx.debug_bounds(selector).is_some()) {
+            return ids;
+        }
+
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for repo tabs to render; missing selectors: {:?}",
+                selectors
+                    .into_iter()
+                    .filter(|selector| cx.debug_bounds(selector).is_none())
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
 #[gpui::test]
 fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
@@ -283,6 +366,172 @@ fn gitgpui_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
         })
         .unwrap();
     });
+}
+
+#[gpui::test]
+fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui_ui_test_repo_tabs_right_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let dragged = repo_ids[0];
+    let target = repo_ids[1];
+    let expected = vec![repo_ids[1], repo_ids[0], repo_ids[2]];
+
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let target_bounds = cx
+        .debug_bounds(repo_tab_selector(target))
+        .expect("expected target repo tab bounds");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x + px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    let drop = gpui::point(target_bounds.right() - px(5.0), target_bounds.center().y);
+    cx.simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+
+    wait_for_repo_order(&store_for_test, &expected);
+}
+
+#[gpui::test]
+fn repo_tabs_can_drag_reorder_by_left_half(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui_ui_test_repo_tabs_left_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let dragged = repo_ids[2];
+    let target = repo_ids[1];
+    let expected = vec![repo_ids[0], repo_ids[2], repo_ids[1]];
+
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let target_bounds = cx
+        .debug_bounds(repo_tab_selector(target))
+        .expect("expected target repo tab bounds");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x - px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    let drop = gpui::point(target_bounds.left() + px(5.0), target_bounds.center().y);
+    cx.simulate_mouse_move(drop, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
+
+    wait_for_repo_order(&store_for_test, &expected);
+}
+
+#[gpui::test]
+fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui_ui_test_repo_tabs_self_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let dragged = repo_ids[1];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+
+    let moved_x = (start.x + px(10.0)).min(dragged_bounds.right() - px(1.0));
+    let moved = gpui::point(moved_x, start.y);
+    cx.simulate_mouse_move(moved, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(moved, MouseButton::Left, Modifiers::default());
+
+    let got = store_for_test.snapshot().repos.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(got, repo_ids);
+}
+
+#[gpui::test]
+fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitgpui_ui_test_worktrees_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+
+    store_for_test.dispatch(Msg::RemoveWorktree {
+        repo_id,
+        path: base.join("repo1").join("worktree_to_remove"),
+    });
+
+    let selector = worktrees_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for worktrees spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
 }
 
 struct PanelLayoutTestView {

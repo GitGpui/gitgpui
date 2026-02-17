@@ -56,6 +56,10 @@ pub(super) fn delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
     vec![Effect::DeleteBranch { repo_id, name }]
 }
 
+pub(super) fn force_delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
+    vec![Effect::ForceDeleteBranch { repo_id, name }]
+}
+
 pub(super) fn export_patch(
     repo_id: RepoId,
     commit_id: gitgpui_core::domain::CommitId,
@@ -235,6 +239,25 @@ pub(super) fn push_set_upstream(
         repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
     }
     vec![Effect::PushSetUpstream {
+        repo_id,
+        remote,
+        branch,
+    }]
+}
+
+pub(super) fn delete_remote_branch(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    remote: String,
+    branch: String,
+) -> Vec<Effect> {
+    if repos.contains_key(&repo_id)
+        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+    {
+        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
+    }
+    vec![Effect::DeleteRemoteBranch {
         repo_id,
         remote,
         branch,
@@ -426,8 +449,12 @@ pub(super) fn repo_command_finished(
             }
             RepoCommandKind::Push
             | RepoCommandKind::ForcePush
-            | RepoCommandKind::PushSetUpstream { .. } => {
+            | RepoCommandKind::PushSetUpstream { .. }
+            | RepoCommandKind::DeleteRemoteBranch { .. } => {
                 repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
+            }
+            RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
+                repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_sub(1);
             }
             _ => {}
         }
