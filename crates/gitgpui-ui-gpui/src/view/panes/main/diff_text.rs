@@ -109,7 +109,50 @@ impl MainPaneView {
         self.diff_text_selecting = true;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
+        self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
+    }
+
+    pub(in super::super::super) fn begin_diff_text_scroll_tracking(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_text_selecting {
+            return;
+        }
+
+        self.diff_text_last_mouse_pos = position;
+        self.diff_text_autoscroll_target =
+            Some(self.diff_text_autoscroll_target_for_position(position));
+        self.diff_text_autoscroll_seq = self.diff_text_autoscroll_seq.wrapping_add(1);
+
+        let autoscroll_seq = self.diff_text_autoscroll_seq;
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| loop {
+                Timer::after(Duration::from_millis(16)).await;
+                let mut keep_going = false;
+                let _ = view.update(cx, |this, cx| {
+                    if !this.diff_text_selecting {
+                        return;
+                    }
+                    if this.diff_text_autoscroll_seq != autoscroll_seq {
+                        return;
+                    }
+
+                    keep_going = true;
+                    let changed = this.tick_diff_text_selection_autoscroll(cx);
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if !keep_going {
+                    break;
+                }
+            },
+        )
+        .detach();
     }
 
     pub(in super::super::super) fn update_diff_text_selection_from_mouse(
@@ -119,6 +162,7 @@ impl MainPaneView {
         if !self.diff_text_selecting {
             return;
         }
+        self.diff_text_last_mouse_pos = position;
         let Some(pos) = self.diff_text_pos_for_mouse(position) else {
             return;
         };
@@ -135,6 +179,7 @@ impl MainPaneView {
 
     pub(in super::super::super) fn end_diff_text_selection(&mut self) {
         self.diff_text_selecting = false;
+        self.diff_text_autoscroll_target = None;
     }
 
     pub(in super::super::super) fn diff_text_has_selection(&self) -> bool {
@@ -754,5 +799,136 @@ impl MainPaneView {
             window,
             cx,
         );
+    }
+}
+
+impl MainPaneView {
+    fn tick_diff_text_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        if let Some(pos) = self
+            .root_view
+            .update(cx, |root, _cx| root.last_mouse_pos)
+            .ok()
+        {
+            self.diff_text_last_mouse_pos = pos;
+        }
+
+        let Some(target) = self.diff_text_autoscroll_target else {
+            // Still update selection periodically so it can expand while the user scrolls.
+            let before = self.diff_text_head;
+            self.update_diff_text_selection_from_mouse(self.diff_text_last_mouse_pos);
+            return self.diff_text_head != before;
+        };
+
+        let handle = self.scroll_handle_for_diff_text_autoscroll_target(target);
+        let bounds = handle.bounds();
+        if bounds.size.width <= px(0.0) || bounds.size.height <= px(0.0) {
+            return false;
+        }
+
+        let max_offset = handle.max_offset();
+        let old_offset = handle.offset();
+        let mouse = self.diff_text_last_mouse_pos;
+
+        let delta_x = autoscroll_delta_for_axis(mouse.x, bounds.left(), bounds.right());
+        let delta_y = autoscroll_delta_for_axis(mouse.y, bounds.top(), bounds.bottom());
+
+        let new_x = (old_offset.x + delta_x).clamp(-max_offset.width, px(0.0));
+        let new_y = (old_offset.y + delta_y).clamp(-max_offset.height, px(0.0));
+
+        let scrolled = new_x != old_offset.x || new_y != old_offset.y;
+        if scrolled {
+            handle.set_offset(point(new_x, new_y));
+        }
+
+        let before_head = self.diff_text_head;
+        self.update_diff_text_selection_from_mouse(mouse);
+        let selection_changed = self.diff_text_head != before_head;
+
+        scrolled || selection_changed
+    }
+
+    fn diff_text_autoscroll_target_for_position(
+        &self,
+        position: Point<Pixels>,
+    ) -> DiffTextAutoscrollTarget {
+        if self.is_file_preview_active() {
+            return DiffTextAutoscrollTarget::WorktreePreview;
+        }
+
+        if self.is_conflict_resolver_view_active_for_preview() {
+            return DiffTextAutoscrollTarget::ConflictResolvedPreview;
+        }
+
+        if self.diff_view == DiffViewMode::Split {
+            let right_bounds = self.diff_split_right_scroll.0.borrow().base_handle.bounds();
+            if right_bounds.contains(&position) {
+                return DiffTextAutoscrollTarget::DiffSplitRight;
+            }
+        }
+
+        DiffTextAutoscrollTarget::DiffLeftOrInline
+    }
+
+    fn is_conflict_resolver_view_active_for_preview(&self) -> bool {
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
+            return false;
+        };
+        if *area != DiffArea::Unstaged {
+            return false;
+        }
+
+        let Loadable::Ready(status) = &repo.status else {
+            return false;
+        };
+        let conflict_kind = status
+            .unstaged
+            .iter()
+            .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
+            .and_then(|e| e.conflict);
+
+        Self::conflict_requires_resolver(conflict_kind)
+    }
+
+    fn scroll_handle_for_diff_text_autoscroll_target(
+        &self,
+        target: DiffTextAutoscrollTarget,
+    ) -> ScrollHandle {
+        match target {
+            DiffTextAutoscrollTarget::DiffLeftOrInline => {
+                self.diff_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::DiffSplitRight => {
+                self.diff_split_right_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::WorktreePreview => {
+                self.worktree_preview_scroll.0.borrow().base_handle.clone()
+            }
+            DiffTextAutoscrollTarget::ConflictResolvedPreview => self
+                .conflict_resolved_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone(),
+        }
+    }
+}
+
+fn autoscroll_delta_for_axis(cursor: Pixels, min: Pixels, max: Pixels) -> Pixels {
+    fn speed(distance: Pixels) -> Pixels {
+        // 2–24px per tick, scaling with how far outside the container the cursor is.
+        let min_step = px(2.0);
+        let max_step = px(24.0);
+        (distance * 0.25).max(min_step).min(max_step)
+    }
+
+    if cursor < min {
+        speed(min - cursor)
+    } else if cursor > max {
+        -speed(cursor - max)
+    } else {
+        px(0.0)
     }
 }

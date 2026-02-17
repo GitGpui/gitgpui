@@ -124,6 +124,7 @@ pub(super) fn inline_diff_line_row_canvas(
                                         DiffTextRegion::Inline,
                                         position,
                                     );
+                                    this.begin_diff_text_scroll_tracking(position, cx);
                                 }
                                 cx.notify();
                             });
@@ -336,6 +337,7 @@ pub(super) fn split_diff_line_row_canvas(
                                     );
                                 } else {
                                     this.begin_diff_text_selection(visible_ix, region, position);
+                                    this.begin_diff_text_scroll_tracking(position, cx);
                                 }
                                 cx.notify();
                             });
@@ -498,6 +500,7 @@ pub(super) fn patch_split_column_row_canvas(
                                     );
                                 } else {
                                     this.begin_diff_text_selection(visible_ix, region, position);
+                                    this.begin_diff_text_scroll_tracking(position, cx);
                                 }
                                 cx.notify();
                             });
@@ -667,6 +670,7 @@ pub(super) fn worktree_preview_row_canvas(
                                     DiffTextRegion::Inline,
                                     position,
                                 );
+                                this.begin_diff_text_scroll_tracking(position, cx);
                             }
                             cx.notify();
                         });
