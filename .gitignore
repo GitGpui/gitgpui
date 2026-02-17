@@ -7,3 +7,4 @@
 zed
 callgrind.out*
 *.orig
+gitgpui-agent*
