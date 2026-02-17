@@ -105,6 +105,9 @@ enum ContextMenuAction {
     UpdateSubmodules {
         repo_id: RepoId,
     },
+    LoadWorktrees {
+        repo_id: RepoId,
+    },
     Pull {
         repo_id: RepoId,
         mode: PullMode,

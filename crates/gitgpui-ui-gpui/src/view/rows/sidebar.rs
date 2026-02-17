@@ -321,7 +321,7 @@ impl SidebarPaneView {
                             .child("Worktrees"),
                     )
                     .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Worktrees (Add / Open / Remove)".into();
+                        let text: SharedString = "Worktrees (Add / Refresh / Open / Remove)".into();
                         let mut changed = false;
                         if *hovering {
                             changed |= this.set_tooltip_text_if_changed(Some(text), cx);

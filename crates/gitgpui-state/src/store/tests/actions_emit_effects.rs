@@ -266,6 +266,149 @@ fn commit_amend_emits_effect() {
 }
 
 #[test]
+fn worktree_commands_reload_worktrees_on_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AddWorktree {
+                path: PathBuf::from("/tmp/worktree"),
+                reference: None,
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git worktree add /tmp/worktree",
+            )),
+        },
+    );
+
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadWorktrees { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_worktrees(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::RemoveWorktree {
+                path: PathBuf::from("/tmp/worktree"),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git worktree remove /tmp/worktree",
+            )),
+        },
+    );
+
+    assert!(state.repos[0].worktrees.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadWorktrees { repo_id: id } if *id == repo_id))
+    );
+}
+
+#[test]
+fn submodule_commands_reload_submodules_on_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AddSubmodule {
+                url: "https://example.com/sub.git".to_string(),
+                path: PathBuf::from("submodule"),
+            },
+            result: Ok(CommandOutput::empty_success("git submodule add")),
+        },
+    );
+
+    assert!(state.repos[0].submodules.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubmodules { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::UpdateSubmodules,
+            result: Ok(CommandOutput::empty_success(
+                "git submodule update --init --recursive",
+            )),
+        },
+    );
+
+    assert!(state.repos[0].submodules.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubmodules { repo_id: id } if *id == repo_id))
+    );
+
+    state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::RemoveSubmodule {
+                path: PathBuf::from("submodule"),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git submodule deinit -f submodule",
+            )),
+        },
+    );
+
+    assert!(state.repos[0].submodules.is_loading());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSubmodules { repo_id: id } if *id == repo_id))
+    );
+}
+
+#[test]
 fn merge_ref_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

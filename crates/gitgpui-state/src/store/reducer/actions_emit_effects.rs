@@ -405,6 +405,18 @@ pub(super) fn repo_command_finished(
     command: RepoCommandKind,
     result: std::result::Result<CommandOutput, Error>,
 ) -> Vec<Effect> {
+    let refresh_worktrees = matches!(
+        &command,
+        RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. }
+    ) && result.is_ok();
+    let refresh_submodules = matches!(
+        &command,
+        RepoCommandKind::AddSubmodule { .. }
+            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::RemoveSubmodule { .. }
+    ) && result.is_ok();
+
+    let mut extra_effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         match command {
             RepoCommandKind::FetchAll
@@ -451,8 +463,16 @@ pub(super) fn repo_command_finished(
                     .map(|entry| entry.summary.clone());
             }
         }
+
+        if refresh_worktrees {
+            repo_state.set_worktrees(Loadable::Loading);
+            extra_effects.push(Effect::LoadWorktrees { repo_id });
+        }
+        if refresh_submodules {
+            repo_state.set_submodules(Loadable::Loading);
+            extra_effects.push(Effect::LoadSubmodules { repo_id });
+        }
     }
-    let mut extra_effects = Vec::new();
     if matches!(
         &command,
         RepoCommandKind::StageHunk

@@ -8,6 +8,38 @@ use std::process::Command;
 use std::str;
 
 impl GixRepo {
+    fn preferred_remote_name(&self) -> Result<Option<String>> {
+        let remotes = self.list_remotes_impl()?;
+        if remotes.is_empty() {
+            return Ok(None);
+        }
+        if remotes.iter().any(|r| r.name == "origin") {
+            return Ok(Some("origin".to_string()));
+        }
+        Ok(Some(remotes[0].name.clone()))
+    }
+
+    fn current_branch_name(&self) -> Result<Option<String>> {
+        let head = self.current_branch_impl()?;
+        let head = head.trim();
+        if head.is_empty() || head == "HEAD" {
+            return Ok(None);
+        }
+        Ok(Some(head.to_string()))
+    }
+
+    fn branch_has_upstream(&self, branch: &str) -> Result<bool> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("for-each-ref")
+            .arg("--format=%(upstream:short)")
+            .arg(format!("refs/heads/{branch}"));
+        Ok(!run_git_capture(cmd, "git for-each-ref refs/heads")?
+            .trim()
+            .is_empty())
+    }
+
     pub(super) fn list_remotes_impl(&self) -> Result<Vec<Remote>> {
         let repo = self._repo.to_thread_local();
         let mut remotes = Vec::new();
@@ -61,6 +93,12 @@ impl GixRepo {
     }
 
     pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {
+        let branch = self.current_branch_name()?;
+        let has_upstream = match branch.as_deref() {
+            Some(branch) => self.branch_has_upstream(branch)?,
+            None => true,
+        };
+
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
@@ -75,10 +113,36 @@ impl GixRepo {
                 cmd.arg("--rebase");
             }
         }
+
+        if !has_upstream
+            && let Some(branch) = branch
+            && let Some(remote) = self.preferred_remote_name()?
+        {
+            cmd.arg(&remote).arg(&branch);
+            run_git_simple(cmd, &format!("git pull {remote} {branch}"))?;
+
+            let mut set_upstream = Command::new("git");
+            set_upstream
+                .arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("branch")
+                .arg("--set-upstream-to")
+                .arg(format!("{remote}/{branch}"))
+                .arg(branch);
+            run_git_simple(set_upstream, "git branch --set-upstream-to")?;
+            return Ok(());
+        }
+
         run_git_simple(cmd, "git pull")
     }
 
     pub(super) fn pull_with_output_impl(&self, mode: PullMode) -> Result<CommandOutput> {
+        let branch = self.current_branch_name()?;
+        let has_upstream = match branch.as_deref() {
+            Some(branch) => self.branch_has_upstream(branch)?,
+            None => true,
+        };
+
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
@@ -93,16 +157,50 @@ impl GixRepo {
                 cmd.arg("--rebase");
             }
         }
+
+        if !has_upstream
+            && let Some(branch) = branch
+            && let Some(remote) = self.preferred_remote_name()?
+        {
+            cmd.arg(&remote).arg(&branch);
+            let output = run_git_with_output(cmd, &format!("git pull {remote} {branch}"))?;
+
+            let mut set_upstream = Command::new("git");
+            set_upstream
+                .arg("-C")
+                .arg(&self.spec.workdir)
+                .arg("branch")
+                .arg("--set-upstream-to")
+                .arg(format!("{remote}/{branch}"))
+                .arg(branch);
+            run_git_simple(set_upstream, "git branch --set-upstream-to")?;
+            return Ok(output);
+        }
+
         run_git_with_output(cmd, "git pull")
     }
 
     pub(super) fn push_impl(&self) -> Result<()> {
+        if let Some(branch) = self.current_branch_name()?
+            && !self.branch_has_upstream(&branch)?
+            && let Some(remote) = self.preferred_remote_name()?
+        {
+            return self.push_set_upstream_impl(&remote, &branch);
+        }
+
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("push");
         run_git_simple(cmd, "git push")
     }
 
     pub(super) fn push_with_output_impl(&self) -> Result<CommandOutput> {
+        if let Some(branch) = self.current_branch_name()?
+            && !self.branch_has_upstream(&branch)?
+            && let Some(remote) = self.preferred_remote_name()?
+        {
+            return self.push_set_upstream_with_output_impl(&remote, &branch);
+        }
+
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("push");
         run_git_with_output(cmd, "git push")

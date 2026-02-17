@@ -2152,7 +2152,28 @@ impl GitGpuiView {
                     return;
                 };
 
-                if path.join(".git").is_dir() {
+                let dot_git = path.join(".git");
+                let is_repo_root = dot_git.is_dir()
+                    || (dot_git.is_file()
+                        && std::fs::read_to_string(&dot_git)
+                            .ok()
+                            .and_then(|contents| {
+                                let line = contents.lines().next()?.trim();
+                                let gitdir = line.strip_prefix("gitdir:")?.trim();
+                                if gitdir.is_empty() {
+                                    return None;
+                                }
+                                let gitdir_path = std::path::Path::new(gitdir);
+                                let resolved = if gitdir_path.is_absolute() {
+                                    gitdir_path.to_path_buf()
+                                } else {
+                                    path.join(gitdir_path)
+                                };
+                                Some(resolved.is_dir())
+                            })
+                            .unwrap_or(false));
+
+                if is_repo_root {
                     store.dispatch(Msg::OpenRepo(path));
                     let _ = view.update(cx, |this, cx| {
                         this.open_repo_panel = false;

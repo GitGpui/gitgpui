@@ -13,6 +13,13 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         },
     });
     items.push(ContextMenuItem::Entry {
+        label: "Refresh worktrees".into(),
+        icon: Some("↻".into()),
+        shortcut: None,
+        disabled: false,
+        action: ContextMenuAction::LoadWorktrees { repo_id },
+    });
+    items.push(ContextMenuItem::Entry {
         label: "Open worktree…".into(),
         icon: Some("↗".into()),
         shortcut: None,

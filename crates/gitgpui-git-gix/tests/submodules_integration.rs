@@ -55,7 +55,13 @@ fn list_submodules_ignores_missing_gitmodules_mapping() {
 
     run_git(
         &parent_repo,
-        &["-c", "commit.gpgsign=false", "commit", "-m", "add submodule"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
     );
 
     fs::write(parent_repo.join(".gitmodules"), "").unwrap();
@@ -81,4 +87,3 @@ fn list_submodules_ignores_missing_gitmodules_mapping() {
     let submodules = opened.list_submodules().unwrap();
     assert!(submodules.is_empty());
 }
-

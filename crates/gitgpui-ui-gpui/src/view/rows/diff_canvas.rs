@@ -99,16 +99,23 @@ pub(super) fn inline_diff_line_row_canvas(
 
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
+            let clip_bounds = window.content_mask().bounds;
+            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_text_bounds = visible_text_bounds.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble || !row_bounds.contains(&event.position) {
+                    if phase != DispatchPhase::Bubble
+                        || !visible_row_bounds.contains(&event.position)
+                    {
                         return;
                     }
 
                     if event.button == gpui::MouseButton::Left {
                         window.focus(&view.read(cx).diff_panel_focus_handle);
-                        if text_bounds.contains(&event.position) {
+                        if visible_text_bounds.contains(&event.position) {
                             let click_count = event.click_count;
                             let position = event.position;
                             view.update(cx, |this, cx| {
@@ -129,7 +136,7 @@ pub(super) fn inline_diff_line_row_canvas(
                             });
                         }
                     } else if event.button == gpui::MouseButton::Right
-                        && text_bounds.contains(&event.position)
+                        && visible_text_bounds.contains(&event.position)
                     {
                         view.update(cx, |this, cx| {
                             this.open_diff_editor_context_menu(
@@ -147,10 +154,11 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
-                        || !row_bounds.contains(&event.position)
+                        || !visible_row_bounds.contains(&event.position)
                     {
                         return;
                     }
@@ -307,16 +315,25 @@ pub(super) fn split_diff_line_row_canvas(
             let row_bounds = prepaint.bounds;
             let left_text_bounds = prepaint.left_text_bounds;
             let right_text_bounds = prepaint.right_text_bounds;
+            let clip_bounds = window.content_mask().bounds;
+            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
+            let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_left_text_bounds = visible_left_text_bounds.clone();
+                let visible_right_text_bounds = visible_right_text_bounds.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble || !row_bounds.contains(&event.position) {
+                    if phase != DispatchPhase::Bubble
+                        || !visible_row_bounds.contains(&event.position)
+                    {
                         return;
                     }
 
-                    let region = if left_text_bounds.contains(&event.position) {
+                    let region = if visible_left_text_bounds.contains(&event.position) {
                         Some(DiffTextRegion::SplitLeft)
-                    } else if right_text_bounds.contains(&event.position) {
+                    } else if visible_right_text_bounds.contains(&event.position) {
                         Some(DiffTextRegion::SplitRight)
                     } else {
                         None
@@ -359,10 +376,11 @@ pub(super) fn split_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
-                        || !row_bounds.contains(&event.position)
+                        || !visible_row_bounds.contains(&event.position)
                     {
                         return;
                     }
@@ -477,16 +495,23 @@ pub(super) fn patch_split_column_row_canvas(
 
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
+            let clip_bounds = window.content_mask().bounds;
+            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_text_bounds = visible_text_bounds.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble || !row_bounds.contains(&event.position) {
+                    if phase != DispatchPhase::Bubble
+                        || !visible_row_bounds.contains(&event.position)
+                    {
                         return;
                     }
 
                     if event.button == gpui::MouseButton::Left {
                         window.focus(&view.read(cx).diff_panel_focus_handle);
-                        if text_bounds.contains(&event.position) {
+                        if visible_text_bounds.contains(&event.position) {
                             let click_count = event.click_count;
                             let position = event.position;
                             view.update(cx, |this, cx| {
@@ -503,7 +528,7 @@ pub(super) fn patch_split_column_row_canvas(
                             });
                         }
                     } else if event.button == gpui::MouseButton::Right
-                        && text_bounds.contains(&event.position)
+                        && visible_text_bounds.contains(&event.position)
                     {
                         view.update(cx, |this, cx| {
                             this.open_diff_editor_context_menu(
@@ -521,10 +546,11 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
+                let visible_row_bounds = visible_row_bounds.clone();
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
-                        || !row_bounds.contains(&event.position)
+                        || !visible_row_bounds.contains(&event.position)
                     {
                         return;
                     }
@@ -643,10 +669,14 @@ pub(super) fn worktree_preview_row_canvas(
             });
 
             let text_bounds = prepaint.text_bounds;
+            let clip_bounds = window.content_mask().bounds;
+            let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble || !text_bounds.contains(&event.position) {
+                    if phase != DispatchPhase::Bubble
+                        || !visible_text_bounds.contains(&event.position)
+                    {
                         return;
                     }
 

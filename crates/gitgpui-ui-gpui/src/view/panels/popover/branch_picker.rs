@@ -72,7 +72,5 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         }
     }
 
-    zed::context_menu(theme, menu)
-        .w(px(420.0))
-        .max_w(px(820.0))
+    zed::context_menu(theme, menu).w(px(420.0)).max_w(px(820.0))
 }
