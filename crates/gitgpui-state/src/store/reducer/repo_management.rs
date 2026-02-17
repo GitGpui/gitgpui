@@ -161,6 +161,49 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     effects
 }
 
+pub(super) fn reorder_repo_tabs(
+    state: &mut AppState,
+    repo_id: RepoId,
+    insert_before: Option<RepoId>,
+) -> Vec<Effect> {
+    if state.repos.len() <= 1 {
+        return Vec::new();
+    }
+
+    let Some(from_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    if let Some(before_repo_id) = insert_before {
+        if before_repo_id == repo_id {
+            return Vec::new();
+        }
+        if let Some(before_ix) = state.repos.iter().position(|r| r.id == before_repo_id)
+            && from_ix + 1 == before_ix
+        {
+            // Already immediately before the target.
+            return Vec::new();
+        }
+    } else if from_ix + 1 == state.repos.len() {
+        // Already last.
+        return Vec::new();
+    }
+
+    let moved = state.repos.remove(from_ix);
+    let insert_ix = match insert_before {
+        Some(before_repo_id) => state
+            .repos
+            .iter()
+            .position(|r| r.id == before_repo_id)
+            .unwrap_or(state.repos.len()),
+        None => state.repos.len(),
+    };
+    state.repos.insert(insert_ix, moved);
+
+    let _ = session::persist_from_state(state);
+    Vec::new()
+}
+
 pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Vec<Effect> {
     state.clone = Some(CloneOpState {
         url: url.clone(),

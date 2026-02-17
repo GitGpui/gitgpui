@@ -918,10 +918,10 @@ impl MainPaneView {
 
 fn autoscroll_delta_for_axis(cursor: Pixels, min: Pixels, max: Pixels) -> Pixels {
     fn speed(distance: Pixels) -> Pixels {
-        // 2–24px per tick, scaling with how far outside the container the cursor is.
+        // 2–48px per tick, scaling with how far outside the container the cursor is.
         let min_step = px(2.0);
-        let max_step = px(24.0);
-        (distance * 0.25).max(min_step).min(max_step)
+        let max_step = px(48.0);
+        (distance * 0.4).max(min_step).min(max_step)
     }
 
     if cursor < min {

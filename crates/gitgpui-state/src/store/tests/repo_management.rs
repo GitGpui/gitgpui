@@ -185,6 +185,72 @@ fn close_repo_removes_and_moves_active() {
 }
 
 #[test]
+fn reorder_repo_tabs_moves_repo_and_keeps_active() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo3")),
+    );
+
+    assert_eq!(
+        state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![RepoId(1), RepoId(2), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(3)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReorderRepoTabs {
+            repo_id: RepoId(3),
+            insert_before: Some(RepoId(1)),
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![RepoId(3), RepoId(1), RepoId(2)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(3)));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReorderRepoTabs {
+            repo_id: RepoId(3),
+            insert_before: None,
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
+        vec![RepoId(1), RepoId(2), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(3)));
+}
+
+#[test]
 fn remote_branches_loaded_sets_state() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

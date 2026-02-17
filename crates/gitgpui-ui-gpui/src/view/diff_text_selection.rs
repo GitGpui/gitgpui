@@ -63,18 +63,27 @@ impl Element for DiffTextSelectionTracker {
         }
 
         let view_for_move = self.view.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
             view_for_move.update(cx, |this, cx| {
                 if !this.diff_text_selecting {
                     return;
                 }
+                let before = this.diff_text_head;
                 this.update_diff_text_selection_from_mouse(event.position);
-                cx.notify();
+                if this.diff_text_head != before {
+                    cx.notify();
+                }
             });
         });
 
         let view_for_up = self.view.clone();
-        window.on_mouse_event(move |event: &MouseUpEvent, _phase, _window, cx| {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
             if event.button != MouseButton::Left {
                 return;
             }

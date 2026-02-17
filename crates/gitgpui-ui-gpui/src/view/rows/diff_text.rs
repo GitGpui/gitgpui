@@ -309,8 +309,14 @@ pub(super) fn selectable_cached_diff_text(
             }),
         )
         .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _w, cx| {
+            if !this.diff_text_selecting {
+                return;
+            }
+            let before = this.diff_text_head;
             this.update_diff_text_selection_from_mouse(e.position);
-            cx.notify();
+            if this.diff_text_head != before {
+                cx.notify();
+            }
         }))
         .on_mouse_up(
             MouseButton::Left,

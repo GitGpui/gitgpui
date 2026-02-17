@@ -59,6 +59,10 @@ pub(super) fn reduce(
             Vec::new()
         }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
+        Msg::ReorderRepoTabs {
+            repo_id,
+            insert_before,
+        } => repo_management::reorder_repo_tabs(state, repo_id, insert_before),
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(state, repo_id, change)

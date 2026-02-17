@@ -418,7 +418,16 @@ impl ScrollDelta {
     pub fn pixel_delta(&self, line_height: Pixels) -> Point<Pixels> {
         match self {
             ScrollDelta::Pixels(delta) => *delta,
-            ScrollDelta::Lines(delta) => point(line_height * delta.x, line_height * delta.y),
+            ScrollDelta::Lines(delta) => {
+                // Line-based wheel deltas tend to feel sluggish compared to trackpad scrolling,
+                // especially in dense UIs. Apply a small multiplier to better match user
+                // expectations while keeping pixel-precise scrolling untouched.
+                const LINE_SCROLL_MULTIPLIER: f32 = 2.0;
+                point(
+                    line_height * (delta.x * LINE_SCROLL_MULTIPLIER),
+                    line_height * (delta.y * LINE_SCROLL_MULTIPLIER),
+                )
+            }
         }
     }
 

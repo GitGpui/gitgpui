@@ -24,6 +24,10 @@ pub enum Msg {
     SetActiveRepo {
         repo_id: RepoId,
     },
+    ReorderRepoTabs {
+        repo_id: RepoId,
+        insert_before: Option<RepoId>,
+    },
     ReloadRepo {
         repo_id: RepoId,
     },

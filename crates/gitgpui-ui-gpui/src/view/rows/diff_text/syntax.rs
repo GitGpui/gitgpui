@@ -296,13 +296,15 @@ fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Html => HTML.get_or_init(|| {
             init(
                 tree_sitter_html::LANGUAGE.into(),
-                include_str!("../../../../../../zed/extensions/html/languages/html/highlights.scm"),
+                include_str!(
+                    "../../../../../../../zed/extensions/html/languages/html/highlights.scm"
+                ),
             )
         }),
         DiffSyntaxLanguage::Css => CSS.get_or_init(|| {
             init(
                 tree_sitter_css::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/css/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/css/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::Hcl => return None,
@@ -314,19 +316,19 @@ fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Rust => RUST.get_or_init(|| {
             init(
                 tree_sitter_rust::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/rust/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/rust/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::Python => PY.get_or_init(|| {
             init(
                 tree_sitter_python::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/python/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/python/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::Go => GO.get_or_init(|| {
             init(
                 tree_sitter_go::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/go/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/go/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::C => return None,
@@ -340,41 +342,41 @@ fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Json => JSON.get_or_init(|| {
             init(
                 tree_sitter_json::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/json/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/json/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::Yaml => YAML.get_or_init(|| {
             init(
                 tree_sitter_yaml::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/yaml/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/yaml/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::TypeScript => TS.get_or_init(|| {
             init(
                 tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
                 include_str!(
-                    "../../../../../../zed/crates/languages/src/typescript/highlights.scm"
+                    "../../../../../../../zed/crates/languages/src/typescript/highlights.scm"
                 ),
             )
         }),
         DiffSyntaxLanguage::Tsx => TSX.get_or_init(|| {
             init(
                 tree_sitter_typescript::LANGUAGE_TSX.into(),
-                include_str!("../../../../../../zed/crates/languages/src/tsx/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/tsx/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::JavaScript => JS.get_or_init(|| {
             init(
                 tree_sitter_typescript::LANGUAGE_TSX.into(),
                 include_str!(
-                    "../../../../../../zed/crates/languages/src/javascript/highlights.scm"
+                    "../../../../../../../zed/crates/languages/src/javascript/highlights.scm"
                 ),
             )
         }),
         DiffSyntaxLanguage::Bash => BASH.get_or_init(|| {
             init(
                 tree_sitter_bash::LANGUAGE.into(),
-                include_str!("../../../../../../zed/crates/languages/src/bash/highlights.scm"),
+                include_str!("../../../../../../../zed/crates/languages/src/bash/highlights.scm"),
             )
         }),
         DiffSyntaxLanguage::Sql => return None,

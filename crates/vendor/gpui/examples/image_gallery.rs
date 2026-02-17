@@ -5,7 +5,7 @@ use gpui::{
     RetainAllImageCache, SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
     actions, div, hash, image_cache, img, prelude::*, px, rgb, size,
 };
-use reqwest_client::ReqwestClient;
+use http_client::BlockedHttpClient;
 use std::{collections::HashMap, sync::Arc};
 
 const IMAGES_IN_GALLERY: usize = 30;
@@ -248,8 +248,9 @@ fn main() {
     env_logger::init();
 
     Application::new().run(move |cx: &mut App| {
-        let http_client = ReqwestClient::user_agent("gpui example").unwrap();
-        cx.set_http_client(Arc::new(http_client));
+        // This example is compile-only in this workspace; use a real `HttpClient` implementation
+        // if you want remote image loading to work at runtime.
+        cx.set_http_client(Arc::new(BlockedHttpClient::new()));
 
         cx.activate(true);
         cx.on_action(|_: &Quit, cx| cx.quit());

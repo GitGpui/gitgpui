@@ -24,6 +24,14 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("SetActiveRepo")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::ReorderRepoTabs {
+                repo_id,
+                insert_before,
+            } => f
+                .debug_struct("ReorderRepoTabs")
+                .field("repo_id", repo_id)
+                .field("insert_before", insert_before)
+                .finish(),
             Msg::ReloadRepo { repo_id } => f
                 .debug_struct("ReloadRepo")
                 .field("repo_id", repo_id)

@@ -15,6 +15,34 @@ pub(in super::super) struct RepoTabsBarView {
     notify_fingerprint: u64,
 }
 
+#[derive(Clone, Debug)]
+struct RepoTabDrag {
+    repo_id: RepoId,
+    label: SharedString,
+}
+
+struct RepoTabDragGhost {
+    theme: AppTheme,
+    label: SharedString,
+}
+
+impl Render for RepoTabDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .h(px(28.0))
+            .flex()
+            .items_center()
+            .rounded(px(self.theme.radii.pill))
+            .bg(with_alpha(self.theme.colors.active_section, 0.92))
+            .border_1()
+            .border_color(with_alpha(self.theme.colors.border, 0.85))
+            .text_sm()
+            .text_color(self.theme.colors.text)
+            .child(self.label.clone())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RepoTabSpinnerDelayState {
     repo_id: RepoId,
@@ -242,6 +270,7 @@ impl Render for RepoTabsBarView {
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| repo.spec.workdir.display().to_string())
                 .into();
+            let label_for_drag = label.clone();
 
             let position = if ix == 0 {
                 zed::TabPosition::First
@@ -342,6 +371,38 @@ impl Render for RepoTabsBarView {
             let tab = tab
                 .child(tab_label)
                 .render(theme)
+                .on_drag(
+                    RepoTabDrag {
+                        repo_id,
+                        label: label_for_drag,
+                    },
+                    move |drag, _offset, _window, cx| {
+                        cx.new(|_cx| RepoTabDragGhost {
+                            theme,
+                            label: drag.label.clone(),
+                        })
+                    },
+                )
+                .can_drop(move |dragged, _window, _cx| {
+                    dragged
+                        .downcast_ref::<RepoTabDrag>()
+                        .is_some_and(|drag| drag.repo_id != repo_id)
+                })
+                .drag_over::<RepoTabDrag>(move |s, _drag, _window, _cx| {
+                    s.bg(with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.14 } else { 0.10 },
+                    ))
+                    .border_color(theme.colors.accent)
+                })
+                .on_drop(cx.listener(move |this, drag: &RepoTabDrag, _w, cx| {
+                    this.store.dispatch(Msg::ReorderRepoTabs {
+                        repo_id: drag.repo_id,
+                        insert_before: Some(repo_id),
+                    });
+                    this.hovered_repo_tab = None;
+                    cx.notify();
+                }))
                 .on_hover(cx.listener({
                     move |this, hovering: &bool, _w, cx| {
                         if *hovering {
@@ -418,5 +479,15 @@ impl Render for RepoTabsBarView {
                 .child(clone_repo),
         )
         .render(theme)
+        .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
+        .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
+            // Drop on the bar (but not on a specific tab) -> move to end.
+            this.store.dispatch(Msg::ReorderRepoTabs {
+                repo_id: drag.repo_id,
+                insert_before: None,
+            });
+            this.hovered_repo_tab = None;
+            cx.notify();
+        }))
     }
 }
