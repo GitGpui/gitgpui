@@ -103,6 +103,9 @@ impl GixRepo {
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
             PullMode::Default => {}
+            PullMode::Merge => {
+                cmd.arg("--no-rebase");
+            }
             PullMode::FastForwardIfPossible => {
                 cmd.arg("--ff");
             }
@@ -147,6 +150,9 @@ impl GixRepo {
         cmd.arg("-C").arg(&self.spec.workdir).arg("pull");
         match mode {
             PullMode::Default => {}
+            PullMode::Merge => {
+                cmd.arg("--no-rebase");
+            }
             PullMode::FastForwardIfPossible => {
                 cmd.arg("--ff");
             }

@@ -478,6 +478,9 @@ enum PopoverKind {
         area: DiffArea,
         path: Option<std::path::PathBuf>,
     },
+    PullReconcilePrompt {
+        repo_id: RepoId,
+    },
     PullPicker,
     PushPicker,
     AppMenu,
@@ -672,6 +675,7 @@ pub struct GitGpuiView {
     pane_resize: Option<PaneResizeState>,
 
     last_mouse_pos: Point<Pixels>,
+    pending_pull_reconcile_prompt: Option<RepoId>,
 
     status_multi_selection: HashMap<RepoId, StatusMultiSelection>,
     status_multi_selection_last_status: HashMap<RepoId, Arc<RepoStatus>>,
@@ -1236,6 +1240,7 @@ impl GitGpuiView {
                 .max(px(DETAILS_MIN_PX)),
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
+            pending_pull_reconcile_prompt: None,
             status_multi_selection: HashMap::default(),
             status_multi_selection_last_status: HashMap::default(),
             commit_details_message_input,
@@ -3966,6 +3971,17 @@ impl Render for GitGpuiView {
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
             self.schedule_ui_settings_persist(cx);
+        }
+
+        if let Some(repo_id) = self.pending_pull_reconcile_prompt.take() {
+            if self.active_repo_id() == Some(repo_id) {
+                self.open_popover_at(
+                    PopoverKind::PullReconcilePrompt { repo_id },
+                    self.last_mouse_pos,
+                    window,
+                    cx,
+                );
+            }
         }
 
         let decorations = window.window_decorations();

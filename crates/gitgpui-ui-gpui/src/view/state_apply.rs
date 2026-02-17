@@ -48,22 +48,42 @@ impl GitGpuiView {
                 self.push_toast(zed::ToastKind::Error, msg, cx);
             }
 
-            let new_command_summaries = next_repo
+            let new_command_entries = next_repo
                 .command_log
                 .iter()
                 .skip(old_cmd_len.min(next_repo.command_log.len()))
-                .map(|e| (e.ok, e.summary.clone()))
                 .collect::<Vec<_>>();
-            for (ok, summary) in new_command_summaries {
+            for entry in &new_command_entries {
                 self.push_toast(
-                    if ok {
+                    if entry.ok {
                         zed::ToastKind::Success
                     } else {
                         zed::ToastKind::Error
                     },
-                    summary,
+                    entry.summary.clone(),
                     cx,
                 );
+            }
+
+            if self.pending_pull_reconcile_prompt.is_none()
+                && next.active_repo == Some(next_repo.id)
+                && new_command_entries.iter().any(|entry| {
+                    if entry.ok {
+                        return false;
+                    }
+                    if !entry.command.trim_start().starts_with("git pull") {
+                        return false;
+                    }
+
+                    let stderr = entry.stderr.as_str();
+                    stderr.contains("Need to specify how to reconcile divergent branches")
+                        || stderr.contains(
+                            "divergent branches and need to specify how to reconcile them",
+                        )
+                        || stderr.contains("Not possible to fast-forward")
+                })
+            {
+                self.pending_pull_reconcile_prompt = Some(next_repo.id);
             }
         }
 

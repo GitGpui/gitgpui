@@ -371,6 +371,7 @@ pub trait GitRepository: Send + Sync {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PullMode {
     Default,
+    Merge,
     FastForwardIfPossible,
     FastForwardOnly,
     Rebase,

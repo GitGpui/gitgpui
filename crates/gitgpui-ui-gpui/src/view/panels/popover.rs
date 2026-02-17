@@ -11,6 +11,7 @@ mod diff_hunks;
 mod discard_changes_confirm;
 mod file_history;
 mod force_push_confirm;
+mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_prompt;
 mod remote_add_prompt;
@@ -1447,6 +1448,7 @@ impl PopoverHost {
             | PopoverKind::SubmoduleRemoveConfirm { .. }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::HistoryColumnSettings => Corner::TopRight,
             _ => Corner::TopLeft,
@@ -1882,6 +1884,9 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::PullReconcilePrompt { repo_id } => {
+                pull_reconcile_prompt::panel(self, repo_id, cx)
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => self
                 .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
                 .min_w(px(160.0))
