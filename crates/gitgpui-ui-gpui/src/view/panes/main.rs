@@ -1624,6 +1624,30 @@ impl MainPaneView {
         self.conflict_resolver.nav_anchor = Some(target);
     }
 
+    pub(in super::super) fn scroll_diff_to_item(
+        &mut self,
+        target: usize,
+        strategy: gpui::ScrollStrategy,
+    ) {
+        self.diff_scroll.scroll_to_item(target, strategy);
+        if self.diff_view == DiffViewMode::Split {
+            self.diff_split_right_scroll
+                .scroll_to_item(target, strategy);
+        }
+    }
+
+    pub(in super::super) fn scroll_diff_to_item_strict(
+        &mut self,
+        target: usize,
+        strategy: gpui::ScrollStrategy,
+    ) {
+        self.diff_scroll.scroll_to_item_strict(target, strategy);
+        if self.diff_view == DiffViewMode::Split {
+            self.diff_split_right_scroll
+                .scroll_to_item_strict(target, strategy);
+        }
+    }
+
     pub(in super::super) fn diff_jump_prev(&mut self) {
         let entries = self.diff_nav_entries();
         if entries.is_empty() {
@@ -1635,8 +1659,7 @@ impl MainPaneView {
             return;
         };
 
-        self.diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
     }
@@ -1652,8 +1675,7 @@ impl MainPaneView {
             return;
         };
 
-        self.diff_scroll
-            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.scroll_diff_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
     }
@@ -1673,8 +1695,7 @@ impl MainPaneView {
         let entries = self.diff_nav_entries();
         let target = entries.first().copied().unwrap_or(0);
 
-        self.diff_scroll
-            .scroll_to_item(target, gpui::ScrollStrategy::Top);
+        self.scroll_diff_to_item(target, gpui::ScrollStrategy::Top);
         self.diff_selection_anchor = Some(target);
         self.diff_selection_range = Some((target, target));
         self.diff_autoscroll_pending = false;

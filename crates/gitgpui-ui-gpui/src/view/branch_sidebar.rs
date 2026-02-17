@@ -47,6 +47,7 @@ pub(super) enum BranchSidebarRow {
         path: std::path::PathBuf,
         label: SharedString,
         tooltip: SharedString,
+        is_active: bool,
     },
     SubmodulesHeader {
         top_border: bool,
@@ -240,10 +241,8 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
 
     match &repo.worktrees {
         Loadable::Ready(worktrees) => {
-            let workdir = repo.spec.workdir.clone();
-            let other_worktrees = worktrees.iter().filter(|w| w.path != workdir);
             let mut any = false;
-            for worktree in other_worktrees {
+            for worktree in worktrees {
                 any = true;
                 let label: SharedString = if let Some(branch) = &worktree.branch {
                     format!("{branch}  {}", worktree.path.display()).into()
@@ -257,6 +256,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
                     path: worktree.path.clone(),
                     label,
                     tooltip,
+                    is_active: worktree.path == repo.spec.workdir,
                 });
             }
             if !any {

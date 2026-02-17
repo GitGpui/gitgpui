@@ -74,8 +74,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     return;
                 };
                 this.main_pane.update(cx, |pane, cx| {
-                    pane.diff_scroll
-                        .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                    pane.scroll_diff_to_item(target, gpui::ScrollStrategy::Top);
                     pane.diff_selection_anchor = Some(target);
                     pane.diff_selection_range = Some((target, target));
                     cx.notify();
@@ -108,8 +107,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .child(div().text_sm().line_clamp(1).child(label))
                     .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                         this.main_pane.update(cx, |pane, cx| {
-                            pane.diff_scroll
-                                .scroll_to_item(target, gpui::ScrollStrategy::Top);
+                            pane.scroll_diff_to_item(target, gpui::ScrollStrategy::Top);
                             pane.diff_selection_anchor = Some(target);
                             pane.diff_selection_range = Some((target, target));
                             cx.notify();

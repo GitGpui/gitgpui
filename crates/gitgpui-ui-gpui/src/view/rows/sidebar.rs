@@ -399,6 +399,7 @@ impl SidebarPaneView {
                     path,
                     label,
                     tooltip,
+                    is_active,
                 } => {
                     let repo_id = repo_id;
                     let tooltip = tooltip.clone();
@@ -416,6 +417,14 @@ impl SidebarPaneView {
                         .pl(indent_px(1))
                         .pr_2()
                         .rounded(px(theme.radii.row))
+                        .when(is_active, |d| {
+                            d.bg(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.18 } else { 0.12 },
+                            ))
+                            .border_1()
+                            .border_color(with_alpha(theme.colors.accent, 0.90))
+                        })
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .child(svg_icon("icons/folder.svg", icon_primary, 12.0))
