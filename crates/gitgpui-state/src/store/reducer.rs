@@ -157,15 +157,13 @@ pub(super) fn reduce(
             reference,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.worktrees_in_flight =
-                    repo_state.worktrees_in_flight.saturating_add(1);
+                repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
             actions_emit_effects::add_worktree(repo_id, path, reference)
         }
         Msg::RemoveWorktree { repo_id, path } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.worktrees_in_flight =
-                    repo_state.worktrees_in_flight.saturating_add(1);
+                repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
             }
             actions_emit_effects::remove_worktree(repo_id, path)
         }

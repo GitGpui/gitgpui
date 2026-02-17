@@ -384,7 +384,9 @@ impl Render for RepoTabsBarView {
                         })
                     },
                 )
-                .can_drop(move |dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
+                .can_drop(move |dragged, _window, _cx| {
+                    dragged.downcast_ref::<RepoTabDrag>().is_some()
+                })
                 .drag_over::<RepoTabDrag>(move |s, drag, _window, _cx| {
                     if drag.repo_id == repo_id {
                         return s;
@@ -396,26 +398,28 @@ impl Render for RepoTabsBarView {
                     ))
                     .border_color(theme.colors.accent)
                 })
-                .on_drag_move(cx.listener(move |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _w, cx| {
-                    let dragged_repo_id = e.drag(cx).repo_id;
-                    if dragged_repo_id == repo_id {
-                        return;
-                    }
+                .on_drag_move(cx.listener(
+                    move |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _w, cx| {
+                        let dragged_repo_id = e.drag(cx).repo_id;
+                        if dragged_repo_id == repo_id {
+                            return;
+                        }
 
-                    let Some(insert_before) = repo_tab_insert_before_for_drop(
-                        &this.state.repos,
-                        repo_id,
-                        e.event.position,
-                        e.bounds,
-                    ) else {
-                        return;
-                    };
+                        let Some(insert_before) = repo_tab_insert_before_for_drop(
+                            &this.state.repos,
+                            repo_id,
+                            e.event.position,
+                            e.bounds,
+                        ) else {
+                            return;
+                        };
 
-                    this.store.dispatch(Msg::ReorderRepoTabs {
-                        repo_id: dragged_repo_id,
-                        insert_before,
-                    });
-                }))
+                        this.store.dispatch(Msg::ReorderRepoTabs {
+                            repo_id: dragged_repo_id,
+                            insert_before,
+                        });
+                    },
+                ))
                 .on_drop(cx.listener(move |this, _drag: &RepoTabDrag, _w, cx| {
                     this.hovered_repo_tab = None;
                     cx.notify();

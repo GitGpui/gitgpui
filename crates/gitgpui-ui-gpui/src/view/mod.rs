@@ -404,6 +404,10 @@ enum PopoverKind {
     RemoteRemovePicker {
         repo_id: RepoId,
     },
+    RemoteBranchDeletePicker {
+        repo_id: RepoId,
+        remote: Option<String>,
+    },
     RemoteEditUrlPrompt {
         repo_id: RepoId,
         name: String,

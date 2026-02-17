@@ -17,6 +17,7 @@ mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_prompt;
 mod remote_add_prompt;
+mod remote_branch_delete_picker;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod remote_remove_picker;
@@ -587,6 +588,9 @@ impl PopoverHost {
                 }
                 PopoverKind::RemoteUrlPicker { .. } | PopoverKind::RemoteRemovePicker { .. } => {
                     let _ = self.ensure_remote_picker_search_input(window, cx);
+                }
+                PopoverKind::RemoteBranchDeletePicker { .. } => {
+                    let _ = self.ensure_branch_picker_search_input(window, cx);
                 }
                 PopoverKind::WorktreeAddPrompt { .. } => {
                     let theme = self.theme;
@@ -1893,6 +1897,9 @@ impl PopoverHost {
             } => remote_edit_url_prompt::panel(self, repo_id, name, kind, cx),
             PopoverKind::RemoteRemovePicker { repo_id } => {
                 remote_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::RemoteBranchDeletePicker { repo_id, remote } => {
+                remote_branch_delete_picker::panel(self, repo_id, remote, cx)
             }
             PopoverKind::RemoteRemoveConfirm { repo_id, name } => {
                 remote_remove_confirm::panel(self, repo_id, name, cx)

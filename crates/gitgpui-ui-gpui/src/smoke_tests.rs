@@ -1,8 +1,8 @@
 use crate::{theme::AppTheme, view, zed_port as zed};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{GitBackend, GitRepository, Result};
-use gitgpui_state::msg::Msg;
 use gitgpui_state::model::RepoId;
+use gitgpui_state::msg::Msg;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
@@ -415,7 +415,11 @@ fn restore_session_and_draw(
 
     let state = wait_for_repo_count(store, repos.len());
     let ids = state.repos.iter().map(|r| r.id).collect::<Vec<_>>();
-    let selectors = ids.iter().copied().map(repo_tab_selector).collect::<Vec<_>>();
+    let selectors = ids
+        .iter()
+        .copied()
+        .map(repo_tab_selector)
+        .collect::<Vec<_>>();
 
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -423,7 +427,10 @@ fn restore_session_and_draw(
             let _ = window.draw(app);
         });
 
-        if selectors.iter().all(|selector| cx.debug_bounds(selector).is_some()) {
+        if selectors
+            .iter()
+            .all(|selector| cx.debug_bounds(selector).is_some())
+        {
             return ids;
         }
 
@@ -575,7 +582,12 @@ fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
     cx.simulate_mouse_move(moved, Some(MouseButton::Left), Modifiers::default());
     cx.simulate_mouse_up(moved, MouseButton::Left, Modifiers::default());
 
-    let got = store_for_test.snapshot().repos.iter().map(|r| r.id).collect::<Vec<_>>();
+    let got = store_for_test
+        .snapshot()
+        .repos
+        .iter()
+        .map(|r| r.id)
+        .collect::<Vec<_>>();
     assert_eq!(got, repo_ids);
 }
 

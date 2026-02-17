@@ -38,6 +38,19 @@ pub(super) fn model(
             disabled: false,
             action: ContextMenuAction::FetchAll { repo_id },
         });
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Delete remote branch…".into(),
+            icon: Some("🗑".into()),
+            shortcut: None,
+            disabled: false,
+            action: ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RemoteBranchDeletePicker {
+                    repo_id,
+                    remote: None,
+                },
+            },
+        });
     }
 
     ContextMenuModel::new(items)

@@ -17,9 +17,9 @@ impl SidebarPaneView {
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
-        let show_worktrees_spinner = this.active_repo().is_some_and(|r| {
-            r.worktrees_in_flight > 0 || matches!(r.worktrees, Loadable::Loading)
-        });
+        let show_worktrees_spinner = this
+            .active_repo()
+            .is_some_and(|r| r.worktrees_in_flight > 0 || matches!(r.worktrees, Loadable::Loading));
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             gpui::svg()
