@@ -15,6 +15,7 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_program: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -37,6 +38,7 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    terminal_program: Option<String>,
 }
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
@@ -68,6 +70,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        terminal_program: file.terminal_program,
     }
 }
 
@@ -111,6 +114,7 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_program: Option<String>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -145,6 +149,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
     }
+    file.terminal_program = settings.terminal_program;
 
     persist_to_path(path, &file)
 }
@@ -419,6 +424,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                terminal_program: None,
             },
             &path,
         )
