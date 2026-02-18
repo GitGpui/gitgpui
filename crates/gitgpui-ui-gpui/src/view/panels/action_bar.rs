@@ -520,27 +520,6 @@ impl Render for ActionBarView {
                 }
             }));
 
-        let terminal = zed::Button::new("terminal", "Terminal")
-            .start_slot(icon("icons/computer.svg", icon_primary))
-            .style(zed::ButtonStyle::Outlined)
-            .disabled(self.active_repo_id().is_none())
-            .on_click(theme, cx, |this, _e, window, cx| {
-                let root_view = this.root_view.clone();
-                let _ = root_view.update(cx, |root, cx| {
-                    root.main_pane.update(cx, |pane, cx| {
-                        pane.toggle_terminal_panel(window, cx);
-                    });
-                });
-            })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Toggle terminal panel".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
-
         div()
             .flex()
             .items_center()
@@ -565,7 +544,6 @@ impl Render for ActionBarView {
                     .items_center()
                     .gap_2()
                     .child(pull)
-                    .child(terminal)
                     .child(push)
                     .child(create_branch)
                     .child(stash),

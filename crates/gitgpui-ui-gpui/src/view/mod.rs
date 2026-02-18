@@ -665,7 +665,6 @@ pub struct GitGpuiView {
     history_stash_ids_cache: Option<HistoryStashIdsCache>,
 
     date_time_format: DateTimeFormat,
-    terminal_program: Option<String>,
 
     open_repo_panel: bool,
     open_repo_input: Entity<zed::TextInput>,
@@ -919,14 +918,6 @@ impl GitGpuiView {
             .as_deref()
             .and_then(DateTimeFormat::from_key)
             .unwrap_or(DateTimeFormat::YmdHm);
-        let terminal_program = ui_session.terminal_program.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
 
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -1021,7 +1012,6 @@ impl GitGpuiView {
                 history_show_author,
                 history_show_date,
                 history_show_sha,
-                terminal_program.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 window,
@@ -1046,7 +1036,6 @@ impl GitGpuiView {
                 ui_model.clone(),
                 initial_theme,
                 date_time_format,
-                terminal_program.clone(),
                 weak_view.clone(),
                 toast_host.downgrade(),
                 main_pane.clone(),
@@ -1261,7 +1250,6 @@ impl GitGpuiView {
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             date_time_format,
-            terminal_program,
             open_repo_panel: false,
             open_repo_input,
             commit_message_input,

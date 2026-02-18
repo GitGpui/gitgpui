@@ -7,14 +7,12 @@ mod diff_cache;
 mod diff_search;
 mod diff_text;
 mod preview;
-mod terminal;
 
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) date_time_format: DateTimeFormat,
-    pub(in super::super) terminal_program: Option<String>,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitGpuiView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -138,14 +136,6 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) conflict_resolved_preview_scroll: UniformListScrollHandle,
     pub(in super::super) worktree_preview_scroll: UniformListScrollHandle,
 
-    pub(in super::super) terminal_open: bool,
-    pub(in super::super) terminal_height: Pixels,
-    pub(in super::super) terminal_scroll: ScrollHandle,
-    pub(in super::super) terminal_output_input: Entity<zed::TextInput>,
-    pub(in super::super) terminal_command_input: Entity<zed::TextInput>,
-    pub(in super::super) terminal_buffer: String,
-    pub(in super::super) terminal_running: bool,
-
     path_display_cache: std::cell::RefCell<HashMap<std::path::PathBuf, SharedString>>,
 }
 
@@ -158,14 +148,14 @@ enum DiffTextAutoscrollTarget {
 }
 
 impl MainPaneView {
-    fn notify_fingerprint_for(state: &AppState, terminal_open: bool) -> u64 {
+    fn notify_fingerprint_for(state: &AppState) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
-            let show_diff = !terminal_open && repo.diff_target.is_some();
+            let show_diff = repo.diff_target.is_some();
             show_diff.hash(&mut hasher);
 
             if show_diff {
@@ -215,17 +205,16 @@ impl MainPaneView {
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
-        terminal_program: Option<String>,
         root_view: WeakEntity<GitGpuiView>,
         tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
-        let initial_fingerprint = Self::notify_fingerprint_for(&state, false);
+        let initial_fingerprint = Self::notify_fingerprint_for(&state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
-            let next_fingerprint = Self::notify_fingerprint_for(&next, this.terminal_open);
+            let next_fingerprint = Self::notify_fingerprint_for(&next);
             if next_fingerprint == this.notify_fingerprint {
                 this.state = next;
                 return;
@@ -319,34 +308,6 @@ impl MainPaneView {
             }
         });
 
-        let terminal_output_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "".into(),
-                    multiline: true,
-                    read_only: true,
-                    chromeless: true,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
-        let terminal_command_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "Type a command…".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
         let diff_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
 
@@ -355,7 +316,6 @@ impl MainPaneView {
             state,
             theme,
             date_time_format,
-            terminal_program,
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
@@ -467,13 +427,6 @@ impl MainPaneView {
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
-            terminal_open: false,
-            terminal_height: px(240.0),
-            terminal_scroll: ScrollHandle::new(),
-            terminal_output_input,
-            terminal_command_input,
-            terminal_buffer: String::new(),
-            terminal_running: false,
             path_display_cache: std::cell::RefCell::new(HashMap::default()),
         };
 
@@ -495,10 +448,6 @@ impl MainPaneView {
         self.diff_search_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.conflict_resolver_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.terminal_output_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.terminal_command_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1924,10 +1873,6 @@ impl MainPaneView {
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         self.last_window_size = window.window_bounds().get_bounds().size;
-
-        if self.terminal_open {
-            return self.history_view(cx);
-        }
 
         let show_diff = self
             .active_repo()

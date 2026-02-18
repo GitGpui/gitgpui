@@ -41,9 +41,7 @@ pub(in super::super) struct PopoverHost {
     state: Arc<AppState>,
     theme: AppTheme,
     date_time_format: DateTimeFormat,
-    terminal_program: Option<String>,
     settings_date_format_open: bool,
-    settings_terminal_program_open: bool,
     _ui_model_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitGpuiView>,
@@ -73,7 +71,6 @@ pub(in super::super) struct PopoverHost {
     remote_url_edit_input: Entity<zed::TextInput>,
     create_branch_input: Entity<zed::TextInput>,
     stash_message_input: Entity<zed::TextInput>,
-    terminal_program_input: Entity<zed::TextInput>,
     push_upstream_branch_input: Entity<zed::TextInput>,
     worktree_path_input: Entity<zed::TextInput>,
     worktree_ref_input: Entity<zed::TextInput>,
@@ -89,7 +86,6 @@ impl PopoverHost {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         date_time_format: DateTimeFormat,
-        terminal_program: Option<String>,
         root_view: WeakEntity<GitGpuiView>,
         toast_host: WeakEntity<ToastHost>,
         main_pane: Entity<MainPaneView>,
@@ -238,20 +234,6 @@ impl PopoverHost {
             )
         });
 
-        let terminal_program_input = cx.new(|cx| {
-            zed::TextInput::new(
-                zed::TextInputOptions {
-                    placeholder: "System default".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
-                window,
-                cx,
-            )
-        });
-
         let push_upstream_branch_input = cx.new(|cx| {
             zed::TextInput::new(
                 zed::TextInputOptions {
@@ -330,8 +312,6 @@ impl PopoverHost {
             theme,
             date_time_format,
             settings_date_format_open: false,
-            terminal_program,
-            settings_terminal_program_open: false,
             _ui_model_subscription: subscription,
             notify_fingerprint: 0,
             root_view,
@@ -358,7 +338,6 @@ impl PopoverHost {
             remote_url_edit_input,
             create_branch_input,
             stash_message_input,
-            terminal_program_input,
             push_upstream_branch_input,
             worktree_path_input,
             worktree_ref_input,
@@ -388,8 +367,6 @@ impl PopoverHost {
         self.create_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.stash_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.terminal_program_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.push_upstream_branch_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -726,36 +703,10 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_terminal_program(
-        &mut self,
-        next: Option<String>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let next = next.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-
-        if self.terminal_program == next {
-            return;
-        }
-
-        self.terminal_program = next.clone();
-        self.main_pane
-            .update(cx, |pane, cx| pane.set_terminal_program(next, cx));
-        self.schedule_ui_settings_persist(cx);
-    }
-
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
         let fmt = self.date_time_format;
-        let terminal_program = self.terminal_program.clone();
         let _ = self.root_view.update(cx, |root, cx| {
             root.date_time_format = fmt;
-            root.terminal_program = terminal_program;
             root.schedule_ui_settings_persist(cx);
         });
     }

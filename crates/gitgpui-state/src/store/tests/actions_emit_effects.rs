@@ -357,6 +357,51 @@ fn worktree_commands_reload_worktrees_on_success() {
 }
 
 #[test]
+fn worktree_remove_closes_tab_for_removed_worktree() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        RepoId(2),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/worktree"),
+        },
+    ));
+    state.active_repo = Some(RepoId(2));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: RepoCommandKind::RemoveWorktree {
+                path: PathBuf::from("/tmp/worktree"),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git worktree remove /tmp/worktree",
+            )),
+        },
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.repos[0].id, RepoId(1));
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadWorktrees { repo_id } if *repo_id == RepoId(1)))
+    );
+}
+
+#[test]
 fn submodule_commands_reload_submodules_on_success() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

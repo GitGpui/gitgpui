@@ -78,34 +78,9 @@ impl MainPaneView {
                     window.focus(&this.history_panel_focus_handle);
                 }),
             )
-            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
                 let key = e.keystroke.key.as_str();
                 let mods = e.keystroke.modifiers;
-
-                let terminal_has_focus = this.terminal_open
-                    && this
-                        .terminal_command_input
-                        .read_with(cx, |input, _| input.focus_handle())
-                        .is_focused(window);
-                if terminal_has_focus {
-                    if mods.control || mods.alt || mods.platform || mods.function {
-                        return;
-                    }
-                    match key {
-                        "enter" => {
-                            this.terminal_submit_command(cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                        "escape" => {
-                            this.close_terminal_panel(cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                        _ => {}
-                    }
-                    return;
-                }
 
                 let handled = !mods.control
                     && !mods.alt
@@ -135,126 +110,8 @@ impl MainPaneView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(div().flex_1().min_h(px(0.0)).child(body))
-                    .when(self.terminal_open, |d| d.child(self.terminal_panel(cx))),
+                    .child(div().flex_1().min_h(px(0.0)).child(body)),
             )
-    }
-
-    fn terminal_panel(&mut self, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let theme = self.theme;
-        let repo_id_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let workdir: SharedString = self
-            .active_repo()
-            .map(|repo| repo.spec.workdir.display().to_string().into())
-            .unwrap_or_else(|| "No repository".into());
-
-        let close = zed::Button::new(format!("terminal_close_{repo_id_key}"), "✕")
-            .style(zed::ButtonStyle::Transparent)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                this.close_terminal_panel(cx);
-            });
-
-        let header = div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(px(zed::CONTROL_HEIGHT_MD_PX))
-            .px_2()
-            .bg(theme.colors.surface_bg_elevated)
-            .border_t_1()
-            .border_color(theme.colors.border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .min_w(px(0.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Terminal"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(workdir),
-                    ),
-            )
-            .child(close);
-
-        let run = zed::Button::new(format!("terminal_run_{repo_id_key}"), "Run")
-            .style(zed::ButtonStyle::Outlined)
-            .disabled(self.terminal_running)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                this.terminal_submit_command(cx);
-                cx.notify();
-            });
-
-        let output = div()
-            .id(("terminal_output_scroll_surface", repo_id_key))
-            .relative()
-            .w_full()
-            .min_w(px(0.0))
-            .flex_1()
-            .min_h(px(0.0))
-            .overflow_y_scroll()
-            .track_scroll(&self.terminal_scroll)
-            .bg(theme.colors.surface_bg)
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .font_family("monospace")
-                    .child(self.terminal_output_input.clone()),
-            );
-
-        let output_with_scrollbar = div()
-            .relative()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .min_h(px(0.0))
-            .child(output)
-            .child(
-                zed::Scrollbar::new(
-                    ("terminal_output_scrollbar", repo_id_key),
-                    self.terminal_scroll.clone(),
-                )
-                .render(theme),
-            );
-
-        let input = div()
-            .px_2()
-            .py_1()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_t_1()
-            .border_color(theme.colors.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .font_family("monospace")
-                    .child(self.terminal_command_input.clone()),
-            )
-            .child(run);
-
-        div()
-            .id(("terminal_panel", repo_id_key))
-            .flex()
-            .flex_col()
-            .h(self.terminal_height)
-            .min_h(px(0.0))
-            .bg(theme.colors.surface_bg)
-            .child(header)
-            .child(output_with_scrollbar)
-            .child(input)
     }
 
     fn history_select_adjacent_commit(

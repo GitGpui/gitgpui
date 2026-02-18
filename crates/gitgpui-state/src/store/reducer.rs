@@ -6,7 +6,7 @@ mod repo_management;
 mod util;
 
 use crate::model::{AppState, RepoId};
-use crate::msg::{Effect, Msg};
+use crate::msg::{Effect, Msg, RepoCommandKind};
 use gitgpui_core::services::GitRepository;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
@@ -15,6 +15,18 @@ use std::sync::atomic::AtomicU64;
 #[cfg(test)]
 pub(super) fn normalize_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     util::normalize_repo_path(path)
+}
+
+fn normalize_repo_relative_path(
+    repo_workdir: &std::path::Path,
+    path: std::path::PathBuf,
+) -> std::path::PathBuf {
+    let path = if path.is_relative() {
+        repo_workdir.join(path)
+    } else {
+        path
+    };
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn begin_local_action(state: &mut AppState, repo_id: RepoId) {
@@ -162,10 +174,15 @@ pub(super) fn reduce(
             actions_emit_effects::add_worktree(repo_id, path, reference)
         }
         Msg::RemoveWorktree { repo_id, path } => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+            let normalized_path = if let Some(repo_state) =
+                state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
                 repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
-            }
-            actions_emit_effects::remove_worktree(repo_id, path)
+                normalize_repo_relative_path(&repo_state.spec.workdir, path)
+            } else {
+                path
+            };
+            actions_emit_effects::remove_worktree(repo_id, normalized_path)
         }
         Msg::AddSubmodule { repo_id, url, path } => {
             actions_emit_effects::add_submodule(repo_id, url, path)
@@ -373,6 +390,28 @@ pub(super) fn reduce(
             repo_id,
             command,
             result,
-        } => actions_emit_effects::repo_command_finished(state, repo_id, command, result),
+        } => {
+            let removed_worktree_path = match (&command, &result) {
+                (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
+                _ => None,
+            };
+
+            let effects =
+                actions_emit_effects::repo_command_finished(state, repo_id, command, result);
+
+            if let Some(path) = removed_worktree_path {
+                let repo_ids_to_close = state
+                    .repos
+                    .iter()
+                    .filter(|repo| repo.spec.workdir == path)
+                    .map(|repo| repo.id)
+                    .collect::<Vec<_>>();
+                for repo_id in repo_ids_to_close {
+                    let _ = repo_management::close_repo(repos, state, repo_id);
+                }
+            }
+
+            effects
+        }
     }
 }
