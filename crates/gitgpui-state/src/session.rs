@@ -1,5 +1,6 @@
 use crate::model::{AppState, RepoId};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
@@ -44,6 +45,9 @@ struct UiSessionFileV2 {
 const SESSION_FILE_VERSION_V1: u32 = 1;
 const SESSION_FILE_VERSION_V2: u32 = 2;
 const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V2;
+
+const SESSION_FILE_ENV: &str = "GITGPUI_SESSION_FILE";
+const DISABLE_SESSION_PERSIST_ENV: &str = "GITGPUI_DISABLE_SESSION_PERSIST";
 
 pub fn load() -> UiSession {
     let Some(path) = default_session_file_path() else {
@@ -248,12 +252,52 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
 }
 
 fn default_session_file_path() -> Option<PathBuf> {
-    // Avoid writing to user state dir during unit tests unless explicitly exercised.
-    if cfg!(test) {
+    if let Some(path) = env::var_os(SESSION_FILE_ENV) {
+        if !path.to_string_lossy().trim().is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    if env::var_os(DISABLE_SESSION_PERSIST_ENV).is_some() {
+        return None;
+    }
+
+    // Avoid reading/writing user state dir during test binaries (e.g. `cargo test`, `cargo nextest`).
+    // `cfg!(test)` only applies to this crate's own unit tests; dependencies built for tests do not
+    // have `cfg(test)` set, so we also use a runtime heuristic.
+    if cfg!(test) || running_under_test_harness() {
         return None;
     }
 
     Some(app_state_dir()?.join("session.json"))
+}
+
+fn running_under_test_harness() -> bool {
+    let Ok(exe) = env::current_exe() else {
+        return false;
+    };
+    looks_like_test_binary(&exe)
+}
+
+fn looks_like_test_binary(exe: &Path) -> bool {
+    if exe.components().any(|component| {
+        component.as_os_str() == OsStr::new("deps")
+            || component.as_os_str() == OsStr::new("nextest")
+    }) {
+        return true;
+    }
+
+    exe.file_stem()
+        .is_some_and(|stem| looks_like_cargo_test_binary_name(stem))
+}
+
+fn looks_like_cargo_test_binary_name(stem: &OsStr) -> bool {
+    let stem = stem.to_string_lossy();
+    let Some((_prefix, suffix)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    // Cargo test binaries typically end in a 16-hex-digit hash suffix, e.g. `mycrate-3ad1b0fd3f0c0d3e`.
+    suffix.len() == 16 && suffix.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn app_state_dir() -> Option<PathBuf> {
@@ -309,6 +353,28 @@ mod tests {
         assert_eq!(loaded.version, SESSION_FILE_VERSION_V1);
         assert_eq!(loaded.open_repos, vec!["/a".to_string(), "/b".to_string()]);
         assert_eq!(loaded.active_repo.as_deref(), Some("/b"));
+    }
+
+    #[test]
+    fn detects_test_harness_executable_paths() {
+        // `cargo test` / nextest binaries are typically located under a `deps` directory.
+        assert!(looks_like_test_binary(Path::new(
+            "/tmp/target/debug/deps/foo"
+        )));
+        assert!(!looks_like_test_binary(Path::new("/tmp/target/debug/foo")));
+
+        // nextest uses a separate target subdir.
+        assert!(looks_like_test_binary(Path::new(
+            "/tmp/target/nextest/default/foo"
+        )));
+
+        // Cargo test binaries also have a hash suffix.
+        assert!(looks_like_test_binary(Path::new(
+            "/tmp/target/debug/gitgpui_ui_gpui-3ad1b0fd3f0c0d3e"
+        )));
+        assert!(!looks_like_test_binary(Path::new(
+            "/tmp/target/debug/gitgpui-app"
+        )));
     }
 
     #[test]

@@ -206,8 +206,9 @@ impl MainPaneView {
 
         cx.spawn(async move |view, cx| {
             const MAX_BYTES: u64 = 2 * 1024 * 1024;
-            let path_for_task = path.clone();
-            let task = cx.background_executor().spawn(async move {
+            let result = smol::unblock({
+                let path_for_task = path.clone();
+                move || {
                 let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
                 if meta.is_dir() {
                     return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
@@ -226,9 +227,9 @@ impl MainPaneView {
 
                 let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
                 Ok::<Arc<Vec<String>>, String>(Arc::new(lines))
-            });
-
-            let result = task.await;
+                }
+            })
+            .await;
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&path) {
                     return;

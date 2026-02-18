@@ -23,12 +23,11 @@ impl Poller {
                 // This still does a full snapshot clone today, but now it happens only when the
                 // store reports state changes (no 10ms polling loop), and coalescing ensures
                 // we do at most one pending update.
-                let snapshot = cx
-                    .background_spawn({
-                        let store = Arc::clone(&store);
-                        async move { store.snapshot() }
-                    })
-                    .await;
+                let snapshot = smol::unblock({
+                    let store = Arc::clone(&store);
+                    move || store.snapshot()
+                })
+                .await;
 
                 let _ = model.update(cx, |model, cx| model.set_state(Arc::new(snapshot), cx));
             }

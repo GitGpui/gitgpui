@@ -11,6 +11,7 @@ mod delete_remote_branch_confirm;
 mod diff_hunks;
 mod discard_changes_confirm;
 mod file_history;
+mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod pull_reconcile_prompt;
@@ -44,6 +45,7 @@ pub(in super::super) struct PopoverHost {
     settings_date_format_open: bool,
     settings_terminal_program_open: bool,
     _ui_model_subscription: gpui::Subscription,
+    notify_fingerprint: u64,
     root_view: WeakEntity<GitGpuiView>,
     toast_host: WeakEntity<ToastHost>,
     main_pane: Entity<MainPaneView>,
@@ -98,7 +100,14 @@ impl PopoverHost {
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             this.state = Arc::clone(&model.read(cx).state);
-            if this.popover.is_some() {
+
+            let Some(popover) = this.popover.as_ref() else {
+                return;
+            };
+
+            let next_fingerprint = fingerprint::notify_fingerprint(&this.state, popover);
+            if next_fingerprint != this.notify_fingerprint {
+                this.notify_fingerprint = next_fingerprint;
                 cx.notify();
             }
         });
@@ -324,6 +333,7 @@ impl PopoverHost {
             terminal_program,
             settings_terminal_program_open: false,
             _ui_model_subscription: subscription,
+            notify_fingerprint: 0,
             root_view,
             toast_host,
             main_pane,
@@ -421,6 +431,7 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
+        self.notify_fingerprint = 0;
         cx.notify();
     }
 
@@ -685,6 +696,9 @@ impl PopoverHost {
                 _ => {}
             }
             self.popover = Some(kind);
+        }
+        if let Some(popover) = self.popover.as_ref() {
+            self.notify_fingerprint = fingerprint::notify_fingerprint(&self.state, popover);
         }
         cx.notify();
     }

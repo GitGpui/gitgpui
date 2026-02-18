@@ -113,98 +113,101 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let old_text = file.old.as_deref().unwrap_or("");
-                let new_text = file.new.as_deref().unwrap_or("");
-                let rows = gitgpui_core::file_diff::side_by_side_rows(old_text, new_text);
+                let rebuild = smol::unblock(move || {
+                    let old_text = file.old.as_deref().unwrap_or("");
+                    let new_text = file.new.as_deref().unwrap_or("");
+                    let rows = gitgpui_core::file_diff::side_by_side_rows(old_text, new_text);
 
-                // Store the file path for syntax highlighting.
-                let file_path = Some(if file.path.is_absolute() {
-                    file.path.clone()
-                } else {
-                    workdir.join(&file.path)
-                });
-                let language = file_path.as_ref().and_then(|p| {
-                    rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
-                });
+                    // Store the file path for syntax highlighting.
+                    let file_path = Some(if file.path.is_absolute() {
+                        file.path.clone()
+                    } else {
+                        workdir.join(&file.path)
+                    });
+                    let language = file_path.as_ref().and_then(|p| {
+                        rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
+                    });
 
-                // Precompute word highlights and inline rows.
-                let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
-                    vec![None; rows.len()];
-                let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
-                    vec![None; rows.len()];
+                    // Precompute word highlights and inline rows.
+                    let mut split_word_highlights_old: Vec<Option<Vec<Range<usize>>>> =
+                        vec![None; rows.len()];
+                    let mut split_word_highlights_new: Vec<Option<Vec<Range<usize>>>> =
+                        vec![None; rows.len()];
 
-                let mut inline_rows: Vec<AnnotatedDiffLine> =
-                    Vec::with_capacity(rows.len().saturating_mul(2));
-                let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
-                    Vec::with_capacity(rows.len().saturating_mul(2));
-                for (row_ix, row) in rows.iter().enumerate() {
-                    use gitgpui_core::file_diff::FileDiffRowKind as K;
-                    match row.kind {
-                        K::Context => {
-                            inline_rows.push(AnnotatedDiffLine {
-                                kind: gitgpui_core::domain::DiffLineKind::Context,
-                                text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
-                                old_line: row.old_line,
-                                new_line: row.new_line,
-                            });
-                            inline_word_highlights.push(None);
-                        }
-                        K::Add => {
-                            inline_rows.push(AnnotatedDiffLine {
-                                kind: gitgpui_core::domain::DiffLineKind::Add,
-                                text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
-                                old_line: None,
-                                new_line: row.new_line,
-                            });
-                            inline_word_highlights.push(None);
-                        }
-                        K::Remove => {
-                            inline_rows.push(AnnotatedDiffLine {
-                                kind: gitgpui_core::domain::DiffLineKind::Remove,
-                                text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
-                                old_line: row.old_line,
-                                new_line: None,
-                            });
-                            inline_word_highlights.push(None);
-                        }
-                        K::Modify => {
-                            let old = row.old.as_deref().unwrap_or("");
-                            let new = row.new.as_deref().unwrap_or("");
-                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                            let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
-                            let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
+                    let mut inline_rows: Vec<AnnotatedDiffLine> =
+                        Vec::with_capacity(rows.len().saturating_mul(2));
+                    let mut inline_word_highlights: Vec<Option<Vec<Range<usize>>>> =
+                        Vec::with_capacity(rows.len().saturating_mul(2));
+                    for (row_ix, row) in rows.iter().enumerate() {
+                        use gitgpui_core::file_diff::FileDiffRowKind as K;
+                        match row.kind {
+                            K::Context => {
+                                inline_rows.push(AnnotatedDiffLine {
+                                    kind: gitgpui_core::domain::DiffLineKind::Context,
+                                    text: format!(" {}", row.old.as_deref().unwrap_or("")).into(),
+                                    old_line: row.old_line,
+                                    new_line: row.new_line,
+                                });
+                                inline_word_highlights.push(None);
+                            }
+                            K::Add => {
+                                inline_rows.push(AnnotatedDiffLine {
+                                    kind: gitgpui_core::domain::DiffLineKind::Add,
+                                    text: format!("+{}", row.new.as_deref().unwrap_or("")).into(),
+                                    old_line: None,
+                                    new_line: row.new_line,
+                                });
+                                inline_word_highlights.push(None);
+                            }
+                            K::Remove => {
+                                inline_rows.push(AnnotatedDiffLine {
+                                    kind: gitgpui_core::domain::DiffLineKind::Remove,
+                                    text: format!("-{}", row.old.as_deref().unwrap_or("")).into(),
+                                    old_line: row.old_line,
+                                    new_line: None,
+                                });
+                                inline_word_highlights.push(None);
+                            }
+                            K::Modify => {
+                                let old = row.old.as_deref().unwrap_or("");
+                                let new = row.new.as_deref().unwrap_or("");
+                                let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                let old_ranges_opt = (!old_ranges.is_empty()).then_some(old_ranges);
+                                let new_ranges_opt = (!new_ranges.is_empty()).then_some(new_ranges);
 
-                            split_word_highlights_old[row_ix] = old_ranges_opt.clone();
-                            split_word_highlights_new[row_ix] = new_ranges_opt.clone();
+                                split_word_highlights_old[row_ix] = old_ranges_opt.clone();
+                                split_word_highlights_new[row_ix] = new_ranges_opt.clone();
 
-                            inline_rows.push(AnnotatedDiffLine {
-                                kind: gitgpui_core::domain::DiffLineKind::Remove,
-                                text: format!("-{}", old).into(),
-                                old_line: row.old_line,
-                                new_line: None,
-                            });
-                            inline_word_highlights.push(old_ranges_opt);
+                                inline_rows.push(AnnotatedDiffLine {
+                                    kind: gitgpui_core::domain::DiffLineKind::Remove,
+                                    text: format!("-{}", old).into(),
+                                    old_line: row.old_line,
+                                    new_line: None,
+                                });
+                                inline_word_highlights.push(old_ranges_opt);
 
-                            inline_rows.push(AnnotatedDiffLine {
-                                kind: gitgpui_core::domain::DiffLineKind::Add,
-                                text: format!("+{}", new).into(),
-                                old_line: None,
-                                new_line: row.new_line,
-                            });
-                            inline_word_highlights.push(new_ranges_opt);
+                                inline_rows.push(AnnotatedDiffLine {
+                                    kind: gitgpui_core::domain::DiffLineKind::Add,
+                                    text: format!("+{}", new).into(),
+                                    old_line: None,
+                                    new_line: row.new_line,
+                                });
+                                inline_word_highlights.push(new_ranges_opt);
+                            }
                         }
                     }
-                }
 
-                let rebuild = Rebuild {
-                    file_path,
-                    language,
-                    rows,
-                    inline_rows,
-                    inline_word_highlights,
-                    split_word_highlights_old,
-                    split_word_highlights_new,
-                };
+                    Rebuild {
+                        file_path,
+                        language,
+                        rows,
+                        inline_rows,
+                        inline_word_highlights,
+                        split_word_highlights_old,
+                        split_word_highlights_new,
+                    }
+                })
+                .await;
 
                 let _ = view.update(cx, |this, cx| {
                     if this.file_diff_cache_inflight != Some(seq) {
@@ -471,7 +474,8 @@ impl MainPaneView {
         let diff_target_for_task = self.diff_cache_target.clone();
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let highlights = compute_diff_word_highlights(&diff_lines);
+                let highlights =
+                    smol::unblock(move || compute_diff_word_highlights(&diff_lines)).await;
 
                 let _ = view.update(cx, |this, cx| {
                     if this.diff_word_highlights_inflight != Some(seq) {

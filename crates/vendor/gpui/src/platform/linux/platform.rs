@@ -17,6 +17,7 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_task::Runnable;
 use calloop::{LoopSignal, channel::Channel};
+use futures::FutureExt as _;
 use futures::channel::oneshot;
 use util::ResultExt as _;
 #[cfg(any(feature = "wayland", feature = "x11"))]
@@ -299,6 +300,8 @@ impl<P: LinuxClient + 'static> Platform for P {
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         let identifier = self.window_identifier();
+        #[cfg(any(feature = "wayland", feature = "x11"))]
+        let background_executor = self.background_executor();
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         self.foreground_executor()
@@ -314,47 +317,51 @@ impl<P: LinuxClient + 'static> Platform for P {
                 let directories = options.directories;
                 let identifier = identifier.await;
 
-                let result = match super::tokio_runtime()
+                let result = background_executor
                     .spawn(async move {
-                        let request = match ashpd::desktop::file_chooser::OpenFileRequest::default()
-                            .identifier(identifier)
-                            .modal(true)
-                            .title(title.as_str())
-                            .accept_label(accept_label.as_deref())
-                            .multiple(multiple)
-                            .directory(directories)
-                            .send()
-                            .await
-                        {
-                            Ok(request) => request,
-                            Err(err) => {
-                                let result = match err {
-                                    ashpd::Error::PortalNotFound(_) => {
-                                        anyhow!(FILE_PICKER_PORTAL_MISSING)
+                        let picked = std::panic::AssertUnwindSafe(async move {
+                            let request =
+                                match ashpd::desktop::file_chooser::OpenFileRequest::default()
+                                    .identifier(identifier)
+                                    .modal(true)
+                                    .title(title.as_str())
+                                    .accept_label(accept_label.as_deref())
+                                    .multiple(multiple)
+                                    .directory(directories)
+                                    .send()
+                                    .await
+                                {
+                                    Ok(request) => request,
+                                    Err(err) => {
+                                        let result = match err {
+                                            ashpd::Error::PortalNotFound(_) => {
+                                                anyhow!(FILE_PICKER_PORTAL_MISSING)
+                                            }
+                                            err => err.into(),
+                                        };
+                                        return Err(result);
                                     }
-                                    err => err.into(),
                                 };
-                                return Err(result);
-                            }
-                        };
 
-                        match request.response() {
-                            Ok(response) => Ok(Some(
-                                response
-                                    .uris()
-                                    .iter()
-                                    .filter_map(|uri| uri.to_file_path().ok())
-                                    .collect::<Vec<_>>(),
-                            )),
-                            Err(ashpd::Error::Response(_)) => Ok(None),
-                            Err(e) => Err(e.into()),
-                        }
+                            match request.response() {
+                                Ok(response) => Ok(Some(
+                                    response
+                                        .uris()
+                                        .iter()
+                                        .filter_map(|uri| uri.to_file_path().ok())
+                                        .collect::<Vec<_>>(),
+                                )),
+                                Err(ashpd::Error::Response(_)) => Ok(None),
+                                Err(e) => Err(e.into()),
+                            }
+                        })
+                        .catch_unwind()
+                        .await
+                        .map_err(|_| anyhow!("file chooser task panicked"))??;
+
+                        Ok(picked)
                     })
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(err) => Err(anyhow!("file chooser task panicked: {err}")),
-                };
+                    .await;
 
                 let _ = done_tx.send(result);
             })
@@ -374,6 +381,8 @@ impl<P: LinuxClient + 'static> Platform for P {
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         let identifier = self.window_identifier();
+        #[cfg(any(feature = "wayland", feature = "x11"))]
+        let background_executor = self.background_executor();
 
         #[cfg(any(feature = "wayland", feature = "x11"))]
         self.foreground_executor()
@@ -383,48 +392,51 @@ impl<P: LinuxClient + 'static> Platform for P {
 
                 async move {
                     let identifier = identifier.await;
-                    let result = match super::tokio_runtime()
+                    let result = background_executor
                         .spawn(async move {
-                            let mut request_builder =
-                                ashpd::desktop::file_chooser::SaveFileRequest::default()
-                                    .identifier(identifier)
-                                    .modal(true)
-                                    .title("Save File")
-                                    .current_folder(directory)
-                                    .expect("pathbuf should not be nul terminated");
+                            let picked = std::panic::AssertUnwindSafe(async move {
+                                let mut request_builder =
+                                    ashpd::desktop::file_chooser::SaveFileRequest::default()
+                                        .identifier(identifier)
+                                        .modal(true)
+                                        .title("Save File")
+                                        .current_folder(directory)
+                                        .expect("pathbuf should not be nul terminated");
 
-                            if let Some(suggested_name) = suggested_name {
-                                request_builder =
-                                    request_builder.current_name(suggested_name.as_str());
-                            }
-
-                            let request = match request_builder.send().await {
-                                Ok(request) => request,
-                                Err(err) => {
-                                    let result = match err {
-                                        ashpd::Error::PortalNotFound(_) => {
-                                            anyhow!(FILE_PICKER_PORTAL_MISSING)
-                                        }
-                                        err => err.into(),
-                                    };
-                                    return Err(result);
+                                if let Some(suggested_name) = suggested_name {
+                                    request_builder =
+                                        request_builder.current_name(suggested_name.as_str());
                                 }
-                            };
 
-                            match request.response() {
-                                Ok(response) => Ok(response
-                                    .uris()
-                                    .first()
-                                    .and_then(|uri| uri.to_file_path().ok())),
-                                Err(ashpd::Error::Response(_)) => Ok(None),
-                                Err(e) => Err(e.into()),
-                            }
+                                let request = match request_builder.send().await {
+                                    Ok(request) => request,
+                                    Err(err) => {
+                                        let result = match err {
+                                            ashpd::Error::PortalNotFound(_) => {
+                                                anyhow!(FILE_PICKER_PORTAL_MISSING)
+                                            }
+                                            err => err.into(),
+                                        };
+                                        return Err(result);
+                                    }
+                                };
+
+                                match request.response() {
+                                    Ok(response) => Ok(response
+                                        .uris()
+                                        .first()
+                                        .and_then(|uri| uri.to_file_path().ok())),
+                                    Err(ashpd::Error::Response(_)) => Ok(None),
+                                    Err(e) => Err(e.into()),
+                                }
+                            })
+                            .catch_unwind()
+                            .await
+                            .map_err(|_| anyhow!("file chooser task panicked"))??;
+
+                            Ok(picked)
                         })
-                        .await
-                    {
-                        Ok(result) => result,
-                        Err(err) => Err(anyhow!("file chooser task panicked: {err}")),
-                    };
+                        .await;
 
                     let _ = done_tx.send(result);
                 }
@@ -529,22 +541,22 @@ impl<P: LinuxClient + 'static> Platform for P {
         let username = username.to_string();
         let password = password.to_vec();
         self.background_executor().spawn(async move {
-            super::tokio_runtime()
-                .spawn(async move {
-                    let keyring = oo7::Keyring::new().await?;
-                    keyring.unlock().await?;
-                    keyring
-                        .create_item(
-                            KEYRING_LABEL,
-                            &vec![("url", &url), ("username", &username)],
-                            password,
-                            true,
-                        )
-                        .await?;
-                    Ok::<_, anyhow::Error>(())
-                })
-                .await
-                .context("credentials task panicked")??;
+            std::panic::AssertUnwindSafe(async move {
+                let keyring = oo7::Keyring::new().await?;
+                keyring.unlock().await?;
+                keyring
+                    .create_item(
+                        KEYRING_LABEL,
+                        &vec![("url", &url), ("username", &username)],
+                        password,
+                        true,
+                    )
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .catch_unwind()
+            .await
+            .map_err(|_| anyhow!("credentials task panicked"))??;
             Ok(())
         })
     }
@@ -552,35 +564,35 @@ impl<P: LinuxClient + 'static> Platform for P {
     fn read_credentials(&self, url: &str) -> Task<Result<Option<(String, Vec<u8>)>>> {
         let url = url.to_string();
         self.background_executor().spawn(async move {
-            let credentials = super::tokio_runtime()
-                .spawn(async move {
-                    let keyring = oo7::Keyring::new().await?;
-                    keyring.unlock().await?;
+            let credentials = std::panic::AssertUnwindSafe(async move {
+                let keyring = oo7::Keyring::new().await?;
+                keyring.unlock().await?;
 
-                    let items = keyring.search_items(&vec![("url", &url)]).await?;
+                let items = keyring.search_items(&vec![("url", &url)]).await?;
 
-                    for item in items.into_iter() {
-                        if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
-                            let attributes = item.attributes().await?;
-                            let username = attributes
-                                .get("username")
-                                .context("Cannot find username in stored credentials")?;
-                            item.unlock().await?;
-                            let secret = item.secret().await?;
+                for item in items.into_iter() {
+                    if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                        let attributes = item.attributes().await?;
+                        let username = attributes
+                            .get("username")
+                            .context("Cannot find username in stored credentials")?;
+                        item.unlock().await?;
+                        let secret = item.secret().await?;
 
-                            // we lose the zeroizing capabilities at this boundary,
-                            // a current limitation GPUI's credentials api
-                            return Ok::<_, anyhow::Error>(Some((
-                                username.to_string(),
-                                secret.to_vec(),
-                            )));
-                        }
+                        // we lose the zeroizing capabilities at this boundary,
+                        // a current limitation GPUI's credentials api
+                        return Ok::<_, anyhow::Error>(Some((
+                            username.to_string(),
+                            secret.to_vec(),
+                        )));
                     }
+                }
 
-                    Ok::<_, anyhow::Error>(None)
-                })
-                .await
-                .context("credentials task panicked")??;
+                Ok::<_, anyhow::Error>(None)
+            })
+            .catch_unwind()
+            .await
+            .map_err(|_| anyhow!("credentials task panicked"))??;
 
             Ok(credentials)
         })
@@ -589,24 +601,24 @@ impl<P: LinuxClient + 'static> Platform for P {
     fn delete_credentials(&self, url: &str) -> Task<Result<()>> {
         let url = url.to_string();
         self.background_executor().spawn(async move {
-            super::tokio_runtime()
-                .spawn(async move {
-                    let keyring = oo7::Keyring::new().await?;
-                    keyring.unlock().await?;
+            std::panic::AssertUnwindSafe(async move {
+                let keyring = oo7::Keyring::new().await?;
+                keyring.unlock().await?;
 
-                    let items = keyring.search_items(&vec![("url", &url)]).await?;
+                let items = keyring.search_items(&vec![("url", &url)]).await?;
 
-                    for item in items.into_iter() {
-                        if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
-                            item.delete().await?;
-                            return Ok::<_, anyhow::Error>(());
-                        }
+                for item in items.into_iter() {
+                    if item.label().await.is_ok_and(|label| label == KEYRING_LABEL) {
+                        item.delete().await?;
+                        return Ok::<_, anyhow::Error>(());
                     }
+                }
 
-                    Ok::<_, anyhow::Error>(())
-                })
-                .await
-                .context("credentials task panicked")??;
+                Ok::<_, anyhow::Error>(())
+            })
+            .catch_unwind()
+            .await
+            .map_err(|_| anyhow!("credentials task panicked"))??;
             Ok(())
         })
     }
@@ -649,21 +661,19 @@ pub(super) fn open_uri_internal(
         executor
             .spawn(async move {
                 let portal_activation_token = activation_token.clone();
-                let portal_result = super::tokio_runtime()
-                    .spawn(async move {
-                        ashpd::desktop::open_uri::OpenFileRequest::default()
-                            .activation_token(
-                                portal_activation_token.map(ashpd::ActivationToken::from),
-                            )
-                            .send_uri(&uri)
-                            .await
-                    })
-                    .await;
+                let portal_result = std::panic::AssertUnwindSafe(async move {
+                    ashpd::desktop::open_uri::OpenFileRequest::default()
+                        .activation_token(portal_activation_token.map(ashpd::ActivationToken::from))
+                        .send_uri(&uri)
+                        .await
+                })
+                .catch_unwind()
+                .await;
 
                 match portal_result {
                     Ok(Ok(_)) => return,
                     Ok(Err(e)) => log::error!("Failed to open with dbus: {}", e),
-                    Err(e) => log::error!("Failed to open with dbus: {}", e),
+                    Err(_) => log::error!("Failed to open with dbus: portal task panicked"),
                 }
 
                 for mut command in open::commands(uri_string) {
@@ -696,21 +706,19 @@ pub(super) fn reveal_path_internal(
         .spawn(async move {
             if let Some(dir) = File::open(path.clone()).log_err() {
                 let portal_activation_token = activation_token.clone();
-                let portal_result = super::tokio_runtime()
-                    .spawn(async move {
-                        ashpd::desktop::open_uri::OpenDirectoryRequest::default()
-                            .activation_token(
-                                portal_activation_token.map(ashpd::ActivationToken::from),
-                            )
-                            .send(&dir.as_fd())
-                            .await
-                    })
-                    .await;
+                let portal_result = std::panic::AssertUnwindSafe(async move {
+                    ashpd::desktop::open_uri::OpenDirectoryRequest::default()
+                        .activation_token(portal_activation_token.map(ashpd::ActivationToken::from))
+                        .send(&dir.as_fd())
+                        .await
+                })
+                .catch_unwind()
+                .await;
 
                 match portal_result {
                     Ok(Ok(_)) => return,
                     Ok(Err(e)) => log::error!("Failed to open with dbus: {}", e),
-                    Err(e) => log::error!("Failed to open with dbus: {}", e),
+                    Err(_) => log::error!("Failed to open with dbus: portal task panicked"),
                 }
                 if path.is_dir() {
                     open::that_detached(path).log_err();

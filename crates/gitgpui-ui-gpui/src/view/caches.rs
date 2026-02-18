@@ -330,149 +330,172 @@ impl MainPaneView {
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let visible_indices = (0..page.commits.len()).collect::<Vec<_>>();
+                struct Rebuild {
+                    visible_indices: Vec<usize>,
+                    graph_rows: Vec<Arc<history_graph::GraphRow>>,
+                    max_lanes: usize,
+                    commit_row_vms: Vec<HistoryCommitRowVm>,
+                }
 
-                let branch_heads: HashSet<&str> = branches
-                    .iter()
-                    .map(|b| b.target.as_ref())
-                    .chain(remote_branches.iter().map(|b| b.target.as_ref()))
-                    .collect();
-                let graph_rows: Vec<Arc<history_graph::GraphRow>> =
-                    history_graph::compute_graph(&page.commits, theme, &branch_heads)
-                        .into_iter()
-                        .map(Arc::new)
+                let request_for_update = request_for_task.clone();
+                let request_for_build = request_for_task.clone();
+
+                let rebuild = smol::unblock(move || {
+                    let visible_indices = (0..page.commits.len()).collect::<Vec<_>>();
+
+                    let branch_heads: HashSet<&str> = branches
+                        .iter()
+                        .map(|b| b.target.as_ref())
+                        .chain(remote_branches.iter().map(|b| b.target.as_ref()))
                         .collect();
-                let max_lanes = graph_rows
-                    .iter()
-                    .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
-                    .max()
-                    .unwrap_or(1);
+                    let graph_rows: Vec<Arc<history_graph::GraphRow>> =
+                        history_graph::compute_graph(&page.commits, theme, &branch_heads)
+                            .into_iter()
+                            .map(Arc::new)
+                            .collect();
+                    let max_lanes = graph_rows
+                        .iter()
+                        .map(|r| r.lanes_now.len().max(r.lanes_next.len()))
+                        .max()
+                        .unwrap_or(1);
 
-                let head_target = head_branch
-                    .as_deref()
-                    .and_then(|head| branches.iter().find(|b| b.name == head))
-                    .map(|b| b.target.as_ref());
+                    let head_target = head_branch
+                        .as_deref()
+                        .and_then(|head| branches.iter().find(|b| b.name == head))
+                        .map(|b| b.target.as_ref());
 
-                let mut branch_names_by_target: HashMap<&str, Vec<String>> =
-                    HashMap::with_capacity_and_hasher(
-                        branches.len() + remote_branches.len(),
-                        Default::default(),
-                    );
-                for branch in &branches {
-                    let should_skip = head_branch
-                        .as_ref()
-                        .is_some_and(|head| branch.name == *head)
-                        && head_target == Some(branch.target.as_ref());
-                    if should_skip {
-                        continue;
-                    }
-                    branch_names_by_target
-                        .entry(branch.target.as_ref())
-                        .or_default()
-                        .push(branch.name.clone());
-                }
-                for branch in &remote_branches {
-                    branch_names_by_target
-                        .entry(branch.target.as_ref())
-                        .or_default()
-                        .push(format!("{}/{}", branch.remote, branch.name));
-                }
-                for names in branch_names_by_target.values_mut() {
-                    names.sort();
-                    names.dedup();
-                }
-
-                let mut tag_names_by_target: HashMap<&str, Vec<&str>> =
-                    HashMap::with_capacity_and_hasher(tags.len(), Default::default());
-                for tag in &tags {
-                    tag_names_by_target
-                        .entry(tag.target.as_ref())
-                        .or_default()
-                        .push(tag.name.as_str());
-                }
-                for names in tag_names_by_target.values_mut() {
-                    names.sort_unstable();
-                    names.dedup();
-                }
-
-                let empty_tags: Arc<[SharedString]> = Vec::new().into();
-                let commit_row_vms = visible_indices
-                    .iter()
-                    .filter_map(|ix| page.commits.get(*ix))
-                    .map(|commit| {
-                        let commit_id = commit.id.as_ref();
-
-                        let branches_text = {
-                            let has_head = head_target == Some(commit_id) && head_branch.is_some();
-                            let branch_count =
-                                branch_names_by_target.get(commit_id).map_or(0, |b| b.len());
-                            let mut names: Vec<String> =
-                                Vec::with_capacity(branch_count + usize::from(has_head));
-                            if head_target == Some(commit_id)
-                                && let Some(head) = head_branch.as_ref()
-                            {
-                                names.push(format!("HEAD → {head}"));
-                            }
-                            if let Some(branches) = branch_names_by_target.get(commit_id) {
-                                names.extend(branches.iter().cloned());
-                            }
-                            names.sort();
-                            names.dedup();
-                            if names.is_empty() {
-                                SharedString::from("")
-                            } else {
-                                SharedString::from(names.join(", "))
-                            }
-                        };
-
-                        let tag_names = tag_names_by_target.get(commit_id).map_or_else(
-                            || Arc::clone(&empty_tags),
-                            |names| {
-                                let tag_names: Vec<SharedString> = names
-                                    .iter()
-                                    .copied()
-                                    .map(|n| n.to_string().into())
-                                    .collect();
-                                tag_names.into()
-                            },
+                    let mut branch_names_by_target: HashMap<&str, Vec<String>> =
+                        HashMap::with_capacity_and_hasher(
+                            branches.len() + remote_branches.len(),
+                            Default::default(),
                         );
-
-                        let author: SharedString = commit.author.clone().into();
-                        let summary: SharedString = commit.summary.clone().into();
-
-                        let when: SharedString =
-                            format_datetime_utc(commit.time, request_for_task.date_time_format)
-                                .into();
-
-                        let id: &str = commit.id.as_ref();
-                        let short = id.get(0..8).unwrap_or(id);
-                        let short_sha: SharedString = short.to_string().into();
-
-                        HistoryCommitRowVm {
-                            branches_text,
-                            tag_names,
-                            author,
-                            summary,
-                            when,
-                            short_sha,
+                    for branch in &branches {
+                        let should_skip = head_branch
+                            .as_ref()
+                            .is_some_and(|head| branch.name == *head)
+                            && head_target == Some(branch.target.as_ref());
+                        if should_skip {
+                            continue;
                         }
-                    })
-                    .collect::<Vec<_>>();
+                        branch_names_by_target
+                            .entry(branch.target.as_ref())
+                            .or_default()
+                            .push(branch.name.clone());
+                    }
+                    for branch in &remote_branches {
+                        branch_names_by_target
+                            .entry(branch.target.as_ref())
+                            .or_default()
+                            .push(format!("{}/{}", branch.remote, branch.name));
+                    }
+                    for names in branch_names_by_target.values_mut() {
+                        names.sort();
+                        names.dedup();
+                    }
+
+                    let mut tag_names_by_target: HashMap<&str, Vec<&str>> =
+                        HashMap::with_capacity_and_hasher(tags.len(), Default::default());
+                    for tag in &tags {
+                        tag_names_by_target
+                            .entry(tag.target.as_ref())
+                            .or_default()
+                            .push(tag.name.as_str());
+                    }
+                    for names in tag_names_by_target.values_mut() {
+                        names.sort_unstable();
+                        names.dedup();
+                    }
+
+                    let empty_tags: Arc<[SharedString]> = Vec::new().into();
+                    let commit_row_vms = visible_indices
+                        .iter()
+                        .filter_map(|ix| page.commits.get(*ix))
+                        .map(|commit| {
+                            let commit_id = commit.id.as_ref();
+
+                            let branches_text = {
+                                let has_head =
+                                    head_target == Some(commit_id) && head_branch.is_some();
+                                let branch_count =
+                                    branch_names_by_target.get(commit_id).map_or(0, |b| b.len());
+                                let mut names: Vec<String> =
+                                    Vec::with_capacity(branch_count + usize::from(has_head));
+                                if head_target == Some(commit_id)
+                                    && let Some(head) = head_branch.as_ref()
+                                {
+                                    names.push(format!("HEAD → {head}"));
+                                }
+                                if let Some(branches) = branch_names_by_target.get(commit_id) {
+                                    names.extend(branches.iter().cloned());
+                                }
+                                names.sort();
+                                names.dedup();
+                                if names.is_empty() {
+                                    SharedString::from("")
+                                } else {
+                                    SharedString::from(names.join(", "))
+                                }
+                            };
+
+                            let tag_names = tag_names_by_target.get(commit_id).map_or_else(
+                                || Arc::clone(&empty_tags),
+                                |names| {
+                                    let tag_names: Vec<SharedString> = names
+                                        .iter()
+                                        .copied()
+                                        .map(|n| n.to_string().into())
+                                        .collect();
+                                    tag_names.into()
+                                },
+                            );
+
+                            let author: SharedString = commit.author.clone().into();
+                            let summary: SharedString = commit.summary.clone().into();
+
+                            let when: SharedString = format_datetime_utc(
+                                commit.time,
+                                request_for_build.date_time_format,
+                            )
+                            .into();
+
+                            let id: &str = commit.id.as_ref();
+                            let short = id.get(0..8).unwrap_or(id);
+                            let short_sha: SharedString = short.to_string().into();
+
+                            HistoryCommitRowVm {
+                                branches_text,
+                                tag_names,
+                                author,
+                                summary,
+                                when,
+                                short_sha,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+
+                    Rebuild {
+                        visible_indices,
+                        graph_rows,
+                        max_lanes,
+                        commit_row_vms,
+                    }
+                })
+                .await;
 
                 let _ = view.update(cx, |this, cx| {
                     if this.history_cache_seq != seq {
                         return;
                     }
-                    if this.history_cache_inflight.as_ref() != Some(&request_for_task) {
+                    if this.history_cache_inflight.as_ref() != Some(&request_for_update) {
                         return;
                     }
-                    if this.active_repo_id() != Some(request_for_task.repo_id) {
+                    if this.active_repo_id() != Some(request_for_update.repo_id) {
                         return;
                     }
 
                     if this.history_col_graph_auto && this.history_col_resize.is_none() {
                         let required = px(HISTORY_GRAPH_MARGIN_X_PX * 2.0
-                            + HISTORY_GRAPH_COL_GAP_PX * (max_lanes as f32));
+                            + HISTORY_GRAPH_COL_GAP_PX * (rebuild.max_lanes as f32));
                         this.history_col_graph = required
                             .min(px(HISTORY_COL_GRAPH_MAX_PX))
                             .max(px(HISTORY_COL_GRAPH_MIN_PX));
@@ -480,10 +503,10 @@ impl MainPaneView {
 
                     this.history_cache_inflight = None;
                     this.history_cache = Some(HistoryCache {
-                        request: request_for_task.clone(),
-                        visible_indices,
-                        graph_rows,
-                        commit_row_vms,
+                        request: request_for_update.clone(),
+                        visible_indices: rebuild.visible_indices,
+                        graph_rows: rebuild.graph_rows,
+                        commit_row_vms: rebuild.commit_row_vms,
                     });
                     cx.notify();
                 });

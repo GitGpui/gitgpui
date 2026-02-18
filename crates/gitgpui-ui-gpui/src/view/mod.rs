@@ -41,11 +41,15 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod fingerprint;
 mod history_graph;
+mod linux_desktop_integration;
 mod panels;
 mod panes;
 mod patch_split;
+mod path_display;
 mod poller;
+mod repo_open;
 pub(crate) mod rows;
 mod state_apply;
 mod toast_host;
@@ -711,17 +715,8 @@ struct DiffTextLayoutCacheEntry {
 
 impl GitGpuiView {
     fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
-        const MAX_ENTRIES: usize = 8_192;
         let mut cache = self.path_display_cache.borrow_mut();
-        if cache.len() > MAX_ENTRIES {
-            cache.clear();
-        }
-        if let Some(s) = cache.get(path) {
-            return s.clone();
-        }
-        let s: SharedString = path.display().to_string().into();
-        cache.insert(path.clone(), s.clone());
-        s
+        path_display::cached_path_display(&mut cache, path)
     }
 
     fn set_tooltip_text_if_changed(
@@ -910,11 +905,11 @@ impl GitGpuiView {
         let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
         let mut ui_session = session::load();
-        if let Some(path) = initial_path {
-            if !ui_session.open_repos.iter().any(|p| p == &path) {
+        if let Some(path) = initial_path.as_ref() {
+            if !ui_session.open_repos.iter().any(|p| p == path) {
                 ui_session.open_repos.push(path.clone());
             }
-            ui_session.active_repo = Some(path);
+            ui_session.active_repo = Some(path.clone());
         }
 
         let restored_sidebar_width = ui_session.sidebar_width;
@@ -937,13 +932,36 @@ impl GitGpuiView {
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
 
-        if !ui_session.open_repos.is_empty() {
-            store.dispatch(Msg::RestoreSession {
-                open_repos: ui_session.open_repos,
-                active_repo: ui_session.active_repo,
-            });
-        } else if let Ok(path) = std::env::current_dir() {
-            store.dispatch(Msg::OpenRepo(path));
+        // Only auto-restore/open on startup if the store hasn't already been preloaded.
+        // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
+        // already-initialized store (notably in `gpui::test` setup).
+        let store_preloaded = !store.snapshot().repos.is_empty();
+        let should_auto_restore = {
+            #[cfg(test)]
+            {
+                false
+            }
+            #[cfg(not(test))]
+            {
+                !store_preloaded
+            }
+        };
+
+        if should_auto_restore {
+            if !ui_session.open_repos.is_empty() {
+                store.dispatch(Msg::RestoreSession {
+                    open_repos: ui_session.open_repos,
+                    active_repo: ui_session.active_repo,
+                });
+            } else if let Ok(path) = std::env::current_dir() {
+                store.dispatch(Msg::OpenRepo(path));
+            }
+        } else if store_preloaded {
+            if let Some(path) = initial_path.as_ref() {
+                store.dispatch(Msg::OpenRepo(path.clone()));
+            }
+        } else if let Some(path) = initial_path.as_ref() {
+            store.dispatch(Msg::OpenRepo(path.clone()));
         }
 
         let initial_state = Arc::new(store.snapshot());
@@ -2154,76 +2172,6 @@ impl GitGpuiView {
         rows
     }
 
-    fn prompt_open_repo(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let store = Arc::clone(&self.store);
-        let view = cx.weak_entity();
-
-        let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open Git Repository".into()),
-        });
-
-        window
-            .spawn(cx, async move |cx| {
-                let result = rx.await;
-                let paths = match result {
-                    Ok(Ok(Some(paths))) => paths,
-                    Ok(Ok(None)) => return,
-                    Ok(Err(_)) | Err(_) => {
-                        let _ = view.update(cx, |this, cx| {
-                            this.open_repo_panel = true;
-                            cx.notify();
-                        });
-                        return;
-                    }
-                };
-
-                let Some(path) = paths.into_iter().next() else {
-                    return;
-                };
-
-                let dot_git = path.join(".git");
-                let is_repo_root = dot_git.is_dir()
-                    || (dot_git.is_file()
-                        && std::fs::read_to_string(&dot_git)
-                            .ok()
-                            .and_then(|contents| {
-                                let line = contents.lines().next()?.trim();
-                                let gitdir = line.strip_prefix("gitdir:")?.trim();
-                                if gitdir.is_empty() {
-                                    return None;
-                                }
-                                let gitdir_path = std::path::Path::new(gitdir);
-                                let resolved = if gitdir_path.is_absolute() {
-                                    gitdir_path.to_path_buf()
-                                } else {
-                                    path.join(gitdir_path)
-                                };
-                                Some(resolved.is_dir())
-                            })
-                            .unwrap_or(false));
-
-                if is_repo_root {
-                    store.dispatch(Msg::OpenRepo(path));
-                    let _ = view.update(cx, |this, cx| {
-                        this.open_repo_panel = false;
-                        cx.notify();
-                    });
-                } else {
-                    let _ = view.update(cx, |this, cx| {
-                        this.open_repo_panel = true;
-                        this.open_repo_input.update(cx, |input, cx| {
-                            input.set_text(path.display().to_string(), cx)
-                        });
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
-    }
-
     fn untracked_worktree_preview_path(&self) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let status = match &repo.status {
@@ -2397,8 +2345,9 @@ impl GitGpuiView {
 
         cx.spawn(async move |view, cx| {
             const MAX_BYTES: u64 = 2 * 1024 * 1024;
-            let path_for_task = path.clone();
-            let task = cx.background_executor().spawn(async move {
+            let result = smol::unblock({
+                let path_for_task = path.clone();
+                move || {
                 let meta = std::fs::metadata(&path_for_task).map_err(|e| e.to_string())?;
                 if meta.is_dir() {
                     return Err("Selected path is a directory. Select a file inside to preview, or stage the directory to add its contents.".to_string());
@@ -2417,9 +2366,9 @@ impl GitGpuiView {
 
                 let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
                 Ok::<Arc<Vec<String>>, String>(Arc::new(lines))
-            });
-
-            let result = task.await;
+                }
+            })
+            .await;
             let _ = view.update(cx, |this, cx| {
                 if this.worktree_preview_path.as_ref() != Some(&path) {
                     return;
@@ -3088,130 +3037,6 @@ impl GitGpuiView {
     fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
         self.toast_host
             .update(cx, |host, cx| host.remove_toast(id, cx));
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn maybe_auto_install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
-        use std::path::PathBuf;
-
-        if std::env::var_os("GITGPUI_NO_DESKTOP_INSTALL").is_some() {
-            return;
-        }
-
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-        if !desktop.to_ascii_lowercase().contains("gnome") {
-            return;
-        }
-
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-        let Some(data_home) = data_home else {
-            return;
-        };
-
-        let desktop_path = data_home.join("applications/gitgpui.desktop");
-        let icon_path = data_home.join("icons/hicolor/scalable/apps/gitgpui.svg");
-        if desktop_path.exists() && icon_path.exists() {
-            return;
-        }
-
-        self.install_linux_desktop_integration(cx);
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
-        use std::fs;
-        use std::path::PathBuf;
-        use std::process::Command;
-
-        const DESKTOP_TEMPLATE: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/linux/gitgpui.desktop"
-        ));
-        const ICON_SVG: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/gitgpui_logo.svg"
-        ));
-
-        let Ok(exe) = std::env::current_exe() else {
-            self.push_toast(
-                zed::ToastKind::Error,
-                "Desktop install failed: could not resolve executable path".to_string(),
-                cx,
-            );
-            return;
-        };
-
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let data_home = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| home.as_ref().map(|h| h.join(".local/share")));
-        let Some(data_home) = data_home else {
-            self.push_toast(
-                zed::ToastKind::Error,
-                "Desktop install failed: HOME/XDG_DATA_HOME not set".to_string(),
-                cx,
-            );
-            return;
-        };
-
-        let applications_dir = data_home.join("applications");
-        let icons_dir = data_home.join("icons/hicolor/scalable/apps");
-        let desktop_path = applications_dir.join("gitgpui.desktop");
-        let icon_path = icons_dir.join("gitgpui.svg");
-
-        if let Err(e) =
-            fs::create_dir_all(&applications_dir).and_then(|_| fs::create_dir_all(&icons_dir))
-        {
-            self.push_toast(
-                zed::ToastKind::Error,
-                format!("Desktop install failed: {e}"),
-                cx,
-            );
-            return;
-        }
-
-        let mut desktop_out = String::new();
-        for line in DESKTOP_TEMPLATE.lines() {
-            if line.starts_with("Exec=") {
-                desktop_out.push_str("Exec=");
-                desktop_out.push_str(&exe.display().to_string());
-                desktop_out.push('\n');
-            } else {
-                desktop_out.push_str(line);
-                desktop_out.push('\n');
-            }
-        }
-
-        if let Err(e) = fs::write(&desktop_path, desktop_out.as_bytes())
-            .and_then(|_| fs::write(&icon_path, ICON_SVG))
-        {
-            self.push_toast(
-                zed::ToastKind::Error,
-                format!("Desktop install failed: {e}"),
-                cx,
-            );
-            return;
-        }
-
-        let _ = Command::new("update-desktop-database")
-            .arg(&applications_dir)
-            .output();
-        let _ = Command::new("gtk-update-icon-cache")
-            .arg(data_home.join("icons/hicolor"))
-            .output();
-
-        self.push_toast(
-            zed::ToastKind::Success,
-            format!(
-                "Installed desktop entry + icon to:\n{}\n{}\n\nIf GNOME still shows a generic icon, log out/in (or restart GNOME Shell).",
-                desktop_path.display(),
-                icon_path.display()
-            ),
-            cx,
-        );
     }
 
     fn rebuild_diff_word_highlights(&mut self) {

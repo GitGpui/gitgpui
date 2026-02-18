@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 mod dispatcher;
 mod headless;
 mod keyboard;
@@ -29,14 +27,3 @@ pub(crate) use x11::*;
 pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
 #[cfg(not(all(feature = "screen-capture", any(feature = "wayland", feature = "x11"))))]
 pub(crate) type PlatformScreenCaptureFrame = ();
-
-pub(super) fn tokio_runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .thread_name("gpui-tokio")
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime for gpui linux platform")
-    })
-}

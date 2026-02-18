@@ -1,3 +1,5 @@
+use super::super::fingerprint;
+use super::super::path_display;
 use super::super::*;
 use std::hash::{Hash, Hasher};
 
@@ -33,53 +35,20 @@ pub(in super::super) struct DetailsPaneView {
 
 impl DetailsPaneView {
     fn notify_fingerprint(state: &AppState) -> u64 {
-        fn hash_loadable_shared<T>(
-            value: &Loadable<Arc<T>>,
-            hasher: &mut std::collections::hash_map::DefaultHasher,
-        ) {
-            match value {
-                Loadable::NotLoaded => 0u8.hash(hasher),
-                Loadable::Loading => 1u8.hash(hasher),
-                Loadable::Ready(shared) => {
-                    2u8.hash(hasher);
-                    (Arc::as_ptr(shared) as usize).hash(hasher);
-                }
-                Loadable::Error(err) => {
-                    3u8.hash(hasher);
-                    err.hash(hasher);
-                }
-            }
-        }
-
-        fn hash_loadable_kind<T>(
-            value: &Loadable<T>,
-            hasher: &mut std::collections::hash_map::DefaultHasher,
-        ) {
-            match value {
-                Loadable::NotLoaded => 0u8.hash(hasher),
-                Loadable::Loading => 1u8.hash(hasher),
-                Loadable::Ready(_) => 2u8.hash(hasher),
-                Loadable::Error(err) => {
-                    3u8.hash(hasher);
-                    err.hash(hasher);
-                }
-            }
-        }
-
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
-            hash_loadable_shared(&repo.status, &mut hasher);
+            fingerprint::hash_loadable_arc(&repo.status, &mut hasher);
             repo.local_actions_in_flight.hash(&mut hasher);
             repo.commit_in_flight.hash(&mut hasher);
             repo.selected_commit.hash(&mut hasher);
-            hash_loadable_shared(&repo.commit_details, &mut hasher);
+            fingerprint::hash_loadable_arc(&repo.commit_details, &mut hasher);
 
-            hash_loadable_kind(&repo.merge_commit_message, &mut hasher);
-            hash_loadable_kind(&repo.rebase_in_progress, &mut hasher);
+            fingerprint::hash_loadable_kind(&repo.merge_commit_message, &mut hasher);
+            fingerprint::hash_loadable_kind(&repo.rebase_in_progress, &mut hasher);
         }
 
         hasher.finish()
@@ -198,17 +167,8 @@ impl DetailsPaneView {
     }
 
     pub(in super::super) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
-        const MAX_ENTRIES: usize = 8_192;
         let mut cache = self.path_display_cache.borrow_mut();
-        if cache.len() > MAX_ENTRIES {
-            cache.clear();
-        }
-        if let Some(s) = cache.get(path) {
-            return s.clone();
-        }
-        let s: SharedString = path.display().to_string().into();
-        cache.insert(path.clone(), s.clone());
-        s
+        path_display::cached_path_display(&mut cache, path)
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {
