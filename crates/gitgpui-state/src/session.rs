@@ -252,10 +252,10 @@ fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
 }
 
 fn default_session_file_path() -> Option<PathBuf> {
-    if let Some(path) = env::var_os(SESSION_FILE_ENV) {
-        if !path.to_string_lossy().trim().is_empty() {
-            return Some(PathBuf::from(path));
-        }
+    if let Some(path) = env::var_os(SESSION_FILE_ENV)
+        && !path.to_string_lossy().trim().is_empty()
+    {
+        return Some(PathBuf::from(path));
     }
 
     if env::var_os(DISABLE_SESSION_PERSIST_ENV).is_some() {
@@ -288,7 +288,7 @@ fn looks_like_test_binary(exe: &Path) -> bool {
     }
 
     exe.file_stem()
-        .is_some_and(|stem| looks_like_cargo_test_binary_name(stem))
+        .is_some_and(looks_like_cargo_test_binary_name)
 }
 
 fn looks_like_cargo_test_binary_name(stem: &OsStr) -> bool {

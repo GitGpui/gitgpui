@@ -804,11 +804,7 @@ impl MainPaneView {
 
 impl MainPaneView {
     fn tick_diff_text_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) -> bool {
-        if let Some(pos) = self
-            .root_view
-            .update(cx, |root, _cx| root.last_mouse_pos)
-            .ok()
-        {
+        if let Ok(pos) = self.root_view.update(cx, |root, _cx| root.last_mouse_pos) {
             self.diff_text_last_mouse_pos = pos;
         }
 

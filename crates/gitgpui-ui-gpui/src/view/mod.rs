@@ -3825,26 +3825,26 @@ impl Render for GitGpuiView {
             self.schedule_ui_settings_persist(cx);
         }
 
-        if let Some(repo_id) = self.pending_pull_reconcile_prompt.take() {
-            if self.active_repo_id() == Some(repo_id) {
-                self.open_popover_at(
-                    PopoverKind::PullReconcilePrompt { repo_id },
-                    self.last_mouse_pos,
-                    window,
-                    cx,
-                );
-            }
+        if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()
+            && self.active_repo_id() == Some(repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::PullReconcilePrompt { repo_id },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
         }
 
-        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take() {
-            if self.active_repo_id() == Some(repo_id) {
-                self.open_popover_at(
-                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
-                    self.last_mouse_pos,
-                    window,
-                    cx,
-                );
-            }
+        if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
+            && self.active_repo_id() == Some(repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
         }
 
         let decorations = window.window_decorations();

@@ -104,8 +104,8 @@ pub(super) fn inline_diff_line_row_canvas(
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
-                let visible_text_bounds = visible_text_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
+                let visible_text_bounds = visible_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -155,7 +155,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
@@ -322,9 +322,9 @@ pub(super) fn split_diff_line_row_canvas(
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
-                let visible_left_text_bounds = visible_left_text_bounds.clone();
-                let visible_right_text_bounds = visible_right_text_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
+                let visible_left_text_bounds = visible_left_text_bounds;
+                let visible_right_text_bounds = visible_right_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -378,7 +378,7 @@ pub(super) fn split_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
@@ -502,8 +502,8 @@ pub(super) fn patch_split_column_row_canvas(
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
-                let visible_text_bounds = visible_text_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
+                let visible_text_bounds = visible_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -549,7 +549,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds.clone();
+                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left

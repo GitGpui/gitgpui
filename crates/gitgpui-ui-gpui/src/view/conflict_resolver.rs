@@ -78,7 +78,7 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
             if l.starts_with("|||||||") {
                 base_marker_line = Some(l);
                 let mut base_buf = String::new();
-                while let Some(l) = it.next() {
+                for l in it.by_ref() {
                     if l.starts_with("=======") {
                         found_sep = true;
                         break;

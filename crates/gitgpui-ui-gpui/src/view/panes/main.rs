@@ -170,9 +170,9 @@ impl MainPaneView {
 
             if show_diff {
                 repo.diff_rev.hash(&mut hasher);
-                repo.diff_target
-                    .as_ref()
-                    .map(|t| fingerprint::hash_diff_target(t, &mut hasher));
+                if let Some(t) = repo.diff_target.as_ref() {
+                    fingerprint::hash_diff_target(t, &mut hasher)
+                }
                 fingerprint::hash_loadable_arc(&repo.diff, &mut hasher);
 
                 repo.diff_file_rev.hash(&mut hasher);
@@ -1125,11 +1125,9 @@ impl MainPaneView {
                 px(0.0)
             };
 
-        if available - fixed < min_message {
-            if show_sha {
-                show_sha = false;
-                fixed -= self.history_col_sha;
-            }
+        if available - fixed < min_message && show_sha {
+            show_sha = false;
+            fixed -= self.history_col_sha;
         }
         if available - fixed < min_message {
             if show_date {
@@ -1138,11 +1136,9 @@ impl MainPaneView {
             }
             show_sha = false;
         }
-        if available - fixed < min_message {
-            if show_author {
-                show_author = false;
-                fixed -= self.history_col_author;
-            }
+        if available - fixed < min_message && show_author {
+            show_author = false;
+            fixed -= self.history_col_author;
         }
 
         if available - fixed < min_message {

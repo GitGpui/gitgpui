@@ -242,7 +242,7 @@ pub fn compute_graph(
                     LaneState {
                         id,
                         color,
-                        target: *parent,
+                        target: parent,
                     },
                 );
                 insert_at += 1;

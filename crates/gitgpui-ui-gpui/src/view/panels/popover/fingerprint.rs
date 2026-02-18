@@ -179,9 +179,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::DiffEditorMenu { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => {
             repo.diff_rev.hash(hasher);
-            repo.diff_target
-                .as_ref()
-                .map(|t| view_fingerprint::hash_diff_target(t, hasher));
+            if let Some(t) = repo.diff_target.as_ref() {
+                view_fingerprint::hash_diff_target(t, hasher)
+            }
             view_fingerprint::hash_loadable_arc(&repo.diff, hasher);
             repo.diff_file_rev.hash(hasher);
             view_fingerprint::hash_loadable_kind(&repo.diff_file, hasher);

@@ -546,11 +546,11 @@ fn parse_failed_command_message(message: &str) -> Option<(String, Option<String>
         if output.starts_with(' ') {
             output = &output[1..];
         }
-        let output = output.trim_end_matches(&['\r', '\n']).to_string();
+        let output = output.trim_end_matches(['\r', '\n']).to_string();
         return Some((command, (!output.is_empty()).then_some(output)));
     }
 
-    let trimmed = message.trim_end_matches(&['\r', '\n']);
+    let trimmed = message.trim_end_matches(['\r', '\n']);
     if let Some(command) = trimmed.strip_suffix(" failed") {
         return Some((command.trim_end().to_string(), None));
     }
@@ -559,11 +559,7 @@ fn parse_failed_command_message(message: &str) -> Option<(String, Option<String>
 }
 
 fn render_command_and_output(command: &str, output: Option<&str>) -> String {
-    let command = command
-        .replace('\n', " ")
-        .replace('\r', " ")
-        .trim()
-        .to_string();
+    let command = command.replace(['\n', '\r'], " ").trim().to_string();
 
     let mut rendered = String::new();
     rendered.push_str("```");
@@ -573,7 +569,7 @@ fn render_command_and_output(command: &str, output: Option<&str>) -> String {
     rendered.push_str("```");
 
     if let Some(output) = output {
-        let output = output.trim_end_matches(&['\r', '\n']);
+        let output = output.trim_end_matches(['\r', '\n']);
         if !output.is_empty() {
             rendered.push_str("\n\n");
             rendered.push_str(output);
