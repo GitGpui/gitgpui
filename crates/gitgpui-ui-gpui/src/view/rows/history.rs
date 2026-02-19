@@ -450,8 +450,7 @@ fn working_tree_summary_history_row(
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::DateTimeFormat;
-    use super::super::super::format_datetime_utc;
+    use crate::view::{DateTimeFormat, format_datetime_utc};
     use std::time::{Duration, UNIX_EPOCH};
 
     #[test]

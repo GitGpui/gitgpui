@@ -15,7 +15,11 @@ struct Token {
     kind: TokenKind,
 }
 
-fn tokenize_for_word_diff(s: &str) -> Vec<Token> {
+fn tokenize_for_word_diff(s: &str, max_tokens: usize) -> Vec<Token> {
+    if max_tokens == 0 {
+        return Vec::new();
+    }
+
     fn classify(c: char) -> (u8, TokenKind) {
         if c.is_whitespace() {
             return (0, TokenKind::Whitespace);
@@ -26,7 +30,7 @@ fn tokenize_for_word_diff(s: &str) -> Vec<Token> {
         (2, TokenKind::Other)
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(max_tokens);
     let mut it = s.char_indices().peekable();
     while let Some((start, ch)) = it.next() {
         let (class, kind) = classify(ch);
@@ -43,6 +47,9 @@ fn tokenize_for_word_diff(s: &str) -> Vec<Token> {
             range: start..end,
             kind,
         });
+        if out.len() >= max_tokens {
+            break;
+        }
     }
     out
 }
@@ -66,10 +73,9 @@ fn coalesce_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
 }
 
 pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-    let old_tokens = tokenize_for_word_diff(old);
-    let new_tokens = tokenize_for_word_diff(new);
-
     const MAX_TOKENS: usize = 128;
+    let old_tokens = tokenize_for_word_diff(old, MAX_TOKENS + 1);
+    let new_tokens = tokenize_for_word_diff(new, MAX_TOKENS + 1);
     if old_tokens.len() > MAX_TOKENS || new_tokens.len() > MAX_TOKENS {
         return fallback_affix_diff_ranges(old, new);
     }
@@ -94,7 +100,7 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
     let offset = max as isize;
 
     let mut v: Vec<isize> = vec![0; 2 * max + 1];
-    let mut trace: Vec<Vec<isize>> = Vec::new();
+    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max + 1);
 
     let mut done = false;
     for d in 0..=max {

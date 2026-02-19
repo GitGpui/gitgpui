@@ -370,9 +370,9 @@ mod tests {
 
     #[test]
     fn append_lines_adds_newlines_safely() {
-        let out = append_lines_to_output("a\n", &vec!["b".into(), "c".into()]);
+        let out = append_lines_to_output("a\n", &["b".into(), "c".into()]);
         assert_eq!(out, "a\nb\nc\n");
-        let out = append_lines_to_output("a", &vec!["b".into()]);
+        let out = append_lines_to_output("a", &["b".into()]);
         assert_eq!(out, "a\nb\n");
     }
 }

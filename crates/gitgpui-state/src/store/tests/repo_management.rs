@@ -56,7 +56,7 @@ fn open_repo_focuses_existing_repo_instead_of_opening_duplicate() {
         state
             .repos
             .iter()
-            .filter(|r| r.spec.workdir == PathBuf::from("/tmp/repo1"))
+            .filter(|r| r.spec.workdir == std::path::Path::new("/tmp/repo1"))
             .count(),
         1
     );

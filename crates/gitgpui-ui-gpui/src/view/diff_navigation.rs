@@ -8,11 +8,11 @@ pub(super) fn diff_nav_next_target(entries: &[usize], current: usize) -> Option<
     entries.iter().find(|&&ix| ix > current).copied()
 }
 
-pub(super) fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
+fn conflict_nav_entries<T>(rows: &[T], mut is_change: impl FnMut(&T) -> bool) -> Vec<usize> {
     let mut out = Vec::new();
     let mut in_block = false;
     for (ix, row) in rows.iter().enumerate() {
-        let is_change = row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context;
+        let is_change = is_change(row);
         if is_change && !in_block {
             out.push(ix);
             in_block = true;
@@ -23,19 +23,16 @@ pub(super) fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize>
     out
 }
 
+pub(super) fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
+    conflict_nav_entries(rows, |row| {
+        row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context
+    })
+}
+
 pub(super) fn conflict_nav_entries_for_inline(rows: &[ConflictInlineRow]) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut in_block = false;
-    for (ix, row) in rows.iter().enumerate() {
-        let is_change = row.kind != gitgpui_core::domain::DiffLineKind::Context;
-        if is_change && !in_block {
-            out.push(ix);
-            in_block = true;
-        } else if !is_change {
-            in_block = false;
-        }
-    }
-    out
+    conflict_nav_entries(rows, |row| {
+        row.kind != gitgpui_core::domain::DiffLineKind::Context
+    })
 }
 
 #[cfg(test)]

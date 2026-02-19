@@ -1,7 +1,7 @@
 use std::backtrace::Backtrace;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
@@ -117,12 +117,12 @@ fn crash_dir() -> Option<PathBuf> {
     Some(base.join("gitgpui").join("crashes"))
 }
 
-fn crash_log_path(dir: &PathBuf) -> Option<PathBuf> {
+fn crash_log_path(dir: &Path) -> Option<PathBuf> {
     let pid = std::process::id();
     Some(dir.join(format!("panic-{pid}-{}.log", unix_time_ms())))
 }
 
-fn open_append(path: &PathBuf) -> std::io::Result<File> {
+fn open_append(path: &Path) -> std::io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 

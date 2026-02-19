@@ -214,7 +214,7 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestAppContext) {
-    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+    let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
         app.bind_keys([
@@ -270,7 +270,7 @@ fn text_input_supports_basic_clipboard_and_word_shortcuts(cx: &mut gpui::TestApp
 
 #[gpui::test]
 fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContext) {
-    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+    let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
         app.bind_keys([
@@ -307,7 +307,7 @@ fn text_input_supports_shift_home_end_row_selection(cx: &mut gpui::TestAppContex
 
 #[gpui::test]
 fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppContext) {
-    let (view, cx) = cx.add_window_view(|window, cx| SmokeView::new(window, cx));
+    let (view, cx) = cx.add_window_view(SmokeView::new);
 
     cx.update(|window, app| {
         app.bind_keys([

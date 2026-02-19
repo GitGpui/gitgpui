@@ -68,19 +68,20 @@ pub(super) fn schedule_clone_repo(
 
         let result = match status {
             Ok(status) => {
-                let mut out = CommandOutput::default();
-                out.command = command_str.clone();
-                out.stdout = stdout_str;
-                out.stderr = stderr_acc;
-                out.exit_code = status.code();
+                let out = CommandOutput {
+                    command: command_str,
+                    stdout: stdout_str,
+                    stderr: stderr_acc,
+                    exit_code: status.code(),
+                };
                 if status.success() {
                     Ok(out)
                 } else {
                     let combined = out.combined();
                     let message = if combined.is_empty() {
-                        format!("{command_str} failed")
+                        format!("{} failed", out.command)
                     } else {
-                        format!("{command_str} failed: {combined}")
+                        format!("{} failed: {combined}", out.command)
                     };
                     Err(Error::new(ErrorKind::Backend(message)))
                 }

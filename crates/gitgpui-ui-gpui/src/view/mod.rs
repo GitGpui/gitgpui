@@ -187,10 +187,11 @@ fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
         return false;
     };
-    match ext.to_ascii_lowercase().as_str() {
-        "png" | "jpg" | "jpeg" | "webp" | "svg" => true,
-        _ => false,
-    }
+    ext.eq_ignore_ascii_case("png")
+        || ext.eq_ignore_ascii_case("jpg")
+        || ext.eq_ignore_ascii_case("jpeg")
+        || ext.eq_ignore_ascii_case("webp")
+        || ext.eq_ignore_ascii_case("svg")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
