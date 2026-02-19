@@ -1,11 +1,16 @@
 use super::*;
 
 pub(super) fn model(
-    _this: &PopoverHost,
+    this: &PopoverHost,
     repo_id: RepoId,
     commit_id: &CommitId,
     path: &std::path::PathBuf,
 ) -> ContextMenuModel {
+    let copy_path_text = this
+        .resolve_workdir_path(repo_id, path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string());
+
     let mut items = vec![ContextMenuItem::Header(
         path.file_name()
             .map(|p| p.to_string_lossy().to_string())
@@ -78,7 +83,7 @@ pub(super) fn model(
         shortcut: Some("C".into()),
         disabled: false,
         action: ContextMenuAction::CopyText {
-            text: path.display().to_string(),
+            text: copy_path_text,
         },
     });
 

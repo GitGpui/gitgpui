@@ -244,13 +244,17 @@ pub(super) fn model(
     });
 
     items.push(ContextMenuItem::Separator);
+    let copy_path_text = this
+        .resolve_workdir_path(repo_id, path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| path.display().to_string());
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
         icon: Some("⧉".into()),
         shortcut: Some("C".into()),
         disabled: false,
         action: ContextMenuAction::CopyText {
-            text: path.display().to_string(),
+            text: copy_path_text,
         },
     });
 
