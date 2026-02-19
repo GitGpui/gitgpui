@@ -475,7 +475,13 @@ fn classify_repo_event(
 
     for path in &event.paths {
         if is_git_related_path(workdir, git_dir, path) {
-            saw_git = true;
+            // Treat `.git/index` updates like worktree changes: they typically reflect staging
+            // operations and should not trigger branch list refreshes.
+            if is_git_index_path(workdir, git_dir, path) {
+                saw_worktree = true;
+            } else {
+                saw_git = true;
+            }
         } else {
             if is_ignored_worktree_path_with_hint(workdir, gitignore, path, is_dir_hint) {
                 continue;
@@ -502,6 +508,21 @@ fn is_git_related_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> b
         return true;
     }
     git_dir.is_some_and(|git_dir| path.starts_with(git_dir))
+}
+
+fn is_git_index_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
+    let dot_git = workdir.join(".git");
+    if path == dot_git.join("index") || path == dot_git.join("index.lock") {
+        return true;
+    }
+
+    if let Some(git_dir) = git_dir {
+        if path == git_dir.join("index") || path == git_dir.join("index.lock") {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn should_ignore_event_kind(event: &notify::Event) -> bool {
@@ -641,7 +662,7 @@ mod tests {
                 &mut GitignoreRules::default(),
                 &event
             ),
-            Some(RepoExternalChange::GitState)
+            Some(RepoExternalChange::Worktree)
         );
 
         let event = notify::Event {

@@ -59,7 +59,20 @@ pub(super) fn repo_externally_changed(
             }
         }
         RepoExternalChange::GitState | RepoExternalChange::Both => {
-            refresh_primary_effects(repo_state)
+            let mut effects = refresh_primary_effects(repo_state);
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::BRANCHES)
+            {
+                effects.push(Effect::LoadBranches { repo_id });
+            }
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+            {
+                effects.push(Effect::LoadRemoteBranches { repo_id });
+            }
+            effects
         }
     };
 

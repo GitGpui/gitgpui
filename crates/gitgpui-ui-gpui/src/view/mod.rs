@@ -1234,17 +1234,48 @@ impl Render for GitGpuiView {
             && let Some(err) = repo.last_error.as_ref()
         {
             let err_text: &str = err.as_ref();
-            let is_code_message = err_text.lines().any(|line| line.starts_with("    "));
-            let display_error: SharedString = if is_code_message {
-                err_text
-                    .lines()
+            let (error_command, display_error): (Option<SharedString>, SharedString) = (|| {
+                let lines: Vec<&str> = err_text.lines().collect();
+                let Some(cmd_start) = lines.iter().position(|line| line.starts_with("    git "))
+                else {
+                    return (None, err.clone().into());
+                };
+
+                let mut cmd_end = cmd_start;
+                while cmd_end < lines.len() && lines[cmd_end].starts_with("    ") {
+                    cmd_end += 1;
+                }
+
+                let command = lines[cmd_start..cmd_end]
+                    .iter()
                     .map(|line| line.strip_prefix("    ").unwrap_or(line))
                     .collect::<Vec<_>>()
-                    .join("\n")
-                    .into()
-            } else {
-                err.clone().into()
-            };
+                    .join("\n");
+
+                let mut body_lines: Vec<String> = Vec::with_capacity(lines.len());
+                for line in &lines[..cmd_start] {
+                    body_lines.push((*line).to_string());
+                }
+                for line in &lines[cmd_end..] {
+                    body_lines.push(line.strip_prefix("    ").unwrap_or(line).to_string());
+                }
+
+                let mut collapsed: Vec<String> = Vec::with_capacity(body_lines.len());
+                let mut prev_blank = false;
+                for line in body_lines {
+                    let blank = line.trim().is_empty();
+                    if blank && prev_blank {
+                        continue;
+                    }
+                    collapsed.push(line);
+                    prev_blank = blank;
+                }
+
+                (
+                    Some(command.into()),
+                    collapsed.join("\n").into(),
+                )
+            })();
             self.error_banner_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_text(display_error.clone(), cx);
@@ -1257,6 +1288,20 @@ impl Render for GitGpuiView {
                     this.store.dispatch(Msg::DismissRepoError { repo_id });
                     cx.notify();
                 });
+
+            let command_block = error_command.as_ref().map(|command| {
+                div()
+                    .id("repo_error_banner_command")
+                    .font_family("monospace")
+                    .bg(with_alpha(
+                        theme.colors.window_bg,
+                        if theme.is_dark { 0.28 } else { 0.75 },
+                    ))
+                    .rounded(px(theme.radii.row))
+                    .px_2()
+                    .py_1()
+                    .child(command.clone())
+            });
 
             body = body.child(
                 div()
@@ -1274,18 +1319,11 @@ impl Render for GitGpuiView {
                             .max_h(px(140.0))
                             .overflow_y_scroll()
                             .child(
-                                div()
-                                    .when(is_code_message, |this| {
-                                        this.font_family("monospace")
-                                            .bg(with_alpha(
-                                                theme.colors.window_bg,
-                                                if theme.is_dark { 0.28 } else { 0.75 },
-                                            ))
-                                            .rounded(px(theme.radii.row))
-                                            .px_2()
-                                            .py_1()
-                                    })
-                                    .child(self.error_banner_input.clone()),
+                                div().flex().flex_col().gap_1().when_some(
+                                    command_block,
+                                    |this, command_block| this.child(command_block),
+                                )
+                                .child(self.error_banner_input.clone()),
                             ),
                     )
                     .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),

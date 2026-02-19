@@ -97,6 +97,12 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
     assert!(
         !effects
             .iter()
+            .any(|e| matches!(e, Effect::LoadBranches { .. } | Effect::LoadRemoteBranches { .. })),
+        "did not expect branch refresh on pure worktree changes"
+    );
+    assert!(
+        !effects
+            .iter()
             .any(|e| matches!(e, Effect::LoadRebaseState { .. })),
         "did not expect rebase state refresh on pure worktree changes"
     );
@@ -201,6 +207,24 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
             }),
         },
     );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::BranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RemoteBranchesLoaded {
+            repo_id: RepoId(1),
+            result: Ok(Vec::new()),
+        },
+    );
 
     let effects = reduce(
         &mut repos,
@@ -241,6 +265,18 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
             .iter()
             .any(|e| matches!(e, Effect::LoadRebaseState { repo_id } if *repo_id == RepoId(1))),
         "expected rebase state refresh"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadBranches { repo_id } if *repo_id == RepoId(1))),
+        "expected local branches refresh"
+    );
+    assert!(
+        effects.iter().any(|e| {
+            matches!(e, Effect::LoadRemoteBranches { repo_id } if *repo_id == RepoId(1))
+        }),
+        "expected remote branches refresh"
     );
     assert!(
         effects.iter().any(|e| {
