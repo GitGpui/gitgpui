@@ -288,6 +288,7 @@ struct ToastState {
     id: u64,
     kind: zed::ToastKind,
     input: Entity<zed::TextInput>,
+    is_code_message: bool,
     ttl: Option<Duration>,
 }
 
@@ -1232,9 +1233,21 @@ impl Render for GitGpuiView {
             && let Some(repo) = self.active_repo()
             && let Some(err) = repo.last_error.as_ref()
         {
+            let err_text: &str = err.as_ref();
+            let is_code_message = err_text.lines().any(|line| line.starts_with("    "));
+            let display_error: SharedString = if is_code_message {
+                err_text
+                    .lines()
+                    .map(|line| line.strip_prefix("    ").unwrap_or(line))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .into()
+            } else {
+                err.clone().into()
+            };
             self.error_banner_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
-                input.set_text(err.clone(), cx);
+                input.set_text(display_error.clone(), cx);
                 input.set_read_only(true, cx);
             });
 
@@ -1260,7 +1273,20 @@ impl Render for GitGpuiView {
                             .id("repo_error_banner_scroll")
                             .max_h(px(140.0))
                             .overflow_y_scroll()
-                            .child(self.error_banner_input.clone()),
+                            .child(
+                                div()
+                                    .when(is_code_message, |this| {
+                                        this.font_family("monospace")
+                                            .bg(with_alpha(
+                                                theme.colors.window_bg,
+                                                if theme.is_dark { 0.28 } else { 0.75 },
+                                            ))
+                                            .rounded(px(theme.radii.row))
+                                            .px_2()
+                                            .py_1()
+                                    })
+                                    .child(self.error_banner_input.clone()),
+                            ),
                     )
                     .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),
             );

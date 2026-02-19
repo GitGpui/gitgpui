@@ -166,9 +166,12 @@ fn pull_error_is_formatted_as_command_and_output() {
     assert_eq!(repo_state.command_log.len(), 1);
 
     let summary = &repo_state.command_log[0].summary;
-    assert!(summary.starts_with("Pull failed:\n\n```"));
-    assert!(summary.contains("```\ngit pull --no-rebase origin main\n```"));
-    assert!(summary.contains("\n\nFrom https://example.com\n * branch main -> FETCH_HEAD\nfatal: refusing to merge unrelated histories"));
+    assert!(summary.starts_with(
+        "Pull failed:\n\n    git pull --no-rebase origin main"
+    ));
+    assert!(summary.contains(
+        "\n\n    From https://example.com\n     * branch main -> FETCH_HEAD\n    fatal: refusing to merge unrelated histories"
+    ));
     assert!(!summary.contains("\\n"));
     assert_eq!(repo_state.last_error.as_deref(), Some(summary.as_str()));
 }

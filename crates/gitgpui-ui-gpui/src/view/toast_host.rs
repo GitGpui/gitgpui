@@ -10,6 +10,18 @@ pub(super) struct ToastHost {
     clone_progress_dest: Option<std::path::PathBuf>,
 }
 
+fn looks_like_code_message(message: &str) -> bool {
+    message.lines().any(|line| line.starts_with("    "))
+}
+
+fn strip_code_message_indentation(message: &str) -> String {
+    message
+        .lines()
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 impl ToastHost {
     pub(super) fn new(theme: AppTheme, tooltip_host: WeakEntity<TooltipHost>) -> Self {
         Self {
@@ -63,6 +75,12 @@ impl ToastHost {
             .map(|t| t.id.wrapping_add(1))
             .unwrap_or(1);
         let theme = self.theme;
+        let is_code_message = looks_like_code_message(&message);
+        let display_message = if is_code_message {
+            strip_code_message_indentation(&message)
+        } else {
+            message
+        };
         let input = cx.new(|cx| {
             zed::TextInput::new_inert(
                 zed::TextInputOptions {
@@ -77,7 +95,7 @@ impl ToastHost {
         });
         input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
-            input.set_text(message, cx);
+            input.set_text(display_message, cx);
             input.set_read_only(true, cx);
         });
 
@@ -85,6 +103,7 @@ impl ToastHost {
             id,
             kind,
             input,
+            is_code_message,
             ttl,
         });
         cx.notify();
@@ -111,13 +130,19 @@ impl ToastHost {
         message: String,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(toast) = self.toasts.iter().find(|t| t.id == id).cloned() else {
+        let Some(toast) = self.toasts.iter_mut().find(|t| t.id == id) else {
             return;
         };
         let theme = self.theme;
+        toast.is_code_message = looks_like_code_message(&message);
+        let display_message = if toast.is_code_message {
+            strip_code_message_indentation(&message)
+        } else {
+            message
+        };
         toast.input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
-            input.set_text(message, cx);
+            input.set_text(display_message, cx);
             input.set_read_only(true, cx);
         });
     }
@@ -286,7 +311,20 @@ impl Render for ToastHost {
                 .id(("toast_message_scroll", t.id))
                 .max_h(px(200.0))
                 .overflow_y_scroll()
-                .child(t.input.clone());
+                .child(
+                    div()
+                        .when(t.is_code_message, |this| {
+                            this.font_family("monospace")
+                                .bg(with_alpha(
+                                    theme.colors.window_bg,
+                                    if theme.is_dark { 0.28 } else { 0.75 },
+                                ))
+                                .rounded(px(theme.radii.row))
+                                .px_2()
+                                .py_1()
+                        })
+                        .child(t.input.clone()),
+                );
 
             div()
                 .relative()

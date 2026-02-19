@@ -568,22 +568,28 @@ fn render_command_and_output(command: &str, output: Option<&str>) -> String {
     let command = command.trim();
 
     let output_len = output.map_or(0, |s| s.len());
-    let mut rendered = String::with_capacity(command.len().saturating_add(output_len) + 16);
-    rendered.push_str("```");
-    rendered.push('\n');
-    rendered.push_str(command);
-    rendered.push('\n');
-    rendered.push_str("```");
+    let mut rendered = String::with_capacity(command.len() + output_len + 16);
+    append_code_block(&mut rendered, command);
 
     if let Some(output) = output {
         let output = output.trim_end_matches(['\r', '\n']);
         if !output.is_empty() {
             rendered.push_str("\n\n");
-            rendered.push_str(output);
+            append_code_block(&mut rendered, output);
         }
     }
 
     rendered
+}
+
+fn append_code_block(out: &mut String, text: &str) {
+    for (ix, line) in text.lines().enumerate() {
+        if ix > 0 {
+            out.push('\n');
+        }
+        out.push_str("    ");
+        out.push_str(line);
+    }
 }
 
 trait IfEmptyElse {
