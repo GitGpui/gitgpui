@@ -759,11 +759,10 @@ impl MainPaneView {
                         if let Some(ix) = old_src_ix {
                             out.push(*ix);
                         }
-                        if let Some(ix) = new_src_ix {
-                            if out.first().copied() != Some(*ix) {
+                        if let Some(ix) = new_src_ix
+                            && out.first().copied() != Some(*ix) {
                                 out.push(*ix);
                             }
-                        }
                         out
                     }
                 }
