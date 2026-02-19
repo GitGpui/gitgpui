@@ -1,0 +1,550 @@
+use super::*;
+
+impl MainPaneView {
+    pub(in crate::view) fn history_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        self.ensure_history_cache(cx);
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let repo = self.active_repo();
+        let commits_count = self
+            .history_cache
+            .as_ref()
+            .map(|c| c.visible_indices.len())
+            .unwrap_or(0);
+        let count = commits_count + usize::from(show_working_tree_summary_row);
+
+        let bg = theme.colors.window_bg;
+
+        let body: AnyElement = if count == 0 {
+            match repo.map(|r| &r.log) {
+                None => zed::empty_state(theme, "History", "No repository.").into_any_element(),
+                Some(Loadable::Loading) => {
+                    zed::empty_state(theme, "History", "Loading").into_any_element()
+                }
+                Some(Loadable::Error(e)) => {
+                    zed::empty_state(theme, "History", e.clone()).into_any_element()
+                }
+                Some(Loadable::NotLoaded) | Some(Loadable::Ready(_)) => {
+                    zed::empty_state(theme, "History", "No commits.").into_any_element()
+                }
+            }
+        } else {
+            let list = uniform_list(
+                "history_main",
+                count,
+                cx.processor(Self::render_history_table_rows),
+            )
+            .h_full()
+            .track_scroll(self.history_scroll.clone());
+            let (scroll_handle, should_load_more) = {
+                let state = self.history_scroll.0.borrow();
+                let scroll_handle = state.base_handle.clone();
+                let max_offset = scroll_handle.max_offset().height.max(px(0.0));
+                let should_load_by_scroll = if max_offset > px(0.0) {
+                    scroll_is_near_bottom(&scroll_handle, px(240.0))
+                } else {
+                    true
+                };
+                let should_load_more = state.last_item_size.is_some()
+                    && repo.is_some_and(|repo| {
+                        !repo.log_loading_more
+                            && matches!(
+                                &repo.log,
+                                Loadable::Ready(page) if page.next_cursor.is_some()
+                            )
+                    })
+                    && should_load_by_scroll;
+                (scroll_handle, should_load_more)
+            };
+            if should_load_more && let Some(repo_id) = self.active_repo_id() {
+                self.store.dispatch(Msg::LoadMoreHistory { repo_id });
+            }
+            div()
+                .id("history_main_scroll_container")
+                .relative()
+                .h_full()
+                .child(list)
+                .child(zed::Scrollbar::new("history_main_scrollbar", scroll_handle).render(theme))
+                .into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .w_full()
+            .h_full()
+            .min_h(px(0.0))
+            .bg(bg)
+            .track_focus(&self.history_panel_focus_handle)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseDownEvent, window, _cx| {
+                    window.focus(&this.history_panel_focus_handle);
+                }),
+            )
+            .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
+                let key = e.keystroke.key.as_str();
+                let mods = e.keystroke.modifiers;
+
+                let handled = !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                    && !mods.shift
+                    && match key {
+                        "up" => this.history_select_adjacent_commit(-1, cx),
+                        "down" => this.history_select_adjacent_commit(1, cx),
+                        _ => false,
+                    };
+
+                if handled {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
+            .child(
+                self.history_column_headers(cx)
+                    .bg(bg)
+                    .border_b_1()
+                    .border_color(theme.colors.border),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(div().flex_1().min_h(px(0.0)).child(body)),
+            )
+    }
+
+    fn history_select_adjacent_commit(
+        &mut self,
+        direction: i8,
+        _cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let offset = usize::from(show_working_tree_summary_row);
+
+        let (selected_commit, page) = match self.active_repo() {
+            Some(repo) => {
+                let page = match &repo.log {
+                    Loadable::Ready(page) => Arc::clone(page),
+                    _ => return false,
+                };
+                (repo.selected_commit.clone(), page)
+            }
+            None => return false,
+        };
+
+        let cache = self
+            .history_cache
+            .as_ref()
+            .filter(|c| c.request.repo_id == repo_id);
+        let Some(cache) = cache else {
+            return false;
+        };
+
+        let total_commits = cache.visible_indices.len();
+        if total_commits == 0 {
+            return false;
+        }
+
+        let list_len = total_commits + offset;
+
+        let current_list_ix = if show_working_tree_summary_row && selected_commit.is_none() {
+            Some(0)
+        } else if let Some(selected_id) = selected_commit.as_ref() {
+            cache
+                .visible_indices
+                .iter()
+                .position(|&commit_ix| {
+                    page.commits
+                        .get(commit_ix)
+                        .is_some_and(|c| &c.id == selected_id)
+                })
+                .map(|ix| ix + offset)
+        } else {
+            None
+        };
+
+        let next_list_ix = match (current_list_ix, direction.is_negative()) {
+            (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
+            (Some(current_list_ix), false) => {
+                let next = current_list_ix + 1;
+                if next < list_len {
+                    next
+                } else {
+                    current_list_ix
+                }
+            }
+            (None, true) => list_len.saturating_sub(1),
+            (None, false) => offset,
+        };
+
+        if current_list_ix.is_some_and(|ix| ix == next_list_ix) {
+            return true;
+        }
+
+        if show_working_tree_summary_row && next_list_ix == 0 {
+            self.store.dispatch(Msg::ClearCommitSelection { repo_id });
+            self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            self.history_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+            return true;
+        }
+
+        let visible_ix = next_list_ix.saturating_sub(offset);
+        let Some(&commit_ix) = cache.visible_indices.get(visible_ix) else {
+            return false;
+        };
+        let Some(commit) = page.commits.get(commit_ix) else {
+            return false;
+        };
+
+        self.store.dispatch(Msg::SelectCommit {
+            repo_id,
+            commit_id: commit.id.clone(),
+        });
+        self.history_scroll
+            .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+        true
+    }
+
+    fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        let theme = self.theme;
+        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let (show_author, show_date, show_sha) = self.history_visible_columns();
+        let col_author = self.history_col_author;
+        let col_date = self.history_col_date;
+        let col_sha = self.history_col_sha;
+        let handle_w = px(HISTORY_COL_HANDLE_PX);
+        let handle_half = px(HISTORY_COL_HANDLE_PX / 2.0);
+        let cell_pad = handle_half;
+        let scope_label: SharedString = self
+            .active_repo()
+            .map(|r| match r.history_scope {
+                gitgpui_core::domain::LogScope::CurrentBranch => "Current branch".to_string(),
+                gitgpui_core::domain::LogScope::AllBranches => "All branches".to_string(),
+            })
+            .unwrap_or_else(|| "Current branch".to_string())
+            .into();
+        let scope_repo_id = self.active_repo_id();
+        let open_column_settings = cx.listener(|this, e: &ClickEvent, window, cx| {
+            this.open_popover_at(PopoverKind::HistoryColumnSettings, e.position(), window, cx);
+        });
+        let column_settings_btn = div()
+            .id("history_columns_settings_btn")
+            .flex()
+            .items_center()
+            .justify_center()
+            .w(px(18.0))
+            .h(px(18.0))
+            .rounded(px(theme.radii.row))
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .active(move |s| s.bg(theme.colors.active))
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                gpui::svg()
+                    .path("icons/cog.svg")
+                    .w(px(12.0))
+                    .h(px(12.0))
+                    .text_color(icon_muted),
+            )
+            .on_click(open_column_settings)
+            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                let text: SharedString = "History columns".into();
+                let mut changed = false;
+                if *hovering {
+                    changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                } else {
+                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                }
+                if changed {
+                    cx.notify();
+                }
+            }));
+
+        let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
+            div()
+                .id(id)
+                .absolute()
+                .w(handle_w)
+                .top_0()
+                .bottom_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor(CursorStyle::ResizeLeftRight)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .active(move |s| s.bg(theme.colors.active))
+                .child(div().w(px(1.0)).h(px(14.0)).bg(theme.colors.border))
+                .on_drag(handle, |_handle, _offset, _window, cx| {
+                    cx.new(|_cx| HistoryColResizeDragGhost)
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                        cx.stop_propagation();
+                        if handle == HistoryColResizeHandle::Graph {
+                            this.history_col_graph_auto = false;
+                        }
+                        this.history_col_resize = Some(HistoryColResizeState {
+                            handle,
+                            start_x: e.position.x,
+                            start_branch: this.history_col_branch,
+                            start_graph: this.history_col_graph,
+                            start_author: this.history_col_author,
+                            start_date: this.history_col_date,
+                            start_sha: this.history_col_sha,
+                        });
+                        cx.notify();
+                    }),
+                )
+                .on_drag_move(cx.listener(
+                    move |this, e: &gpui::DragMoveEvent<HistoryColResizeHandle>, _w, cx| {
+                        let Some(state) = this.history_col_resize else {
+                            return;
+                        };
+                        if state.handle != *e.drag(cx) {
+                            return;
+                        }
+
+                        let dx = e.event.position.x - state.start_x;
+                        match state.handle {
+                            HistoryColResizeHandle::Branch => {
+                                this.history_col_branch =
+                                    (state.start_branch + dx).max(px(HISTORY_COL_BRANCH_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Graph => {
+                                this.history_col_graph =
+                                    (state.start_graph + dx).max(px(HISTORY_COL_GRAPH_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Author => {
+                                this.history_col_author =
+                                    (state.start_author - dx).max(px(HISTORY_COL_AUTHOR_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Date => {
+                                this.history_col_date =
+                                    (state.start_date - dx).max(px(HISTORY_COL_DATE_MIN_PX));
+                            }
+                            HistoryColResizeHandle::Sha => {
+                                this.history_col_sha =
+                                    (state.start_sha - dx).max(px(HISTORY_COL_SHA_MIN_PX));
+                            }
+                        }
+                        cx.notify();
+                    },
+                ))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _e, _w, cx| {
+                        this.history_col_resize = None;
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_up_out(
+                    MouseButton::Left,
+                    cx.listener(|this, _e, _w, cx| {
+                        this.history_col_resize = None;
+                        cx.notify();
+                    }),
+                )
+        };
+
+        let mut header = div()
+            .relative()
+            .flex()
+            .h(px(24.0))
+            .w_full()
+            .items_center()
+            .px_2()
+            .text_xs()
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.colors.text_muted)
+            .child(
+                div()
+                    .w(self.history_col_branch)
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w(px(0.0))
+                    .px(cell_pad)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("history_scope_header")
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .px_1()
+                            .h(px(18.0))
+                            .line_height(px(18.0))
+                            .rounded(px(theme.radii.row))
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+                            .cursor(CursorStyle::PointingHand)
+                            .child(
+                                div()
+                                    .min_w(px(0.0))
+                                    .line_clamp(1)
+                                    .whitespace_nowrap()
+                                    .child(scope_label.clone()),
+                            )
+                            .child(
+                                gpui::svg()
+                                    .path("icons/chevron_down.svg")
+                                    .w(px(12.0))
+                                    .h(px(12.0))
+                                    .text_color(icon_muted)
+                                    .flex_shrink_0(),
+                            )
+                            .when_some(scope_repo_id, |this, repo_id| {
+                                this.on_click(cx.listener(
+                                    move |this, e: &ClickEvent, window, cx| {
+                                        this.open_popover_at(
+                                            PopoverKind::HistoryBranchFilter { repo_id },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                ))
+                            })
+                            .when(scope_repo_id.is_none(), |this| {
+                                this.opacity(0.6).cursor(CursorStyle::Arrow)
+                            })
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                                let text: SharedString =
+                                    "History scope (Current branch / All branches)".into();
+                                let mut changed = false;
+                                if *hovering {
+                                    changed |=
+                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
+                                } else {
+                                    changed |= this.clear_tooltip_if_matches(&text, cx);
+                                }
+                                if changed {
+                                    cx.notify();
+                                }
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .w(self.history_col_graph)
+                    .flex()
+                    .justify_center()
+                    .px(cell_pad)
+                    .font_family(".SystemUIFont")
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child("GRAPH"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .px(cell_pad)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child("COMMIT MESSAGE"),
+                    )
+                    .child(column_settings_btn),
+            )
+            .when(show_author, |header| {
+                header.child(
+                    div()
+                        .w(col_author)
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .px(cell_pad)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .child("AUTHOR"),
+                )
+            });
+
+        if show_date {
+            header = header.child(
+                div()
+                    .w(col_date)
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .px(cell_pad)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .font_family("monospace")
+                    .child("Commit date"),
+            );
+        }
+
+        if show_sha {
+            header = header.child(
+                div()
+                    .w(col_sha)
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .px(cell_pad)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .font_family("monospace")
+                    .child("SHA"),
+            );
+        }
+
+        let mut header_with_handles = header
+            .child(
+                resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
+                    .left((self.history_col_branch - handle_half).max(px(0.0))),
+            )
+            .child(
+                resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph).left(
+                    (self.history_col_branch + self.history_col_graph - handle_half).max(px(0.0)),
+                ),
+            );
+
+        if show_author {
+            let right_fixed = col_author
+                + if show_date { col_date } else { px(0.0) }
+                + if show_sha { col_sha } else { px(0.0) };
+            header_with_handles = header_with_handles.child(
+                resize_handle("history_col_resize_author", HistoryColResizeHandle::Author)
+                    .right((right_fixed - handle_half).max(px(0.0))),
+            );
+        }
+
+        if show_date {
+            let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
+            header_with_handles = header_with_handles.child(
+                resize_handle("history_col_resize_date", HistoryColResizeHandle::Date)
+                    .right((right_fixed - handle_half).max(px(0.0))),
+            );
+        }
+
+        if show_sha {
+            header_with_handles = header_with_handles.child(
+                resize_handle("history_col_resize_sha", HistoryColResizeHandle::Sha)
+                    .right((col_sha - handle_half).max(px(0.0))),
+            );
+        }
+
+        header_with_handles
+    }
+}

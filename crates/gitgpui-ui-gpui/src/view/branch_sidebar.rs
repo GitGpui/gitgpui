@@ -95,7 +95,24 @@ impl SlashTree {
 }
 
 pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
-    let mut rows = Vec::new();
+    let approx_rows =
+        16 + match &repo.branches {
+            Loadable::Ready(branches) => branches.len(),
+            _ => 0,
+        } + match &repo.remote_branches {
+            Loadable::Ready(branches) => branches.len(),
+            _ => 0,
+        } + match &repo.worktrees {
+            Loadable::Ready(worktrees) => worktrees.len(),
+            _ => 0,
+        } + match &repo.submodules {
+            Loadable::Ready(submodules) => submodules.len(),
+            _ => 0,
+        } + match &repo.stashes {
+            Loadable::Ready(stashes) => stashes.len(),
+            _ => 0,
+        };
+    let mut rows = Vec::with_capacity(approx_rows);
     let head_upstream_full = match (&repo.branches, &repo.head_branch) {
         (Loadable::Ready(branches), Loadable::Ready(head)) => branches
             .iter()
@@ -124,6 +141,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
             };
             let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
                 HashMap::default();
+            local_meta.reserve(branches.len());
             for b in branches {
                 local_meta.insert(
                     b.name.clone(),

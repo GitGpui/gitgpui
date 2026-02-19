@@ -269,10 +269,8 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     }
 
     let needs_leading_nl = !output.is_empty() && !output.ends_with('\n');
-    let extra_len: usize = lines.iter().map(|l| l.len()).sum::<usize>()
-        + lines.len()
-        + 1
-        + usize::from(needs_leading_nl);
+    let extra_len: usize =
+        lines.iter().map(|l| l.len()).sum::<usize>() + lines.len() + usize::from(needs_leading_nl);
     let mut out = String::with_capacity(output.len() + extra_len);
     out.push_str(output);
     if !out.is_empty() && !out.ends_with('\n') {

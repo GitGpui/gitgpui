@@ -495,7 +495,8 @@ fn find_all_ascii_case_insensitive(haystack: &str, needle: &str) -> Vec<Range<us
         return Vec::new();
     }
 
-    let mut out = Vec::new();
+    let max_possible = haystack_bytes.len() / needle_bytes.len().max(1);
+    let mut out = Vec::with_capacity(MAX_MATCHES.min(max_possible));
     let mut start = 0usize;
     while start + needle_bytes.len() <= haystack_bytes.len() && out.len() < MAX_MATCHES {
         let mut matched = true;

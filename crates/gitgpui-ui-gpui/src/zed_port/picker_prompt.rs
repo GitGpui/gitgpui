@@ -140,15 +140,16 @@ fn match_items(items: &[SharedString], query: &str) -> Vec<Match> {
             .collect();
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(items.len());
     for (index, label) in items.iter().enumerate() {
         let Some(range) = find_ascii_case_insensitive(label, query) else {
             continue;
         };
+        let start = range.start;
         out.push(Match {
             index,
-            range: Some(range.clone()),
-            sort_key: (range.start, label.len(), label.to_string()),
+            range: Some(range),
+            sort_key: (start, label.len(), label.to_string()),
         });
     }
 

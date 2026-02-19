@@ -6,6 +6,7 @@ use crate::msg::{Effect, RepoCommandKind};
 use gitgpui_core::domain::DiffTarget;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::CommandOutput;
+use rustc_hash::FxHashSet;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -13,10 +14,15 @@ fn is_supported_image_path(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
         return false;
     };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "tif" | "tiff"
-    )
+    ext.eq_ignore_ascii_case("png")
+        || ext.eq_ignore_ascii_case("jpg")
+        || ext.eq_ignore_ascii_case("jpeg")
+        || ext.eq_ignore_ascii_case("gif")
+        || ext.eq_ignore_ascii_case("webp")
+        || ext.eq_ignore_ascii_case("bmp")
+        || ext.eq_ignore_ascii_case("svg")
+        || ext.eq_ignore_ascii_case("tif")
+        || ext.eq_ignore_ascii_case("tiff")
 }
 
 fn is_svg_path(path: &Path) -> bool {
@@ -204,9 +210,10 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
 }
 
 pub(super) fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::with_capacity(paths.len());
+    let mut seen: FxHashSet<PathBuf> = FxHashSet::default();
     for p in paths {
-        if out.iter().any(|x| x == &p) {
+        if !seen.insert(p.clone()) {
             continue;
         }
         out.push(p);
@@ -533,10 +540,8 @@ fn try_format_git_backend_error_message(message: &str) -> Option<(String, String
         return None;
     }
 
-    Some((
-        command.clone(),
-        render_command_and_output(&command, output.as_deref()),
-    ))
+    let rendered = render_command_and_output(&command, output.as_deref());
+    Some((command, rendered))
 }
 
 fn parse_failed_command_message(message: &str) -> Option<(String, Option<String>)> {
@@ -559,12 +564,14 @@ fn parse_failed_command_message(message: &str) -> Option<(String, Option<String>
 }
 
 fn render_command_and_output(command: &str, output: Option<&str>) -> String {
-    let command = command.replace(['\n', '\r'], " ").trim().to_string();
+    let command = command.replace(['\n', '\r'], " ");
+    let command = command.trim();
 
-    let mut rendered = String::new();
+    let output_len = output.map_or(0, |s| s.len());
+    let mut rendered = String::with_capacity(command.len().saturating_add(output_len) + 16);
     rendered.push_str("```");
     rendered.push('\n');
-    rendered.push_str(&command);
+    rendered.push_str(command);
     rendered.push('\n');
     rendered.push_str("```");
 

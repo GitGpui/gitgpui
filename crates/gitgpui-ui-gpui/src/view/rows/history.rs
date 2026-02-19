@@ -311,7 +311,7 @@ fn working_tree_summary_history_row(
     };
 
     let (added, modified, deleted) = counts;
-    let mut parts: Vec<AnyElement> = Vec::new();
+    let mut parts: Vec<AnyElement> = Vec::with_capacity(3);
     if modified > 0 {
         parts.push(icon_count("✎", theme.colors.warning, modified));
     }

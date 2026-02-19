@@ -1,4 +1,5 @@
 use crate::model::{AppState, RepoId};
+use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -84,18 +85,19 @@ pub fn persist_from_state(state: &AppState) -> io::Result<()> {
 }
 
 pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<()> {
-    let mut open_repos: Vec<String> = Vec::new();
+    let mut open_repos: Vec<String> = Vec::with_capacity(state.repos.len());
+    let mut seen: FxHashSet<&Path> = FxHashSet::default();
     for repo in &state.repos {
-        let s = repo.spec.workdir.to_string_lossy().to_string();
-        if open_repos.iter().any(|p| p == &s) {
+        let workdir = repo.spec.workdir.as_path();
+        if !seen.insert(workdir) {
             continue;
         }
-        open_repos.push(s);
+        open_repos.push(workdir.to_string_lossy().to_string());
     }
 
     let active_repo: Option<String> = active_repo_path(state, state.active_repo)
-        .map(|p| p.to_string_lossy().to_string())
-        .filter(|active| open_repos.iter().any(|p| p == active));
+        .filter(|p| seen.contains(*p))
+        .map(|p| p.to_string_lossy().to_string());
 
     let mut file = load_file_v2(path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
@@ -157,14 +159,15 @@ fn parse_repos(
     open_repos_raw: Vec<String>,
     active_repo_raw: Option<String>,
 ) -> (Vec<PathBuf>, Option<PathBuf>) {
-    let mut open_repos: Vec<PathBuf> = Vec::new();
+    let mut open_repos: Vec<PathBuf> = Vec::with_capacity(open_repos_raw.len());
+    let mut seen: FxHashSet<PathBuf> = FxHashSet::default();
     for repo in open_repos_raw {
         let repo = repo.trim();
         if repo.is_empty() {
             continue;
         }
         let repo = PathBuf::from(repo);
-        if open_repos.iter().any(|p| p == &repo) {
+        if !seen.insert(repo.clone()) {
             continue;
         }
         open_repos.push(repo);
@@ -180,7 +183,7 @@ fn parse_repos(
                 Some(PathBuf::from(p))
             }
         })
-        .filter(|active| open_repos.iter().any(|p| p == active));
+        .filter(|active| seen.contains(active));
 
     (open_repos, active_repo)
 }

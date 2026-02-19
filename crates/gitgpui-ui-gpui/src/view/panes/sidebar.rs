@@ -206,8 +206,10 @@ impl SidebarPaneView {
 
     pub(in super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
-            root.rebuild_diff_cache();
-            cx.notify();
+            root.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                cx.notify();
+            });
         });
     }
 }

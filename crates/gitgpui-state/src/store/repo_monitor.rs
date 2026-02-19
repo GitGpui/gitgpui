@@ -99,9 +99,9 @@ impl RepoMonitorManager {
     }
 
     pub(super) fn stop_all(&mut self) {
-        let repo_ids = self.handles.keys().copied().collect::<Vec<_>>();
-        for repo_id in repo_ids {
-            self.stop(repo_id);
+        for (_repo_id, handle) in self.handles.drain() {
+            let _ = handle.msg_tx.send(MonitorMsg::Stop);
+            let _ = handle.join.join();
         }
     }
 
@@ -124,9 +124,9 @@ impl RepoMonitorManager {
         msg_tx: mpsc::Sender<Msg>,
         active_repo_id: Arc<AtomicU64>,
     ) {
-        if self.handles.contains_key(&repo_id) {
+        let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
             return;
-        }
+        };
         let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
         let monitor_tx_for_notify = monitor_tx.clone();
         let join = thread::spawn(move || {
@@ -139,13 +139,10 @@ impl RepoMonitorManager {
                 active_repo_id,
             )
         });
-        self.handles.insert(
-            repo_id,
-            RepoMonitorHandle {
-                msg_tx: monitor_tx,
-                join,
-            },
-        );
+        entry.insert(RepoMonitorHandle {
+            msg_tx: monitor_tx,
+            join,
+        });
     }
 }
 
@@ -271,8 +268,8 @@ fn parse_gitignore_pattern(line: &str) -> (bool, Option<String>) {
 }
 
 fn gitignore_pattern_to_globs(pattern: &str) -> (Vec<String>, Vec<String>) {
-    let mut out = Vec::new();
-    let mut dir_self_only = Vec::new();
+    let mut out = Vec::with_capacity(4);
+    let mut dir_self_only = Vec::with_capacity(2);
 
     // Strip leading "./" and leading "/" (repo-root anchoring).
     let mut pat = pattern.trim_start_matches("./");
@@ -292,7 +289,7 @@ fn gitignore_pattern_to_globs(pattern: &str) -> (Vec<String>, Vec<String>) {
 
     let anchored = pat.contains('/');
 
-    let mut bases = Vec::new();
+    let mut bases = Vec::with_capacity(if anchored { 1 } else { 2 });
     if anchored {
         bases.push(pat.to_string());
     } else {

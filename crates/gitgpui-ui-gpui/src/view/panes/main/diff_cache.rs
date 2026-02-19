@@ -239,17 +239,7 @@ impl MainPaneView {
     }
 
     fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
-        let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
-        match ext.as_str() {
-            "png" => Some(gpui::ImageFormat::Png),
-            "jpg" | "jpeg" => Some(gpui::ImageFormat::Jpeg),
-            "gif" => Some(gpui::ImageFormat::Gif),
-            "webp" => Some(gpui::ImageFormat::Webp),
-            "bmp" => Some(gpui::ImageFormat::Bmp),
-            "svg" => Some(gpui::ImageFormat::Svg),
-            "tif" | "tiff" => Some(gpui::ImageFormat::Tiff),
-            _ => None,
-        }
+        image_format_for_path(path)
     }
 
     pub(in super::super::super) fn ensure_file_image_diff_cache(&mut self) {
@@ -695,65 +685,6 @@ impl MainPaneView {
             self.diff_search_recompute_matches_for_current_view();
         }
     }
-}
-
-fn compute_diff_word_highlights(diff: &[AnnotatedDiffLine]) -> Vec<Option<Vec<Range<usize>>>> {
-    let mut highlights: Vec<Option<Vec<Range<usize>>>> = vec![None; diff.len()];
-
-    let mut ix = 0usize;
-    while ix < diff.len() {
-        let kind = diff[ix].kind;
-        if matches!(kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-            ix += 1;
-            continue;
-        }
-
-        if !matches!(kind, gitgpui_core::domain::DiffLineKind::Remove) {
-            ix += 1;
-            continue;
-        }
-
-        let mut removed: Vec<(usize, &str)> = Vec::new();
-        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Remove)
-        {
-            let text = diff_content_text(&diff[ix]);
-            removed.push((ix, text));
-            ix += 1;
-        }
-
-        let mut added: Vec<(usize, &str)> = Vec::new();
-        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Add) {
-            let text = diff_content_text(&diff[ix]);
-            added.push((ix, text));
-            ix += 1;
-        }
-
-        let pairs = removed.len().min(added.len());
-        for i in 0..pairs {
-            let (old_ix, old_text) = removed[i];
-            let (new_ix, new_text) = added[i];
-            let (old_ranges, new_ranges) = capped_word_diff_ranges(old_text, new_text);
-            if !old_ranges.is_empty() {
-                highlights[old_ix] = Some(old_ranges);
-            }
-            if !new_ranges.is_empty() {
-                highlights[new_ix] = Some(new_ranges);
-            }
-        }
-
-        for (old_ix, old_text) in removed.into_iter().skip(pairs) {
-            if !old_text.is_empty() {
-                highlights[old_ix] = Some(vec![0..old_text.len()]);
-            }
-        }
-        for (new_ix, new_text) in added.into_iter().skip(pairs) {
-            if !new_text.is_empty() {
-                highlights[new_ix] = Some(vec![0..new_text.len()]);
-            }
-        }
-    }
-
-    highlights
 }
 
 #[cfg(test)]

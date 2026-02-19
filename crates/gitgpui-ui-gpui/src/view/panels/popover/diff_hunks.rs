@@ -4,15 +4,12 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
-    let mut items: Vec<SharedString> = Vec::new();
-    let mut targets: Vec<usize> = Vec::new();
+    let pane = this.main_pane.read(cx);
+    let mut items: Vec<SharedString> = Vec::with_capacity(pane.diff_visible_indices.len());
+    let mut targets: Vec<usize> = Vec::with_capacity(pane.diff_visible_indices.len());
     let mut current_file: Option<String> = None;
 
-    let pane = this.main_pane.read(cx);
-    if pane.is_file_diff_view_active() {
-        items.clear();
-        targets.clear();
-    } else {
+    if !pane.is_file_diff_view_active() {
         for (visible_ix, &ix) in pane.diff_visible_indices.iter().enumerate() {
             let (src_ix, click_kind) = match pane.diff_view {
                 DiffViewMode::Inline => {

@@ -1226,7 +1226,7 @@ impl Element for TextElement {
                 scroll_x = px(0.0);
             }
 
-            let mut selections = Vec::new();
+            let mut selections = Vec::with_capacity(lines.len());
             let cursor_quad = if selected_range.is_empty() {
                 let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                 let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
@@ -1281,7 +1281,7 @@ impl Element for TextElement {
         }
 
         let wrap_width = bounds.size.width.max(px(0.0));
-        let mut y_offsets: Vec<Pixels> = Vec::new();
+        let mut y_offsets: Vec<Pixels> = Vec::with_capacity(lines_text.len());
         let mut lines: Vec<WrappedLine> = Vec::with_capacity(lines_text.len());
         let mut y = Pixels::ZERO;
         let mut total_rows = 0usize;
@@ -1316,7 +1316,7 @@ impl Element for TextElement {
             rows: total_rows.max(1),
         });
 
-        let mut selections = Vec::new();
+        let mut selections = Vec::with_capacity(total_rows.max(1));
         let cursor_quad = if selected_range.is_empty() {
             let mut ix = line_starts.partition_point(|&s| s <= cursor);
             if ix == 0 {
@@ -1624,8 +1624,8 @@ fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 
 fn split_lines_with_starts(text: &SharedString) -> (Vec<usize>, Vec<SharedString>) {
     let s = text.as_ref();
-    let mut starts = Vec::new();
-    let mut lines = Vec::new();
+    let mut starts = Vec::with_capacity(8);
+    let mut lines = Vec::with_capacity(8);
     starts.push(0);
     let mut start = 0usize;
     for (ix, b) in s.bytes().enumerate() {

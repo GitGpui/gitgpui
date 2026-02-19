@@ -516,14 +516,26 @@ fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<Stri
     ))))
 }
 
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn git_blob_missing_for_show(stderr: &str) -> bool {
-    let s = stderr.to_ascii_lowercase();
-    s.contains("does not exist in") // `Path 'x' does not exist in 'REV'`
-        || s.contains("exists on disk, but not in") // common suggestion text
-        || (s.contains("path '") && s.contains("' does not exist"))
-        || s.contains("neither on disk nor in the index")
-        || s.contains("fatal: invalid object name")
-        || s.contains("bad object")
-        || s.contains("unknown revision")
-        || s.contains("bad revision")
+    let has = |needle: &str| contains_ascii_case_insensitive(stderr, needle);
+    has("does not exist in") // `Path 'x' does not exist in 'REV'`
+        || has("exists on disk, but not in") // common suggestion text
+        || (has("path '") && has("' does not exist"))
+        || has("neither on disk nor in the index")
+        || has("fatal: invalid object name")
+        || has("bad object")
+        || has("unknown revision")
+        || has("bad revision")
 }

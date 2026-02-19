@@ -23,6 +23,24 @@ fn conflict_nav_entries<T>(rows: &[T], mut is_change: impl FnMut(&T) -> bool) ->
     out
 }
 
+pub(super) fn change_block_entries(
+    len: usize,
+    mut is_change: impl FnMut(usize) -> bool,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut in_block = false;
+    for ix in 0..len {
+        let is_change = is_change(ix);
+        if is_change && !in_block {
+            out.push(ix);
+            in_block = true;
+        } else if !is_change {
+            in_block = false;
+        }
+    }
+    out
+}
+
 pub(super) fn conflict_nav_entries_for_split(rows: &[FileDiffRow]) -> Vec<usize> {
     conflict_nav_entries(rows, |row| {
         row.kind != gitgpui_core::file_diff::FileDiffRowKind::Context

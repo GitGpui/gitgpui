@@ -756,50 +756,7 @@ impl PopoverHost {
         let Loadable::Ready(diff) = &repo.diff else {
             return None;
         };
-
-        let lines = diff.lines.as_slice();
-        let hunk = lines.get(hunk_src_ix)?;
-        if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-            return None;
-        }
-
-        let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
-            lines
-                .get(ix)
-                .is_some_and(|l| l.text.starts_with("diff --git "))
-        })?;
-
-        let first_hunk = (file_start + 1..lines.len())
-            .find(|&ix| {
-                let Some(line) = lines.get(ix) else {
-                    return false;
-                };
-                matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                    || line.text.starts_with("diff --git ")
-            })
-            .unwrap_or(lines.len());
-
-        let header_end = first_hunk.min(hunk_src_ix);
-        let hunk_end = (hunk_src_ix + 1..lines.len())
-            .find(|&ix| {
-                let Some(line) = lines.get(ix) else {
-                    return false;
-                };
-                matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                    || line.text.starts_with("diff --git ")
-            })
-            .unwrap_or(lines.len());
-
-        let mut out = String::new();
-        for line in &lines[file_start..header_end] {
-            out.push_str(&line.text);
-            out.push('\n');
-        }
-        for line in &lines[hunk_src_ix..hunk_end] {
-            out.push_str(&line.text);
-            out.push('\n');
-        }
-        (!out.trim().is_empty()).then_some(out)
+        crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)
     }
 
     pub(super) fn context_menu_view(

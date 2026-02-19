@@ -11,7 +11,7 @@ use crate::session;
 use gitgpui_core::domain::{DiffTarget, RepoSpec};
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,12 +58,13 @@ pub(super) fn restore_session(
     let active_repo = active_repo.map(normalize_repo_path);
     let mut active_repo_id: Option<RepoId> = None;
 
-    let mut effects = Vec::new();
-    for path in dedup_paths_in_order(open_repos)
-        .into_iter()
-        .map(normalize_repo_path)
-    {
-        if state.repos.iter().any(|r| r.spec.workdir == path) {
+    let open_repos = dedup_paths_in_order(open_repos);
+    let mut effects = Vec::with_capacity(open_repos.len());
+    let mut seen_workdirs: HashSet<PathBuf> = HashSet::default();
+    seen_workdirs.reserve(open_repos.len());
+
+    for path in open_repos.into_iter().map(normalize_repo_path) {
+        if !seen_workdirs.insert(path.clone()) {
             continue;
         }
         let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));

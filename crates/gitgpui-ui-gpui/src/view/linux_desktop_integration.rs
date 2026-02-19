@@ -13,7 +13,12 @@ impl GitGpuiView {
         }
 
         let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-        if !desktop.to_ascii_lowercase().contains("gnome") {
+        const GNOME: &[u8] = b"gnome";
+        if !desktop
+            .as_bytes()
+            .windows(GNOME.len())
+            .any(|window| window.eq_ignore_ascii_case(GNOME))
+        {
             return;
         }
 
@@ -77,12 +82,13 @@ impl GitGpuiView {
                             .and_then(|_| fs::create_dir_all(&icons_dir))
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
 
-                        let mut desktop_out = String::new();
+                        use std::fmt::Write as _;
+
+                        let mut desktop_out = String::with_capacity(DESKTOP_TEMPLATE.len() + 128);
                         for line in DESKTOP_TEMPLATE.lines() {
                             if line.starts_with("Exec=") {
                                 desktop_out.push_str("Exec=");
-                                desktop_out.push_str(&exe.display().to_string());
-                                desktop_out.push('\n');
+                                let _ = writeln!(&mut desktop_out, "{}", exe.display());
                             } else {
                                 desktop_out.push_str(line);
                                 desktop_out.push('\n');

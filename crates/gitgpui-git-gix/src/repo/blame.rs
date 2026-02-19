@@ -124,19 +124,19 @@ fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
                 .unwrap_or_else(|| "0000000".to_string());
             let line_text = line.strip_prefix('\t').unwrap_or("").to_string();
 
-            let (author_filled, author_time_filled, summary_filled) = if author.is_none()
-                && author_time.is_none()
-                && summary.is_none()
-                && cached_by_commit.contains_key(&commit)
-            {
-                cached_by_commit.get(&commit).cloned().unwrap_or_default()
+            let cached = if author.is_none() && author_time.is_none() && summary.is_none() {
+                cached_by_commit.get(&commit).cloned()
             } else {
+                None
+            };
+
+            let (author_filled, author_time_filled, summary_filled) = cached.unwrap_or_else(|| {
                 (
                     author.clone().unwrap_or_default(),
                     author_time,
                     summary.clone().unwrap_or_default(),
                 )
-            };
+            });
 
             cached_by_commit.insert(
                 commit.clone(),

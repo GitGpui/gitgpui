@@ -21,7 +21,7 @@ pub(super) fn scrollbar_markers_from_flags(
         }
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(bucket_count);
     let mut ix = 0usize;
     while ix < bucket_count {
         let flag = buckets[ix];
@@ -68,6 +68,88 @@ pub(super) fn diff_content_text(line: &AnnotatedDiffLine) -> &str {
             &line.text
         }
     }
+}
+
+pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
+    let ext = path.extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("png") {
+        Some(gpui::ImageFormat::Png)
+    } else if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") {
+        Some(gpui::ImageFormat::Jpeg)
+    } else if ext.eq_ignore_ascii_case("gif") {
+        Some(gpui::ImageFormat::Gif)
+    } else if ext.eq_ignore_ascii_case("webp") {
+        Some(gpui::ImageFormat::Webp)
+    } else if ext.eq_ignore_ascii_case("bmp") {
+        Some(gpui::ImageFormat::Bmp)
+    } else if ext.eq_ignore_ascii_case("svg") {
+        Some(gpui::ImageFormat::Svg)
+    } else if ext.eq_ignore_ascii_case("tif") || ext.eq_ignore_ascii_case("tiff") {
+        Some(gpui::ImageFormat::Tiff)
+    } else {
+        None
+    }
+}
+
+pub(super) fn compute_diff_word_highlights(
+    diff: &[AnnotatedDiffLine],
+) -> Vec<Option<Vec<Range<usize>>>> {
+    let mut highlights: Vec<Option<Vec<Range<usize>>>> = vec![None; diff.len()];
+
+    let mut ix = 0usize;
+    while ix < diff.len() {
+        let kind = diff[ix].kind;
+        if matches!(kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+            ix += 1;
+            continue;
+        }
+
+        if !matches!(kind, gitgpui_core::domain::DiffLineKind::Remove) {
+            ix += 1;
+            continue;
+        }
+
+        let mut removed: Vec<(usize, &str)> = Vec::new();
+        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Remove)
+        {
+            let text = diff_content_text(&diff[ix]);
+            removed.push((ix, text));
+            ix += 1;
+        }
+
+        let mut added: Vec<(usize, &str)> = Vec::new();
+        while ix < diff.len() && matches!(diff[ix].kind, gitgpui_core::domain::DiffLineKind::Add) {
+            let text = diff_content_text(&diff[ix]);
+            added.push((ix, text));
+            ix += 1;
+        }
+
+        let pairs = removed.len().min(added.len());
+        for i in 0..pairs {
+            let (old_ix, old_text) = removed[i];
+            let (new_ix, new_text) = added[i];
+            let (old_ranges, new_ranges) = capped_word_diff_ranges(old_text, new_text);
+            if !old_ranges.is_empty() {
+                highlights[old_ix] = Some(old_ranges);
+            }
+            if !new_ranges.is_empty() {
+                highlights[new_ix] = Some(new_ranges);
+            }
+        }
+
+        for (old_ix, old_text) in removed.into_iter().skip(pairs) {
+            if !old_text.is_empty() {
+                highlights[old_ix] = Some(vec![0..old_text.len()]);
+            }
+        }
+        for (new_ix, new_text) in added.into_iter().skip(pairs) {
+            if !new_text.is_empty() {
+                highlights[new_ix] = Some(vec![0..new_text.len()]);
+            }
+        }
+    }
+
+    highlights
 }
 
 pub(super) fn parse_diff_git_header_path(text: &str) -> Option<String> {
@@ -170,20 +252,44 @@ pub(super) fn enclosing_hunk_src_ix(diff: &[AnnotatedDiffLine], src_ix: usize) -
     None
 }
 
-pub(super) fn build_unified_patch_for_hunk(
-    diff: &[AnnotatedDiffLine],
+pub(super) trait UnifiedDiffLine {
+    fn kind(&self) -> gitgpui_core::domain::DiffLineKind;
+    fn text(&self) -> &str;
+}
+
+impl UnifiedDiffLine for AnnotatedDiffLine {
+    fn kind(&self) -> gitgpui_core::domain::DiffLineKind {
+        self.kind
+    }
+
+    fn text(&self) -> &str {
+        self.text.as_ref()
+    }
+}
+
+impl UnifiedDiffLine for gitgpui_core::domain::DiffLine {
+    fn kind(&self) -> gitgpui_core::domain::DiffLineKind {
+        self.kind
+    }
+
+    fn text(&self) -> &str {
+        self.text.as_ref()
+    }
+}
+
+fn unified_patch_file_and_hunk_bounds<T: UnifiedDiffLine>(
+    lines: &[T],
     hunk_src_ix: usize,
-) -> Option<String> {
-    let lines = diff;
+) -> Option<(usize, usize, usize)> {
     let hunk = lines.get(hunk_src_ix)?;
-    if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
+    if !matches!(hunk.kind(), gitgpui_core::domain::DiffLineKind::Hunk) {
         return None;
     }
 
     let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
         lines
             .get(ix)
-            .is_some_and(|l| l.text.starts_with("diff --git "))
+            .is_some_and(|l| l.text().starts_with("diff --git "))
     })?;
 
     let first_hunk = (file_start + 1..lines.len())
@@ -191,8 +297,8 @@ pub(super) fn build_unified_patch_for_hunk(
             let Some(line) = lines.get(ix) else {
                 return false;
             };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
+            matches!(line.kind(), gitgpui_core::domain::DiffLineKind::Hunk)
+                || line.text().starts_with("diff --git ")
         })
         .unwrap_or(lines.len());
 
@@ -202,18 +308,49 @@ pub(super) fn build_unified_patch_for_hunk(
             let Some(line) = lines.get(ix) else {
                 return false;
             };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
+            matches!(line.kind(), gitgpui_core::domain::DiffLineKind::Hunk)
+                || line.text().starts_with("diff --git ")
         })
         .unwrap_or(lines.len());
 
-    let mut out = String::new();
+    Some((file_start, header_end, hunk_end))
+}
+
+fn unified_patch_capacity<T: UnifiedDiffLine>(
+    lines: &[T],
+    file_start: usize,
+    header_end: usize,
+    hunk_start: usize,
+    hunk_end: usize,
+) -> usize {
+    lines[file_start..header_end]
+        .iter()
+        .map(|l| l.text().len().saturating_add(1))
+        .sum::<usize>()
+        .saturating_add(
+            lines[hunk_start..hunk_end]
+                .iter()
+                .map(|l| l.text().len().saturating_add(1))
+                .sum::<usize>(),
+        )
+}
+
+pub(super) fn build_unified_patch_for_hunk(
+    diff: &[impl UnifiedDiffLine],
+    hunk_src_ix: usize,
+) -> Option<String> {
+    let lines = diff;
+    let (file_start, header_end, hunk_end) =
+        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
+
+    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
+    let mut out = String::with_capacity(capacity);
     for line in &lines[file_start..header_end] {
-        out.push_str(&line.text);
+        out.push_str(line.text());
         out.push('\n');
     }
     for line in &lines[hunk_src_ix..hunk_end] {
-        out.push_str(&line.text);
+        out.push_str(line.text());
         out.push('\n');
     }
     (!out.trim().is_empty()).then_some(out)
@@ -252,46 +389,18 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     }
 
     let lines = diff;
-    let hunk = lines.get(hunk_src_ix)?;
-    if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-        return None;
-    }
+    let (file_start, header_end, hunk_end) =
+        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
 
-    let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
-        lines
-            .get(ix)
-            .is_some_and(|l| l.text.starts_with("diff --git "))
-    })?;
-
-    let first_hunk = (file_start + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    let header_end = first_hunk.min(hunk_src_ix);
-    let hunk_end = (hunk_src_ix + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    let mut out = String::new();
+    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
+    let mut out = String::with_capacity(capacity);
     for line in &lines[file_start..header_end] {
-        out.push_str(&line.text);
+        out.push_str(line.text());
         out.push('\n');
     }
 
     // Keep the original hunk header; `git apply --recount` will adjust counts.
-    out.push_str(&lines[hunk_src_ix].text);
+    out.push_str(lines[hunk_src_ix].text());
     out.push('\n');
 
     let mut has_change = false;
@@ -299,9 +408,9 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     for ix in hunk_src_ix + 1..hunk_end {
         let line = &lines[ix];
 
-        if line.text.starts_with("\\") {
+        if line.text().starts_with("\\") {
             if prev_included {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
             }
             continue;
@@ -310,7 +419,7 @@ pub(super) fn build_unified_patch_for_hunk_selection(
         match line.kind {
             gitgpui_core::domain::DiffLineKind::Add => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(&line.text);
+                    out.push_str(line.text());
                     out.push('\n');
                     has_change = true;
                     prev_included = true;
@@ -320,12 +429,13 @@ pub(super) fn build_unified_patch_for_hunk_selection(
             }
             gitgpui_core::domain::DiffLineKind::Remove => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(&line.text);
+                    out.push_str(line.text());
                     out.push('\n');
                     has_change = true;
                     prev_included = true;
                 } else {
-                    let content = line.text.strip_prefix('-').unwrap_or(&line.text);
+                    let text = line.text();
+                    let content = text.strip_prefix('-').unwrap_or(text);
                     out.push(' ');
                     out.push_str(content);
                     out.push('\n');
@@ -333,13 +443,13 @@ pub(super) fn build_unified_patch_for_hunk_selection(
                 }
             }
             gitgpui_core::domain::DiffLineKind::Context => {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
                 prev_included = true;
             }
             gitgpui_core::domain::DiffLineKind::Header
             | gitgpui_core::domain::DiffLineKind::Hunk => {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
                 prev_included = true;
             }
@@ -359,46 +469,18 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
     }
 
     let lines = diff;
-    let hunk = lines.get(hunk_src_ix)?;
-    if !matches!(hunk.kind, gitgpui_core::domain::DiffLineKind::Hunk) {
-        return None;
-    }
+    let (file_start, header_end, hunk_end) =
+        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
 
-    let file_start = (0..=hunk_src_ix).rev().find(|&ix| {
-        lines
-            .get(ix)
-            .is_some_and(|l| l.text.starts_with("diff --git "))
-    })?;
-
-    let first_hunk = (file_start + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    let header_end = first_hunk.min(hunk_src_ix);
-    let hunk_end = (hunk_src_ix + 1..lines.len())
-        .find(|&ix| {
-            let Some(line) = lines.get(ix) else {
-                return false;
-            };
-            matches!(line.kind, gitgpui_core::domain::DiffLineKind::Hunk)
-                || line.text.starts_with("diff --git ")
-        })
-        .unwrap_or(lines.len());
-
-    let mut out = String::new();
+    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
+    let mut out = String::with_capacity(capacity);
     for line in &lines[file_start..header_end] {
-        out.push_str(&line.text);
+        out.push_str(line.text());
         out.push('\n');
     }
 
     // Keep the original hunk header; `git apply --recount` will adjust counts.
-    out.push_str(&lines[hunk_src_ix].text);
+    out.push_str(lines[hunk_src_ix].text());
     out.push('\n');
 
     let mut has_change = false;
@@ -406,9 +488,9 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
     for ix in hunk_src_ix + 1..hunk_end {
         let line = &lines[ix];
 
-        if line.text.starts_with("\\") {
+        if line.text().starts_with("\\") {
             if prev_included {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
             }
             continue;
@@ -417,12 +499,13 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
         match line.kind {
             gitgpui_core::domain::DiffLineKind::Add => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(&line.text);
+                    out.push_str(line.text());
                     out.push('\n');
                     has_change = true;
                     prev_included = true;
                 } else {
-                    let content = line.text.strip_prefix('+').unwrap_or(&line.text);
+                    let text = line.text();
+                    let content = text.strip_prefix('+').unwrap_or(text);
                     out.push(' ');
                     out.push_str(content);
                     out.push('\n');
@@ -431,7 +514,7 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
             }
             gitgpui_core::domain::DiffLineKind::Remove => {
                 if selected_src_ixs.contains(&ix) {
-                    out.push_str(&line.text);
+                    out.push_str(line.text());
                     out.push('\n');
                     has_change = true;
                     prev_included = true;
@@ -440,13 +523,13 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
                 }
             }
             gitgpui_core::domain::DiffLineKind::Context => {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
                 prev_included = true;
             }
             gitgpui_core::domain::DiffLineKind::Header
             | gitgpui_core::domain::DiffLineKind::Hunk => {
-                out.push_str(&line.text);
+                out.push_str(line.text());
                 out.push('\n');
                 prev_included = true;
             }

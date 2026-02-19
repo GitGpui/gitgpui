@@ -103,7 +103,8 @@ impl GixRepo {
 }
 
 fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
-    let mut out = Vec::new();
+    let approx_lines = output.lines().filter(|l| !l.trim().is_empty()).count();
+    let mut out = Vec::with_capacity(approx_lines);
     for raw in output.lines() {
         let line = raw.trim_end();
         if line.trim().is_empty() {
@@ -111,8 +112,7 @@ fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
         }
         let mut chars = line.chars();
         let status = chars.next().unwrap_or(' ');
-        let rest: String = chars.collect();
-        let rest = rest.trim();
+        let rest = chars.as_str().trim();
         let mut parts = rest.split_whitespace();
         let Some(sha) = parts.next() else {
             continue;

@@ -268,24 +268,34 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 },
             )));
 
-            this.state = Arc::new(AppState {
+            let next_state = Arc::new(AppState {
                 repos: vec![repo],
                 active_repo: Some(repo_id),
                 ..Default::default()
             });
 
-            this.try_populate_worktree_preview_from_diff_file();
-            cx.notify();
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
         });
     });
 
     cx.update(|_window, app| {
-        let this = view.read(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.try_populate_worktree_preview_from_diff_file();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
         assert_eq!(
-            this.deleted_file_preview_abs_path(),
+            pane.deleted_file_preview_abs_path(),
             Some(workdir.join(&file_rel))
         );
-        let gitgpui_state::model::Loadable::Ready(lines) = &this.worktree_preview else {
+        let gitgpui_state::model::Loadable::Ready(lines) = &pane.worktree_preview else {
             panic!("expected worktree preview to be ready");
         };
         assert_eq!(lines.as_ref(), &vec!["one".to_string(), "two".to_string()]);

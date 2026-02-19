@@ -755,14 +755,14 @@ impl MainPaneView {
                         new_src_ix,
                         ..
                     } => {
-                        let mut out = Vec::new();
+                        let mut out = Vec::with_capacity(2);
                         if let Some(ix) = old_src_ix {
                             out.push(*ix);
                         }
-                        if let Some(ix) = new_src_ix
-                            && !out.contains(ix)
-                        {
-                            out.push(*ix);
+                        if let Some(ix) = new_src_ix {
+                            if out.first().copied() != Some(*ix) {
+                                out.push(*ix);
+                            }
                         }
                         out
                     }
@@ -1238,44 +1238,34 @@ impl MainPaneView {
         if !self.is_file_diff_view_active() {
             return Vec::new();
         }
-        let mut out: Vec<usize> = Vec::new();
         match self.diff_view {
-            DiffViewMode::Inline => {
-                let mut prev_changed = false;
-                for visible_ix in 0..self.diff_visible_indices.len() {
+            DiffViewMode::Inline => diff_navigation::change_block_entries(
+                self.diff_visible_indices.len(),
+                |visible_ix| {
                     let Some(&inline_ix) = self.diff_visible_indices.get(visible_ix) else {
-                        continue;
+                        return false;
                     };
-                    let changed = self.file_diff_inline_cache.get(inline_ix).is_some_and(|l| {
+                    self.file_diff_inline_cache.get(inline_ix).is_some_and(|l| {
                         matches!(
                             l.kind,
                             gitgpui_core::domain::DiffLineKind::Add
                                 | gitgpui_core::domain::DiffLineKind::Remove
                         )
-                    });
-                    if changed && !prev_changed {
-                        out.push(visible_ix);
-                    }
-                    prev_changed = changed;
-                }
-            }
-            DiffViewMode::Split => {
-                let mut prev_changed = false;
-                for visible_ix in 0..self.diff_visible_indices.len() {
+                    })
+                },
+            ),
+            DiffViewMode::Split => diff_navigation::change_block_entries(
+                self.diff_visible_indices.len(),
+                |visible_ix| {
                     let Some(&row_ix) = self.diff_visible_indices.get(visible_ix) else {
-                        continue;
+                        return false;
                     };
-                    let changed = self.file_diff_cache_rows.get(row_ix).is_some_and(|row| {
+                    self.file_diff_cache_rows.get(row_ix).is_some_and(|row| {
                         !matches!(row.kind, gitgpui_core::file_diff::FileDiffRowKind::Context)
-                    });
-                    if changed && !prev_changed {
-                        out.push(visible_ix);
-                    }
-                    prev_changed = changed;
-                }
-            }
+                    })
+                },
+            ),
         }
-        out
     }
 
     fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {

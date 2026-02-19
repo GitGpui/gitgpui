@@ -46,7 +46,7 @@ pub fn compute_graph(
     theme: AppTheme,
     branch_heads: &HashSet<&str>,
 ) -> Vec<GraphRow> {
-    let mut palette: Vec<Rgba> = Vec::new();
+    let mut palette: Vec<Rgba> = Vec::with_capacity(LANE_COLOR_PALETTE_SIZE);
     for i in 0..LANE_COLOR_PALETTE_SIZE {
         let hue = (i as f32 * 0.13) % 1.0;
         let sat = 0.75;
@@ -196,7 +196,7 @@ pub fn compute_graph(
         }
 
         // Incoming join edges: other lanes that were targeting this commit join into the node.
-        let mut joins_in = Vec::new();
+        let mut joins_in = Vec::with_capacity(hits.len().saturating_sub(1));
         for &col in hits.iter().skip(1) {
             joins_in.push(GraphEdge {
                 from_col: col,
@@ -265,24 +265,30 @@ pub fn compute_graph(
             })
             .collect::<Vec<_>>();
 
+        let mut now_index_by_lane: HashMap<LaneId, usize> =
+            HashMap::with_capacity_and_hasher(lanes_now.len(), Default::default());
+        for (ix, lane) in lanes_now.iter().enumerate() {
+            now_index_by_lane.insert(lane.id, ix);
+        }
+
         let next_from_cols = lanes_next
             .iter()
-            .map(|lane| lanes_now.iter().position(|now| now.id == lane.id))
+            .map(|lane| now_index_by_lane.get(&lane.id).copied())
             .collect::<Vec<_>>();
 
         // Node->parent "merge" edges: connect the node into secondary-parent lanes.
         // - If the secondary parent lane existed already in this row, draw an explicit edge.
         // - If it was inserted this row, the continuation line already originates from the node.
-        let mut edges_out = Vec::new();
-        let mut next_index_by_lane: HashMap<LaneId, usize> = HashMap::default();
+        let mut edges_out = Vec::with_capacity(parent_ids.len().saturating_sub(1));
+        let mut next_index_by_lane: HashMap<LaneId, usize> =
+            HashMap::with_capacity_and_hasher(lanes_next.len(), Default::default());
         for (ix, lane) in lanes_next.iter().enumerate() {
             next_index_by_lane.insert(lane.id, ix);
         }
-        let lanes_now_ids: HashSet<LaneId> = lanes_now.iter().map(|l| l.id).collect();
         for parent in parent_ids.iter().skip(1) {
             if let Some(lane) = lanes
                 .iter()
-                .find(|l| l.target == *parent && lanes_now_ids.contains(&l.id))
+                .find(|l| l.target == *parent && now_index_by_lane.contains_key(&l.id))
                 && let Some(to_col) = next_index_by_lane.get(&lane.id).copied()
             {
                 edges_out.push(GraphEdge {

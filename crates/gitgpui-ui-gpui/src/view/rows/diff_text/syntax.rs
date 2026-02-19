@@ -1,4 +1,5 @@
 use super::super::*;
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 use tree_sitter::StreamingIterator;
@@ -7,6 +8,14 @@ thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
     static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
+    if s.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(s.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(s)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,19 +64,12 @@ pub(super) struct SyntaxToken {
 
 pub(in crate::view) fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
     let p = std::path::Path::new(path);
-    let ext = p
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = ascii_lowercase_for_match(ext);
 
-    let file_name = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
-    Some(match ext.as_str() {
+    Some(match ext.as_ref() {
         "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" => DiffSyntaxLanguage::Markdown,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         // Use HTML highlighting for XML-ish formats as a pragmatic baseline.
@@ -99,7 +101,9 @@ pub(in crate::view) fn diff_syntax_language_for_path(path: &str) -> Option<DiffS
         "sql" => DiffSyntaxLanguage::Sql,
         "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
         _ => {
-            if file_name == "makefile" || file_name == "gnumakefile" {
+            if file_name.eq_ignore_ascii_case("makefile")
+                || file_name.eq_ignore_ascii_case("gnumakefile")
+            {
                 DiffSyntaxLanguage::Makefile
             } else {
                 return None;
@@ -513,7 +517,10 @@ fn syntax_tokens_for_line_heuristic(text: &str, language: DiffSyntaxLanguage) ->
         }
 
         if matches!(language, DiffSyntaxLanguage::VisualBasic)
-            && (rest.starts_with('\'') || rest.to_ascii_lowercase().starts_with("rem "))
+            && (rest.starts_with('\'')
+                || rest
+                    .get(..4)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rem ")))
         {
             tokens.push(SyntaxToken {
                 range: i..len,
@@ -1031,40 +1038,43 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "volatile"
                 | "while"
         ),
-        DiffSyntaxLanguage::Php => matches!(
-            ident.to_ascii_lowercase().as_str(),
-            "function"
-                | "class"
-                | "public"
-                | "private"
-                | "protected"
-                | "static"
-                | "final"
-                | "abstract"
-                | "extends"
-                | "implements"
-                | "use"
-                | "namespace"
-                | "return"
-                | "if"
-                | "else"
-                | "elseif"
-                | "for"
-                | "foreach"
-                | "while"
-                | "do"
-                | "switch"
-                | "case"
-                | "default"
-                | "try"
-                | "catch"
-                | "finally"
-                | "throw"
-                | "new"
-                | "true"
-                | "false"
-                | "null"
-        ),
+        DiffSyntaxLanguage::Php => {
+            let ident = ascii_lowercase_for_match(ident);
+            matches!(
+                ident.as_ref(),
+                "function"
+                    | "class"
+                    | "public"
+                    | "private"
+                    | "protected"
+                    | "static"
+                    | "final"
+                    | "abstract"
+                    | "extends"
+                    | "implements"
+                    | "use"
+                    | "namespace"
+                    | "return"
+                    | "if"
+                    | "else"
+                    | "elseif"
+                    | "for"
+                    | "foreach"
+                    | "while"
+                    | "do"
+                    | "switch"
+                    | "case"
+                    | "default"
+                    | "try"
+                    | "catch"
+                    | "finally"
+                    | "throw"
+                    | "new"
+                    | "true"
+                    | "false"
+                    | "null"
+            )
+        }
         DiffSyntaxLanguage::Ruby => matches!(
             ident,
             "def"
@@ -1097,80 +1107,83 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         DiffSyntaxLanguage::Json => matches!(ident, "true" | "false" | "null"),
         DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Yaml => matches!(ident, "true" | "false" | "null"),
-        DiffSyntaxLanguage::Sql => matches!(
-            ident.to_ascii_lowercase().as_str(),
-            "add"
-                | "all"
-                | "alter"
-                | "and"
-                | "as"
-                | "asc"
-                | "begin"
-                | "between"
-                | "by"
-                | "case"
-                | "check"
-                | "column"
-                | "commit"
-                | "constraint"
-                | "create"
-                | "cross"
-                | "database"
-                | "default"
-                | "delete"
-                | "desc"
-                | "distinct"
-                | "drop"
-                | "else"
-                | "end"
-                | "exists"
-                | "false"
-                | "foreign"
-                | "from"
-                | "full"
-                | "group"
-                | "having"
-                | "if"
-                | "in"
-                | "index"
-                | "inner"
-                | "insert"
-                | "intersect"
-                | "into"
-                | "is"
-                | "join"
-                | "key"
-                | "left"
-                | "like"
-                | "limit"
-                | "materialized"
-                | "not"
-                | "null"
-                | "offset"
-                | "on"
-                | "or"
-                | "order"
-                | "outer"
-                | "primary"
-                | "references"
-                | "returning"
-                | "right"
-                | "rollback"
-                | "select"
-                | "set"
-                | "table"
-                | "then"
-                | "transaction"
-                | "true"
-                | "union"
-                | "unique"
-                | "update"
-                | "values"
-                | "view"
-                | "when"
-                | "where"
-                | "with"
-        ),
+        DiffSyntaxLanguage::Sql => {
+            let ident = ascii_lowercase_for_match(ident);
+            matches!(
+                ident.as_ref(),
+                "add"
+                    | "all"
+                    | "alter"
+                    | "and"
+                    | "as"
+                    | "asc"
+                    | "begin"
+                    | "between"
+                    | "by"
+                    | "case"
+                    | "check"
+                    | "column"
+                    | "commit"
+                    | "constraint"
+                    | "create"
+                    | "cross"
+                    | "database"
+                    | "default"
+                    | "delete"
+                    | "desc"
+                    | "distinct"
+                    | "drop"
+                    | "else"
+                    | "end"
+                    | "exists"
+                    | "false"
+                    | "foreign"
+                    | "from"
+                    | "full"
+                    | "group"
+                    | "having"
+                    | "if"
+                    | "in"
+                    | "index"
+                    | "inner"
+                    | "insert"
+                    | "intersect"
+                    | "into"
+                    | "is"
+                    | "join"
+                    | "key"
+                    | "left"
+                    | "like"
+                    | "limit"
+                    | "materialized"
+                    | "not"
+                    | "null"
+                    | "offset"
+                    | "on"
+                    | "or"
+                    | "order"
+                    | "outer"
+                    | "primary"
+                    | "references"
+                    | "returning"
+                    | "right"
+                    | "rollback"
+                    | "select"
+                    | "set"
+                    | "table"
+                    | "then"
+                    | "transaction"
+                    | "true"
+                    | "union"
+                    | "unique"
+                    | "update"
+                    | "values"
+                    | "view"
+                    | "when"
+                    | "where"
+                    | "with"
+            )
+        }
         DiffSyntaxLanguage::Bash => matches!(
             ident,
             "if" | "then"
