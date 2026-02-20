@@ -4,7 +4,7 @@ use super::util::{
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
 use crate::session;
-use gitgpui_core::domain::{LogCursor, LogPage, LogScope};
+use gitgpui_core::domain::{DiffTarget, LogCursor, LogPage, LogScope};
 use gitgpui_core::error::Error;
 use std::sync::Arc;
 
@@ -77,7 +77,9 @@ pub(super) fn repo_externally_changed(
         }
     };
 
-    if let Some(target) = repo_state.diff_target.clone() {
+    if let Some(target) = repo_state.diff_target.clone()
+        && matches!(target, DiffTarget::WorkingTree { .. })
+    {
         effects.extend(diff_reload_effects(repo_id, target));
     }
 
@@ -279,7 +281,9 @@ pub(super) fn repo_action_finished(
     };
 
     let mut effects = refresh_primary_effects(repo_state);
-    if let Some(target) = repo_state.diff_target.clone() {
+    if let Some(target) = repo_state.diff_target.clone()
+        && matches!(target, DiffTarget::WorkingTree { .. })
+    {
         effects.extend(diff_reload_effects(repo_id, target));
     }
     effects

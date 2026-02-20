@@ -273,9 +273,45 @@ fn history_table_row(
     }
 
     if is_head {
+        let thickness = px(1.0);
+        let color = with_alpha(theme.colors.accent, 0.90);
         row = row
-            .border_1()
-            .border_color(with_alpha(theme.colors.accent, 0.90));
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(thickness)
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(thickness)
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(thickness)
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(thickness)
+                    .bg(color),
+            );
     }
 
     row.into_any_element()

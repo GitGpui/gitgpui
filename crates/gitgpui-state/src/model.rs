@@ -286,41 +286,65 @@ impl RepoState {
     }
 
     pub(crate) fn set_head_branch(&mut self, head_branch: Loadable<String>) {
+        if self.head_branch == head_branch {
+            return;
+        }
         self.head_branch = head_branch;
         self.head_branch_rev = self.head_branch_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_branches(&mut self, branches: Loadable<Vec<Branch>>) {
+        if self.branches == branches {
+            return;
+        }
         self.branches = branches;
         self.branches_rev = self.branches_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_tags(&mut self, tags: Loadable<Vec<Tag>>) {
+        if self.tags == tags {
+            return;
+        }
         self.tags = tags;
         self.tags_rev = self.tags_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_remotes(&mut self, remotes: Loadable<Vec<Remote>>) {
+        if self.remotes == remotes {
+            return;
+        }
         self.remotes = remotes;
         self.remotes_rev = self.remotes_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_remote_branches(&mut self, remote_branches: Loadable<Vec<RemoteBranch>>) {
+        if self.remote_branches == remote_branches {
+            return;
+        }
         self.remote_branches = remote_branches;
         self.remote_branches_rev = self.remote_branches_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_stashes(&mut self, stashes: Loadable<Vec<StashEntry>>) {
+        if self.stashes == stashes {
+            return;
+        }
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
+        if self.worktrees == worktrees {
+            return;
+        }
         self.worktrees = worktrees;
         self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {
+        if self.submodules == submodules {
+            return;
+        }
         self.submodules = submodules;
         self.submodules_rev = self.submodules_rev.wrapping_add(1);
     }

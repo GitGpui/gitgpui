@@ -340,13 +340,21 @@ pub(super) fn status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.status = match result {
-            Ok(v) => Loadable::Ready(Arc::new(v)),
+        match result {
+            Ok(next) => {
+                let status_unchanged = matches!(
+                    &repo_state.status,
+                    Loadable::Ready(prev) if prev.as_ref() == &next
+                );
+                if !status_unchanged {
+                    repo_state.status = Loadable::Ready(Arc::new(next));
+                }
+            }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                repo_state.status = Loadable::Error(e.to_string());
             }
-        };
+        }
         if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS) {
             effects.push(Effect::LoadStatus { repo_id });
         }
