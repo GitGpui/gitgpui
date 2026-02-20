@@ -23,19 +23,21 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
         icon: Some(icon.into()),
         shortcut: shortcut.map(Into::into),
         disabled,
-        action: match this
-            .state
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .and_then(|r| r.diff_target.as_ref())
-        {
-            Some(DiffTarget::WorkingTree {
-                area: DiffArea::Staged,
-                ..
-            }) => ContextMenuAction::UnstageHunk { repo_id, src_ix },
-            _ => ContextMenuAction::StageHunk { repo_id, src_ix },
-        },
+        action: Box::new(
+            match this
+                .state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .and_then(|r| r.diff_target.as_ref())
+            {
+                Some(DiffTarget::WorkingTree {
+                    area: DiffArea::Staged,
+                    ..
+                }) => ContextMenuAction::UnstageHunk { repo_id, src_ix },
+                _ => ContextMenuAction::StageHunk { repo_id, src_ix },
+            },
+        ),
     });
 
     let is_unstaged = this
@@ -60,11 +62,11 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
         icon: Some("↺".into()),
         shortcut: Some("D".into()),
         disabled: !is_unstaged || patch.is_none(),
-        action: ContextMenuAction::ApplyWorktreePatch {
+        action: Box::new(ContextMenuAction::ApplyWorktreePatch {
             repo_id,
             patch: patch.unwrap_or_default(),
             reverse: true,
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

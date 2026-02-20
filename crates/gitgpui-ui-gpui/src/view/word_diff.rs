@@ -232,12 +232,18 @@ fn fallback_affix_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<R
     let new_mid_end = new.len().saturating_sub(suffix).max(new_mid_start);
 
     let old_ranges = if old_mid_end > old_mid_start {
-        vec![old_mid_start..old_mid_end]
+        vec![Range {
+            start: old_mid_start,
+            end: old_mid_end,
+        }]
     } else {
         Vec::new()
     };
     let new_ranges = if new_mid_end > new_mid_start {
-        vec![new_mid_start..new_mid_end]
+        vec![Range {
+            start: new_mid_start,
+            end: new_mid_end,
+        }]
     } else {
         Vec::new()
     };

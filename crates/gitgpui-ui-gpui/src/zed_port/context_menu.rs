@@ -37,6 +37,7 @@ pub fn context_menu_separator(theme: AppTheme) -> Div {
     div().border_t_1().border_color(theme.colors.border)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn context_menu_entry(
     id: impl Into<ElementId>,
     theme: AppTheme,

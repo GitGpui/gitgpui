@@ -57,10 +57,12 @@ enum ContextMenuAction {
         show_date: bool,
         show_sha: bool,
     },
+    #[allow(dead_code)]
     StagePath {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    #[allow(dead_code)]
     StagePaths {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
@@ -70,10 +72,12 @@ enum ContextMenuAction {
         area: DiffArea,
         path: std::path::PathBuf,
     },
+    #[allow(dead_code)]
     UnstagePath {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    #[allow(dead_code)]
     UnstagePaths {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
@@ -88,6 +92,7 @@ enum ContextMenuAction {
         area: DiffArea,
         path: std::path::PathBuf,
     },
+    #[allow(dead_code)]
     CheckoutConflictSide {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
@@ -164,7 +169,7 @@ enum ContextMenuItem {
         icon: Option<SharedString>,
         shortcut: Option<SharedString>,
         disabled: bool,
-        action: ContextMenuAction,
+        action: Box<ContextMenuAction>,
     },
 }
 

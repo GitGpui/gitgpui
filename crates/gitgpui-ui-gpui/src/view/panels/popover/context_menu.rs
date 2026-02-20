@@ -830,7 +830,7 @@ impl PopoverHost {
                                 if let Some(ContextMenuItem::Entry { action, .. }) =
                                     model_for_keys.items.get(ix).cloned()
                                 {
-                                    this.context_menu_activate_action(action, window, cx);
+                                    this.context_menu_activate_action(*action, window, cx);
                                 }
                             }
                             _ => {
@@ -857,7 +857,7 @@ impl PopoverHost {
                                         && let Some(ContextMenuItem::Entry { action, .. }) =
                                             model_for_keys.items.get(ix).cloned()
                                     {
-                                        this.context_menu_activate_action(action, window, cx);
+                                        this.context_menu_activate_action(*action, window, cx);
                                     }
                                 }
                             }
@@ -903,7 +903,7 @@ impl PopoverHost {
                                 row.on_click(cx.listener(
                                     move |this, _e: &ClickEvent, window, cx| {
                                         this.context_menu_activate_action(
-                                            action.clone(),
+                                            action.as_ref().clone(),
                                             window,
                                             cx,
                                         );

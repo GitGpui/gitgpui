@@ -1,5 +1,6 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn model(
     repo_id: RepoId,
     area: DiffArea,
@@ -38,11 +39,11 @@ pub(super) fn model(
         icon: Some(line_icon.into()),
         shortcut: line_shortcut.map(Into::into),
         disabled: lines_patch.is_none(),
-        action: ContextMenuAction::ApplyIndexPatch {
+        action: Box::new(ContextMenuAction::ApplyIndexPatch {
             repo_id,
             patch: lines_patch.clone().unwrap_or_default(),
             reverse: line_reverse,
-        },
+        }),
     });
 
     if area == DiffArea::Unstaged {
@@ -55,11 +56,11 @@ pub(super) fn model(
             icon: Some("↺".into()),
             shortcut: Some("D".into()),
             disabled: discard_lines_patch.is_none(),
-            action: ContextMenuAction::ApplyWorktreePatch {
+            action: Box::new(ContextMenuAction::ApplyWorktreePatch {
                 repo_id,
                 patch: discard_lines_patch.clone().unwrap_or_default(),
                 reverse: true,
-            },
+            }),
         });
     }
 
@@ -78,11 +79,11 @@ pub(super) fn model(
         icon: Some(hunk_icon.into()),
         shortcut: None,
         disabled: hunk_patch.is_none(),
-        action: ContextMenuAction::ApplyIndexPatch {
+        action: Box::new(ContextMenuAction::ApplyIndexPatch {
             repo_id,
             patch: hunk_patch.clone().unwrap_or_default(),
             reverse: hunk_reverse,
-        },
+        }),
     });
 
     if area == DiffArea::Unstaged {
@@ -95,11 +96,11 @@ pub(super) fn model(
             icon: Some("↺".into()),
             shortcut: None,
             disabled: hunk_patch.is_none(),
-            action: ContextMenuAction::ApplyWorktreePatch {
+            action: Box::new(ContextMenuAction::ApplyWorktreePatch {
                 repo_id,
                 patch: hunk_patch.clone().unwrap_or_default(),
                 reverse: true,
-            },
+            }),
         });
     }
 
@@ -110,20 +111,20 @@ pub(super) fn model(
             icon: Some("🗎".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenFile {
+            action: Box::new(ContextMenuAction::OpenFile {
                 repo_id,
                 path: path.clone(),
-            },
+            }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Open file location".into(),
             icon: Some("📂".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenFileLocation {
+            action: Box::new(ContextMenuAction::OpenFileLocation {
                 repo_id,
                 path: path.clone(),
-            },
+            }),
         });
         items.push(ContextMenuItem::Separator);
     }
@@ -135,9 +136,9 @@ pub(super) fn model(
             .as_ref()
             .map(|t| t.trim().is_empty())
             .unwrap_or(true),
-        action: ContextMenuAction::CopyText {
+        action: Box::new(ContextMenuAction::CopyText {
             text: copy_text.clone().unwrap_or_default(),
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

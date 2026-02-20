@@ -186,7 +186,6 @@ impl SidebarPaneView {
                     drop_button_id,
                     created_at: _,
                 } => {
-                    let repo_id = repo_id;
                     let tooltip = tooltip.clone();
                     let row_group = row_group.clone();
                     let apply_button_id = apply_button_id.clone();
@@ -401,7 +400,6 @@ impl SidebarPaneView {
                     tooltip,
                     is_active,
                 } => {
-                    let repo_id = repo_id;
                     let tooltip = tooltip.clone();
                     let label = label.clone();
                     let path_for_open = path.clone();
@@ -544,7 +542,6 @@ impl SidebarPaneView {
                     label,
                     tooltip,
                 } => {
-                    let repo_id = repo_id;
                     let tooltip = tooltip.clone();
                     let label = label.clone();
                     let path_for_open = path.clone();

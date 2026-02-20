@@ -13,40 +13,40 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             icon: Some("↓".into()),
             shortcut: Some("Enter".into()),
             disabled,
-            action: ContextMenuAction::Pull {
+            action: Box::new(ContextMenuAction::Pull {
                 repo_id,
                 mode: PullMode::Default,
-            },
+            }),
         },
         ContextMenuItem::Entry {
             label: "Pull (fast-forward if possible)".into(),
             icon: Some("↓".into()),
             shortcut: Some("F".into()),
             disabled,
-            action: ContextMenuAction::Pull {
+            action: Box::new(ContextMenuAction::Pull {
                 repo_id,
                 mode: PullMode::FastForwardIfPossible,
-            },
+            }),
         },
         ContextMenuItem::Entry {
             label: "Pull (fast-forward only)".into(),
             icon: Some("↓".into()),
             shortcut: Some("O".into()),
             disabled,
-            action: ContextMenuAction::Pull {
+            action: Box::new(ContextMenuAction::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
-            },
+            }),
         },
         ContextMenuItem::Entry {
             label: "Pull (rebase)".into(),
             icon: Some("↓".into()),
             shortcut: Some("R".into()),
             disabled,
-            action: ContextMenuAction::Pull {
+            action: Box::new(ContextMenuAction::Pull {
                 repo_id,
                 mode: PullMode::Rebase,
-            },
+            }),
         },
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
@@ -54,7 +54,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             icon: Some("↓".into()),
             shortcut: Some("A".into()),
             disabled,
-            action: ContextMenuAction::FetchAll { repo_id },
+            action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         },
     ])
 }

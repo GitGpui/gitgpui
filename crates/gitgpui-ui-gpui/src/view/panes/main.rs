@@ -197,6 +197,7 @@ impl MainPaneView {
         hasher.finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,

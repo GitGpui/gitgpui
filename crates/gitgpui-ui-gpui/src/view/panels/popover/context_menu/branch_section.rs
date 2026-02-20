@@ -16,9 +16,9 @@ pub(super) fn model(
         icon: Some("⎇".into()),
         shortcut: Some("Enter".into()),
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::BranchPicker,
-        },
+        }),
     });
 
     if section == BranchSection::Remote {
@@ -27,16 +27,16 @@ pub(super) fn model(
             icon: Some("+".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenPopover {
+            action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::RemoteAddPrompt { repo_id },
-            },
+            }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),
             icon: Some("↓".into()),
             shortcut: Some("F".into()),
             disabled: false,
-            action: ContextMenuAction::FetchAll { repo_id },
+            action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         });
         items.push(ContextMenuItem::Separator);
         items.push(ContextMenuItem::Entry {
@@ -44,12 +44,12 @@ pub(super) fn model(
             icon: Some("🗑".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenPopover {
+            action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::RemoteBranchDeletePicker {
                     repo_id,
                     remote: None,
                 },
-            },
+            }),
         });
     }
 

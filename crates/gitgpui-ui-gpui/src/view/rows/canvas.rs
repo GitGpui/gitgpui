@@ -4,6 +4,9 @@ use gpui::{
     Style, StyleRefinement, Styled, Window,
 };
 
+type PrepaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>;
+type PaintCallback<T> = Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>;
+
 pub(super) fn keyed_canvas<T>(
     id: impl Into<ElementId>,
     prepaint: impl 'static + FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T,
@@ -19,8 +22,8 @@ pub(super) fn keyed_canvas<T>(
 
 pub(super) struct KeyedCanvas<T> {
     id: ElementId,
-    prepaint: Option<Box<dyn FnOnce(Bounds<Pixels>, &mut Window, &mut App) -> T>>,
-    paint: Option<Box<dyn FnOnce(Bounds<Pixels>, T, &mut Window, &mut App)>>,
+    prepaint: Option<PrepaintCallback<T>>,
+    paint: Option<PaintCallback<T>>,
     style: StyleRefinement,
 }
 

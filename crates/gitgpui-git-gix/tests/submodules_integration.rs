@@ -81,7 +81,7 @@ fn list_submodules_ignores_missing_gitmodules_mapping() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&parent_repo).unwrap();
 
     let submodules = opened.list_submodules().unwrap();

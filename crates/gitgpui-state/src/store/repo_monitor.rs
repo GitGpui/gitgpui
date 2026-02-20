@@ -49,9 +49,7 @@ impl DebouncedChange {
     }
 
     fn take_if_max_delay_elapsed(&mut self, now: Instant) -> Option<RepoExternalChange> {
-        let Some(first) = self.first_event_at else {
-            return None;
-        };
+        let first = self.first_event_at?;
         if now.duration_since(first) >= self.max_delay {
             self.take()
         } else {
@@ -516,10 +514,10 @@ fn is_git_index_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> boo
         return true;
     }
 
-    if let Some(git_dir) = git_dir {
-        if path == git_dir.join("index") || path == git_dir.join("index.lock") {
-            return true;
-        }
+    if let Some(git_dir) = git_dir
+        && (path == git_dir.join("index") || path == git_dir.join("index.lock"))
+    {
+        return true;
     }
 
     false

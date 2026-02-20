@@ -14,33 +14,33 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::Context<PopoverHost>) -> Cont
             icon: check(show_author),
             shortcut: Some("A".into()),
             disabled: false,
-            action: ContextMenuAction::SetHistoryColumns {
+            action: Box::new(ContextMenuAction::SetHistoryColumns {
                 show_author: !show_author,
                 show_date,
                 show_sha,
-            },
+            }),
         },
         ContextMenuItem::Entry {
             label: "Commit date".into(),
             icon: check(show_date),
             shortcut: Some("D".into()),
             disabled: false,
-            action: ContextMenuAction::SetHistoryColumns {
+            action: Box::new(ContextMenuAction::SetHistoryColumns {
                 show_author,
                 show_date: !show_date,
                 show_sha,
-            },
+            }),
         },
         ContextMenuItem::Entry {
             label: "SHA".into(),
             icon: check(show_sha),
             shortcut: Some("S".into()),
             disabled: false,
-            action: ContextMenuAction::SetHistoryColumns {
+            action: Box::new(ContextMenuAction::SetHistoryColumns {
                 show_author,
                 show_date,
                 show_sha: !show_sha,
-            },
+            }),
         },
         ContextMenuItem::Separator,
         ContextMenuItem::Label("Columns may auto-hide in narrow windows".into()),

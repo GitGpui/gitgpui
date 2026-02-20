@@ -82,6 +82,7 @@ pub(in super::super) struct PopoverHost {
 }
 
 impl PopoverHost {
+    #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -1549,7 +1550,7 @@ mod tests {
 
             let add_tag_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Add tag…" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1599,7 +1600,7 @@ mod tests {
 
             let open_file_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1618,7 +1619,7 @@ mod tests {
                 ContextMenuItem::Entry { label, action, .. }
                     if label.as_ref() == "Open file location" =>
                 {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1694,7 +1695,7 @@ mod tests {
 
             let open_file_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1713,7 +1714,7 @@ mod tests {
                 ContextMenuItem::Entry { label, action, .. }
                     if label.as_ref() == "Open file location" =>
                 {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1763,7 +1764,7 @@ mod tests {
 
             let open_file_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1782,7 +1783,7 @@ mod tests {
                 ContextMenuItem::Entry { label, action, .. }
                     if label.as_ref() == "Open file location" =>
                 {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -1880,7 +1881,7 @@ mod tests {
                     ContextMenuItem::Entry { label, action, .. }
                         if label.as_ref() == expected_label.as_str() =>
                     {
-                        Some(action.clone())
+                        Some((**action).clone())
                     }
                     _ => None,
                 });
@@ -1954,7 +1955,7 @@ mod tests {
                     active_repo: Some(repo_id),
                     ..Default::default()
                 });
-                let _ = this.details_pane.update(cx, |pane, cx| {
+                this.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.insert(
                         repo_id,
                         StatusMultiSelection {
@@ -1988,7 +1989,7 @@ mod tests {
 
             let stage_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Stage (2)" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -2055,7 +2056,7 @@ mod tests {
                     active_repo: Some(repo_id),
                     ..Default::default()
                 });
-                let _ = this.details_pane.update(cx, |pane, cx| {
+                this.details_pane.update(cx, |pane, cx| {
                     pane.status_multi_selection.insert(
                         repo_id,
                         StatusMultiSelection {
@@ -2089,7 +2090,7 @@ mod tests {
 
             let unstage_action = model.items.iter().find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Unstage (2)" => {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             });
@@ -2174,13 +2175,13 @@ mod tests {
                     if label.as_ref() == "Resolve using ours" =>
                 {
                     matches!(
-                        action,
+                        action.as_ref(),
                         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                             repo_id: rid,
                             area: DiffArea::Unstaged,
                             path: p,
                             side: gitgpui_core::services::ConflictSide::Ours
-                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
+                        } if *rid == repo_id && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,
@@ -2190,13 +2191,13 @@ mod tests {
                     if label.as_ref() == "Resolve using theirs" =>
                 {
                     matches!(
-                        action,
+                        action.as_ref(),
                         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                             repo_id: rid,
                             area: DiffArea::Unstaged,
                             path: p,
                             side: gitgpui_core::services::ConflictSide::Theirs
-                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
+                        } if *rid == repo_id && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,
@@ -2206,11 +2207,11 @@ mod tests {
                     if label.as_ref() == "Resolve manually…" =>
                 {
                     matches!(
-                        action,
+                        action.as_ref(),
                         ContextMenuAction::SelectDiff {
                             repo_id: rid,
                             target: DiffTarget::WorkingTree { path: p, area: DiffArea::Unstaged }
-                        } if rid.0 == repo_id.0 && p.as_path() == path.as_path()
+                        } if *rid == repo_id && p.as_path() == path.as_path()
                     )
                 }
                 _ => false,
@@ -2268,7 +2269,7 @@ mod tests {
         cx.update(|window, app| {
             let details_pane = view.read(app).details_pane.clone();
             let anchor = point(px(0.0), px(0.0));
-            let _ = details_pane.update(app, |pane, cx| {
+            details_pane.update(app, |pane, cx| {
                 pane.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,

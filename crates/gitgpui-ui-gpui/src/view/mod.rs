@@ -411,10 +411,12 @@ enum PopoverKind {
     RemoteAddPrompt {
         repo_id: RepoId,
     },
+    #[allow(dead_code)]
     RemoteUrlPicker {
         repo_id: RepoId,
         kind: RemoteUrlKind,
     },
+    #[allow(dead_code)]
     RemoteRemovePicker {
         repo_id: RepoId,
     },
@@ -634,32 +636,6 @@ struct DiffTextLayoutCacheEntry {
 }
 
 impl GitGpuiView {
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.tooltip_host.update(cx, |tooltip, cx| {
-            tooltip.set_tooltip_text_if_changed(next, cx)
-        })
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        self.tooltip_host.update(cx, |tooltip_host, cx| {
-            tooltip_host.clear_tooltip_if_matches(&tooltip, cx)
-        })
-    }
-
-    pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
-        self.popover_host
-            .update(cx, |host, cx| host.close_popover(cx));
-    }
-
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -1092,26 +1068,6 @@ impl GitGpuiView {
     fn push_toast(&mut self, kind: zed::ToastKind, message: String, cx: &mut gpui::Context<Self>) {
         self.toast_host
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
-    }
-
-    fn push_persistent_toast(
-        &mut self,
-        kind: zed::ToastKind,
-        message: String,
-        cx: &mut gpui::Context<Self>,
-    ) -> u64 {
-        self.toast_host
-            .update(cx, |host, cx| host.push_persistent_toast(kind, message, cx))
-    }
-
-    fn update_toast_text(&mut self, id: u64, message: String, cx: &mut gpui::Context<Self>) {
-        self.toast_host
-            .update(cx, |host, cx| host.update_toast_text(id, message, cx));
-    }
-
-    fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
-        self.toast_host
-            .update(cx, |host, cx| host.remove_toast(id, cx));
     }
 
     #[cfg(test)]

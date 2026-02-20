@@ -13,16 +13,16 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             icon: Some("↑".into()),
             shortcut: Some("Enter".into()),
             disabled,
-            action: ContextMenuAction::Push { repo_id },
+            action: Box::new(ContextMenuAction::Push { repo_id }),
         },
         ContextMenuItem::Entry {
             label: "Force push (with lease)…".into(),
             icon: Some("⚠".into()),
             shortcut: Some("F".into()),
             disabled,
-            action: ContextMenuAction::OpenPopover {
+            action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::ForcePushConfirm { repo_id },
-            },
+            }),
         },
     ])
 }

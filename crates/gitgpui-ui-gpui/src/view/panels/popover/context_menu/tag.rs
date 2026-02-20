@@ -35,7 +35,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             icon: Some("🗑".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::DeleteTag { repo_id, name },
+            action: Box::new(ContextMenuAction::DeleteTag { repo_id, name }),
         });
     }
 

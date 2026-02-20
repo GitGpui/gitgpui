@@ -278,7 +278,6 @@ impl DetailsPaneView {
             show_loading: false,
         });
 
-        let repo_id = repo_id;
         let selected_id = selected_id.clone();
         cx.spawn(
             async move |view: WeakEntity<DetailsPaneView>, cx: &mut gpui::AsyncApp| {

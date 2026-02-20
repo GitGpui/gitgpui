@@ -30,7 +30,7 @@ pub(super) fn model(
         icon: Some("⎇".into()),
         shortcut: Some("Enter".into()),
         disabled: false,
-        action: match section {
+        action: Box::new(match section {
             BranchSection::Local => ContextMenuAction::CheckoutBranch {
                 repo_id,
                 name: name.clone(),
@@ -49,14 +49,14 @@ pub(super) fn model(
                     }
                 }
             }
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Copy name".into(),
         icon: Some("⧉".into()),
         shortcut: Some("C".into()),
         disabled: false,
-        action: ContextMenuAction::CopyText { text: name.clone() },
+        action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
     });
 
     if section == BranchSection::Local {
@@ -66,10 +66,10 @@ pub(super) fn model(
             icon: Some("🗑".into()),
             shortcut: None,
             disabled: is_current_branch,
-            action: ContextMenuAction::DeleteBranch {
+            action: Box::new(ContextMenuAction::DeleteBranch {
                 repo_id,
                 name: name.clone(),
-            },
+            }),
         });
     }
 
@@ -81,21 +81,21 @@ pub(super) fn model(
                 icon: Some("↓".into()),
                 shortcut: Some("P".into()),
                 disabled: false,
-                action: ContextMenuAction::PullBranch {
+                action: Box::new(ContextMenuAction::PullBranch {
                     repo_id,
                     remote: remote.to_string(),
                     branch: branch.to_string(),
-                },
+                }),
             });
             items.push(ContextMenuItem::Entry {
                 label: "Merge into current".into(),
                 icon: Some("⇄".into()),
                 shortcut: Some("M".into()),
                 disabled: false,
-                action: ContextMenuAction::MergeRef {
+                action: Box::new(ContextMenuAction::MergeRef {
                     repo_id,
                     reference: name.clone(),
-                },
+                }),
             });
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Entry {
@@ -103,13 +103,13 @@ pub(super) fn model(
                 icon: Some("🗑".into()),
                 shortcut: None,
                 disabled: false,
-                action: ContextMenuAction::OpenPopover {
+                action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::DeleteRemoteBranchConfirm {
                         repo_id,
                         remote: remote.to_string(),
                         branch: branch.to_string(),
                     },
-                },
+                }),
             });
             items.push(ContextMenuItem::Separator);
         }
@@ -118,7 +118,7 @@ pub(super) fn model(
             icon: Some("↓".into()),
             shortcut: Some("F".into()),
             disabled: false,
-            action: ContextMenuAction::FetchAll { repo_id },
+            action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         });
     }
 

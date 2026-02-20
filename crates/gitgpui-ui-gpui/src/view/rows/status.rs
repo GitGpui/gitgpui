@@ -138,17 +138,6 @@ impl DetailsPaneView {
         }
     }
 
-    fn status_selection_contains(
-        &self,
-        repo_id: RepoId,
-        area: DiffArea,
-        path: &std::path::PathBuf,
-    ) -> bool {
-        self.status_selected_paths_for_area(repo_id, area)
-            .iter()
-            .any(|p| p == path)
-    }
-
     fn status_selection_apply_click(
         &mut self,
         repo_id: RepoId,
@@ -252,6 +241,7 @@ impl DetailsPaneView {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn status_row(
     theme: AppTheme,
     ix: usize,

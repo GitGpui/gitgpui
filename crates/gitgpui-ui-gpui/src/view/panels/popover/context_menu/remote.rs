@@ -1,8 +1,8 @@
 use super::*;
 
-pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &String) -> ContextMenuModel {
+pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Remote".into())];
-    items.push(ContextMenuItem::Label(name.clone().into()));
+    items.push(ContextMenuItem::Label(name.to_owned().into()));
     items.push(ContextMenuItem::Separator);
 
     for (label, kind) in [
@@ -14,13 +14,13 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &String) -> Cont
             icon: Some("✎".into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenPopover {
+            action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::RemoteEditUrlPrompt {
                     repo_id,
-                    name: name.clone(),
+                    name: name.to_owned(),
                     kind,
                 },
-            },
+            }),
         });
     }
 
@@ -30,12 +30,12 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &String) -> Cont
         icon: Some("🗑".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::RemoteRemoveConfirm {
                 repo_id,
-                name: name.clone(),
+                name: name.to_owned(),
             },
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

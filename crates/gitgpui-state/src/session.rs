@@ -184,9 +184,7 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
 }
 
 pub fn load_repo_history_scope(workdir: &Path) -> Option<LogScope> {
-    let Some(session_file_path) = default_session_file_path() else {
-        return None;
-    };
+    let session_file_path = default_session_file_path()?;
     load_repo_history_scope_from_path(workdir, &session_file_path)
 }
 
@@ -479,22 +477,24 @@ mod tests {
         let _ = fs::create_dir_all(&repo_a);
         let _ = fs::create_dir_all(&repo_b);
 
-        let mut state = AppState::default();
-        state.repos = vec![
-            RepoState::new_opening(
-                RepoId(1),
-                RepoSpec {
-                    workdir: repo_a.clone(),
-                },
-            ),
-            RepoState::new_opening(
-                RepoId(2),
-                RepoSpec {
-                    workdir: repo_b.clone(),
-                },
-            ),
-        ];
-        state.active_repo = Some(RepoId(2));
+        let state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: repo_b.clone(),
+                    },
+                ),
+            ],
+            active_repo: Some(RepoId(2)),
+            ..Default::default()
+        };
 
         persist_from_state_to_path(&state, &path).expect("persist succeeds");
         let loaded = load_from_path(&path);

@@ -29,7 +29,6 @@ pub struct GraphRow {
     pub next_from_cols: Vec<Option<usize>>,
     pub joins_in: Vec<GraphEdge>,
     pub edges_out: Vec<GraphEdge>,
-    pub node_id: LaneId,
     pub node_col: usize,
     pub is_merge: bool,
 }
@@ -189,9 +188,9 @@ pub fn compute_graph(
         node_col = hits.first().copied().unwrap_or(node_col);
 
         let node_id = lanes[node_col].id;
-        if main_lane_id.is_none() {
-            main_lane_id = Some(node_id);
-        } else if force_branch_head_lane && head_chain.contains(commit.id.as_ref()) {
+        if main_lane_id.is_none()
+            || (force_branch_head_lane && head_chain.contains(commit.id.as_ref()))
+        {
             main_lane_id = Some(node_id);
         }
 
@@ -306,7 +305,6 @@ pub fn compute_graph(
             next_from_cols,
             joins_in,
             edges_out,
-            node_id,
             node_col,
             is_merge,
         });
@@ -393,7 +391,10 @@ mod tests {
         assert_ne!(base_row.lanes_now[0].color, base_row.lanes_now[1].color);
 
         assert_eq!(base_row.lanes_next.len(), 1);
-        assert_eq!(base_row.lanes_next[0].id, base_row.node_id);
+        assert_eq!(
+            base_row.lanes_next[0].id,
+            base_row.lanes_now[base_row.node_col].id
+        );
         assert_eq!(base_row.next_from_cols, vec![Some(1)]);
     }
 }

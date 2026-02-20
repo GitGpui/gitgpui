@@ -26,65 +26,65 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         icon: Some("↗".into()),
         shortcut: Some("Enter".into()),
         disabled: false,
-        action: ContextMenuAction::SelectDiff {
+        action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
             target: DiffTarget::Commit {
                 commit_id: commit_id.clone(),
                 path: None,
             },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Export patch…".into(),
         icon: Some("⬇".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::ExportPatch {
+        action: Box::new(ContextMenuAction::ExportPatch {
             repo_id,
             commit_id: commit_id.clone(),
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Add tag…".into(),
         icon: Some("🏷".into()),
         shortcut: Some("T".into()),
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::CreateTagPrompt {
                 repo_id,
                 target: sha.clone(),
             },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Checkout (detached)".into(),
         icon: Some("⎇".into()),
         shortcut: Some("D".into()),
         disabled: false,
-        action: ContextMenuAction::CheckoutCommit {
+        action: Box::new(ContextMenuAction::CheckoutCommit {
             repo_id,
             commit_id: commit_id.clone(),
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Cherry-pick".into(),
         icon: Some("⇡".into()),
         shortcut: Some("P".into()),
         disabled: false,
-        action: ContextMenuAction::CherryPickCommit {
+        action: Box::new(ContextMenuAction::CherryPickCommit {
             repo_id,
             commit_id: commit_id.clone(),
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Revert".into(),
         icon: Some("↶".into()),
         shortcut: Some("R".into()),
         disabled: false,
-        action: ContextMenuAction::RevertCommit {
+        action: Box::new(ContextMenuAction::RevertCommit {
             repo_id,
             commit_id: commit_id.clone(),
-        },
+        }),
     });
 
     items.push(ContextMenuItem::Separator);
@@ -98,13 +98,13 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             icon: Some(icon.into()),
             shortcut: None,
             disabled: false,
-            action: ContextMenuAction::OpenPopover {
+            action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::ResetPrompt {
                     repo_id,
                     target: sha.clone(),
                     mode,
                 },
-            },
+            }),
         });
     }
 

@@ -33,16 +33,13 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
                     gpui::img("gitgpui_logo_window.svg")
                         .size(px(16.0))
                         .object_fit(ObjectFit::Contain)
-                        .with_fallback({
-                            let theme = theme;
-                            move || {
-                                gpui::svg()
-                                    .path("icons/gitgpui_mark.svg")
-                                    .w(px(16.0))
-                                    .h(px(16.0))
-                                    .text_color(theme.colors.accent)
-                                    .into_any_element()
-                            }
+                        .with_fallback(move || {
+                            gpui::svg()
+                                .path("icons/gitgpui_mark.svg")
+                                .w(px(16.0))
+                                .h(px(16.0))
+                                .text_color(theme.colors.accent)
+                                .into_any_element()
                         }),
                 ),
         )

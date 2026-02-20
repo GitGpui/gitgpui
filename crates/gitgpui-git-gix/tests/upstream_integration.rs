@@ -65,7 +65,7 @@ fn push_without_upstream_sets_upstream() {
 
     run_git(&work_repo, &["checkout", "-b", "ai_report_issue"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
     opened.push().unwrap();
 
@@ -139,7 +139,7 @@ fn pull_without_upstream_sets_upstream() {
     );
     assert!(upstream_before.trim().is_empty());
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&work_repo).unwrap();
     opened.pull(PullMode::Default).unwrap();
 

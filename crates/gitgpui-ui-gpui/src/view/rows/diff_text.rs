@@ -115,131 +115,6 @@ fn build_diff_text_segments(
     segments
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn build_segments_fast_path_skips_syntax_work() {
-        let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto);
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text.as_ref(), "a    b");
-        assert!(!segments[0].in_word);
-        assert!(!segments[0].in_query);
-        assert_eq!(segments[0].syntax, SyntaxTokenKind::None);
-    }
-
-    #[test]
-    fn build_cached_styled_text_plain_has_no_highlights() {
-        let theme = AppTheme::zed_ayu_dark();
-        let styled =
-            build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
-        assert_eq!(styled.text.as_ref(), "a    b");
-        assert!(styled.highlights.is_empty());
-        assert_eq!(styled.highlights_hash, 0);
-    }
-
-    #[test]
-    fn build_segments_does_not_panic_on_non_char_boundary_ranges() {
-        // This can happen if token ranges are computed in bytes that don't align to UTF-8
-        // boundaries. We should never panic during diff rendering.
-        let text = "aé"; // 'é' is 2 bytes in UTF-8
-        let ranges = vec![1..2];
-        let segments = build_diff_text_segments(text, &ranges, "", None, DiffSyntaxMode::Auto);
-        assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0].text.as_ref(), text);
-    }
-
-    #[test]
-    fn styled_text_highlights_cover_combined_ranges() {
-        let theme = AppTheme::zed_ayu_dark();
-        let segments = vec![
-            CachedDiffTextSegment {
-                text: "abc".into(),
-                in_word: false,
-                in_query: false,
-                syntax: SyntaxTokenKind::None,
-            },
-            CachedDiffTextSegment {
-                text: "def".into(),
-                in_word: false,
-                in_query: true,
-                syntax: SyntaxTokenKind::Keyword,
-            },
-        ];
-
-        let (text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
-        assert_eq!(text.as_ref(), "abcdef");
-        assert_eq!(highlights.len(), 1);
-        assert_eq!(highlights[0].0, 3..6);
-        assert_eq!(highlights[0].1.font_weight, None);
-        assert!(highlights[0].1.background_color.is_some());
-
-        // Hashing highlights is used for caching shaped layouts; it should be stable for identical
-        // highlight sequences within a process.
-        let styled = build_cached_diff_styled_text(
-            theme,
-            "abcdef",
-            &[],
-            "def",
-            None,
-            DiffSyntaxMode::Auto,
-            None,
-        );
-        assert_eq!(styled.highlights.len(), 1);
-        assert_eq!(styled.highlights[0].0, 3..6);
-    }
-
-    #[test]
-    fn cached_styled_text_highlights_all_query_occurrences() {
-        let theme = AppTheme::zed_ayu_dark();
-        let styled = build_cached_diff_styled_text(
-            theme,
-            "abxxab",
-            &[],
-            "ab",
-            None,
-            DiffSyntaxMode::Auto,
-            None,
-        );
-        assert_eq!(styled.highlights.len(), 2);
-        assert_eq!(styled.highlights[0].0, 0..2);
-        assert_eq!(styled.highlights[1].0, 4..6);
-    }
-
-    #[test]
-    fn styled_text_word_highlight_sets_background() {
-        let theme = AppTheme::zed_ayu_dark();
-        let segments = vec![CachedDiffTextSegment {
-            text: "x".into(),
-            in_word: true,
-            in_query: false,
-            syntax: SyntaxTokenKind::None,
-        }];
-        let (text, highlights) =
-            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.danger));
-        assert_eq!(text.as_ref(), "x");
-        assert_eq!(highlights.len(), 1);
-        assert!(highlights[0].1.background_color.is_some());
-    }
-
-    #[test]
-    fn syntax_colors_are_softened_for_keywords() {
-        let theme = AppTheme::zed_one_light();
-        let segments = vec![CachedDiffTextSegment {
-            text: "fn".into(),
-            in_word: false,
-            in_query: false,
-            syntax: SyntaxTokenKind::Keyword,
-        }];
-
-        let (_text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
-        assert_eq!(highlights.len(), 1);
-        assert_eq!(highlights[0].0, 0..2);
-        assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
-    }
-}
-
 pub(super) fn selectable_cached_diff_text(
     visible_ix: usize,
     region: DiffTextRegion,
@@ -561,5 +436,130 @@ pub(super) fn diff_line_colors(
             theme.colors.text,
             theme.colors.text_muted,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_segments_fast_path_skips_syntax_work() {
+        let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text.as_ref(), "a    b");
+        assert!(!segments[0].in_word);
+        assert!(!segments[0].in_query);
+        assert_eq!(segments[0].syntax, SyntaxTokenKind::None);
+    }
+
+    #[test]
+    fn build_cached_styled_text_plain_has_no_highlights() {
+        let theme = AppTheme::zed_ayu_dark();
+        let styled =
+            build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
+        assert_eq!(styled.text.as_ref(), "a    b");
+        assert!(styled.highlights.is_empty());
+        assert_eq!(styled.highlights_hash, 0);
+    }
+
+    #[test]
+    fn build_segments_does_not_panic_on_non_char_boundary_ranges() {
+        // This can happen if token ranges are computed in bytes that don't align to UTF-8
+        // boundaries. We should never panic during diff rendering.
+        let text = "aé"; // 'é' is 2 bytes in UTF-8
+        let ranges = vec![Range { start: 1, end: 2 }];
+        let segments = build_diff_text_segments(text, &ranges, "", None, DiffSyntaxMode::Auto);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text.as_ref(), text);
+    }
+
+    #[test]
+    fn styled_text_highlights_cover_combined_ranges() {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = vec![
+            CachedDiffTextSegment {
+                text: "abc".into(),
+                in_word: false,
+                in_query: false,
+                syntax: SyntaxTokenKind::None,
+            },
+            CachedDiffTextSegment {
+                text: "def".into(),
+                in_word: false,
+                in_query: true,
+                syntax: SyntaxTokenKind::Keyword,
+            },
+        ];
+
+        let (text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
+        assert_eq!(text.as_ref(), "abcdef");
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 3..6);
+        assert_eq!(highlights[0].1.font_weight, None);
+        assert!(highlights[0].1.background_color.is_some());
+
+        // Hashing highlights is used for caching shaped layouts; it should be stable for identical
+        // highlight sequences within a process.
+        let styled = build_cached_diff_styled_text(
+            theme,
+            "abcdef",
+            &[],
+            "def",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        assert_eq!(styled.highlights.len(), 1);
+        assert_eq!(styled.highlights[0].0, 3..6);
+    }
+
+    #[test]
+    fn cached_styled_text_highlights_all_query_occurrences() {
+        let theme = AppTheme::zed_ayu_dark();
+        let styled = build_cached_diff_styled_text(
+            theme,
+            "abxxab",
+            &[],
+            "ab",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        assert_eq!(styled.highlights.len(), 2);
+        assert_eq!(styled.highlights[0].0, 0..2);
+        assert_eq!(styled.highlights[1].0, 4..6);
+    }
+
+    #[test]
+    fn styled_text_word_highlight_sets_background() {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = vec![CachedDiffTextSegment {
+            text: "x".into(),
+            in_word: true,
+            in_query: false,
+            syntax: SyntaxTokenKind::None,
+        }];
+        let (text, highlights) =
+            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.danger));
+        assert_eq!(text.as_ref(), "x");
+        assert_eq!(highlights.len(), 1);
+        assert!(highlights[0].1.background_color.is_some());
+    }
+
+    #[test]
+    fn syntax_colors_are_softened_for_keywords() {
+        let theme = AppTheme::zed_one_light();
+        let segments = vec![CachedDiffTextSegment {
+            text: "fn".into(),
+            in_word: false,
+            in_query: false,
+            syntax: SyntaxTokenKind::Keyword,
+        }];
+
+        let (_text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 0..2);
+        assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
     }
 }

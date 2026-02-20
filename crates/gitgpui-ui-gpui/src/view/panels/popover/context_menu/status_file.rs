@@ -84,58 +84,58 @@ pub(super) fn model(
         icon: Some("↗".into()),
         shortcut: Some("Enter".into()),
         disabled: false,
-        action: ContextMenuAction::SelectDiff {
+        action: Box::new(ContextMenuAction::SelectDiff {
             repo_id,
             target: DiffTarget::WorkingTree {
                 path: path.clone(),
                 area,
             },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
         icon: Some("🗎".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenFile {
+        action: Box::new(ContextMenuAction::OpenFile {
             repo_id,
             path: path.clone(),
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file location".into(),
         icon: Some("📂".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenFileLocation {
+        action: Box::new(ContextMenuAction::OpenFileLocation {
             repo_id,
             path: path.clone(),
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "File history".into(),
         icon: Some("⟲".into()),
         shortcut: Some("H".into()),
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory {
                 repo_id,
                 path: path.clone(),
             },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Blame".into(),
         icon: Some("≡".into()),
         shortcut: Some("B".into()),
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::Blame {
                 repo_id,
                 path: path.clone(),
                 rev: None,
             },
-        },
+        }),
     });
 
     if is_conflicted {
@@ -150,12 +150,12 @@ pub(super) fn model(
             icon: Some("⇤".into()),
             shortcut: Some("O".into()),
             disabled: false,
-            action: ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+            action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
                 area,
                 path: path.clone(),
                 side: gitgpui_core::services::ConflictSide::Ours,
-            },
+            }),
         });
         items.push(ContextMenuItem::Entry {
             label: if use_selection {
@@ -166,12 +166,12 @@ pub(super) fn model(
             icon: Some("⇥".into()),
             shortcut: Some("T".into()),
             disabled: false,
-            action: ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+            action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
                 area,
                 path: path.clone(),
                 side: gitgpui_core::services::ConflictSide::Theirs,
-            },
+            }),
         });
 
         let can_manual = !use_selection;
@@ -184,13 +184,13 @@ pub(super) fn model(
             icon: Some("✎".into()),
             shortcut: Some("M".into()),
             disabled: !can_manual,
-            action: ContextMenuAction::SelectDiff {
+            action: Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {
                     path: path.clone(),
                     area: DiffArea::Unstaged,
                 },
-            },
+            }),
         });
     } else {
         match area {
@@ -203,11 +203,11 @@ pub(super) fn model(
                 icon: Some("+".into()),
                 shortcut: Some("S".into()),
                 disabled: false,
-                action: ContextMenuAction::StageSelectionOrPath {
+                action: Box::new(ContextMenuAction::StageSelectionOrPath {
                     repo_id,
                     area,
                     path: path.clone(),
-                },
+                }),
             }),
             DiffArea::Staged => items.push(ContextMenuItem::Entry {
                 label: if use_selection {
@@ -218,11 +218,11 @@ pub(super) fn model(
                 icon: Some("−".into()),
                 shortcut: Some("U".into()),
                 disabled: false,
-                action: ContextMenuAction::UnstageSelectionOrPath {
+                action: Box::new(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id,
                     area,
                     path: path.clone(),
-                },
+                }),
             }),
         };
     }
@@ -236,11 +236,11 @@ pub(super) fn model(
         icon: Some("↺".into()),
         shortcut: Some("D".into()),
         disabled: !can_discard_worktree_changes,
-        action: ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+        action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id,
             area,
             path: path.clone(),
-        },
+        }),
     });
 
     items.push(ContextMenuItem::Separator);
@@ -253,9 +253,9 @@ pub(super) fn model(
         icon: Some("⧉".into()),
         shortcut: Some("C".into()),
         disabled: false,
-        action: ContextMenuAction::CopyText {
+        action: Box::new(ContextMenuAction::CopyText {
             text: copy_path_text,
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

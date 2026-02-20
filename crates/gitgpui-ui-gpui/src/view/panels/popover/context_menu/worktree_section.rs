@@ -8,34 +8,34 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         icon: Some("+".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::WorktreeAddPrompt { repo_id },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Refresh worktrees".into(),
         icon: Some("↻".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::LoadWorktrees { repo_id },
+        action: Box::new(ContextMenuAction::LoadWorktrees { repo_id }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Open worktree…".into(),
         icon: Some("↗".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::WorktreeOpenPicker { repo_id },
-        },
+        }),
     });
     items.push(ContextMenuItem::Entry {
         label: "Remove worktree…".into(),
         icon: Some("🗑".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::WorktreeRemovePicker { repo_id },
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

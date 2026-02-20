@@ -7,17 +7,21 @@ use gpui::{
 use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 const DIFF_FONT_SCALE: f32 = 0.80;
 
 const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 
+type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
+
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
         RefCell::new(HashMap::default());
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn inline_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
@@ -104,8 +108,6 @@ pub(super) fn inline_diff_line_row_canvas(
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
-                let visible_text_bounds = visible_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -155,7 +157,6 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
@@ -193,6 +194,7 @@ pub(super) fn inline_diff_line_row_canvas(
     .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn split_diff_line_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
@@ -322,9 +324,6 @@ pub(super) fn split_diff_line_row_canvas(
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
-                let visible_left_text_bounds = visible_left_text_bounds;
-                let visible_right_text_bounds = visible_right_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -378,7 +377,6 @@ pub(super) fn split_diff_line_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
@@ -415,6 +413,7 @@ pub(super) fn split_diff_line_row_canvas(
     .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn patch_split_column_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
@@ -502,8 +501,6 @@ pub(super) fn patch_split_column_row_canvas(
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
-                let visible_text_bounds = visible_text_bounds;
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || !visible_row_bounds.contains(&event.position)
@@ -549,7 +546,6 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.on_mouse_event({
                 let view = view.clone();
-                let visible_row_bounds = visible_row_bounds;
                 move |event: &gpui::MouseUpEvent, phase, _window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != gpui::MouseButton::Left
@@ -889,6 +885,7 @@ fn paint_gutter_text(
     let _ = shaped.paint(point(x, y), metrics.line_height, window, cx);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_selectable_diff_text(
     view: &Entity<MainPaneView>,
     visible_ix: usize,
@@ -997,6 +994,7 @@ fn diff_layout_base_key(
     hasher.finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ensure_layout_cached(
     view: &Entity<MainPaneView>,
     text_hash: u64,
@@ -1066,7 +1064,7 @@ fn compute_runs(
     runs
 }
 
-fn empty_highlights() -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
-    static EMPTY: OnceLock<Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>> = OnceLock::new();
+fn empty_highlights() -> HighlightSpans {
+    static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
     Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
 }

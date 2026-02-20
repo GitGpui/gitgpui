@@ -101,6 +101,7 @@ fn hit_test_any(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> bool {
     bounds.iter().any(|b| b.contains(&p))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn history_commit_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,

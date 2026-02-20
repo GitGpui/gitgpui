@@ -811,6 +811,7 @@ impl MainPaneView {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn diff_row(
     theme: AppTheme,
     visible_ix: usize,
@@ -1007,6 +1008,7 @@ pub(super) enum PatchSplitColumn {
     Right,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn patch_split_column_row(
     theme: AppTheme,
     column: PatchSplitColumn,
@@ -1058,6 +1060,7 @@ fn patch_split_column_row(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn patch_split_header_row(
     theme: AppTheme,
     column: PatchSplitColumn,

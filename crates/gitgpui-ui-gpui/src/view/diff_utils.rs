@@ -139,12 +139,18 @@ pub(super) fn compute_diff_word_highlights(
 
         for (old_ix, old_text) in removed.into_iter().skip(pairs) {
             if !old_text.is_empty() {
-                highlights[old_ix] = Some(vec![0..old_text.len()]);
+                highlights[old_ix] = Some(vec![std::ops::Range {
+                    start: 0,
+                    end: old_text.len(),
+                }]);
             }
         }
         for (new_ix, new_text) in added.into_iter().skip(pairs) {
             if !new_text.is_empty() {
-                highlights[new_ix] = Some(vec![0..new_text.len()]);
+                highlights[new_ix] = Some(vec![std::ops::Range {
+                    start: 0,
+                    end: new_text.len(),
+                }]);
             }
         }
     }
@@ -405,9 +411,12 @@ pub(super) fn build_unified_patch_for_hunk_selection(
 
     let mut has_change = false;
     let mut prev_included = false;
-    for ix in hunk_src_ix + 1..hunk_end {
-        let line = &lines[ix];
-
+    for (ix, line) in lines
+        .iter()
+        .enumerate()
+        .take(hunk_end)
+        .skip(hunk_src_ix + 1)
+    {
         if line.text().starts_with("\\") {
             if prev_included {
                 out.push_str(line.text());
@@ -485,9 +494,12 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
 
     let mut has_change = false;
     let mut prev_included = false;
-    for ix in hunk_src_ix + 1..hunk_end {
-        let line = &lines[ix];
-
+    for (ix, line) in lines
+        .iter()
+        .enumerate()
+        .take(hunk_end)
+        .skip(hunk_src_ix + 1)
+    {
         if line.text().starts_with("\\") {
             if prev_included {
                 out.push_str(line.text());

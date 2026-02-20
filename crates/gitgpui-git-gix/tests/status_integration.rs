@@ -134,7 +134,7 @@ fn status_separates_staged_and_unstaged() {
     run_git(repo, &["add", "a.txt"]);
     write(repo, "b.txt", "untracked\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let status = opened.status().unwrap();
 
@@ -157,7 +157,7 @@ fn status_lists_untracked_files_in_directories() {
     write(repo, "dir/a.txt", "one\n");
     write(repo, "dir/b.txt", "two\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let status = opened.status().unwrap();
 
@@ -166,13 +166,13 @@ fn status_lists_untracked_files_in_directories() {
         status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("dir/a.txt") && e.kind == FileStatusKind::Untracked)
+            .any(|e| e.path == Path::new("dir/a.txt") && e.kind == FileStatusKind::Untracked)
     );
     assert!(
         status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("dir/b.txt") && e.kind == FileStatusKind::Untracked)
+            .any(|e| e.path == Path::new("dir/b.txt") && e.kind == FileStatusKind::Untracked)
     );
 }
 
@@ -195,7 +195,7 @@ fn diff_unified_works_for_staged_and_unstaged() {
 
     write(repo, "a.txt", "one\ntwo\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
@@ -236,7 +236,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 
     write(repo, "a.txt", "one\ntwo\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
@@ -308,7 +308,7 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
     run_git(repo, &["add", "b.txt"]);
     run_git(repo, &["rm", "a.txt"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let added = opened
@@ -342,7 +342,7 @@ fn diff_file_text_returns_none_for_directories() {
     run_git(repo, &["init"]);
     write(repo, "dir/a.txt", "one\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let result = opened
@@ -377,7 +377,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
 
     write_bytes(repo, "img.png", &new_png);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let unstaged = opened
@@ -435,7 +435,7 @@ fn diff_file_image_returns_none_for_directories() {
     run_git(repo, &["init"]);
     write(repo, "dir/a.png", "not really a png\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let result = opened
@@ -483,7 +483,7 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let status = opened.status().unwrap();
     assert_eq!(status.unstaged.len(), 1);
@@ -539,14 +539,14 @@ fn status_reports_single_conflict_for_modify_delete() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let status = opened.status().unwrap();
 
     let entries = status
         .unstaged
         .iter()
-        .filter(|e| e.path == PathBuf::from("a.txt"))
+        .filter(|e| e.path == Path::new("a.txt"))
         .collect::<Vec<_>>();
     assert_eq!(
         entries.len(),
@@ -593,7 +593,7 @@ fn status_reports_conflict_kind_for_add_add() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let status = opened.status().unwrap();
     assert_eq!(status.unstaged.len(), 1);
@@ -639,7 +639,7 @@ fn diff_file_text_handles_modify_delete_conflicts() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let diff = opened
@@ -687,7 +687,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_ours() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
         .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Ours)
@@ -703,7 +703,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_ours() {
             .staged
             .iter()
             .chain(status.unstaged.iter())
-            .any(|e| e.path == PathBuf::from("a.txt")),
+            .any(|e| e.path == Path::new("a.txt")),
         "expected ours resolution to clear status entries for a.txt, got {status:?}"
     );
 }
@@ -742,7 +742,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
         .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Theirs)
@@ -763,7 +763,7 @@ fn checkout_conflict_side_resolves_modify_delete_using_theirs() {
         status
             .staged
             .iter()
-            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Added),
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Added),
         "expected theirs resolution to stage file as added, got {status:?}"
     );
 }
@@ -803,7 +803,7 @@ fn checkout_conflict_side_stages_resolution() {
 
     run_git_expect_failure(repo, &["merge", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -811,17 +811,12 @@ fn checkout_conflict_side_stages_resolution() {
         .unwrap();
 
     let status = opened.status().unwrap();
-    assert!(
-        status
-            .unstaged
-            .iter()
-            .all(|s| s.path != PathBuf::from("a.txt"))
-    );
+    assert!(status.unstaged.iter().all(|s| s.path != Path::new("a.txt")));
     assert!(
         status
             .staged
             .iter()
-            .any(|s| s.path == PathBuf::from("a.txt") && s.kind == FileStatusKind::Modified)
+            .any(|s| s.path == Path::new("a.txt") && s.kind == FileStatusKind::Modified)
     );
 
     let on_disk = fs::read_to_string(repo.join("a.txt")).unwrap();
@@ -848,7 +843,7 @@ fn stage_and_unstage_paths_update_status() {
     write(repo, "a.txt", "one\ntwo\n");
     write(repo, "b.txt", "untracked\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.stage(&[Path::new("a.txt")]).unwrap();
@@ -868,13 +863,13 @@ fn stage_and_unstage_paths_update_status() {
         status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified)
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Modified)
     );
     assert!(
         status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("b.txt") && e.kind == FileStatusKind::Untracked)
+            .any(|e| e.path == Path::new("b.txt") && e.kind == FileStatusKind::Untracked)
     );
 }
 
@@ -898,7 +893,7 @@ fn commit_creates_new_commit_and_cleans_status() {
     write(repo, "a.txt", "one\ntwo\n");
     run_git(repo, &["add", "a.txt"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.commit("second").unwrap();
@@ -943,7 +938,7 @@ fn reset_soft_moves_head_and_leaves_changes_staged() {
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c2"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -993,7 +988,7 @@ fn reset_mixed_moves_head_and_leaves_changes_unstaged() {
     run_git(repo, &["add", "a.txt"]);
     run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "c2"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -1045,7 +1040,7 @@ fn reset_hard_moves_head_and_discards_changes() {
 
     write(repo, "a.txt", "two-modified\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -1094,7 +1089,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     assert!(c2.status.success());
     let c2 = String::from_utf8(c2.stdout).unwrap().trim().to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -1149,7 +1144,7 @@ fn amend_rewrites_head_commit_message_and_content() {
     write(repo, "a.txt", "one\ntwo\n");
     run_git(repo, &["add", "a.txt"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.commit_amend("amended").unwrap();
@@ -1227,7 +1222,7 @@ fn merge_creates_merge_commit_when_branches_diverged() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.merge_ref_with_output("feature").unwrap();
@@ -1280,7 +1275,7 @@ fn merge_fast_forwards_when_possible_even_if_merge_ff_is_disabled() {
     run_git(repo, &["checkout", "-"]);
     run_git(repo, &["config", "merge.ff", "false"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.merge_ref_with_output("feature").unwrap();
@@ -1342,7 +1337,7 @@ fn merge_commit_message_is_available_during_conflict() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     assert!(opened.merge_ref_with_output("feature").is_err());
@@ -1410,7 +1405,7 @@ fn rebase_replays_commits_onto_target_branch() {
 
     run_git(repo, &["checkout", "feature"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.rebase_with_output("master").unwrap();
@@ -1451,7 +1446,7 @@ fn create_and_delete_local_branch() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -1492,7 +1487,7 @@ fn create_and_delete_local_tag() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
@@ -1548,7 +1543,7 @@ fn list_remote_branches_includes_fetched_remote_tracking_refs() {
     run_git(&repo, &["push", "-u", "origin", "feature"]);
     run_git(&repo, &["fetch", "origin"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     let branches = opened.list_remote_branches().unwrap();
 
@@ -1610,7 +1605,7 @@ fn push_with_output_updates_remote_head() {
         .trim()
         .to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     opened.push_with_output().unwrap();
 
@@ -1690,7 +1685,7 @@ fn force_push_with_output_updates_remote_head_after_rewrite() {
         .trim()
         .to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     opened.push_force_with_output().unwrap();
 
@@ -1764,7 +1759,7 @@ fn pull_with_output_fast_forwards_from_remote() {
         .trim()
         .to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
         .pull_with_output(gitgpui_core::services::PullMode::FastForwardOnly)
@@ -1842,7 +1837,7 @@ fn pull_with_output_fast_forwards_when_possible_even_if_pull_ff_is_disabled() {
         .trim()
         .to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened_b = backend.open(&repo_b).unwrap();
     opened_b
         .pull_with_output(gitgpui_core::services::PullMode::Merge)
@@ -1892,7 +1887,7 @@ fn stash_create_list_apply_and_drop_work() {
 
     write(repo, "a.txt", "one\ntwo\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened.stash_create("wip", false).unwrap();
@@ -1939,7 +1934,7 @@ fn checkout_commit_detaches_head_at_target() {
     assert!(sha.status.success());
     let sha = String::from_utf8(sha.stdout).unwrap().trim().to_string();
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
         .checkout_commit(&gitgpui_core::domain::CommitId(sha.clone()))
@@ -1985,7 +1980,7 @@ fn discard_worktree_changes_reverts_to_index_version() {
     run_git(repo, &["add", "a.txt"]);
     write(repo, "a.txt", "one\ntwo\nthree\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -2002,14 +1997,9 @@ fn discard_worktree_changes_reverts_to_index_version() {
         status
             .staged
             .iter()
-            .any(|e| e.path == PathBuf::from("a.txt") && e.kind == FileStatusKind::Modified)
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Modified)
     );
-    assert!(
-        !status
-            .unstaged
-            .iter()
-            .any(|e| e.path == PathBuf::from("a.txt"))
-    );
+    assert!(!status.unstaged.iter().any(|e| e.path == Path::new("a.txt")));
 }
 
 #[test]
@@ -2031,7 +2021,7 @@ fn discard_worktree_changes_reverts_modified_file_to_head() {
 
     write(repo, "a.txt", "one\ntwo\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -2064,7 +2054,7 @@ fn discard_worktree_changes_removes_staged_new_file() {
     write(repo, "new.txt", "new\n");
     run_git(repo, &["add", "new.txt"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -2073,17 +2063,12 @@ fn discard_worktree_changes_removes_staged_new_file() {
 
     assert!(!repo.join("new.txt").exists());
     let status = opened.status().unwrap();
-    assert!(
-        !status
-            .staged
-            .iter()
-            .any(|e| e.path == PathBuf::from("new.txt"))
-    );
+    assert!(!status.staged.iter().any(|e| e.path == Path::new("new.txt")));
     assert!(
         !status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("new.txt"))
+            .any(|e| e.path == Path::new("new.txt"))
     );
 }
 
@@ -2106,7 +2091,7 @@ fn discard_worktree_changes_removes_untracked_file() {
 
     write(repo, "untracked.txt", "new\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -2119,7 +2104,7 @@ fn discard_worktree_changes_removes_untracked_file() {
         !status
             .unstaged
             .iter()
-            .any(|e| e.path == PathBuf::from("untracked.txt"))
+            .any(|e| e.path == Path::new("untracked.txt"))
     );
 }
 
@@ -2145,7 +2130,7 @@ fn discard_worktree_changes_supports_mixed_selection() {
     fs::remove_file(repo.join("b.txt")).unwrap();
     write(repo, "c.txt", "three\n");
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     opened
@@ -2186,7 +2171,7 @@ fn stage_hunk_applies_only_part_of_a_file_to_index() {
         .replace("L25\n", "L25-mod\n");
     write(repo, "a.txt", &modified);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let unstaged_before = opened
@@ -2288,7 +2273,7 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
         .replace("L25\n", "L25-mod\n");
     write(repo, "a.txt", &modified);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     let unstaged_before = opened

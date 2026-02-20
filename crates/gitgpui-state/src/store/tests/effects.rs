@@ -237,24 +237,23 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
-            if let Msg::ConflictFileLoaded {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::ConflictFileLoaded {
                 repo_id: rid,
                 path,
                 result,
             } = msg
-            {
-                assert_eq!(rid, repo_id);
-                assert_eq!(path, rel);
-                let file = result.unwrap().unwrap();
-                assert_eq!(file.path, PathBuf::from("conflict.txt"));
-                assert_eq!(file.base, None);
-                assert_eq!(file.ours.as_deref(), Some("ours\n"));
-                assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
-                assert_eq!(file.current.as_deref(), Some(current));
-                return;
-            }
-        }
+        {
+            assert_eq!(rid, repo_id);
+            assert_eq!(path, rel);
+            let file = result.unwrap().unwrap();
+            assert_eq!(file.path, PathBuf::from("conflict.txt"));
+            assert_eq!(file.base, None);
+            assert_eq!(file.ours.as_deref(), Some("ours\n"));
+            assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
+            assert_eq!(file.current.as_deref(), Some(current));
+            return;
+        };
     }
     panic!("timed out waiting for ConflictFileLoaded");
 }
@@ -407,26 +406,25 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
-        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50)) {
-            if let Msg::RepoCommandFinished {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::RepoCommandFinished {
                 repo_id: rid,
                 command,
                 result,
             } = msg
-            {
-                assert_eq!(rid, repo_id);
-                assert!(matches!(
-                    command,
-                    crate::msg::RepoCommandKind::SaveWorktreeFile { .. }
-                ));
-                assert!(result.is_ok());
-                let on_disk = std::fs::read_to_string(base.join(&rel)).unwrap();
-                assert_eq!(on_disk, contents);
-                let staged = repo.staged.lock().unwrap().clone();
-                assert_eq!(staged, vec![rel.clone()]);
-                return;
-            }
-        }
+        {
+            assert_eq!(rid, repo_id);
+            assert!(matches!(
+                command,
+                crate::msg::RepoCommandKind::SaveWorktreeFile { .. }
+            ));
+            assert!(result.is_ok());
+            let on_disk = std::fs::read_to_string(base.join(&rel)).unwrap();
+            assert_eq!(on_disk, contents);
+            let staged = repo.staged.lock().unwrap().clone();
+            assert_eq!(staged, vec![rel.clone()]);
+            return;
+        };
     }
     panic!("timed out waiting for RepoCommandFinished");
 }

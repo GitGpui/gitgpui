@@ -374,6 +374,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
     rows
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_slash_tree_rows(
     tree: &SlashTree,
     out: &mut Vec<BranchSidebarRow>,

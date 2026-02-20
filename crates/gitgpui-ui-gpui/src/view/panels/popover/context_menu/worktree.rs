@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn model(repo_id: RepoId, path: &std::path::PathBuf) -> ContextMenuModel {
+pub(super) fn model(repo_id: RepoId, path: &std::path::Path) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Worktree".into())];
     items.push(ContextMenuItem::Label(path.display().to_string().into()));
     items.push(ContextMenuItem::Separator);
@@ -9,7 +9,9 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::PathBuf) -> ContextMenuMo
         icon: Some("↗".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenRepo { path: path.clone() },
+        action: Box::new(ContextMenuAction::OpenRepo {
+            path: path.to_path_buf(),
+        }),
     });
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
@@ -17,12 +19,12 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::PathBuf) -> ContextMenuMo
         icon: Some("🗑".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::WorktreeRemoveConfirm {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             },
-        },
+        }),
     });
 
     ContextMenuModel::new(items)
@@ -43,9 +45,9 @@ mod tests {
             .iter()
             .find_map(|item| match item {
                 ContextMenuItem::Entry { label, action, .. }
-                    if label.to_string() == "Open in new tab" =>
+                    if label.as_ref() == "Open in new tab" =>
                 {
-                    Some(action.clone())
+                    Some((**action).clone())
                 }
                 _ => None,
             })

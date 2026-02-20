@@ -21,9 +21,9 @@ pub(super) fn model(
         icon: Some("↗".into()),
         shortcut: None,
         disabled: open_disabled,
-        action: ContextMenuAction::OpenRepo {
+        action: Box::new(ContextMenuAction::OpenRepo {
             path: open_path.unwrap_or_default(),
-        },
+        }),
     });
 
     items.push(ContextMenuItem::Separator);
@@ -32,12 +32,12 @@ pub(super) fn model(
         icon: Some("🗑".into()),
         shortcut: None,
         disabled: false,
-        action: ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::SubmoduleRemoveConfirm {
                 repo_id,
                 path: path.clone(),
             },
-        },
+        }),
     });
 
     ContextMenuModel::new(items)

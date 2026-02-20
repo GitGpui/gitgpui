@@ -202,9 +202,7 @@ fn build_synthetic_repo_state(
 
     let mut remote = Vec::with_capacity(remote_branches);
     for ix in 0..remote_branches {
-        let remote_name = if remotes <= 1 {
-            "origin".to_string()
-        } else if ix % remotes == 0 {
+        let remote_name = if remotes <= 1 || ix % remotes == 0 {
             "origin".to_string()
         } else {
             format!("remote{}", ix % remotes)

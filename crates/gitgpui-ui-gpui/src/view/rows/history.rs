@@ -196,6 +196,7 @@ impl MainPaneView {
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
 
+#[allow(clippy::too_many_arguments)]
 fn history_table_row(
     theme: AppTheme,
     col_branch: Pixels,
@@ -280,6 +281,7 @@ fn history_table_row(
     row.into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn working_tree_summary_history_row(
     theme: AppTheme,
     col_branch: Pixels,

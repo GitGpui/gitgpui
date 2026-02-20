@@ -6,11 +6,10 @@ use gpui::px;
 use std::path::Path;
 use std::sync::Arc;
 
-#[test]
-fn commit_details_message_has_reasonable_max_height() {
+const _: () = {
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX <= 400.0);
-}
+};
 
 #[test]
 fn conflict_requires_resolver_only_for_both_modified() {

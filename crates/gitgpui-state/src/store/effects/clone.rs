@@ -53,7 +53,7 @@ pub(super) fn schedule_clone_repo(
         let mut stderr_acc = String::new();
         if let Some(stderr) = stderr {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 stderr_acc.push_str(&line);
                 stderr_acc.push('\n');
                 let _ = msg_tx.send(Msg::CloneRepoProgress {

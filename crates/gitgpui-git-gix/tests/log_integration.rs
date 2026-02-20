@@ -64,7 +64,7 @@ fn log_all_branches_includes_remote_tracking_branches() {
     run_git(&repo, &["branch", "-D", "feature"]);
     run_git(&repo, &["fetch", "origin"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
 
     let head = opened.log_head_page(200, None).unwrap();
@@ -120,7 +120,7 @@ fn log_all_branches_includes_nonstandard_ref_namespaces() {
         ],
     );
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let all = opened.log_all_branches_page(200, None).unwrap();
     assert!(
@@ -174,7 +174,7 @@ fn log_all_branches_does_not_include_tag_only_tips() {
     run_git(repo, &["checkout", "main"]);
     run_git(repo, &["branch", "-D", "tag-only"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let all = opened.log_all_branches_page(200, None).unwrap();
     assert!(
@@ -190,7 +190,7 @@ fn empty_repo_log_and_head_branch_do_not_error() {
 
     run_git(repo, &["init", "-b", "main"]);
 
-    let backend = GixBackend::default();
+    let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
     assert_eq!(opened.current_branch().unwrap(), "main");

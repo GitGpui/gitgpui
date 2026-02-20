@@ -410,7 +410,7 @@ pub(super) fn tags_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.tags = match result {
+        let tags = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
                 if matches!(e.kind(), gitgpui_core::error::ErrorKind::Unsupported(_)) {
@@ -421,6 +421,7 @@ pub(super) fn tags_loaded(
                 }
             }
         };
+        repo_state.set_tags(tags);
         if repo_state.loads_in_flight.finish(RepoLoadsInFlight::TAGS) {
             effects.push(Effect::LoadTags { repo_id });
         }
