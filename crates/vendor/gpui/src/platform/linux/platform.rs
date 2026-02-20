@@ -320,10 +320,11 @@ impl<P: LinuxClient + 'static> Platform for P {
                 let result = background_executor
                     .spawn(async move {
                         let picked = std::panic::AssertUnwindSafe(async move {
+                            let is_modal = identifier.is_some();
                             let request =
                                 match ashpd::desktop::file_chooser::OpenFileRequest::default()
                                     .identifier(identifier)
-                                    .modal(true)
+                                    .modal(is_modal)
                                     .title(title.as_str())
                                     .accept_label(accept_label.as_deref())
                                     .multiple(multiple)

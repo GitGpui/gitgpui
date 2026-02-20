@@ -3,6 +3,7 @@ use super::util::{
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
+use crate::session;
 use gitgpui_core::domain::{LogCursor, LogPage, LogScope};
 use gitgpui_core::error::Error;
 use std::sync::Arc;
@@ -97,6 +98,7 @@ pub(super) fn set_history_scope(
     }
 
     repo_state.history_scope = scope;
+    let _ = session::persist_repo_history_scope(&repo_state.spec.workdir, scope);
     repo_state.log = Loadable::Loading;
     repo_state.log_loading_more = false;
 

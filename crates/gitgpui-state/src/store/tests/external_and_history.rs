@@ -95,9 +95,10 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         "did not expect upstream divergence refresh on pure worktree changes"
     );
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadBranches { .. } | Effect::LoadRemoteBranches { .. })),
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadBranches { .. } | Effect::LoadRemoteBranches { .. }
+        )),
         "did not expect branch refresh on pure worktree changes"
     );
     assert!(

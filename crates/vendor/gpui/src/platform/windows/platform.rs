@@ -915,6 +915,10 @@ fn file_open_dialog(
     }
 
     unsafe {
+        // Ensure no stale mouse capture prevents interacting with the native dialog
+        // (e.g. titlebar close button, folder navigation).
+        let _ = ReleaseCapture();
+
         folder_dialog.SetOptions(dialog_options)?;
 
         if let Some(prompt) = options.prompt {
@@ -978,6 +982,9 @@ fn file_save_dialog(
     }
 
     unsafe {
+        // Ensure no stale mouse capture prevents interacting with the native dialog.
+        let _ = ReleaseCapture();
+
         dialog.SetFileTypes(&[Common::COMDLG_FILTERSPEC {
             pszName: windows::core::w!("All files"),
             pszSpec: windows::core::w!("*.*"),

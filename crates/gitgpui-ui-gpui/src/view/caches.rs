@@ -28,6 +28,7 @@ pub(super) struct HistoryCommitRowVm {
     pub(super) summary: SharedString,
     pub(super) when: SharedString,
     pub(super) short_sha: SharedString,
+    pub(super) is_head: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -413,13 +414,13 @@ impl MainPaneView {
                         .map(|commit| {
                             let commit_id = commit.id.as_ref();
 
+                            let is_head = head_target == Some(commit_id) && head_branch.is_some();
+
                             let branches_text = {
-                                let has_head =
-                                    head_target == Some(commit_id) && head_branch.is_some();
                                 let branch_count =
                                     branch_names_by_target.get(commit_id).map_or(0, |b| b.len());
                                 let mut names: Vec<String> =
-                                    Vec::with_capacity(branch_count + usize::from(has_head));
+                                    Vec::with_capacity(branch_count + usize::from(is_head));
                                 if head_target == Some(commit_id)
                                     && let Some(head) = head_branch.as_ref()
                                 {
@@ -469,6 +470,7 @@ impl MainPaneView {
                                 summary,
                                 when,
                                 short_sha,
+                                is_head,
                             }
                         })
                         .collect::<Vec<_>>();

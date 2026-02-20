@@ -185,6 +185,7 @@ impl MainPaneView {
                     row_vm.when.clone(),
                     row_vm.short_sha.clone(),
                     selected,
+                    row_vm.is_head,
                     is_stash_node,
                     cx,
                 ))
@@ -218,6 +219,7 @@ fn history_table_row(
     when: SharedString,
     short_sha: SharedString,
     selected: bool,
+    is_head: bool,
     is_stash_node: bool,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
@@ -267,6 +269,12 @@ fn history_table_row(
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));
+    }
+
+    if is_head {
+        row = row
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.90));
     }
 
     row.into_any_element()

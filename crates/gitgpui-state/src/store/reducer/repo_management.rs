@@ -32,9 +32,13 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
     let spec = RepoSpec { workdir: path };
 
-    state
-        .repos
-        .push(crate::model::RepoState::new_opening(repo_id, spec.clone()));
+    state.repos.push({
+        let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
+        if let Some(scope) = session::load_repo_history_scope(&spec.workdir) {
+            repo_state.history_scope = scope;
+        }
+        repo_state
+    });
     state.active_repo = Some(repo_id);
     let effects = vec![Effect::OpenRepo {
         repo_id,
@@ -55,6 +59,7 @@ pub(super) fn restore_session(
     state.repos.clear();
     state.active_repo = None;
 
+    let repo_history_scopes = session::load_repo_history_scopes();
     let active_repo = active_repo.map(normalize_repo_path);
     let mut active_repo_id: Option<RepoId> = None;
 
@@ -77,9 +82,14 @@ pub(super) fn restore_session(
             active_repo_id = Some(repo_id);
         }
 
-        state
-            .repos
-            .push(crate::model::RepoState::new_opening(repo_id, spec.clone()));
+        state.repos.push({
+            let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
+            let workdir_key = spec.workdir.to_string_lossy();
+            if let Some(scope) = repo_history_scopes.get(workdir_key.as_ref()).copied() {
+                repo_state.history_scope = scope;
+            }
+            repo_state
+        });
         effects.push(Effect::OpenRepo {
             repo_id,
             path: spec.workdir.clone(),

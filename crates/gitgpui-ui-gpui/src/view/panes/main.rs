@@ -760,9 +760,10 @@ impl MainPaneView {
                             out.push(*ix);
                         }
                         if let Some(ix) = new_src_ix
-                            && out.first().copied() != Some(*ix) {
-                                out.push(*ix);
-                            }
+                            && out.first().copied() != Some(*ix)
+                        {
+                            out.push(*ix);
+                        }
                         out
                     }
                 }

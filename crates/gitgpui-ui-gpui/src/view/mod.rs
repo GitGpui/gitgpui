@@ -1271,11 +1271,9 @@ impl Render for GitGpuiView {
                     prev_blank = blank;
                 }
 
-                (
-                    Some(command.into()),
-                    collapsed.join("\n").into(),
-                )
-            })();
+                (Some(command.into()), collapsed.join("\n").into())
+            })(
+            );
             self.error_banner_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_text(display_error.clone(), cx);
@@ -1319,11 +1317,14 @@ impl Render for GitGpuiView {
                             .max_h(px(140.0))
                             .overflow_y_scroll()
                             .child(
-                                div().flex().flex_col().gap_1().when_some(
-                                    command_block,
-                                    |this, command_block| this.child(command_block),
-                                )
-                                .child(self.error_banner_input.clone()),
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .when_some(command_block, |this, command_block| {
+                                        this.child(command_block)
+                                    })
+                                    .child(self.error_banner_input.clone()),
                             ),
                     )
                     .child(div().absolute().top(px(6.0)).right(px(6.0)).child(dismiss)),

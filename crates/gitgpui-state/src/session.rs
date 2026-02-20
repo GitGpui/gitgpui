@@ -1,6 +1,8 @@
 use crate::model::{AppState, RepoId};
+use gitgpui_core::domain::LogScope;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
@@ -17,6 +19,31 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum HistoryScopeSetting {
+    CurrentBranch,
+    AllBranches,
+}
+
+impl From<LogScope> for HistoryScopeSetting {
+    fn from(value: LogScope) -> Self {
+        match value {
+            LogScope::CurrentBranch => Self::CurrentBranch,
+            LogScope::AllBranches => Self::AllBranches,
+        }
+    }
+}
+
+impl From<HistoryScopeSetting> for LogScope {
+    fn from(value: HistoryScopeSetting) -> Self {
+        match value {
+            HistoryScopeSetting::CurrentBranch => Self::CurrentBranch,
+            HistoryScopeSetting::AllBranches => Self::AllBranches,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -39,6 +66,7 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
 }
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
@@ -153,6 +181,63 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
 
     persist_to_path(path, &file)
+}
+
+pub fn load_repo_history_scope(workdir: &Path) -> Option<LogScope> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return None;
+    };
+    load_repo_history_scope_from_path(workdir, &session_file_path)
+}
+
+pub fn load_repo_history_scope_from_path(
+    workdir: &Path,
+    session_file_path: &Path,
+) -> Option<LogScope> {
+    let workdir_key = workdir.to_string_lossy();
+    let file = load_file_v2(session_file_path)?;
+    let scopes = file.repo_history_scopes?;
+    scopes.get(workdir_key.as_ref()).copied().map(Into::into)
+}
+
+pub fn load_repo_history_scopes() -> BTreeMap<String, LogScope> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return BTreeMap::new();
+    };
+    load_repo_history_scopes_from_path(&session_file_path)
+}
+
+pub fn load_repo_history_scopes_from_path(session_file_path: &Path) -> BTreeMap<String, LogScope> {
+    let Some(file) = load_file_v2(session_file_path) else {
+        return BTreeMap::new();
+    };
+    file.repo_history_scopes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, v.into()))
+        .collect()
+}
+
+pub fn persist_repo_history_scope(workdir: &Path, scope: LogScope) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_repo_history_scope_to_path(workdir, scope, &session_file_path)
+}
+
+pub fn persist_repo_history_scope_to_path(
+    workdir: &Path,
+    scope: LogScope,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    let workdir_key = workdir.to_string_lossy().to_string();
+    file.repo_history_scopes
+        .get_or_insert_with(BTreeMap::new)
+        .insert(workdir_key, scope.into());
+
+    persist_to_path(session_file_path, &file)
 }
 
 fn parse_repos(
@@ -331,6 +416,7 @@ fn app_state_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
     use crate::model::RepoState;
+    use gitgpui_core::domain::LogScope;
     use gitgpui_core::domain::RepoSpec;
 
     #[test]
@@ -495,5 +581,39 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
+    }
+
+    #[test]
+    fn persist_repo_history_scope_round_trips() {
+        let dir = env::temp_dir().join(format!(
+            "gitgpui-repo-history-scope-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo_a);
+
+        persist_to_path(
+            &session_path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_repo_history_scope_to_path(&repo_a, LogScope::AllBranches, &session_path)
+            .expect("persist repo history scope");
+
+        let loaded = load_repo_history_scope_from_path(&repo_a, &session_path);
+        assert_eq!(loaded, Some(LogScope::AllBranches));
     }
 }
