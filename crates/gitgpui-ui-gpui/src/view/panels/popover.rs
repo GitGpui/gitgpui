@@ -83,6 +83,18 @@ pub(in super::super) struct PopoverHost {
 }
 
 impl PopoverHost {
+    fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.title_bar.update(cx, |title_bar, cx| {
+                    title_bar.set_app_menu_open(app_menu_open, cx);
+                });
+            });
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
@@ -412,6 +424,7 @@ impl PopoverHost {
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
         self.notify_fingerprint = 0;
+        self.sync_titlebar_app_menu_state(cx);
         cx.notify();
     }
 
@@ -692,6 +705,7 @@ impl PopoverHost {
         if let Some(popover) = self.popover.as_ref() {
             self.notify_fingerprint = fingerprint::notify_fingerprint(&self.state, popover);
         }
+        self.sync_titlebar_app_menu_state(cx);
         cx.notify();
     }
 
@@ -1405,7 +1419,7 @@ impl PopoverHost {
 
         let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
         let gap_y = if is_app_menu {
-            px(40.0)
+            crate::view::chrome::TITLE_BAR_HEIGHT
         } else if is_right {
             px(10.0)
         } else {
@@ -1466,7 +1480,7 @@ impl PopoverHost {
                     .occlude()
                     .bg(theme.colors.surface_bg_elevated)
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA))
                     .rounded(px(theme.radii.panel))
                     .shadow_lg()
                     .overflow_hidden()

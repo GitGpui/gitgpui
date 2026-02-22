@@ -2,11 +2,25 @@ use super::*;
 use gpui::ObjectFit;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
+pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
+pub(super) const WINDOW_OUTLINE_RGBA: u32 = 0x5a5d63ff;
 
 pub(super) struct TitleBarView {
     theme: AppTheme,
     root_view: WeakEntity<GitGpuiView>,
     title_should_move: bool,
+    app_menu_open: bool,
+}
+
+fn window_top_left_corner(window: &Window) -> Point<Pixels> {
+    let inset = window.client_inset().unwrap_or(px(0.0));
+    match window.window_decorations() {
+        Decorations::Client { tiling } => point(
+            if tiling.left { px(0.0) } else { inset },
+            if tiling.top { px(0.0) } else { inset },
+        ),
+        Decorations::Server => point(px(0.0), px(0.0)),
+    }
 }
 
 fn titlebar_control_icon(path: &'static str, color: gpui::Rgba) -> gpui::Svg {
@@ -159,11 +173,20 @@ impl TitleBarView {
             theme,
             root_view,
             title_should_move: false,
+            app_menu_open: false,
         }
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    pub(super) fn set_app_menu_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
+        if self.app_menu_open == open {
+            return;
+        }
+        self.app_menu_open = open;
         cx.notify();
     }
 
@@ -183,6 +206,7 @@ impl TitleBarView {
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let app_menu_open = self.app_menu_open;
         let bar_bg = if window.is_window_active() {
             lighten(
                 theme.colors.surface_bg,
@@ -223,18 +247,21 @@ impl Render for TitleBarView {
                     .items_center()
                     .justify_center()
                     .rounded(px(theme.radii.pill))
+                    .when(app_menu_open, |s| s.bg(theme.colors.hover))
                     .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active))
                     .child(titlebar_control_icon("icons/menu.svg", theme.colors.accent)),
             )
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(PopoverKind::AppMenu, e.position(), window, cx);
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                this.set_app_menu_open(true, cx);
+                let anchor = window_top_left_corner(window);
+                this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
+                cx.listener(|_this, _e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    window.show_window_menu(e.position);
+                    window.show_window_menu(window_top_left_corner(window));
                 }),
             );
 
@@ -342,7 +369,7 @@ impl Render for TitleBarView {
             .id("title_bar")
             .flex()
             .items_center()
-            .h(px(34.0))
+            .h(TITLE_BAR_HEIGHT)
             .w_full()
             .bg(bar_bg)
             .border_b_1()
@@ -392,7 +419,7 @@ pub(crate) fn window_frame(
         .size_full()
         .bg(theme.colors.window_bg)
         .border_1()
-        .border_color(gpui::rgba(0x5a5d63ff))
+        .border_color(gpui::rgba(WINDOW_OUTLINE_RGBA))
         .rounded(px(theme.radii.panel))
         .shadow_lg()
         .overflow_hidden()

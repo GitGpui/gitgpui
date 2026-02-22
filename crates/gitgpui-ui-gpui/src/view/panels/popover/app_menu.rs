@@ -61,9 +61,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     {
         install_desktop = install_desktop.on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             this.install_linux_desktop_integration(cx);
-            this.popover = None;
-            this.popover_anchor = None;
-            cx.notify();
+            this.close_popover(cx);
         }));
         install_desktop = install_desktop
             .cursor(CursorStyle::PointingHand)
@@ -85,11 +83,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .child(section_label("app_menu_app_section", "Application"))
         .child(
             entry("app_menu_settings", "Settings…".into(), false).on_click(cx.listener(
-                |this, e: &ClickEvent, _w, cx| {
-                    this.popover = Some(PopoverKind::Settings);
-                    this.popover_anchor = Some(e.position());
+                |this, e: &ClickEvent, window, cx| {
                     this.settings_date_format_open = false;
-                    cx.notify();
+                    this.open_popover_at(PopoverKind::Settings, e.position(), window, cx);
                 },
             )),
         )
@@ -130,9 +126,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     return;
                 }
                 this.store.dispatch(Msg::RebaseContinue { repo_id });
-                this.popover = None;
-                this.popover_anchor = None;
-                cx.notify();
+                this.close_popover(cx);
             })),
         )
         .child(
@@ -149,9 +143,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     return;
                 }
                 this.store.dispatch(Msg::RebaseAbort { repo_id });
-                this.popover = None;
-                this.popover_anchor = None;
-                cx.notify();
+                this.close_popover(cx);
             })),
         )
         .child(separator())
@@ -191,9 +183,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         });
                     })
                     .detach();
-                this.popover = None;
-                this.popover_anchor = None;
-                cx.notify();
+                this.close_popover(cx);
             })),
         )
         .child(separator())
