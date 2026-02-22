@@ -139,8 +139,13 @@ impl GitRepository for GixRepo {
         self.checkout_branch_impl(name)
     }
 
-    fn checkout_remote_branch(&self, remote: &str, branch: &str) -> Result<()> {
-        self.checkout_remote_branch_impl(remote, branch)
+    fn checkout_remote_branch(
+        &self,
+        remote: &str,
+        branch: &str,
+        local_branch: &str,
+    ) -> Result<()> {
+        self.checkout_remote_branch_impl(remote, branch, local_branch)
     }
 
     fn checkout_commit(&self, id: &CommitId) -> Result<()> {
@@ -188,11 +193,15 @@ impl GitRepository for GixRepo {
     }
 
     fn fetch_all(&self) -> Result<()> {
-        self.fetch_all_impl()
+        self.fetch_all_impl(false)
     }
 
     fn fetch_all_with_output(&self) -> Result<CommandOutput> {
-        self.fetch_all_with_output_impl()
+        self.fetch_all_with_output_impl(false)
+    }
+
+    fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
+        self.fetch_all_with_output_impl(prune)
     }
 
     fn pull(&self, mode: PullMode) -> Result<()> {

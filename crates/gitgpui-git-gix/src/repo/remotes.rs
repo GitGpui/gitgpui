@@ -74,22 +74,42 @@ impl GixRepo {
         Ok(parse_remote_branches(&output))
     }
 
-    pub(super) fn fetch_all_impl(&self) -> Result<()> {
+    pub(super) fn fetch_all_impl(&self, prune: bool) -> Result<()> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("fetch")
             .arg("--all");
-        run_git_simple(cmd, "git fetch --all")
+        if prune {
+            cmd.arg("--prune");
+        }
+        run_git_simple(
+            cmd,
+            if prune {
+                "git fetch --all --prune"
+            } else {
+                "git fetch --all"
+            },
+        )
     }
 
-    pub(super) fn fetch_all_with_output_impl(&self) -> Result<CommandOutput> {
+    pub(super) fn fetch_all_with_output_impl(&self, prune: bool) -> Result<CommandOutput> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("fetch")
             .arg("--all");
-        run_git_with_output(cmd, "git fetch --all")
+        if prune {
+            cmd.arg("--prune");
+        }
+        run_git_with_output(
+            cmd,
+            if prune {
+                "git fetch --all --prune"
+            } else {
+                "git fetch --all"
+            },
+        )
     }
 
     pub(super) fn pull_impl(&self, mode: PullMode) -> Result<()> {

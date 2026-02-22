@@ -39,6 +39,10 @@ pub enum Msg {
         repo_id: RepoId,
         scope: LogScope,
     },
+    SetFetchPruneDeletedRemoteTrackingBranches {
+        repo_id: RepoId,
+        enabled: bool,
+    },
     LoadMoreHistory {
         repo_id: RepoId,
     },
@@ -105,7 +109,8 @@ pub enum Msg {
     CheckoutRemoteBranch {
         repo_id: RepoId,
         remote: String,
-        name: String,
+        branch: String,
+        local_branch: String,
     },
     CheckoutCommit {
         repo_id: RepoId,

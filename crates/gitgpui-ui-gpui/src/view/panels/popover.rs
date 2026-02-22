@@ -3,6 +3,7 @@ use super::*;
 mod app_menu;
 mod blame;
 mod branch_picker;
+mod checkout_remote_branch_prompt;
 mod clone_repo;
 mod context_menu;
 mod create_branch;
@@ -470,6 +471,18 @@ impl PopoverHost {
                     self.create_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(branch.clone(), cx);
                         cx.notify();
                     });
                     let focus = self
@@ -1194,6 +1207,11 @@ impl PopoverHost {
             } */
             PopoverKind::BranchPicker => branch_picker::panel(self, cx),
             PopoverKind::CreateBranch => create_branch::panel(self, cx),
+            PopoverKind::CheckoutRemoteBranchPrompt {
+                repo_id,
+                remote,
+                branch,
+            } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CloneRepo => clone_repo::panel(self, cx),
             PopoverKind::ResetPrompt {

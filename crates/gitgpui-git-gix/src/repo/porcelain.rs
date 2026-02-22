@@ -49,7 +49,12 @@ impl GixRepo {
         run_git_simple(cmd, "git checkout")
     }
 
-    pub(super) fn checkout_remote_branch_impl(&self, remote: &str, branch: &str) -> Result<()> {
+    pub(super) fn checkout_remote_branch_impl(
+        &self,
+        remote: &str,
+        branch: &str,
+        local_branch: &str,
+    ) -> Result<()> {
         let upstream = format!("{remote}/{branch}");
 
         let output = Command::new("git")
@@ -58,7 +63,7 @@ impl GixRepo {
             .arg("checkout")
             .arg("--track")
             .arg("-b")
-            .arg(branch)
+            .arg(local_branch)
             .arg(&upstream)
             .output()
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
@@ -84,7 +89,7 @@ impl GixRepo {
             .arg("-C")
             .arg(&self.spec.workdir)
             .arg("checkout")
-            .arg(branch);
+            .arg(local_branch);
         run_git_simple(checkout, "git checkout")?;
 
         let mut set_upstream = Command::new("git");
@@ -93,7 +98,7 @@ impl GixRepo {
             .arg(&self.spec.workdir)
             .arg("branch")
             .arg(format!("--set-upstream-to={upstream}"))
-            .arg(branch);
+            .arg(local_branch);
         run_git_simple(set_upstream, "git branch --set-upstream-to")
     }
 

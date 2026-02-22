@@ -82,6 +82,11 @@ pub(super) fn reduce(
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
+        Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
+            repo_management::set_fetch_prune_deleted_remote_tracking_branches(
+                state, repo_id, enabled,
+            )
+        }
         Msg::LoadMoreHistory { repo_id } => external_and_history::load_more_history(state, repo_id),
         Msg::SelectCommit { repo_id, commit_id } => {
             effects::select_commit(state, repo_id, commit_id)
@@ -117,10 +122,11 @@ pub(super) fn reduce(
         Msg::CheckoutRemoteBranch {
             repo_id,
             remote,
-            name,
+            branch,
+            local_branch,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::checkout_remote_branch(repo_id, remote, name)
+            actions_emit_effects::checkout_remote_branch(repo_id, remote, branch, local_branch)
         }
         Msg::CheckoutCommit { repo_id, commit_id } => {
             begin_local_action(state, repo_id);

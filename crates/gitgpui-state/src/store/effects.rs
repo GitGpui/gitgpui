@@ -106,9 +106,10 @@ pub(super) fn schedule_effect(
         Effect::CheckoutRemoteBranch {
             repo_id,
             remote,
-            name,
+            branch,
+            local_branch,
         } => repo_actions::schedule_checkout_remote_branch(
-            executor, repos, msg_tx, repo_id, remote, name,
+            executor, repos, msg_tx, repo_id, remote, branch, local_branch,
         ),
         Effect::CheckoutCommit { repo_id, commit_id } => {
             repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);
@@ -204,8 +205,8 @@ pub(super) fn schedule_effect(
         Effect::CommitAmend { repo_id, message } => {
             repo_actions::schedule_commit_amend(executor, repos, msg_tx, repo_id, message);
         }
-        Effect::FetchAll { repo_id } => {
-            repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id)
+        Effect::FetchAll { repo_id, prune } => {
+            repo_commands::schedule_fetch_all(executor, repos, msg_tx, repo_id, prune)
         }
         Effect::Pull { repo_id, mode } => {
             repo_commands::schedule_pull(executor, repos, msg_tx, repo_id, mode)

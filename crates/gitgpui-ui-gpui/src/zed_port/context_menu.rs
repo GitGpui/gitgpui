@@ -2,7 +2,7 @@
 
 use crate::theme::AppTheme;
 use gpui::prelude::*;
-use gpui::{CursorStyle, Div, ElementId, FontWeight, SharedString, Stateful, div, px};
+use gpui::{AnyElement, CursorStyle, Div, ElementId, FontWeight, SharedString, Stateful, div, px};
 
 use super::CONTROL_HEIGHT_MD_PX;
 
@@ -119,6 +119,104 @@ pub fn context_menu_entry(
     }
     if has_submenu {
         end = end.child("›");
+    }
+    row = row.child(end);
+
+    if disabled {
+        row = row
+            .text_color(theme.colors.text_muted)
+            .cursor(CursorStyle::Arrow);
+    }
+
+    row
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn context_menu_entry_with_end_slot(
+    id: impl Into<ElementId>,
+    theme: AppTheme,
+    selected: bool,
+    disabled: bool,
+    icon: Option<SharedString>,
+    label: impl Into<SharedString>,
+    end_slot: Option<AnyElement>,
+    shortcut: Option<SharedString>,
+    has_submenu: bool,
+) -> Stateful<Div> {
+    let label: SharedString = label.into();
+    let icon_color = context_menu_icon_color(
+        theme,
+        disabled,
+        label.as_ref(),
+        icon.as_ref().map(|icon| icon.as_ref()),
+    );
+
+    let mut row = div()
+        .id(id)
+        .h(px(CONTROL_HEIGHT_MD_PX))
+        .w_full()
+        .px_2()
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .rounded(px(theme.radii.row))
+        .text_color(theme.colors.text)
+        .when(selected, |s| s.bg(theme.colors.hover))
+        .when(!disabled, |s| {
+            s.cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .active(move |s| s.bg(theme.colors.active))
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(
+                    div()
+                        .w(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when_some(icon, |this, icon| {
+                            this.child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(icon_color)
+                                    .child(icon),
+                            )
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .text_sm()
+                        .line_clamp(1)
+                        .child(label),
+                ),
+        );
+
+    let mut end = div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .text_xs()
+        .text_color(theme.colors.text_muted);
+
+    if let Some(end_slot) = end_slot {
+        end = end.child(end_slot);
+    }
+
+    if let Some(shortcut) = shortcut {
+        end = end.child(div().font_family("monospace").child(shortcut));
+    }
+    if has_submenu {
+        end = end.child(div().font_family("monospace").child("›"));
     }
     row = row.child(end);
 

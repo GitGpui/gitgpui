@@ -15,11 +15,17 @@ pub(super) fn checkout_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
     vec![Effect::CheckoutBranch { repo_id, name }]
 }
 
-pub(super) fn checkout_remote_branch(repo_id: RepoId, remote: String, name: String) -> Vec<Effect> {
+pub(super) fn checkout_remote_branch(
+    repo_id: RepoId,
+    remote: String,
+    branch: String,
+    local_branch: String,
+) -> Vec<Effect> {
     vec![Effect::CheckoutRemoteBranch {
         repo_id,
         remote,
-        name,
+        branch,
+        local_branch,
     }]
 }
 
@@ -155,12 +161,19 @@ pub(super) fn fetch_all(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
+    let prune = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .map(|r| r.fetch_prune_deleted_remote_tracking_branches)
+        .unwrap_or(true);
+
     if repos.contains_key(&repo_id)
         && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
     {
         repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
     }
-    vec![Effect::FetchAll { repo_id }]
+    vec![Effect::FetchAll { repo_id, prune }]
 }
 
 pub(super) fn pull(

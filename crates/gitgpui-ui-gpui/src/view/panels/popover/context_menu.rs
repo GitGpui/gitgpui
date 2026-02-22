@@ -372,17 +372,6 @@ impl PopoverHost {
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
-            ContextMenuAction::CheckoutRemoteBranch {
-                repo_id,
-                remote,
-                name,
-            } => {
-                self.store.dispatch(Msg::CheckoutRemoteBranch {
-                    repo_id,
-                    remote,
-                    name,
-                });
-            }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
@@ -401,6 +390,11 @@ impl PopoverHost {
                     cx.notify();
                 });
                 self.schedule_ui_settings_persist(cx);
+                close_after_action = false;
+            }
+            ContextMenuAction::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
+                self.store
+                    .dispatch(Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled });
                 close_after_action = false;
             }
             ContextMenuAction::StagePath { repo_id, path } => {
@@ -769,6 +763,7 @@ impl PopoverHost {
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
         let model_for_keys = model.clone();
+        let state = self.state.clone();
 
         let focus = self.context_menu_focus_handle.clone();
         let current_selected = self.context_menu_selected_ix;
@@ -883,17 +878,121 @@ impl PopoverHost {
                             action,
                         } => {
                             let selected = selected_for_render == Some(ix);
-                            zed::context_menu_entry(
-                                ("context_menu_entry", ix),
-                                theme,
-                                selected,
-                                disabled,
-                                icon,
-                                label,
-                                shortcut,
-                                false,
-                            )
-                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            let row = if let ContextMenuAction::FetchAll { repo_id } =
+                                action.as_ref()
+                            {
+                                let repo_id = *repo_id;
+                                let prune = state
+                                    .repos
+                                    .iter()
+                                    .find(|r| r.id == repo_id)
+                                    .map(|r| r.fetch_prune_deleted_remote_tracking_branches)
+                                    .unwrap_or(true);
+                                let toggle_action =
+                                    ContextMenuAction::SetFetchPruneDeletedRemoteTrackingBranches {
+                                        repo_id,
+                                        enabled: !prune,
+                                    };
+
+                                let pill_bg = if theme.is_dark {
+                                    theme.colors.window_bg
+                                } else {
+                                    theme.colors.border
+                                };
+                                let pill_border = if theme.is_dark {
+                                    theme.colors.border
+                                } else {
+                                    theme.colors.active_section
+                                };
+
+                                let pill_hover_bg = {
+                                    let mut bg = theme.colors.accent;
+                                    bg.a = if theme.is_dark { 0.16 } else { 0.12 };
+                                    bg
+                                };
+                                let pill_active_bg = {
+                                    let mut bg = theme.colors.accent;
+                                    bg.a = if theme.is_dark { 0.26 } else { 0.20 };
+                                    bg
+                                };
+
+                                let pill = div()
+                                    .id(("context_menu_fetch_prune_pill", ix))
+                                    .px_2()
+                                    .py(px(2.0))
+                                    .rounded(px(theme.radii.pill))
+                                    .bg(pill_bg)
+                                    .border_1()
+                                    .border_color(pill_border)
+                                    .text_xs()
+                                    .text_color(theme.colors.text)
+                                    .when(disabled, |pill| {
+                                        pill.text_color(theme.colors.text_muted)
+                                            .cursor(gpui::CursorStyle::Arrow)
+                                    })
+                                    .when(!disabled, |pill| {
+                                        pill.cursor(gpui::CursorStyle::PointingHand)
+                                            .hover(move |pill| {
+                                                pill.bg(pill_hover_bg)
+                                                    .border_color(theme.colors.accent)
+                                            })
+                                            .active(move |pill| {
+                                                pill.bg(pill_active_bg)
+                                                    .border_color(theme.colors.accent)
+                                            })
+                                            .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+                                            .on_click(cx.listener(
+                                                move |this, _e: &ClickEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.context_menu_activate_action(
+                                                        toggle_action.clone(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                    })
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .child("Prune branches")
+                                            .when(prune, |this| {
+                                                this.child(
+                                                    div()
+                                                        .text_color(theme.colors.success)
+                                                        .child("✓"),
+                                                )
+                                            }),
+                                    )
+                                    .into_any_element();
+
+                                zed::context_menu_entry_with_end_slot(
+                                    ("context_menu_entry", ix),
+                                    theme,
+                                    selected,
+                                    disabled,
+                                    icon,
+                                    label,
+                                    Some(pill),
+                                    shortcut,
+                                    false,
+                                )
+                            } else {
+                                zed::context_menu_entry(
+                                    ("context_menu_entry", ix),
+                                    theme,
+                                    selected,
+                                    disabled,
+                                    icon,
+                                    label,
+                                    shortcut,
+                                    false,
+                                )
+                            };
+
+                            row.on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 if *hovering {
                                     this.context_menu_selected_ix = Some(ix);
                                     cx.notify();

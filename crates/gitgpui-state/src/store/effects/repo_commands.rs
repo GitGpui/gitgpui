@@ -227,12 +227,13 @@ pub(super) fn schedule_fetch_all(
     repos: &RepoMap,
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
+    prune: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let _ = msg_tx.send(Msg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::FetchAll,
-            result: repo.fetch_all_with_output(),
+            result: repo.fetch_all_with_output_prune(prune),
         });
     });
 }

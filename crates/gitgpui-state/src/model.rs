@@ -181,6 +181,7 @@ pub struct RepoState {
 
     pub open: Loadable<()>,
     pub history_scope: LogScope,
+    pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub head_branch_rev: u64,
     pub upstream_divergence: Loadable<Option<UpstreamDivergence>>,
@@ -241,6 +242,7 @@ impl RepoState {
             commit_in_flight: 0,
             open: Loadable::Loading,
             history_scope: LogScope::CurrentBranch,
+            fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             head_branch_rev: 0,
             upstream_divergence: Loadable::NotLoaded,

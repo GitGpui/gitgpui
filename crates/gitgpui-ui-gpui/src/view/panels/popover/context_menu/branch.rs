@@ -37,10 +37,12 @@ pub(super) fn model(
             },
             BranchSection::Remote => {
                 if let Some((remote, branch)) = name.split_once('/') {
-                    ContextMenuAction::CheckoutRemoteBranch {
-                        repo_id,
-                        remote: remote.to_string(),
-                        name: branch.to_string(),
+                    ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::CheckoutRemoteBranchPrompt {
+                            repo_id,
+                            remote: remote.to_string(),
+                            branch: branch.to_string(),
+                        },
                     }
                 } else {
                     ContextMenuAction::CheckoutBranch {

@@ -134,7 +134,12 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn checkout_branch(&self, name: &str) -> Result<()>;
-    fn checkout_remote_branch(&self, _remote: &str, _branch: &str) -> Result<()> {
+    fn checkout_remote_branch(
+        &self,
+        _remote: &str,
+        _branch: &str,
+        _local_branch: &str,
+    ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote branch checkout is not implemented for this backend",
         )))
@@ -229,6 +234,11 @@ pub trait GitRepository: Send + Sync {
     fn fetch_all_with_output(&self) -> Result<CommandOutput> {
         self.fetch_all()?;
         Ok(CommandOutput::empty_success("git fetch --all"))
+    }
+
+    fn fetch_all_with_output_prune(&self, prune: bool) -> Result<CommandOutput> {
+        let _ = prune;
+        self.fetch_all_with_output()
     }
 
     fn pull_with_output(&self, mode: PullMode) -> Result<CommandOutput> {

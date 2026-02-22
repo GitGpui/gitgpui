@@ -37,6 +37,11 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         if let Some(scope) = session::load_repo_history_scope(&spec.workdir) {
             repo_state.history_scope = scope;
         }
+        if let Some(enabled) =
+            session::load_repo_fetch_prune_deleted_remote_tracking_branches(&spec.workdir)
+        {
+            repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
+        }
         repo_state
     });
     state.active_repo = Some(repo_id);
@@ -60,6 +65,8 @@ pub(super) fn restore_session(
     state.active_repo = None;
 
     let repo_history_scopes = session::load_repo_history_scopes();
+    let repo_fetch_prune_deleted_remote_tracking_branches =
+        session::load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo();
     let active_repo = active_repo.map(normalize_repo_path);
     let mut active_repo_id: Option<RepoId> = None;
 
@@ -87,6 +94,12 @@ pub(super) fn restore_session(
             let workdir_key = spec.workdir.to_string_lossy();
             if let Some(scope) = repo_history_scopes.get(workdir_key.as_ref()).copied() {
                 repo_state.history_scope = scope;
+            }
+            if let Some(enabled) = repo_fetch_prune_deleted_remote_tracking_branches
+                .get(workdir_key.as_ref())
+                .copied()
+            {
+                repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
             }
             repo_state
         });
@@ -170,6 +183,27 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
         }
     }
     effects
+}
+
+pub(super) fn set_fetch_prune_deleted_remote_tracking_branches(
+    state: &mut AppState,
+    repo_id: RepoId,
+    enabled: bool,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    if repo_state.fetch_prune_deleted_remote_tracking_branches == enabled {
+        return Vec::new();
+    }
+
+    repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
+    let _ = session::persist_repo_fetch_prune_deleted_remote_tracking_branches(
+        &repo_state.spec.workdir,
+        enabled,
+    );
+    Vec::new()
 }
 
 pub(super) fn reorder_repo_tabs(

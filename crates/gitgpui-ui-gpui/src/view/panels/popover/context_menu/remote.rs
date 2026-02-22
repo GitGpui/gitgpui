@@ -4,6 +4,14 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
     let mut items = vec![ContextMenuItem::Header("Remote".into())];
     items.push(ContextMenuItem::Label(name.to_owned().into()));
     items.push(ContextMenuItem::Separator);
+    items.push(ContextMenuItem::Entry {
+        label: "Fetch all".into(),
+        icon: Some("↓".into()),
+        shortcut: Some("F".into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::FetchAll { repo_id }),
+    });
+    items.push(ContextMenuItem::Separator);
 
     for (label, kind) in [
         ("Edit fetch URL…", RemoteUrlKind::Fetch),

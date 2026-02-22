@@ -26,10 +26,11 @@ pub(super) fn schedule_checkout_remote_branch(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     remote: String,
-    name: String,
+    branch: String,
+    local_branch: String,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.checkout_remote_branch(&remote, &name);
+        let result = repo.checkout_remote_branch(&remote, &branch, &local_branch);
         let refresh = result.is_ok();
         if refresh {
             let _ = msg_tx.send(Msg::RefreshBranches { repo_id });

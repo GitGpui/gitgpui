@@ -100,7 +100,8 @@ pub enum Effect {
     CheckoutRemoteBranch {
         repo_id: RepoId,
         remote: String,
-        name: String,
+        branch: String,
+        local_branch: String,
     },
     CheckoutCommit {
         repo_id: RepoId,
@@ -211,6 +212,7 @@ pub enum Effect {
     },
     FetchAll {
         repo_id: RepoId,
+        prune: bool,
     },
     Pull {
         repo_id: RepoId,

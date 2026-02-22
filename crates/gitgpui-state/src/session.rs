@@ -67,6 +67,7 @@ struct UiSessionFileV2 {
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
+    repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
 
 const SESSION_FILE_VERSION_V1: u32 = 1;
@@ -234,6 +235,67 @@ pub fn persist_repo_history_scope_to_path(
     file.repo_history_scopes
         .get_or_insert_with(BTreeMap::new)
         .insert(workdir_key, scope.into());
+
+    persist_to_path(session_file_path, &file)
+}
+
+pub fn load_repo_fetch_prune_deleted_remote_tracking_branches(workdir: &Path) -> Option<bool> {
+    let session_file_path = default_session_file_path()?;
+    load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(workdir, &session_file_path)
+}
+
+pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_from_path(
+    workdir: &Path,
+    session_file_path: &Path,
+) -> Option<bool> {
+    let workdir_key = workdir.to_string_lossy();
+    let file = load_file_v2(session_file_path)?;
+    let settings = file.repo_fetch_prune_deleted_remote_tracking_branches?;
+    settings.get(workdir_key.as_ref()).copied()
+}
+
+pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo() -> BTreeMap<String, bool> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return BTreeMap::new();
+    };
+    load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo_from_path(&session_file_path)
+}
+
+pub fn load_repo_fetch_prune_deleted_remote_tracking_branches_by_repo_from_path(
+    session_file_path: &Path,
+) -> BTreeMap<String, bool> {
+    let Some(file) = load_file_v2(session_file_path) else {
+        return BTreeMap::new();
+    };
+    file.repo_fetch_prune_deleted_remote_tracking_branches
+        .unwrap_or_default()
+}
+
+pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches(
+    workdir: &Path,
+    enabled: bool,
+) -> io::Result<()> {
+    let Some(session_file_path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
+        workdir,
+        enabled,
+        &session_file_path,
+    )
+}
+
+pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
+    workdir: &Path,
+    enabled: bool,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+    let workdir_key = workdir.to_string_lossy().to_string();
+    file.repo_fetch_prune_deleted_remote_tracking_branches
+        .get_or_insert_with(BTreeMap::new)
+        .insert(workdir_key, enabled);
 
     persist_to_path(session_file_path, &file)
 }

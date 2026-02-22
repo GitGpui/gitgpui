@@ -393,6 +393,11 @@ enum PopoverKind {
     RepoPicker,
     BranchPicker,
     CreateBranch,
+    CheckoutRemoteBranchPrompt {
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+    },
     StashPrompt,
     CloneRepo,
     Settings,
@@ -1350,7 +1355,7 @@ impl Render for GitGpuiView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitgpui_core::domain::{Branch, CommitId, RemoteBranch, RepoSpec, Upstream};
+    use gitgpui_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream};
     use std::path::PathBuf;
 
     #[test]
@@ -1437,6 +1442,52 @@ mod tests {
                     name: "main".to_string()
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn remote_headers_include_remotes_with_no_branches() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::new(),
+            },
+        );
+
+        repo.remotes = Loadable::Ready(vec![
+            Remote {
+                name: "origin".to_string(),
+                url: Some("https://example.com/origin.git".to_string()),
+            },
+            Remote {
+                name: "upstream".to_string(),
+                url: Some("https://example.com/upstream.git".to_string()),
+            },
+        ]);
+        repo.remote_branches = Loadable::Ready(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: CommitId("deadbeef".to_string()),
+        }]);
+
+        let rows = GitGpuiView::branch_sidebar_rows(&repo);
+        let mut headers = rows
+            .iter()
+            .filter_map(|r| match r {
+                BranchSidebarRow::RemoteHeader { name } => Some(name.as_ref().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        headers.sort();
+        headers.dedup();
+
+        assert!(
+            headers.contains(&"origin".to_string()),
+            "expected origin remote header"
+        );
+        assert!(
+            headers.contains(&"upstream".to_string()),
+            "expected upstream remote header"
         );
     }
 

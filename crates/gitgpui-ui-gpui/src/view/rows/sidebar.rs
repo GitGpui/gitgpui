@@ -817,7 +817,7 @@ impl SidebarPaneView {
                     let branch_tooltip: SharedString = tooltip.clone();
 
                     row = row
-                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
                                 return;
                             }
@@ -834,12 +834,16 @@ impl SidebarPaneView {
                                     if let Some((remote, branch)) =
                                         full_name_for_checkout.as_ref().split_once('/')
                                     {
-                                        this.store.dispatch(Msg::CheckoutRemoteBranch {
-                                            repo_id,
-                                            remote: remote.to_string(),
-                                            name: branch.to_string(),
-                                        });
-                                        this.rebuild_diff_cache(cx);
+                                        this.open_popover_at(
+                                            PopoverKind::CheckoutRemoteBranchPrompt {
+                                                repo_id,
+                                                remote: remote.to_string(),
+                                                branch: branch.to_string(),
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
                                         cx.notify();
                                     }
                                 }

@@ -46,6 +46,11 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("scope", scope)
                 .finish(),
+            Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => f
+                .debug_struct("SetFetchPruneDeletedRemoteTrackingBranches")
+                .field("repo_id", repo_id)
+                .field("enabled", enabled)
+                .finish(),
             Msg::LoadMoreHistory { repo_id } => f
                 .debug_struct("LoadMoreHistory")
                 .field("repo_id", repo_id)
@@ -137,12 +142,14 @@ impl std::fmt::Debug for Msg {
             Msg::CheckoutRemoteBranch {
                 repo_id,
                 remote,
-                name,
+                branch,
+                local_branch,
             } => f
                 .debug_struct("CheckoutRemoteBranch")
                 .field("repo_id", repo_id)
                 .field("remote", remote)
-                .field("name", name)
+                .field("branch", branch)
+                .field("local_branch", local_branch)
                 .finish(),
             Msg::CheckoutCommit { repo_id, commit_id } => f
                 .debug_struct("CheckoutCommit")

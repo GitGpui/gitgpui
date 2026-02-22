@@ -19,8 +19,8 @@ pub use components::{empty_state, key_value_monospace_value, split_columns_heade
 #[cfg(test)]
 pub use components::{panel, pill};
 pub use context_menu::{
-    context_menu, context_menu_entry, context_menu_header, context_menu_label,
-    context_menu_separator,
+    context_menu, context_menu_entry, context_menu_entry_with_end_slot, context_menu_header,
+    context_menu_label, context_menu_separator,
 };
 pub use diff_stat::diff_stat;
 pub use picker_prompt::PickerPrompt;

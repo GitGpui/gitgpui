@@ -1,9 +1,9 @@
 use super::*;
 
 pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
-    let repo_id = this.active_repo_id();
-    let disabled = repo_id.is_none();
-    let repo_id = repo_id.unwrap_or(RepoId(0));
+    let active_repo_id = this.active_repo_id();
+    let disabled = active_repo_id.is_none();
+    let repo_id = active_repo_id.unwrap_or(RepoId(0));
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Pull".into()),

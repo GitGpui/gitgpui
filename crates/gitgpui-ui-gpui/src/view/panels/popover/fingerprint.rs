@@ -69,6 +69,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
 
         // Popovers that carry an explicit repo id.
         PopoverKind::ResetPrompt { repo_id, .. }
+        | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::RebasePrompt { repo_id }
         | PopoverKind::CreateTagPrompt { repo_id, .. }
         | PopoverKind::RemoteAddPrompt { repo_id }
@@ -211,6 +212,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         // Most prompt-style popovers don't require live state updates.
         PopoverKind::ResetPrompt { .. }
+        | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::RebasePrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::CommitMenu { .. }
@@ -230,6 +232,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::RepoPicker => 0u8.hash(hasher),
         PopoverKind::BranchPicker => 1u8.hash(hasher),
         PopoverKind::CreateBranch => 2u8.hash(hasher),
+        PopoverKind::CheckoutRemoteBranchPrompt {
+            repo_id,
+            remote,
+            branch,
+        } => {
+            50u8.hash(hasher);
+            repo_id.hash(hasher);
+            remote.hash(hasher);
+            branch.hash(hasher);
+        }
         PopoverKind::StashPrompt => 3u8.hash(hasher),
         PopoverKind::CloneRepo => 4u8.hash(hasher),
         PopoverKind::Settings => 5u8.hash(hasher),

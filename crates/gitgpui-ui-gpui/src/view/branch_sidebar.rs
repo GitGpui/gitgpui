@@ -209,16 +209,17 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
             });
             remote_section_is_loading_or_error = true;
         }
-        Loadable::NotLoaded => {
-            if let Loadable::Ready(known) = &repo.remotes {
-                for remote in known {
-                    remotes.entry(remote.name.clone()).or_default();
-                }
-            }
-        }
+        Loadable::NotLoaded => {}
     }
 
     if !remote_section_is_loading_or_error {
+        if let Loadable::Ready(known) = &repo.remotes {
+            // Ensure remotes with no local remote-tracking branches are still visible (e.g. newly
+            // added remotes before an initial fetch).
+            for remote in known {
+                remotes.entry(remote.name.clone()).or_default();
+            }
+        }
         if remotes.is_empty() {
             rows.push(BranchSidebarRow::Placeholder {
                 section: BranchSection::Remote,

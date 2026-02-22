@@ -39,11 +39,6 @@ enum ContextMenuAction {
         repo_id: RepoId,
         name: String,
     },
-    CheckoutRemoteBranch {
-        repo_id: RepoId,
-        remote: String,
-        name: String,
-    },
     DeleteBranch {
         repo_id: RepoId,
         name: String,
@@ -56,6 +51,10 @@ enum ContextMenuAction {
         show_author: bool,
         show_date: bool,
         show_sha: bool,
+    },
+    SetFetchPruneDeletedRemoteTrackingBranches {
+        repo_id: RepoId,
+        enabled: bool,
     },
     #[allow(dead_code)]
     StagePath {
