@@ -15,6 +15,7 @@ mod file_history;
 mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
+mod merge_abort_confirm;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_prompt;
@@ -909,6 +910,7 @@ impl PopoverHost {
             | PopoverKind::SubmoduleRemoveConfirm { .. }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
@@ -1360,6 +1362,9 @@ impl PopoverHost {
             }
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::MergeAbortConfirm { repo_id } => {
+                merge_abort_confirm::panel(self, repo_id, cx)
             }
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)

@@ -101,6 +101,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) conflict_resolver_input: Entity<zed::TextInput>,
     _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in super::super) conflict_resolver: ConflictResolverUiState,
+    pub(in super::super) conflict_resolver_vsplit_ratio: f32,
+    pub(in super::super) conflict_resolver_vsplit_resize: Option<ConflictVSplitResizeState>,
     pub(in super::super) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
     pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
@@ -373,6 +375,8 @@ impl MainPaneView {
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
+            conflict_resolver_vsplit_ratio: 0.5,
+            conflict_resolver_vsplit_resize: None,
             conflict_diff_segments_cache_split: HashMap::default(),
             conflict_diff_segments_cache_inline: HashMap::default(),
             conflict_resolved_preview_path: None,
@@ -1510,6 +1514,28 @@ impl MainPaneView {
             .max(three_way_ours_lines.len())
             .max(three_way_theirs_lines.len());
 
+        let three_way_conflict_ranges = {
+            let mut ranges = Vec::new();
+            let mut line_offset = 0usize;
+            for seg in &marker_segments {
+                match seg {
+                    conflict_resolver::ConflictSegment::Text(text) => {
+                        line_offset += text.lines().count();
+                    }
+                    conflict_resolver::ConflictSegment::Block(block) => {
+                        let count = if block.ours.is_empty() {
+                            0
+                        } else {
+                            block.ours.lines().count()
+                        };
+                        ranges.push(line_offset..line_offset + count);
+                        line_offset += count;
+                    }
+                }
+            }
+            ranges
+        };
+
         let view_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
         {
@@ -1561,15 +1587,18 @@ impl MainPaneView {
             three_way_ours_lines,
             three_way_theirs_lines,
             three_way_len,
+            three_way_conflict_ranges,
             diff_mode,
             nav_anchor,
             split_selected: std::collections::BTreeSet::new(),
             inline_selected: std::collections::BTreeSet::new(),
         };
 
+        let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
+            input.set_line_ending(line_ending);
             input.set_text(resolved, cx);
         });
 
@@ -1781,6 +1810,29 @@ impl MainPaneView {
             return;
         }
         block.choice = choice;
+        let resolved =
+            conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
+        self.conflict_resolver_set_output(resolved, cx);
+    }
+
+    pub(in super::super) fn conflict_resolver_pick_all_conflicts(
+        &mut self,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver_conflict_count() == 0 {
+            return;
+        }
+        for seg in &mut self.conflict_resolver.marker_segments {
+            if let conflict_resolver::ConflictSegment::Block(block) = seg {
+                if matches!(choice, conflict_resolver::ConflictChoice::Base)
+                    && block.base.is_none()
+                {
+                    continue;
+                }
+                block.choice = choice;
+            }
+        }
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);

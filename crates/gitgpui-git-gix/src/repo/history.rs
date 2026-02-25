@@ -50,6 +50,15 @@ impl GixRepo {
         run_git_with_output(cmd, "git rebase --abort")
     }
 
+    pub(super) fn merge_abort_with_output_impl(&self) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("merge")
+            .arg("--abort");
+        run_git_with_output(cmd, "git merge --abort")
+    }
+
     pub(super) fn rebase_in_progress_impl(&self) -> Result<bool> {
         let output = Command::new("git")
             .arg("-C")

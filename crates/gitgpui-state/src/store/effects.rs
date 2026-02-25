@@ -251,6 +251,9 @@ pub(super) fn schedule_effect(
         Effect::RebaseAbort { repo_id } => {
             repo_commands::schedule_rebase_abort(executor, repos, msg_tx, repo_id)
         }
+        Effect::MergeAbort { repo_id } => {
+            repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)
+        }
         Effect::CreateTag {
             repo_id,
             name,

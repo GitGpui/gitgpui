@@ -371,6 +371,10 @@ impl std::fmt::Debug for Msg {
                 .debug_struct("RebaseAbort")
                 .field("repo_id", repo_id)
                 .finish(),
+            Msg::MergeAbort { repo_id } => f
+                .debug_struct("MergeAbort")
+                .field("repo_id", repo_id)
+                .finish(),
             Msg::CreateTag {
                 repo_id,
                 name,

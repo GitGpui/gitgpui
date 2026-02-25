@@ -177,6 +177,11 @@ pub trait GitRepository: Send + Sync {
             "git rebase --abort is not implemented for this backend",
         )))
     }
+    fn merge_abort_with_output(&self) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git merge --abort is not implemented for this backend",
+        )))
+    }
     fn rebase_in_progress(&self) -> Result<bool> {
         Ok(false)
     }

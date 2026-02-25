@@ -271,6 +271,7 @@ fn status_row(
     let path_for_stage = Arc::clone(&path);
     let path_for_row = Arc::clone(&path);
     let path_for_menu = Arc::clone(&path);
+    let path_for_conflict_stage = Arc::clone(&path);
     let is_conflicted = entry.kind == FileStatusKind::Conflicted;
     let stage_label = if is_conflicted {
         "Resolve…"
@@ -356,6 +357,26 @@ fn status_row(
                 cx.notify();
             }
         }));
+
+    let conflict_stage_button = if is_conflicted {
+        Some(
+            zed::Button::new(format!("conflict_stage_btn_{ix}"), "Stage")
+                .style(zed::ButtonStyle::Outlined)
+                .on_click(theme, cx, move |this, _e, window, cx| {
+                    cx.stop_propagation();
+                    this.focus_diff_panel(window, cx);
+                    this.store.dispatch(Msg::StagePaths {
+                        repo_id,
+                        paths: vec![(*path_for_conflict_stage).clone()],
+                    });
+                    this.clear_status_multi_selection(repo_id);
+                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                    cx.notify();
+                }),
+        )
+    } else {
+        None
+    };
 
     let path_display_for_label = path_display.clone();
 
@@ -463,6 +484,8 @@ fn status_row(
                 .items_center()
                 .invisible()
                 .group_hover(row_group.clone(), |d| d.visible())
+                .gap_1()
+                .when_some(conflict_stage_button, |d, btn| d.child(btn))
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {

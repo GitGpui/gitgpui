@@ -268,6 +268,9 @@ pub enum Msg {
     RebaseAbort {
         repo_id: RepoId,
     },
+    MergeAbort {
+        repo_id: RepoId,
+    },
     CreateTag {
         repo_id: RepoId,
         name: String,

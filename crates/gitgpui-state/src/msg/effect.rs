@@ -258,6 +258,9 @@ pub enum Effect {
     RebaseAbort {
         repo_id: RepoId,
     },
+    MergeAbort {
+        repo_id: RepoId,
+    },
     CreateTag {
         repo_id: RepoId,
         name: String,

@@ -16,6 +16,7 @@ actions!(
     [
         Backspace,
         Delete,
+        Enter,
         Left,
         Right,
         WordLeft,
@@ -137,6 +138,7 @@ pub struct TextInput {
     read_only: bool,
     chromeless: bool,
     soft_wrap: bool,
+    line_ending: &'static str,
     style: TextInputStyle,
 
     selected_range: Range<usize>,
@@ -168,6 +170,7 @@ impl TextInput {
             read_only: options.read_only,
             chromeless: options.chromeless,
             soft_wrap: options.soft_wrap,
+            line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             selected_range: 0..0,
             selection_reversed: false,
@@ -195,6 +198,7 @@ impl TextInput {
             read_only: options.read_only,
             chromeless: options.chromeless,
             soft_wrap: options.soft_wrap,
+            line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             selected_range: 0..0,
             selection_reversed: false,
@@ -256,6 +260,22 @@ impl TextInput {
         self.soft_wrap = soft_wrap;
         self.wrap_cache = None;
         cx.notify();
+    }
+
+    pub fn set_line_ending(&mut self, line_ending: &'static str) {
+        self.line_ending = line_ending;
+    }
+
+    /// Detect line ending from file content. Returns `\r\n` if CRLF is found,
+    /// otherwise falls back to the OS default (`\n` on Unix, `\r\n` on Windows).
+    pub fn detect_line_ending(content: &str) -> &'static str {
+        if content.contains("\r\n") {
+            "\r\n"
+        } else if cfg!(windows) {
+            "\r\n"
+        } else {
+            "\n"
+        }
     }
 
     fn sanitize_insert_text(&self, text: &str) -> Option<String> {
@@ -518,6 +538,13 @@ impl TextInput {
             self.select_to(self.next_boundary(self.cursor_offset()), cx)
         }
         self.replace_text_in_range(None, "", window, cx)
+    }
+
+    fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
+        if self.read_only || !self.multiline {
+            return;
+        }
+        self.replace_text_in_range(None, self.line_ending, window, cx);
     }
 
     fn show_character_palette(
@@ -1548,6 +1575,7 @@ impl Render for TextInput {
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(Self::enter))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::word_left))

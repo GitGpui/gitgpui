@@ -265,6 +265,7 @@ pub(super) fn reduce(
         Msg::Rebase { repo_id, onto } => actions_emit_effects::rebase(repo_id, onto),
         Msg::RebaseContinue { repo_id } => actions_emit_effects::rebase_continue(repo_id),
         Msg::RebaseAbort { repo_id } => actions_emit_effects::rebase_abort(repo_id),
+        Msg::MergeAbort { repo_id } => actions_emit_effects::merge_abort(repo_id),
         Msg::CreateTag {
             repo_id,
             name,

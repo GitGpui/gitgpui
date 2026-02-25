@@ -304,6 +304,10 @@ pub(super) fn rebase_abort(repo_id: RepoId) -> Vec<Effect> {
     vec![Effect::RebaseAbort { repo_id }]
 }
 
+pub(super) fn merge_abort(repo_id: RepoId) -> Vec<Effect> {
+    vec![Effect::MergeAbort { repo_id }]
+}
+
 pub(super) fn create_tag(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
     vec![Effect::CreateTag {
         repo_id,
@@ -494,6 +498,7 @@ pub(super) fn repo_command_finished(
                         | RepoCommandKind::Rebase { .. }
                         | RepoCommandKind::RebaseContinue
                         | RepoCommandKind::RebaseAbort
+                        | RepoCommandKind::MergeAbort
                 ) {
                     repo_state.diff_target = None;
                     repo_state.diff = Loadable::NotLoaded;

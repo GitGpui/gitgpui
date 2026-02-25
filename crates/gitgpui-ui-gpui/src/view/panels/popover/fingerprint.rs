@@ -95,6 +95,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::Blame { repo_id, .. }
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
+        | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::DeleteRemoteBranchConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
@@ -211,7 +212,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         // Most prompt-style popovers don't require live state updates.
-        PopoverKind::ResetPrompt { .. }
+        PopoverKind::MergeAbortConfirm { .. }
+        | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::RebasePrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
@@ -481,6 +483,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
         }
         PopoverKind::HistoryColumnSettings => 49u8.hash(hasher),
+        PopoverKind::MergeAbortConfirm { repo_id } => {
+            51u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
     }
 }
 

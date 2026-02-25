@@ -25,6 +25,7 @@ pub fn run(backend: Arc<dyn GitBackend>) {
             cx.bind_keys([
                 KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
                 KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
+                KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
                 KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
                 KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
                 // Word navigation (Ctrl on Windows/Linux, Option on macOS)

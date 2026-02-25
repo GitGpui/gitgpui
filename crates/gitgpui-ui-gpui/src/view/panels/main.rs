@@ -785,6 +785,37 @@ impl MainPaneView {
                                     this.conflict_resolver_reset_output_from_markers(cx);
                                 };
 
+                            let pick_all_base =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_pick_all_conflicts(
+                                        conflict_resolver::ConflictChoice::Base,
+                                        cx,
+                                    );
+                                };
+                            let pick_all_local =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_pick_all_conflicts(
+                                        conflict_resolver::ConflictChoice::Ours,
+                                        cx,
+                                    );
+                                };
+                            let pick_all_remote =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_pick_all_conflicts(
+                                        conflict_resolver::ConflictChoice::Theirs,
+                                        cx,
+                                    );
+                                };
+
                             let view_mode_controls = div()
                                 .flex()
                                 .items_center()
@@ -878,6 +909,19 @@ impl MainPaneView {
                             let active_conflict = self.conflict_resolver.active_conflict;
                             let has_conflicts = conflict_count > 0;
 
+                            let any_block_missing_base = has_conflicts
+                                && self
+                                    .conflict_resolver
+                                    .marker_segments
+                                    .iter()
+                                    .any(|seg| {
+                                        matches!(
+                                            seg,
+                                            conflict_resolver::ConflictSegment::Block(b)
+                                                if b.base.is_none()
+                                        )
+                                    });
+
                             let active_block_has_base = if has_conflicts {
                                 let mut seen = 0usize;
                                 self.conflict_resolver
@@ -964,6 +1008,30 @@ impl MainPaneView {
                                         .disabled(!has_conflicts && file.theirs.is_none())
                                         .on_click(theme, cx, set_output_remote),
                                 )
+                                .when(has_conflicts && conflict_count > 1, |d| {
+                                    d.child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h(px(12.0))
+                                            .bg(theme.colors.border),
+                                    )
+                                    .child(
+                                        zed::Button::new("conflict_all_base", "All → A")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .disabled(any_block_missing_base)
+                                            .on_click(theme, cx, pick_all_base),
+                                    )
+                                    .child(
+                                        zed::Button::new("conflict_all_local", "All → B")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .on_click(theme, cx, pick_all_local),
+                                    )
+                                    .child(
+                                        zed::Button::new("conflict_all_remote", "All → C")
+                                            .style(zed::ButtonStyle::Transparent)
+                                            .on_click(theme, cx, pick_all_remote),
+                                    )
+                                })
                                 .child(
                                     zed::Button::new(
                                         "conflict_reset_markers",
@@ -1012,27 +1080,45 @@ impl MainPaneView {
                                     d.child(
                                         div()
                                             .flex_1()
+                                            .min_w(px(0.0))
                                             .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Base (A, index :1)"),
                                     )
                                     .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w(px(0.0))
                                             .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Local (B, index :2)"),
                                     )
                                     .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                     .child(
                                         div()
                                             .flex_1()
+                                            .min_w(px(0.0))
                                             .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Remote (C, index :3)"),
                                     )
                                 })
@@ -1041,18 +1127,30 @@ impl MainPaneView {
                                         d.child(
                                             div()
                                                 .flex_1()
+                                                .min_w(px(0.0))
                                                 .px_2()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .text_xs()
                                                 .text_color(theme.colors.text_muted)
+                                                .whitespace_nowrap()
+                                                .child(div().w(px(38.0)).flex_shrink_0())
                                                 .child("Local (index :2)"),
                                         )
                                         .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                                         .child(
                                             div()
                                                 .flex_1()
+                                                .min_w(px(0.0))
                                                 .px_2()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .text_xs()
                                                 .text_color(theme.colors.text_muted)
+                                                .whitespace_nowrap()
+                                                .child(div().w(px(38.0)).flex_shrink_0())
                                                 .child("Remote (index :3)"),
                                         )
                                     })
@@ -1077,6 +1175,9 @@ impl MainPaneView {
                                 }
                                 .h_full()
                                 .min_h(px(0.0))
+                                .with_horizontal_sizing_behavior(
+                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                )
                                 .track_scroll(self.conflict_resolver_diff_scroll.clone());
 
                                 let scroll_handle = self
@@ -1116,44 +1217,74 @@ impl MainPaneView {
                                 )
                                 .child(start_controls);
 
-                            let preview_count = self.conflict_resolved_preview_lines.len();
-                            let preview_body: AnyElement = if preview_count == 0 {
-                                zed::empty_state(theme, "Preview", "Empty.").into_any_element()
-                            } else {
-                                let list = uniform_list(
-                                    "conflict_resolved_preview_list",
-                                    preview_count,
-                                    cx.processor(Self::render_conflict_resolved_preview_rows),
+                            // Vertical resize handle between merge inputs and resolved output
+                            let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
+                            let handle_h = px(PANE_RESIZE_HANDLE_PX);
+                            let min_section_h = px(80.0);
+
+                            let vsplit_handle = div()
+                                .id("conflict_resolver_vsplit_handle")
+                                .w_full()
+                                .h(handle_h)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor(CursorStyle::ResizeUpDown)
+                                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
+                                .active(move |s| s.bg(theme.colors.active))
+                                .child(div().h(px(1.0)).w_full().bg(theme.colors.border))
+                                .on_drag(
+                                    ConflictVSplitResizeHandle::Divider,
+                                    |_handle, _offset, _window, cx| {
+                                        cx.new(|_cx| ConflictVSplitResizeDragGhost)
+                                    },
                                 )
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(self.conflict_resolved_preview_scroll.clone());
-                                let scroll_handle = self
-                                    .conflict_resolved_preview_scroll
-                                    .0
-                                    .borrow()
-                                    .base_handle
-                                    .clone();
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                                        cx.stop_propagation();
+                                        this.conflict_resolver_vsplit_resize =
+                                            Some(ConflictVSplitResizeState {
+                                                start_y: e.position.y,
+                                                start_ratio: this.conflict_resolver_vsplit_ratio,
+                                            });
+                                        cx.notify();
+                                    }),
+                                )
+                                .on_drag_move(cx.listener(
+                                    move |this,
+                                          e: &gpui::DragMoveEvent<ConflictVSplitResizeHandle>,
+                                          _w,
+                                          cx| {
+                                        let Some(state) = this.conflict_resolver_vsplit_resize else {
+                                            return;
+                                        };
 
-                                div()
-                                    .id("conflict_resolved_preview_scroll")
-                                    .relative()
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .bg(theme.colors.window_bg)
-                                    .child(list)
-                                    .child(
-                                        zed::Scrollbar::new(
-                                            "conflict_resolved_preview_scrollbar",
-                                            scroll_handle,
-                                        )
-                                        .render(theme),
-                                    )
-                                    .into_any_element()
-                            };
-
-                            let output_columns_header =
-                                zed::split_columns_header(theme, "Resolved (editable)", "Preview");
+                                        let total_h = this.last_window_size.height;
+                                        // Approximate available height (window - chrome)
+                                        let available = (total_h - px(200.0)).max(min_section_h * 2.0);
+                                        let dy = e.event.position.y - state.start_y;
+                                        let mut next_top = (available * state.start_ratio) + dy;
+                                        next_top = next_top.max(min_section_h).min(available - min_section_h);
+                                        this.conflict_resolver_vsplit_ratio =
+                                            (next_top / available).clamp(0.1, 0.9);
+                                        cx.notify();
+                                    },
+                                ))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _e, _w, cx| {
+                                        this.conflict_resolver_vsplit_resize = None;
+                                        cx.notify();
+                                    }),
+                                )
+                                .on_mouse_up_out(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _e, _w, cx| {
+                                        this.conflict_resolver_vsplit_resize = None;
+                                        cx.notify();
+                                    }),
+                                );
 
                             div()
                         .id("conflict_resolver_panel")
@@ -1161,9 +1292,9 @@ impl MainPaneView {
                         .flex_col()
                         .flex_1()
                         .min_h(px(0.0))
-                        .gap_2()
                         .px_2()
                         .py_2()
+                        .gap_1()
                         .child(
                             div()
                                 .text_sm()
@@ -1174,8 +1305,8 @@ impl MainPaneView {
                         .child(top_header)
                         .child(
                             div()
-                                .h(px(240.0))
-                                .min_h(px(0.0))
+                                .flex_basis(relative(vsplit_ratio))
+                                .min_h(min_section_h)
                                 .border_1()
                                 .border_color(theme.colors.border)
                                 .rounded(px(theme.radii.row))
@@ -1186,62 +1317,34 @@ impl MainPaneView {
                                 .child(div().border_t_1().border_color(theme.colors.border))
                                 .child(top_body),
                         )
-	                        .child(div().border_t_1().border_color(theme.colors.border))
-	                        .child(output_header)
-	                        .child(
-	                            div()
-	                                .id("conflict_resolver_output_split")
-	                                .relative()
-	                                .h_full()
-	                                .min_h(px(0.0))
-	                                .flex()
-	                                .flex_col()
-	                                .flex_1()
-	                                .min_h(px(0.0))
-	                                .border_1()
-	                                .border_color(theme.colors.border)
-	                                .rounded(px(theme.radii.row))
-	                                .overflow_hidden()
-	                                .bg(theme.colors.window_bg)
-	                                .child(output_columns_header)
-	                                .child(
-	                                    div()
-	                                        .flex_1()
-	                                        .min_h(px(0.0))
-	                                        .flex()
-	                                        .child(
-	                                            div()
-	                                                .flex_1()
-	                                                .min_w(px(0.0))
-	                                                .h_full()
-	                                                .overflow_hidden()
-	                                                .child(
-	                                                    div()
-	                                                        .id("conflict_resolver_output_scroll")
-	                                                        .h_full()
-	                                                        .min_h(px(0.0))
-	                                                        .overflow_y_scroll()
-	                                                        .child(
-	                                                            div()
-	                                                                .p_2()
-	                                                                .child(
-	                                                                    self.conflict_resolver_input.clone(),
-	                                                                ),
-	                                                        ),
-	                                                ),
-	                                        )
-	                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
-	                                        .child(
-	                                            div()
-	                                                .flex_1()
-	                                                .min_w(px(0.0))
-	                                                .h_full()
-	                                                .overflow_hidden()
-	                                                .child(preview_body),
-	                                        ),
-	                                ),
-	                        )
-	                        .into_any_element()
+                        .child(vsplit_handle)
+                        .child(output_header)
+                        .child(
+                            div()
+                                .id("conflict_resolver_output")
+                                .flex_basis(relative(1.0 - vsplit_ratio))
+                                .min_h(min_section_h)
+                                .border_1()
+                                .border_color(theme.colors.border)
+                                .rounded(px(theme.radii.row))
+                                .overflow_hidden()
+                                .bg(theme.colors.window_bg)
+                                .child(
+                                    div()
+                                        .id("conflict_resolver_output_scroll")
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .overflow_y_scroll()
+                                        .child(
+                                            div()
+                                                .p_2()
+                                                .child(
+                                                    self.conflict_resolver_input.clone(),
+                                                ),
+                                        ),
+                                ),
+                        )
+                        .into_any_element()
                         }
                     }
                 }

@@ -7,6 +7,7 @@ impl MainPaneView {
         matches!(
             conflict,
             Some(gitgpui_core::domain::FileConflictKind::BothModified)
+                | Some(gitgpui_core::domain::FileConflictKind::BothAdded)
         )
     }
 

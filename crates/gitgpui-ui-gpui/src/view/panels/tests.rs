@@ -18,7 +18,7 @@ fn conflict_requires_resolver_only_for_both_modified() {
     assert!(MainPaneView::conflict_requires_resolver(Some(
         K::BothModified
     )));
-    assert!(!MainPaneView::conflict_requires_resolver(Some(
+    assert!(MainPaneView::conflict_requires_resolver(Some(
         K::BothAdded
     )));
     assert!(!MainPaneView::conflict_requires_resolver(Some(

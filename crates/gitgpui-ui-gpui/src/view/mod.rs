@@ -258,6 +258,25 @@ impl Render for DiffSplitResizeDragGhost {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictVSplitResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConflictVSplitResizeState {
+    start_y: Pixels,
+    start_ratio: f32,
+}
+
+struct ConflictVSplitResizeDragGhost;
+
+impl Render for ConflictVSplitResizeDragGhost {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div().w(px(0.0)).h(px(0.0))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 enum DiffTextRegion {
     Inline,
@@ -368,6 +387,7 @@ struct ConflictResolverUiState {
     three_way_ours_lines: Vec<SharedString>,
     three_way_theirs_lines: Vec<SharedString>,
     three_way_len: usize,
+    three_way_conflict_ranges: Vec<Range<usize>>,
     diff_mode: ConflictDiffMode,
     nav_anchor: Option<usize>,
     split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
@@ -390,6 +410,7 @@ impl Default for ConflictResolverUiState {
             three_way_ours_lines: Vec::new(),
             three_way_theirs_lines: Vec::new(),
             three_way_len: 0,
+            three_way_conflict_ranges: Vec::new(),
             diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
             split_selected: std::collections::BTreeSet::new(),
@@ -506,6 +527,9 @@ enum PopoverKind {
         remote: String,
     },
     ForcePushConfirm {
+        repo_id: RepoId,
+    },
+    MergeAbortConfirm {
         repo_id: RepoId,
     },
     ForceDeleteBranchConfirm {

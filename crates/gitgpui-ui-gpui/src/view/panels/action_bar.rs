@@ -23,6 +23,7 @@ impl ActionBarView {
             repo.open_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.upstream_divergence_rev.hash(&mut hasher);
+            repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.status_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
@@ -187,6 +188,10 @@ impl Render for ActionBarView {
                 Loadable::NotLoaded => "—".into(),
             })
             .unwrap_or_else(|| "—".into());
+
+        let is_merging = self
+            .active_repo()
+            .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -560,7 +565,36 @@ impl Render for ActionBarView {
                     .gap_2()
                     .flex_1()
                     .child(repo_picker)
-                    .child(branch_picker),
+                    .child(branch_picker)
+                    .when(is_merging, |d| {
+                        d.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.warning)
+                                        .font_weight(FontWeight::BOLD)
+                                        .child("MERGING"),
+                                )
+                                .child(
+                                    zed::Button::new("abort_merge", "Abort merge")
+                                        .style(zed::ButtonStyle::Danger)
+                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.open_popover_at(
+                                                    PopoverKind::MergeAbortConfirm { repo_id },
+                                                    e.position(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        }),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()

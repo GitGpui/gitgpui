@@ -244,6 +244,10 @@ impl GitRepository for GixRepo {
         self.rebase_abort_with_output_impl()
     }
 
+    fn merge_abort_with_output(&self) -> Result<CommandOutput> {
+        self.merge_abort_with_output_impl()
+    }
+
     fn rebase_in_progress(&self) -> Result<bool> {
         self.rebase_in_progress_impl()
     }

@@ -1,4 +1,3 @@
-use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
 
@@ -10,14 +9,23 @@ impl MainPaneView {
         _cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
+        let active_range = this
+            .conflict_resolver
+            .three_way_conflict_ranges
+            .get(this.conflict_resolver.active_conflict)
+            .cloned();
         range
             .map(|ix| {
                 let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
                 let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
                 let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
+                let is_in_active_conflict =
+                    active_range.as_ref().map_or(false, |r| r.contains(&ix));
 
                 let base = div()
                     .id(("conflict_three_way_base", ix))
+                    .flex_1()
+                    .min_w(px(0.0))
                     .h(px(20.0))
                     .px_2()
                     .flex()
@@ -50,6 +58,8 @@ impl MainPaneView {
 
                 let ours = div()
                     .id(("conflict_three_way_ours", ix))
+                    .flex_1()
+                    .min_w(px(0.0))
                     .h(px(20.0))
                     .px_2()
                     .flex()
@@ -82,6 +92,8 @@ impl MainPaneView {
 
                 let theirs = div()
                     .id(("conflict_three_way_theirs", ix))
+                    .flex_1()
+                    .min_w(px(0.0))
                     .h(px(20.0))
                     .px_2()
                     .flex()
@@ -115,6 +127,12 @@ impl MainPaneView {
                 div()
                     .id(("conflict_three_way_row", ix))
                     .flex()
+                    .when(is_in_active_conflict, |d| {
+                        d.bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.08 } else { 0.06 },
+                        ))
+                    })
                     .child(base)
                     .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
                     .child(ours)
@@ -155,69 +173,6 @@ impl MainPaneView {
                 .map(|ix| this.render_conflict_resolver_inline_row(ix, cx))
                 .collect(),
         }
-    }
-
-    pub(in super::super) fn render_conflict_resolved_preview_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let theme = this.theme;
-        let Some(path) = this.conflict_resolver.path.as_ref() else {
-            return Vec::new();
-        };
-        if this.conflict_resolved_preview_lines.is_empty() {
-            return Vec::new();
-        }
-
-        let syntax_mode =
-            if this.conflict_resolved_preview_lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-                DiffSyntaxMode::Auto
-            } else {
-                DiffSyntaxMode::HeuristicOnly
-            };
-        if this.conflict_resolved_preview_syntax_language.is_none() {
-            this.conflict_resolved_preview_syntax_language =
-                diff_syntax_language_for_path(path.to_string_lossy().as_ref());
-        }
-        let language = this.conflict_resolved_preview_syntax_language;
-
-        range
-            .map(|ix| {
-                let line = this
-                    .conflict_resolved_preview_lines
-                    .get(ix)
-                    .map(String::as_str)
-                    .unwrap_or("");
-
-                let styled = this
-                    .conflict_resolved_preview_segments_cache
-                    .entry(ix)
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text(
-                            theme,
-                            line,
-                            &[],
-                            "",
-                            language,
-                            syntax_mode,
-                            None,
-                        )
-                    });
-
-                let line_no = line_number_string(u32::try_from(ix + 1).ok());
-                diff_canvas::worktree_preview_row_canvas(
-                    theme,
-                    cx.entity(),
-                    ix,
-                    px(0.0),
-                    None,
-                    line_no,
-                    styled,
-                )
-            })
-            .collect()
     }
 
     fn render_conflict_compare_split_row(
@@ -297,6 +252,8 @@ impl MainPaneView {
 
         let left = div()
             .id(("conflict_compare_split_ours", row_ix))
+            .flex_1()
+            .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
             .flex()
@@ -320,6 +277,8 @@ impl MainPaneView {
 
         let right = div()
             .id(("conflict_compare_split_theirs", row_ix))
+            .flex_1()
+            .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
             .flex()
@@ -528,6 +487,8 @@ impl MainPaneView {
 
         let mut left = div()
             .id(("conflict_diff_split_ours", row_ix))
+            .flex_1()
+            .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
             .flex()
@@ -556,6 +517,8 @@ impl MainPaneView {
 
         let mut right = div()
             .id(("conflict_diff_split_theirs", row_ix))
+            .flex_1()
+            .min_w(px(0.0))
             .h(px(20.0))
             .px_2()
             .flex()

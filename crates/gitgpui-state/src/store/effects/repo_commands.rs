@@ -428,6 +428,21 @@ pub(super) fn schedule_rebase_abort(
     });
 }
 
+pub(super) fn schedule_merge_abort(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let _ = msg_tx.send(Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::MergeAbort,
+            result: repo.merge_abort_with_output(),
+        });
+    });
+}
+
 pub(super) fn schedule_create_tag(
     executor: &TaskExecutor,
     repos: &RepoMap,
