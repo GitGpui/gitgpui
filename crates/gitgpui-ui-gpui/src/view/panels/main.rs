@@ -1,8 +1,10 @@
 use super::*;
 
 mod binary_conflict;
+mod decision_conflict;
 mod diff;
 mod history;
+mod keep_delete_conflict;
 mod status_nav;
 
 impl MainPaneView {
@@ -253,9 +255,17 @@ impl MainPaneView {
         .unwrap_or((None, None));
 
         let mut controls = div().flex().items_center().gap_1();
-        if is_conflict_resolver && self.conflict_resolver.is_binary_conflict {
-            // Binary conflicts use CheckoutConflictSide directly; only show
-            // prev/next file navigation in the controls bar.
+        let is_simple_conflict_strategy = matches!(
+            self.conflict_resolver.strategy,
+            Some(
+                gitgpui_core::conflict_session::ConflictResolverStrategy::BinarySidePick
+                    | gitgpui_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
+                    | gitgpui_core::conflict_session::ConflictResolverStrategy::DecisionOnly
+            )
+        );
+        if is_conflict_resolver && is_simple_conflict_strategy {
+            // Binary, keep/delete, and decision-only conflicts handle actions
+            // inline in their dedicated panels; only show file navigation.
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
                 .when_some(next_file_btn, |d, btn| d.child(btn));
@@ -765,14 +775,44 @@ impl MainPaneView {
                             if self.conflict_resolver.is_binary_conflict =>
                         {
                             // Binary/non-UTF8 side-pick resolver panel.
-                            // Clone the file data so we can release the immutable
-                            // borrow on `self` through `repo`.
                             let file_clone = file.clone();
                             let rid = repo_id.unwrap();
-                            // Shadow `repo` to drop the borrow.
                             #[allow(unused_variables)]
                             let repo = ();
                             self.render_binary_conflict_resolver(theme, rid, path, &file_clone, cx)
+                        }
+                        Loadable::Ready(Some(file))
+                            if matches!(
+                                self.conflict_resolver.strategy,
+                                Some(gitgpui_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete)
+                            ) =>
+                        {
+                            // Keep/delete resolver for modify/delete conflicts.
+                            let file_clone = file.clone();
+                            let rid = repo_id.unwrap();
+                            let kind = self.conflict_resolver.conflict_kind.unwrap_or(
+                                gitgpui_core::domain::FileConflictKind::DeletedByUs,
+                            );
+                            #[allow(unused_variables)]
+                            let repo = ();
+                            self.render_keep_delete_conflict_resolver(
+                                theme, rid, path, &file_clone, kind, cx,
+                            )
+                        }
+                        Loadable::Ready(Some(file))
+                            if matches!(
+                                self.conflict_resolver.strategy,
+                                Some(gitgpui_core::conflict_session::ConflictResolverStrategy::DecisionOnly)
+                            ) =>
+                        {
+                            // Decision-only resolver for BothDeleted conflicts.
+                            let file_clone = file.clone();
+                            let rid = repo_id.unwrap();
+                            #[allow(unused_variables)]
+                            let repo = ();
+                            self.render_decision_conflict_resolver(
+                                theme, rid, path, &file_clone, cx,
+                            )
                         }
                         Loadable::Ready(Some(file)) => {
                             let base = file.base.clone().unwrap_or_default();

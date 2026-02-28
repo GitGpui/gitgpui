@@ -1561,6 +1561,8 @@ impl MainPaneView {
                 source_hash: Some(source_hash),
                 is_binary_conflict: true,
                 binary_side_sizes,
+                strategy: conflict_strategy,
+                conflict_kind,
                 ..ConflictResolverUiState::default()
             };
             return;
@@ -1731,6 +1733,8 @@ impl MainPaneView {
             three_way_visible_map,
             is_binary_conflict: false,
             binary_side_sizes: [None; 3],
+            strategy: conflict_strategy,
+            conflict_kind,
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);

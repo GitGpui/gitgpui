@@ -451,6 +451,10 @@ struct ConflictResolverUiState {
     is_binary_conflict: bool,
     /// Byte sizes of the three conflict sides (for binary UI display).
     binary_side_sizes: [Option<usize>; 3],
+    /// The resolver strategy for the current conflict (set during sync).
+    strategy: Option<gitgpui_core::conflict_session::ConflictResolverStrategy>,
+    /// The conflict kind for the current file (set during sync).
+    conflict_kind: Option<gitgpui_core::domain::FileConflictKind>,
 }
 
 impl Default for ConflictResolverUiState {
@@ -482,6 +486,8 @@ impl Default for ConflictResolverUiState {
             three_way_visible_map: Vec::new(),
             is_binary_conflict: false,
             binary_side_sizes: [None; 3],
+            strategy: None,
+            conflict_kind: None,
         }
     }
 }
