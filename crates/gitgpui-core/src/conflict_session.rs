@@ -1743,6 +1743,199 @@ end
         assert!(session.regions.is_empty());
     }
 
+    // -- Marker parser edge case tests --
+
+    #[test]
+    fn parse_regions_empty_conflict_blocks() {
+        // Both sides empty
+        let merged = "before\n<<<<<<< ours\n=======\n>>>>>>> theirs\nafter\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "");
+        assert_eq!(regions[0].theirs, "");
+        assert_eq!(regions[0].base, None);
+    }
+
+    #[test]
+    fn parse_regions_empty_ours_nonempty_theirs() {
+        let merged = "<<<<<<< ours\n=======\ntheirs line\n>>>>>>> theirs\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "");
+        assert_eq!(regions[0].theirs, "theirs line\n");
+    }
+
+    #[test]
+    fn parse_regions_nonempty_ours_empty_theirs() {
+        let merged = "<<<<<<< ours\nours line\n=======\n>>>>>>> theirs\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "ours line\n");
+        assert_eq!(regions[0].theirs, "");
+    }
+
+    #[test]
+    fn parse_regions_diff3_empty_base() {
+        let merged = "<<<<<<< ours\nours\n||||||| base\n=======\ntheirs\n>>>>>>> theirs\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "ours\n");
+        assert_eq!(regions[0].base.as_deref(), Some(""));
+        assert_eq!(regions[0].theirs, "theirs\n");
+    }
+
+    #[test]
+    fn parse_regions_nested_marker_like_content() {
+        // Content that looks like markers but is inside a conflict block
+        let merged = "\
+<<<<<<< ours
+<<<<<<< nested-fake
+some text
+=======
+other text
+>>>>>>> theirs
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        // The inner <<<<<<< starts a new parse attempt; the first block's ours
+        // only gets "<<<<<<< nested-fake\nsome text\n" before seeing "======="
+        // The parser should handle this gracefully.
+        assert!(!regions.is_empty());
+    }
+
+    #[test]
+    fn parse_regions_separator_without_start_marker() {
+        // Lone ======= should not create any regions
+        let merged = "before\n=======\nafter\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 0);
+    }
+
+    #[test]
+    fn parse_regions_end_marker_without_start() {
+        let merged = "before\n>>>>>>> theirs\nafter\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 0);
+    }
+
+    #[test]
+    fn parse_regions_marker_labels_with_extra_text() {
+        // Marker lines can have arbitrary text after the marker
+        let merged = "\
+<<<<<<< HEAD (feature/my-branch)
+ours content
+||||||| merged common ancestors
+base content
+======= some extra text
+theirs content
+>>>>>>> origin/main (remote tracking)
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "ours content\n");
+        assert_eq!(regions[0].base.as_deref(), Some("base content\n"));
+        assert_eq!(regions[0].theirs, "theirs content\n");
+    }
+
+    #[test]
+    fn parse_regions_missing_end_after_separator() {
+        // Start + ours + separator found, but no end marker (EOF)
+        let merged = "<<<<<<< ours\nours line\n=======\ntheirs line\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 0, "missing end marker should yield no regions");
+    }
+
+    #[test]
+    fn parse_regions_missing_separator_in_diff3() {
+        // diff3 base section started but no separator before EOF
+        let merged = "<<<<<<< ours\nours line\n||||||| base\nbase line\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 0, "missing separator after base should yield no regions");
+    }
+
+    #[test]
+    fn parse_regions_multiple_conflicts_with_varied_styles() {
+        // Mix of 2-way and 3-way conflicts in same file
+        let merged = "\
+header
+<<<<<<< ours
+two-way ours
+=======
+two-way theirs
+>>>>>>> theirs
+middle
+<<<<<<< ours
+three-way ours
+||||||| base
+three-way base
+=======
+three-way theirs
+>>>>>>> theirs
+footer
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].base, None);
+        assert_eq!(regions[0].ours, "two-way ours\n");
+        assert_eq!(regions[0].theirs, "two-way theirs\n");
+        assert!(regions[1].base.is_some());
+        assert_eq!(regions[1].ours, "three-way ours\n");
+        assert_eq!(regions[1].base.as_deref(), Some("three-way base\n"));
+        assert_eq!(regions[1].theirs, "three-way theirs\n");
+    }
+
+    #[test]
+    fn parse_regions_multiline_content_in_all_sections() {
+        let merged = "\
+<<<<<<< ours
+ours line 1
+ours line 2
+ours line 3
+||||||| base
+base line 1
+base line 2
+=======
+theirs line 1
+theirs line 2
+theirs line 3
+theirs line 4
+>>>>>>> theirs
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours.lines().count(), 3);
+        assert_eq!(regions[0].base.as_deref().unwrap().lines().count(), 2);
+        assert_eq!(regions[0].theirs.lines().count(), 4);
+    }
+
+    #[test]
+    fn parse_regions_valid_then_truly_malformed_preserves_valid() {
+        // First valid conflict followed by one with no separator or end — truly malformed
+        let merged = "\
+<<<<<<< ours
+ok ours
+=======
+ok theirs
+>>>>>>> theirs
+<<<<<<< ours
+unterminated content with no separator
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1, "only the first valid conflict should be parsed");
+        assert_eq!(regions[0].ours, "ok ours\n");
+        assert_eq!(regions[0].theirs, "ok theirs\n");
+    }
+
+    #[test]
+    fn parse_regions_no_trailing_newline_on_file() {
+        let merged = "<<<<<<< ours\nfoo\n=======\nbar\n>>>>>>> theirs";
+        let regions = parse_conflict_regions_from_markers(merged);
+        // The end marker line ">>>>>>> theirs" has no trailing newline but still
+        // starts with ">>>>>>>" so it should be recognized
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "foo\n");
+        assert_eq!(regions[0].theirs, "bar\n");
+    }
+
     // -- ConflictSession counter & navigation tests --
 
     #[test]

@@ -1409,6 +1409,309 @@ mod tests {
         assert_eq!(generate_resolved_text(&segments), input);
     }
 
+    // -- Marker parser edge case tests --
+
+    #[test]
+    fn empty_conflict_blocks_parse_and_generate() {
+        let input = "a\n<<<<<<< ours\n=======\n>>>>>>> theirs\nb\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.ours, "");
+        assert_eq!(block.theirs, "");
+        // Default choice is Ours, generating empty content in place of the conflict
+        let resolved = generate_resolved_text(&segments);
+        assert_eq!(resolved, "a\nb\n");
+    }
+
+    #[test]
+    fn malformed_missing_end_marker_preserved_as_text() {
+        // Start + separator found but no end marker
+        let input = "a\n<<<<<<< HEAD\nfoo\n=======\nbar\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 0, "malformed block should not produce a conflict");
+        assert_eq!(generate_resolved_text(&segments), input, "malformed content must be preserved");
+    }
+
+    #[test]
+    fn malformed_missing_separator_preserved_as_text() {
+        // Start marker then end marker with no separator
+        let input = "a\n<<<<<<< HEAD\nfoo\n>>>>>>> theirs\nb\n";
+        let segments = parse_conflict_markers(input);
+        // Parser looks for "=======" before ">>>>>>>", so this is malformed
+        // and preserved as text. The parser stops parsing.
+        assert_eq!(conflict_count(&segments), 0);
+        // All content should be preserved
+        assert_eq!(generate_resolved_text(&segments), input);
+    }
+
+    #[test]
+    fn separator_without_start_marker_is_plain_text() {
+        let input = "before\n=======\nafter\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 0);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(generate_resolved_text(&segments), input);
+    }
+
+    #[test]
+    fn end_marker_without_start_is_plain_text() {
+        let input = "before\n>>>>>>> theirs\nafter\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 0);
+        assert_eq!(generate_resolved_text(&segments), input);
+    }
+
+    #[test]
+    fn marker_labels_with_extra_text_parsed_correctly() {
+        let input = "<<<<<<< HEAD (feature/my-branch)\nours\n||||||| merged common ancestors\nbase\n======= some notes\ntheirs\n>>>>>>> origin/main (remote)\n";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.ours, "ours\n");
+        assert_eq!(block.base.as_deref(), Some("base\n"));
+        assert_eq!(block.theirs, "theirs\n");
+    }
+
+    #[test]
+    fn mixed_two_way_and_diff3_conflicts() {
+        let input = "\
+header
+<<<<<<< ours
+two-way ours
+=======
+two-way theirs
+>>>>>>> theirs
+middle
+<<<<<<< ours
+diff3 ours
+||||||| base
+diff3 base
+=======
+diff3 theirs
+>>>>>>> theirs
+footer
+";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 2);
+
+        let blocks: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+
+        // First: 2-way (no base)
+        assert!(blocks[0].base.is_none());
+        assert_eq!(blocks[0].ours, "two-way ours\n");
+        assert_eq!(blocks[0].theirs, "two-way theirs\n");
+
+        // Second: 3-way (with base)
+        assert_eq!(blocks[1].base.as_deref(), Some("diff3 base\n"));
+        assert_eq!(blocks[1].ours, "diff3 ours\n");
+        assert_eq!(blocks[1].theirs, "diff3 theirs\n");
+    }
+
+    #[test]
+    fn valid_conflict_before_malformed_is_preserved() {
+        let input = "\
+<<<<<<< ours
+ok ours
+=======
+ok theirs
+>>>>>>> theirs
+<<<<<<< ours
+missing end
+=======
+dangling
+";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1, "only valid conflict should be parsed");
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.ours, "ok ours\n");
+        assert_eq!(block.theirs, "ok theirs\n");
+        // The malformed part should be preserved as trailing text
+        let resolved = generate_resolved_text(&segments);
+        assert!(resolved.contains("ok ours"), "resolved should contain the valid conflict's choice");
+        assert!(resolved.contains("missing end"), "malformed content should be preserved as text");
+    }
+
+    #[test]
+    fn multiline_asymmetric_conflict_blocks() {
+        let input = "\
+<<<<<<< ours
+ours line 1
+ours line 2
+ours line 3
+=======
+theirs only line
+>>>>>>> theirs
+";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(block.ours.lines().count(), 3);
+        assert_eq!(block.theirs.lines().count(), 1);
+    }
+
+    #[test]
+    fn no_trailing_newline_on_file() {
+        let input = "<<<<<<< ours\nfoo\n=======\nbar\n>>>>>>> theirs";
+        let segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+    }
+
+    // -- 2-way / 3-way mode consistency tests --
+
+    #[test]
+    fn two_way_blocks_have_no_base_three_way_have_base() {
+        let two_way = "<<<<<<< ours\na\n=======\nb\n>>>>>>> theirs\n";
+        let three_way =
+            "<<<<<<< ours\na\n||||||| base\norig\n=======\nb\n>>>>>>> theirs\n";
+
+        let two_way_segments = parse_conflict_markers(two_way);
+        let three_way_segments = parse_conflict_markers(three_way);
+
+        let two_way_block = two_way_segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        let three_way_block = three_way_segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+
+        // 2-way has no base, 3-way has base
+        assert!(two_way_block.base.is_none(), "2-way conflict should have no base");
+        assert!(three_way_block.base.is_some(), "3-way conflict should have base");
+
+        // Both have same ours/theirs content
+        assert_eq!(two_way_block.ours, three_way_block.ours);
+        assert_eq!(two_way_block.theirs, three_way_block.theirs);
+    }
+
+    #[test]
+    fn populate_bases_converts_two_way_to_three_way_compatible() {
+        let two_way = "a\n<<<<<<< HEAD\nfoo\n=======\nbar\n>>>>>>> other\nb\n";
+        let mut segments = parse_conflict_markers(two_way);
+
+        // Initially no base
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert!(block.base.is_none());
+
+        // After populating from ancestor, base is set
+        populate_block_bases_from_ancestor(&mut segments, "a\norig\nb\n");
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
+        assert!(block.base.is_some(), "after populate, block should have base for 3-way display");
+
+        // Pick Base should now produce ancestor content
+        if let Some(ConflictSegment::Block(b)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            b.choice = ConflictChoice::Base;
+        }
+        let resolved = generate_resolved_text(&segments);
+        assert_eq!(resolved, "a\norig\nb\n");
+    }
+
+    #[test]
+    fn split_and_inline_views_consistent_for_mixed_mode_conflicts() {
+        use gitgpui_core::file_diff::{FileDiffRow, FileDiffRowKind as RK};
+
+        // Simulate rows from a conflict with asymmetric content (3 ours lines, 1 theirs)
+        let rows = vec![
+            FileDiffRow {
+                kind: RK::Context,
+                old_line: Some(1),
+                new_line: Some(1),
+                old: Some("context".into()),
+                new: Some("context".into()),
+                eof_newline: None,
+            },
+            FileDiffRow {
+                kind: RK::Modify,
+                old_line: Some(2),
+                new_line: Some(2),
+                old: Some("old line".into()),
+                new: Some("new line".into()),
+                eof_newline: None,
+            },
+            FileDiffRow {
+                kind: RK::Context,
+                old_line: Some(3),
+                new_line: Some(3),
+                old: Some("end".into()),
+                new: Some("end".into()),
+                eof_newline: None,
+            },
+        ];
+
+        let inline = build_inline_rows(&rows);
+        // Split view has rows.len() entries, inline expands Modify → Remove+Add
+        assert!(
+            inline.len() >= rows.len(),
+            "inline should have at least as many rows as split"
+        );
+        // Both should cover the same line range
+        let split_lines: std::collections::HashSet<_> = rows
+            .iter()
+            .filter_map(|r| r.new_line)
+            .collect();
+        let inline_lines: std::collections::HashSet<_> = inline
+            .iter()
+            .filter_map(|r| r.new_line)
+            .collect();
+        assert!(
+            split_lines.is_subset(&inline_lines),
+            "inline should cover all new lines that split covers"
+        );
+    }
+
     #[test]
     fn inline_rows_expand_modify_into_remove_and_add() {
         let rows = vec![
