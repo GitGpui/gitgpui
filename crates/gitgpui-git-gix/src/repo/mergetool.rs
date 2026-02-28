@@ -67,10 +67,10 @@ impl GixRepo {
 
         // 4. Snapshot merged contents before tool invocation so we can
         //    detect actual content changes when trustExitCode is false.
-        let pre_merged_contents = if trust_exit_code {
+        let pre_merged_state = if trust_exit_code {
             None
         } else {
-            std::fs::read(&merged_path).ok()
+            Some(read_merged_file_state(&merged_path)?)
         };
 
         // Build and invoke the mergetool command
@@ -117,22 +117,13 @@ impl GixRepo {
         };
 
         // 5. Determine success
-        let mut post_merged_contents = None;
+        let post_merged_state = read_merged_file_state(&merged_path)?;
         let tool_success = if trust_exit_code {
             output.status.success()
         } else {
-            // When trustExitCode is false (default), require actual content
-            // changes in MERGED (not just metadata changes).
-            match std::fs::read(&merged_path) {
-                Ok(post) => {
-                    let changed = pre_merged_contents.as_ref() != Some(&post);
-                    if changed {
-                        post_merged_contents = Some(post);
-                    }
-                    changed
-                }
-                Err(_) => false, // file doesn't exist or is unreadable
-            }
+            // When trustExitCode is false (default), require an actual
+            // merged-output delta (bytes change or file deletion/creation).
+            pre_merged_state.as_ref() != Some(&post_merged_state)
         };
 
         if !tool_success {
@@ -144,49 +135,66 @@ impl GixRepo {
             });
         }
 
-        // 6. Read back merged contents and stage
-        let merged_contents = match post_merged_contents {
-            Some(bytes) => bytes,
-            None => std::fs::read(&merged_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?,
-        };
+        // 6. Stage tool output. For deleted output, stage deletion instead
+        // of reading/staging file contents.
+        let merged_contents = match post_merged_state {
+            MergedFileState::Present(bytes) => {
+                // Validate textual merged output and refuse staging if conflict
+                // markers are still present.
+                if let Ok(merged_text) = std::str::from_utf8(&bytes) {
+                    let validation = validate_conflict_resolution_text(merged_text);
+                    if validation.has_conflict_markers {
+                        return Err(Error::new(ErrorKind::Backend(format!(
+                            "Mergetool '{tool_name}' left unresolved conflict markers in {} ({} marker lines); refusing to stage",
+                            path.display(),
+                            validation.marker_lines
+                        ))));
+                    }
+                }
 
-        // Validate textual merged output and refuse staging if conflict
-        // markers are still present.
-        if let Ok(merged_text) = std::str::from_utf8(&merged_contents) {
-            let validation = validate_conflict_resolution_text(merged_text);
-            if validation.has_conflict_markers {
-                return Err(Error::new(ErrorKind::Backend(format!(
-                    "Mergetool '{tool_name}' left unresolved conflict markers in {} ({} marker lines); refusing to stage",
-                    path.display(),
-                    validation.marker_lines
-                ))));
+                // Stage the file
+                let path_ref: &Path = path;
+                let mut add = Command::new("git");
+                add.arg("-C")
+                    .arg(workdir)
+                    .arg("add")
+                    .arg("--")
+                    .arg(path_ref);
+                let add_output = add
+                    .output()
+                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+                if !add_output.status.success() {
+                    let add_stderr = String::from_utf8_lossy(&add_output.stderr);
+                    return Err(Error::new(ErrorKind::Backend(format!(
+                        "git add failed after mergetool: {}",
+                        add_stderr.trim()
+                    ))));
+                }
+
+                Some(bytes)
             }
-        }
-
-        // Stage the file
-        let path_ref: &Path = path;
-        let mut add = Command::new("git");
-        add.arg("-C")
-            .arg(workdir)
-            .arg("add")
-            .arg("--")
-            .arg(path_ref);
-        let add_output = add
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        if !add_output.status.success() {
-            let add_stderr = String::from_utf8_lossy(&add_output.stderr);
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git add failed after mergetool: {}",
-                add_stderr.trim()
-            ))));
-        }
+            MergedFileState::Missing => {
+                let mut rm = Command::new("git");
+                rm.arg("-C").arg(workdir).arg("rm").arg("--").arg(path);
+                let rm_output = rm
+                    .output()
+                    .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+                if !rm_output.status.success() {
+                    let rm_stderr = String::from_utf8_lossy(&rm_output.stderr);
+                    return Err(Error::new(ErrorKind::Backend(format!(
+                        "git rm failed after mergetool: {}",
+                        rm_stderr.trim()
+                    ))));
+                }
+                None
+            }
+        };
 
         Ok(MergetoolResult {
             tool_name,
             success: true,
-            merged_contents: Some(merged_contents),
+            merged_contents,
             output: cmd_output,
         })
     }
@@ -257,6 +265,20 @@ fn git_show_stage_bytes(workdir: &Path, stage: u8, path: &Path) -> Result<Option
                 stderr.trim()
             ))))
         }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum MergedFileState {
+    Present(Vec<u8>),
+    Missing,
+}
+
+fn read_merged_file_state(path: &Path) -> Result<MergedFileState> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(MergedFileState::Present(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(MergedFileState::Missing),
+        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
     }
 }
 

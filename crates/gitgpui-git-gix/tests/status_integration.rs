@@ -1630,6 +1630,48 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
 }
 
 #[test]
+fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &["config", "mergetool.fake.cmd", "rm -f \"$MERGED\"; exit 1"],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(1));
+    assert!(
+        result.merged_contents.is_none(),
+        "deleted-output resolution should not return merged file bytes"
+    );
+    assert!(
+        !repo.join("a.txt").exists(),
+        "mergetool delete output should remove the worktree file"
+    );
+
+    let status = opened.status().unwrap();
+    assert!(
+        status.unstaged.iter().all(|e| e.path != Path::new("a.txt")),
+        "expected conflict to clear from unstaged after delete-output mergetool run, got {status:?}"
+    );
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Deleted),
+        "expected delete-output mergetool run to stage file deletion, got {status:?}"
+    );
+}
+
+#[test]
 fn launch_mergetool_rejects_unresolved_marker_output() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
