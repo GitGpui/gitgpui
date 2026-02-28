@@ -2863,12 +2863,10 @@ impl MainPaneView {
                         .focus_handle()
                         .is_focused(window)
                     && this.conflict_resolver_conflict_count() > 0
+                    && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
                 {
-                    if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
-                    {
-                        this.conflict_resolver_pick_active_conflict(choice, cx);
-                        handled = true;
-                    }
+                    this.conflict_resolver_pick_active_conflict(choice, cx);
+                    handled = true;
                 }
 
                 if !handled
