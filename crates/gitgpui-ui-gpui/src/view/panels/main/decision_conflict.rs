@@ -43,7 +43,7 @@ impl MainPaneView {
     /// Render the decision-only conflict resolver for `BothDeleted` conflicts.
     ///
     /// Both sides deleted the file. The user can accept the deletion (stage
-    /// the removal) or, if base content is available, restore from the base.
+    /// the removal) or restore from any available staged source.
     pub(super) fn render_decision_conflict_resolver(
         &mut self,
         theme: AppTheme,
