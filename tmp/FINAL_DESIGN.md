@@ -39,8 +39,8 @@
 ### 6) Non-UTF8/Binary-Safe Data Path
 - ✅ `ConflictPayload::from_bytes()` for lazy UTF-8 decode — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `BinarySidePick` strategy auto-selected when any payload is binary — `crates/gitgpui-core/src/conflict_session.rs`
-- ⬜ Upgrade `ConflictFileStages` to carry bytes (not just `Option<String>`)
-- ⬜ Update state loading to use bytes-first path
+- ✅ Upgraded `ConflictFileStages` to carry `base_bytes/ours_bytes/theirs_bytes` plus optional decoded text views — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-git-gix/src/repo/diff.rs`
+- ✅ Updated state loading to preserve bytes-first conflict payloads (`base/ours/theirs/current`) with lazy UTF-8 decode for UI text fields — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/effects/repo_load.rs`
 - ⬜ Binary/non-UTF8 resolver UI mode
 
 ### 7) Optional External Mergetool Bridge

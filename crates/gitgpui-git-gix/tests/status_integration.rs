@@ -606,6 +606,64 @@ fn status_reports_conflict_kind_for_add_add() {
 }
 
 #[test]
+fn conflict_file_stages_preserve_non_utf8_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let base_bytes = b"\x00base\xff\n".to_vec();
+    let ours_bytes = b"\x00ours\xff\n".to_vec();
+    let theirs_bytes = b"\x00theirs\xff\n".to_vec();
+
+    write_bytes(repo, "bin.dat", &base_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_bytes(repo, "bin.dat", &theirs_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write_bytes(repo, "bin.dat", &ours_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let stages = opened
+        .conflict_file_stages(Path::new("bin.dat"))
+        .unwrap()
+        .expect("conflict stage data");
+
+    assert_eq!(stages.path, PathBuf::from("bin.dat"));
+    assert_eq!(stages.base_bytes.as_deref(), Some(base_bytes.as_slice()));
+    assert_eq!(stages.ours_bytes.as_deref(), Some(ours_bytes.as_slice()));
+    assert_eq!(
+        stages.theirs_bytes.as_deref(),
+        Some(theirs_bytes.as_slice())
+    );
+    assert_eq!(stages.base, None);
+    assert_eq!(stages.ours, None);
+    assert_eq!(stages.theirs, None);
+}
+
+#[test]
 fn diff_file_text_handles_modify_delete_conflicts() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

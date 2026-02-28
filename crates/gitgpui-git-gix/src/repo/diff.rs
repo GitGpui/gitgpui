@@ -316,32 +316,42 @@ impl GixRepo {
         }
 
         let path_str = path.to_string_lossy();
-        let base = git_show_path_utf8_optional_unmerged_stage(
+        let base_bytes = git_show_path_bytes_optional_unmerged_stage(
             &self.spec.workdir,
             ":1:",
             path_str.as_ref(),
             1,
         )?;
-        let ours = git_show_path_utf8_optional_unmerged_stage(
+        let ours_bytes = git_show_path_bytes_optional_unmerged_stage(
             &self.spec.workdir,
             ":2:",
             path_str.as_ref(),
             2,
         )?;
-        let theirs = git_show_path_utf8_optional_unmerged_stage(
+        let theirs_bytes = git_show_path_bytes_optional_unmerged_stage(
             &self.spec.workdir,
             ":3:",
             path_str.as_ref(),
             3,
         )?;
+        let base = decode_utf8_optional(base_bytes.as_deref());
+        let ours = decode_utf8_optional(ours_bytes.as_deref());
+        let theirs = decode_utf8_optional(theirs_bytes.as_deref());
 
         Ok(Some(ConflictFileStages {
             path: path.to_path_buf(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
             base,
             ours,
             theirs,
         }))
     }
+}
+
+fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
+    bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
 }
 
 fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {

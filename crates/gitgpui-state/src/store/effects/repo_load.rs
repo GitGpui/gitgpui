@@ -7,6 +7,10 @@ use std::sync::mpsc;
 use super::super::{RepoId, executor::TaskExecutor};
 use super::util::{RepoMap, spawn_with_repo};
 
+fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
+    bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
+}
+
 pub(super) fn schedule_load_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -166,27 +170,49 @@ pub(super) fn schedule_load_conflict_file(
                     area: DiffArea::Unstaged,
                 })
                 .map(|opt| {
-                    opt.map(|d| gitgpui_core::services::ConflictFileStages {
-                        path: d.path,
-                        base: None,
-                        ours: d.old,
-                        theirs: d.new,
+                    opt.map(|d| {
+                        let ours_bytes = d.old.as_ref().map(|text| text.as_bytes().to_vec());
+                        let theirs_bytes = d.new.as_ref().map(|text| text.as_bytes().to_vec());
+                        gitgpui_core::services::ConflictFileStages {
+                            path: d.path,
+                            base_bytes: None,
+                            ours_bytes,
+                            theirs_bytes,
+                            base: None,
+                            ours: d.old,
+                            theirs: d.new,
+                        }
                     })
                 }),
             Err(e) => Err(e),
         };
 
-        let current = std::fs::read(repo.spec().workdir.join(&path))
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok());
+        let current_bytes = std::fs::read(repo.spec().workdir.join(&path)).ok();
+        let current = decode_utf8_optional(current_bytes.as_deref());
 
         let result = stages.map(|opt| {
-            opt.map(|d| crate::model::ConflictFile {
-                path: d.path,
-                base: d.base,
-                ours: d.ours,
-                theirs: d.theirs,
-                current,
+            opt.map(|d| {
+                let gitgpui_core::services::ConflictFileStages {
+                    path,
+                    base_bytes,
+                    ours_bytes,
+                    theirs_bytes,
+                    base,
+                    ours,
+                    theirs,
+                } = d;
+
+                crate::model::ConflictFile {
+                    path,
+                    base: base.or_else(|| decode_utf8_optional(base_bytes.as_deref())),
+                    ours: ours.or_else(|| decode_utf8_optional(ours_bytes.as_deref())),
+                    theirs: theirs.or_else(|| decode_utf8_optional(theirs_bytes.as_deref())),
+                    base_bytes,
+                    ours_bytes,
+                    theirs_bytes,
+                    current_bytes,
+                    current,
+                }
             })
         });
 

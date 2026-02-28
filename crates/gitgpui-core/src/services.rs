@@ -47,6 +47,9 @@ pub enum ConflictSide {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFileStages {
     pub path: PathBuf,
+    pub base_bytes: Option<Vec<u8>>,
+    pub ours_bytes: Option<Vec<u8>>,
+    pub theirs_bytes: Option<Vec<u8>>,
     pub base: Option<String>,
     pub ours: Option<String>,
     pub theirs: Option<String>,

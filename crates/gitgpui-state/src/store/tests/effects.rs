@@ -248,6 +248,10 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
             assert_eq!(path, rel);
             let file = result.unwrap().unwrap();
             assert_eq!(file.path, PathBuf::from("conflict.txt"));
+            assert_eq!(file.base_bytes, None);
+            assert_eq!(file.ours_bytes.as_deref(), Some(b"ours\n".as_slice()));
+            assert_eq!(file.theirs_bytes.as_deref(), Some(b"theirs\n".as_slice()));
+            assert_eq!(file.current_bytes.as_deref(), Some(current.as_bytes()));
             assert_eq!(file.base, None);
             assert_eq!(file.ours.as_deref(), Some("ours\n"));
             assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
