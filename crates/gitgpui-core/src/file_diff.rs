@@ -29,6 +29,44 @@ pub struct FileDiffRow {
     pub eof_newline: Option<FileDiffEofNewline>,
 }
 
+/// Stable anchor metadata for a rendered side-by-side diff row.
+///
+/// `region_id`/`ordinal_in_region` are only populated for non-context rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileDiffRowAnchor {
+    pub row_index: usize,
+    pub region_id: Option<u32>,
+    pub ordinal_in_region: Option<u32>,
+    pub old_line: Option<u32>,
+    pub new_line: Option<u32>,
+}
+
+/// Stable anchor metadata for one contiguous changed region.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileDiffRegionAnchor {
+    pub region_id: u32,
+    pub row_start: usize,
+    pub row_end_exclusive: usize,
+    pub old_start_line: Option<u32>,
+    pub old_end_line: Option<u32>,
+    pub new_start_line: Option<u32>,
+    pub new_end_line: Option<u32>,
+}
+
+/// Anchors for all rows and change regions in a side-by-side diff.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffAnchors {
+    pub row_anchors: Vec<FileDiffRowAnchor>,
+    pub region_anchors: Vec<FileDiffRegionAnchor>,
+}
+
+/// Side-by-side diff rows along with stable row/region anchors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffRowsWithAnchors {
+    pub rows: Vec<FileDiffRow>,
+    pub anchors: FileDiffAnchors,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EditKind {
     Equal,
@@ -102,6 +140,119 @@ pub fn side_by_side_rows(old: &str, new: &str) -> Vec<FileDiffRow> {
     }
 
     annotate_eof_newline(pair_replacements(raw), old, new)
+}
+
+pub fn side_by_side_rows_with_anchors(old: &str, new: &str) -> FileDiffRowsWithAnchors {
+    let rows = side_by_side_rows(old, new);
+    let anchors = compute_row_region_anchors(&rows);
+    FileDiffRowsWithAnchors { rows, anchors }
+}
+
+pub fn compute_row_region_anchors(rows: &[FileDiffRow]) -> FileDiffAnchors {
+    #[derive(Clone, Copy, Debug)]
+    struct ActiveRegion {
+        region_id: u32,
+        row_start: usize,
+        old_start_line: Option<u32>,
+        old_end_line: Option<u32>,
+        new_start_line: Option<u32>,
+        new_end_line: Option<u32>,
+        next_ordinal: u32,
+    }
+
+    impl ActiveRegion {
+        fn new(region_id: u32, row_start: usize) -> Self {
+            Self {
+                region_id,
+                row_start,
+                old_start_line: None,
+                old_end_line: None,
+                new_start_line: None,
+                new_end_line: None,
+                next_ordinal: 0,
+            }
+        }
+
+        fn update_lines(&mut self, row: &FileDiffRow) {
+            if let Some(old_line) = row.old_line {
+                self.old_start_line = Some(
+                    self.old_start_line
+                        .map_or(old_line, |line| line.min(old_line)),
+                );
+                self.old_end_line = Some(
+                    self.old_end_line
+                        .map_or(old_line, |line| line.max(old_line)),
+                );
+            }
+            if let Some(new_line) = row.new_line {
+                self.new_start_line = Some(
+                    self.new_start_line
+                        .map_or(new_line, |line| line.min(new_line)),
+                );
+                self.new_end_line = Some(
+                    self.new_end_line
+                        .map_or(new_line, |line| line.max(new_line)),
+                );
+            }
+        }
+
+        fn as_region_anchor(self, row_end_exclusive: usize) -> FileDiffRegionAnchor {
+            FileDiffRegionAnchor {
+                region_id: self.region_id,
+                row_start: self.row_start,
+                row_end_exclusive,
+                old_start_line: self.old_start_line,
+                old_end_line: self.old_end_line,
+                new_start_line: self.new_start_line,
+                new_end_line: self.new_end_line,
+            }
+        }
+    }
+
+    let mut row_anchors = Vec::with_capacity(rows.len());
+    let mut region_anchors: Vec<FileDiffRegionAnchor> = Vec::new();
+    let mut active_region: Option<ActiveRegion> = None;
+
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.kind == FileDiffRowKind::Context {
+            if let Some(region) = active_region.take() {
+                region_anchors.push(region.as_region_anchor(row_index));
+            }
+            row_anchors.push(FileDiffRowAnchor {
+                row_index,
+                region_id: None,
+                ordinal_in_region: None,
+                old_line: row.old_line,
+                new_line: row.new_line,
+            });
+            continue;
+        }
+
+        let region = active_region.get_or_insert_with(|| {
+            let region_id = region_anchors.len() as u32;
+            ActiveRegion::new(region_id, row_index)
+        });
+        region.update_lines(row);
+        let ordinal_in_region = region.next_ordinal;
+        region.next_ordinal = region.next_ordinal.saturating_add(1);
+
+        row_anchors.push(FileDiffRowAnchor {
+            row_index,
+            region_id: Some(region.region_id),
+            ordinal_in_region: Some(ordinal_in_region),
+            old_line: row.old_line,
+            new_line: row.new_line,
+        });
+    }
+
+    if let Some(region) = active_region.take() {
+        region_anchors.push(region.as_region_anchor(rows.len()));
+    }
+
+    FileDiffAnchors {
+        row_anchors,
+        region_anchors,
+    }
 }
 
 fn pair_replacements(rows: Vec<FileDiffRow>) -> Vec<FileDiffRow> {
@@ -698,5 +849,126 @@ mod tests {
                 FileDiffRowKind::Context
             ]
         );
+    }
+
+    #[test]
+    fn anchor_groups_contiguous_changes_into_regions() {
+        let old = "a\nb\nc\nd\n";
+        let new = "a\nx\nc\ny\nd\n";
+
+        let rows = side_by_side_rows(old, new);
+        assert_eq!(
+            rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
+            vec![
+                FileDiffRowKind::Context,
+                FileDiffRowKind::Modify,
+                FileDiffRowKind::Context,
+                FileDiffRowKind::Add,
+                FileDiffRowKind::Context,
+            ]
+        );
+
+        let anchors = compute_row_region_anchors(&rows);
+        assert_eq!(anchors.row_anchors.len(), rows.len());
+        assert_eq!(anchors.region_anchors.len(), 2);
+
+        assert_eq!(
+            anchors.region_anchors[0],
+            FileDiffRegionAnchor {
+                region_id: 0,
+                row_start: 1,
+                row_end_exclusive: 2,
+                old_start_line: Some(2),
+                old_end_line: Some(2),
+                new_start_line: Some(2),
+                new_end_line: Some(2),
+            }
+        );
+        assert_eq!(
+            anchors.region_anchors[1],
+            FileDiffRegionAnchor {
+                region_id: 1,
+                row_start: 3,
+                row_end_exclusive: 4,
+                old_start_line: None,
+                old_end_line: None,
+                new_start_line: Some(4),
+                new_end_line: Some(4),
+            }
+        );
+        assert_eq!(anchors.row_anchors[0].region_id, None);
+        assert_eq!(anchors.row_anchors[1].region_id, Some(0));
+        assert_eq!(anchors.row_anchors[1].ordinal_in_region, Some(0));
+        assert_eq!(anchors.row_anchors[2].region_id, None);
+        assert_eq!(anchors.row_anchors[3].region_id, Some(1));
+        assert_eq!(anchors.row_anchors[3].ordinal_in_region, Some(0));
+        assert_eq!(anchors.row_anchors[4].region_id, None);
+    }
+
+    #[test]
+    fn anchor_keeps_ordinals_within_single_region() {
+        let old = "start\nalpha\nbeta\nend\n";
+        let new = "start\nintro\nalpha changed\nbeta changed\nend\n";
+
+        let rows = side_by_side_rows(old, new);
+        let anchors = compute_row_region_anchors(&rows);
+
+        assert_eq!(anchors.region_anchors.len(), 1);
+        assert_eq!(
+            anchors.region_anchors[0],
+            FileDiffRegionAnchor {
+                region_id: 0,
+                row_start: 1,
+                row_end_exclusive: 4,
+                old_start_line: Some(2),
+                old_end_line: Some(3),
+                new_start_line: Some(2),
+                new_end_line: Some(4),
+            }
+        );
+        assert_eq!(anchors.row_anchors[1].region_id, Some(0));
+        assert_eq!(anchors.row_anchors[1].ordinal_in_region, Some(0));
+        assert_eq!(anchors.row_anchors[2].ordinal_in_region, Some(1));
+        assert_eq!(anchors.row_anchors[3].ordinal_in_region, Some(2));
+    }
+
+    #[test]
+    fn anchor_handles_rows_without_line_numbers() {
+        let rows = vec![FileDiffRow {
+            kind: FileDiffRowKind::Modify,
+            old_line: None,
+            new_line: None,
+            old: None,
+            new: None,
+            eof_newline: Some(FileDiffEofNewline::MissingInNew),
+        }];
+
+        let anchors = compute_row_region_anchors(&rows);
+        assert_eq!(anchors.row_anchors.len(), 1);
+        assert_eq!(anchors.row_anchors[0].region_id, Some(0));
+        assert_eq!(anchors.row_anchors[0].ordinal_in_region, Some(0));
+        assert_eq!(
+            anchors.region_anchors,
+            vec![FileDiffRegionAnchor {
+                region_id: 0,
+                row_start: 0,
+                row_end_exclusive: 1,
+                old_start_line: None,
+                old_end_line: None,
+                new_start_line: None,
+                new_end_line: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn side_by_side_with_anchors_is_deterministic() {
+        let old = "a\nb\nc\n";
+        let new = "a\nb changed\nc\n";
+
+        let first = side_by_side_rows_with_anchors(old, new);
+        let second = side_by_side_rows_with_anchors(old, new);
+        assert_eq!(first, second);
+        assert_eq!(first.rows.len(), first.anchors.row_anchors.len());
     }
 }
