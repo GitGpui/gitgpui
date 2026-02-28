@@ -4,6 +4,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let current_format = this.date_time_format;
     let current_timezone = this.timezone;
+    let (conflict_enable_regex_autosolve, conflict_enable_history_autosolve) = this
+        .main_pane
+        .read(cx)
+        .conflict_advanced_autosolve_settings();
     let preview_now = std::time::SystemTime::now();
 
     let row = |id: &'static str, label: &'static str, value: SharedString, open: bool| {
@@ -32,6 +36,31 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .font_family("monospace")
                             .child(if open { "▴" } else { "▾" }),
                     ),
+            )
+    };
+
+    let toggle_row = |id: &'static str, label: &'static str, enabled: bool| {
+        div()
+            .id(id)
+            .px_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .justify_between()
+            .rounded(px(theme.radii.row))
+            .hover(move |s| s.bg(theme.colors.hover))
+            .active(move |s| s.bg(theme.colors.active))
+            .cursor(CursorStyle::PointingHand)
+            .child(div().text_sm().child(label))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(if enabled {
+                        theme.colors.success
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .child(if enabled { "On" } else { "Off" }),
             )
     };
 
@@ -87,8 +116,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         for tz in Timezone::all() {
             let selected = *tz == current_timezone;
             let tz_val = *tz;
-            let preview: SharedString =
-                format_datetime(preview_now, current_format, tz_val).into();
+            let preview: SharedString = format_datetime(preview_now, current_format, tz_val).into();
             tz_dropdown = tz_dropdown.child(
                 div()
                     .id(SharedString::from(format!(
@@ -197,6 +225,53 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .child(date_row)
                 .child(tz_row),
         );
+
+    let conflict_section_label = div()
+        .px_2()
+        .pt(px(6.0))
+        .pb(px(4.0))
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child("Conflict resolver");
+
+    let regex_row = toggle_row(
+        "settings_conflict_regex_autosolve",
+        "Enable regex auto-resolve",
+        conflict_enable_regex_autosolve,
+    )
+    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+        let (enabled, _) = this
+            .main_pane
+            .read(cx)
+            .conflict_advanced_autosolve_settings();
+        this.set_conflict_enable_regex_autosolve(!enabled, cx);
+        cx.notify();
+    }));
+
+    let history_row = toggle_row(
+        "settings_conflict_history_autosolve",
+        "Enable history auto-resolve",
+        conflict_enable_history_autosolve,
+    )
+    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+        let (_, enabled) = this
+            .main_pane
+            .read(cx)
+            .conflict_advanced_autosolve_settings();
+        this.set_conflict_enable_history_autosolve(!enabled, cx);
+        cx.notify();
+    }));
+
+    content = content.child(conflict_section_label).child(
+        div()
+            .px_2()
+            .pb_1()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(regex_row)
+            .child(history_row),
+    );
 
     if this.settings_date_format_open {
         content = content

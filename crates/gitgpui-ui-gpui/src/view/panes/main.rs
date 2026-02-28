@@ -21,6 +21,8 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) last_window_size: Size<Pixels>,
 
     pub(in super::super) show_whitespace: bool,
+    pub(in super::super) conflict_enable_regex_autosolve: bool,
+    pub(in super::super) conflict_enable_history_autosolve: bool,
     pub(in super::super) diff_view: DiffViewMode,
     pub(in super::super) svg_diff_view_mode: SvgDiffViewMode,
     pub(in super::super) diff_word_wrap: bool,
@@ -174,6 +176,8 @@ impl MainPaneView {
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
+        conflict_enable_regex_autosolve: bool,
+        conflict_enable_history_autosolve: bool,
         root_view: WeakEntity<GitGpuiView>,
         tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
@@ -310,6 +314,8 @@ impl MainPaneView {
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
             show_whitespace: false,
+            conflict_enable_regex_autosolve,
+            conflict_enable_history_autosolve,
             diff_view: DiffViewMode::Split,
             svg_diff_view_mode: SvgDiffViewMode::Image,
             diff_word_wrap: false,
@@ -448,8 +454,9 @@ impl MainPaneView {
             return;
         }
         self.active_context_menu_invoker = next.clone();
-        self.history_view
-            .update(cx, |view, cx| view.set_active_context_menu_invoker(next, cx));
+        self.history_view.update(cx, |view, cx| {
+            view.set_active_context_menu_invoker(next, cx)
+        });
         cx.notify();
     }
 
@@ -467,11 +474,7 @@ impl MainPaneView {
         cx.notify();
     }
 
-    pub(in super::super) fn set_timezone(
-        &mut self,
-        next: Timezone,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(in super::super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         self.history_view
             .update(cx, |view, cx| view.set_timezone(next, cx));
         cx.notify();
@@ -490,7 +493,40 @@ impl MainPaneView {
         &self,
         cx: &gpui::App,
     ) -> (bool, bool, bool) {
-        self.history_view.read(cx).history_visible_column_preferences()
+        self.history_view
+            .read(cx)
+            .history_visible_column_preferences()
+    }
+
+    pub(in super::super) fn conflict_advanced_autosolve_settings(&self) -> (bool, bool) {
+        (
+            self.conflict_enable_regex_autosolve,
+            self.conflict_enable_history_autosolve,
+        )
+    }
+
+    pub(in super::super) fn set_conflict_enable_regex_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_enable_regex_autosolve == enabled {
+            return;
+        }
+        self.conflict_enable_regex_autosolve = enabled;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_conflict_enable_history_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_enable_history_autosolve == enabled {
+            return;
+        }
+        self.conflict_enable_history_autosolve = enabled;
+        cx.notify();
     }
 
     pub(in super::super) fn open_popover_at(
@@ -666,7 +702,6 @@ impl MainPaneView {
                 }
             }
         }
-
     }
 
     /// Prune the layout cache if it has grown past the high-water mark.
@@ -1057,7 +1092,6 @@ impl MainPaneView {
         let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
         (self.last_window_size.width - sidebar_w - details_w - handles_w).max(px(0.0))
     }
-
 }
 
 impl MainPaneView {
@@ -1274,9 +1308,7 @@ impl MainPaneView {
                 let ranges = &self.conflict_resolver.three_way_conflict_ranges;
                 let map = &self.conflict_resolver.three_way_visible_map;
                 (0..ranges.len())
-                    .filter_map(|ri| {
-                        conflict_resolver::visible_index_for_conflict(map, ranges, ri)
-                    })
+                    .filter_map(|ri| conflict_resolver::visible_index_for_conflict(map, ranges, ri))
                     .collect()
             }
             ConflictResolverViewMode::TwoWayDiff => match self.conflict_resolver.diff_mode {
@@ -1307,9 +1339,7 @@ impl MainPaneView {
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
                 // Map visible index back to conflict range index.
-                if let Some(range_ix) =
-                    self.conflict_resolver_range_ix_for_visible(target)
-                {
+                if let Some(range_ix) = self.conflict_resolver_range_ix_for_visible(target) {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
             }
@@ -1337,9 +1367,7 @@ impl MainPaneView {
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
                 // Map visible index back to conflict range index.
-                if let Some(range_ix) =
-                    self.conflict_resolver_range_ix_for_visible(target)
-                {
+                if let Some(range_ix) = self.conflict_resolver_range_ix_for_visible(target) {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
             }
@@ -1461,12 +1489,9 @@ impl MainPaneView {
         }
 
         let conflict_entry = match &repo.status {
-            Loadable::Ready(status) => status
-                .unstaged
-                .iter()
-                .find(|e| {
-                    e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
-                }),
+            Loadable::Ready(status) => status.unstaged.iter().find(|e| {
+                e.path == *path && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
+            }),
             _ => None,
         };
         let Some(conflict_entry) = conflict_entry else {
@@ -1516,9 +1541,8 @@ impl MainPaneView {
         self.conflict_diff_segments_cache_inline.clear();
 
         // Detect binary conflict: has bytes but no text for any side.
-        let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
-            bytes.is_some() && text.is_none()
-        };
+        let has_non_text =
+            |bytes: &Option<Vec<u8>>, text: &Option<String>| bytes.is_some() && text.is_none();
         let is_binary = has_non_text(&file.base_bytes, &file.base)
             || has_non_text(&file.ours_bytes, &file.ours)
             || has_non_text(&file.theirs_bytes, &file.theirs);
@@ -1564,10 +1588,7 @@ impl MainPaneView {
         // When conflict markers are 2-way (no base section), populate block.base
         // from the git ancestor file so "A (base)" picks work.
         if !base_text.is_empty() {
-            conflict_resolver::populate_block_bases_from_ancestor(
-                &mut marker_segments,
-                base_text,
-            );
+            conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
         }
 
         let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
@@ -1661,13 +1682,16 @@ impl MainPaneView {
             0
         };
 
-        let (three_way_word_highlights_base, three_way_word_highlights_ours, three_way_word_highlights_theirs) =
-            conflict_resolver::compute_three_way_word_highlights(
-                &three_way_base_lines,
-                &three_way_ours_lines,
-                &three_way_theirs_lines,
-                &three_way_conflict_ranges,
-            );
+        let (
+            three_way_word_highlights_base,
+            three_way_word_highlights_ours,
+            three_way_word_highlights_theirs,
+        ) = conflict_resolver::compute_three_way_word_highlights(
+            &three_way_base_lines,
+            &three_way_ours_lines,
+            &three_way_theirs_lines,
+            &three_way_conflict_ranges,
+        );
         let diff_word_highlights_split =
             conflict_resolver::compute_two_way_word_highlights(&diff_rows);
 
@@ -2017,6 +2041,9 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.conflict_enable_regex_autosolve {
+            return;
+        }
         self.conflict_resolver_auto_resolve_inner(true, cx);
     }
 
@@ -2049,8 +2076,7 @@ impl MainPaneView {
             }
             + if include_regex_pass {
                 let options =
-                    gitgpui_core::conflict_session::RegexAutosolveOptions::whitespace_insensitive(
-                    );
+                    gitgpui_core::conflict_session::RegexAutosolveOptions::whitespace_insensitive();
                 conflict_resolver::auto_resolve_segments_regex(
                     &mut self.conflict_resolver.marker_segments,
                     &options,
@@ -2059,9 +2085,8 @@ impl MainPaneView {
                 0
             };
         if count > 0 {
-            let resolved = conflict_resolver::generate_resolved_text(
-                &self.conflict_resolver.marker_segments,
-            );
+            let resolved =
+                conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
             self.conflict_resolver_set_output(resolved, cx);
             self.conflict_resolver_rebuild_visible_map();
             // Keep focus aligned with unresolved navigation after auto-resolve.
@@ -2081,6 +2106,9 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.conflict_enable_history_autosolve {
+            return;
+        }
         if self.conflict_resolver_conflict_count() == 0 {
             return;
         }
@@ -2092,9 +2120,8 @@ impl MainPaneView {
             &options,
         );
         if count > 0 {
-            let resolved = conflict_resolver::generate_resolved_text(
-                &self.conflict_resolver.marker_segments,
-            );
+            let resolved =
+                conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
             self.conflict_resolver_set_output(resolved, cx);
             self.conflict_resolver_rebuild_visible_map();
             if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
@@ -2117,8 +2144,7 @@ impl MainPaneView {
         }
         for seg in &mut self.conflict_resolver.marker_segments {
             if let conflict_resolver::ConflictSegment::Block(block) = seg {
-                if matches!(choice, conflict_resolver::ConflictChoice::Base)
-                    && block.base.is_none()
+                if matches!(choice, conflict_resolver::ConflictChoice::Base) && block.base.is_none()
                 {
                     continue;
                 }

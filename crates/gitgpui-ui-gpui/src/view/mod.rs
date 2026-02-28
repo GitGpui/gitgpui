@@ -15,12 +15,12 @@ use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle,
-    Decorations, Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId,
-    InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size,
-    Style, TextRun, Tiling, Timer, UniformListScrollHandle, WeakEntity, Window,
-    WindowControlArea, anchored, div, fill, point, px, relative, size, uniform_list,
+    Animation, AnimationExt, AnyElement, App, Bounds, ClickEvent, Corner, CursorStyle, Decorations,
+    Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId, InspectorElementId,
+    IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size, Style, TextRun, Tiling,
+    Timer, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::BTreeMap;
@@ -70,9 +70,9 @@ use chrome::{
 use conflict_resolver::{
     ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
 };
-use date_time::{DateTimeFormat, Timezone, format_datetime};
 #[cfg(test)]
 use date_time::format_datetime_utc;
+use date_time::{DateTimeFormat, Timezone, format_datetime};
 use diff_preview::{build_deleted_file_preview_from_diff, build_new_file_preview_from_diff};
 use patch_split::build_patch_split_rows;
 use poller::Poller;
@@ -837,6 +837,11 @@ impl GitGpuiView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let conflict_enable_regex_autosolve =
+            ui_session.conflict_enable_regex_autosolve.unwrap_or(false);
+        let conflict_enable_history_autosolve = ui_session
+            .conflict_enable_history_autosolve
+            .unwrap_or(false);
 
         // Only auto-restore/open on startup if the store hasn't already been preloaded.
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
@@ -928,6 +933,8 @@ impl GitGpuiView {
                 history_show_author,
                 history_show_date,
                 history_show_sha,
+                conflict_enable_regex_autosolve,
+                conflict_enable_history_autosolve,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 window,

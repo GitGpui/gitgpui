@@ -519,8 +519,8 @@ impl PopoverHost {
                 | PopoverKind::CommitFileMenu { .. }
                 | PopoverKind::TagMenu { .. }
         );
-        let keep_active_invoker =
-            is_context_menu || matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+        let keep_active_invoker = is_context_menu
+            || matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
         if !keep_active_invoker {
             self.clear_active_context_menu_invoker(cx);
         }
@@ -796,17 +796,35 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_timezone(
-        &mut self,
-        next: Timezone,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         if self.timezone == next {
             return;
         }
         self.timezone = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_timezone(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_conflict_enable_regex_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_regex_autosolve(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_conflict_enable_history_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_history_autosolve(enabled, cx)
+        });
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -873,9 +891,10 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
         let theme = self.theme;
-        let anchor_source = self.popover_anchor.clone().unwrap_or_else(|| {
-            PopoverAnchor::Point(point(px(64.0), px(64.0)))
-        });
+        let anchor_source = self
+            .popover_anchor
+            .clone()
+            .unwrap_or_else(|| PopoverAnchor::Point(point(px(64.0), px(64.0))));
         let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
         let window_bounds = window.window_bounds().get_bounds();
         let window_w = window_bounds.size.width;

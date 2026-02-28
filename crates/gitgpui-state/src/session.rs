@@ -20,6 +20,8 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub conflict_enable_regex_autosolve: Option<bool>,
+    pub conflict_enable_history_autosolve: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -68,6 +70,8 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    conflict_enable_regex_autosolve: Option<bool>,
+    conflict_enable_history_autosolve: Option<bool>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
 }
@@ -105,6 +109,8 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        conflict_enable_regex_autosolve: file.conflict_enable_regex_autosolve,
+        conflict_enable_history_autosolve: file.conflict_enable_history_autosolve,
     }
 }
 
@@ -150,6 +156,8 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub conflict_enable_regex_autosolve: Option<bool>,
+    pub conflict_enable_history_autosolve: Option<bool>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -186,6 +194,12 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(value) = settings.conflict_enable_regex_autosolve {
+        file.conflict_enable_regex_autosolve = Some(value);
+    }
+    if let Some(value) = settings.conflict_enable_history_autosolve {
+        file.conflict_enable_history_autosolve = Some(value);
     }
 
     persist_to_path(path, &file)
@@ -644,6 +658,8 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                conflict_enable_regex_autosolve: None,
+                conflict_enable_history_autosolve: None,
             },
             &path,
         )
@@ -651,6 +667,53 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_conflict_autosolve_flags() {
+        let dir = env::temp_dir().join(format!(
+            "gitgpui-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                date_time_format: None,
+                timezone: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                conflict_enable_regex_autosolve: Some(true),
+                conflict_enable_history_autosolve: Some(false),
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.conflict_enable_regex_autosolve, Some(true));
+        assert_eq!(loaded.conflict_enable_history_autosolve, Some(false));
     }
 
     #[test]

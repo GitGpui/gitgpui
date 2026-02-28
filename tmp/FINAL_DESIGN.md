@@ -66,6 +66,12 @@
 - ✅ Fixed all conflict-resolution clippy warnings: collapsible `if` chains (4 sites), `derivable_impls` for `HistoryAutosolveOptions`, `needless_range_loop` (2 sites), `type_complexity` (added `WordHighlights` and `TwoWayWordHighlights` type aliases), `map_or` → `is_some_and` — across `conflict_session.rs`, `conflict_resolver.rs`, `panes/main.rs`, `panels/main.rs`, `rows/conflict_resolver.rs`, `view/mod.rs`
 - ✅ Deduplicated `decode_utf8_optional` helper: extracted to `gitgpui_core::services::decode_utf8_optional()`, removed copies from `gitgpui-git-gix/src/repo/diff.rs` and `gitgpui-state/src/store/effects/repo_load.rs`
 
+### 9) Rollout and Compatibility Flags
+- ✅ Added persisted UI settings flags for advanced autosolve modes (`conflict_enable_regex_autosolve`, `conflict_enable_history_autosolve`) with round-trip tests — `crates/gitgpui-state/src/session.rs`
+- ✅ Threaded advanced autosolve flags from session load into `MainPaneView` startup defaults (`false` unless explicitly enabled) — `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Gated Pass 3 actions and toolbar buttons behind opt-in flags; safe autosolve remains always available — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- ✅ Added Settings popover toggles to enable/disable regex/history autosolve and persist changes — `crates/gitgpui-ui-gpui/src/view/panels/popover/settings.rs`, `crates/gitgpui-ui-gpui/src/view/panels/popover.rs`, `crates/gitgpui-ui-gpui/src/view/tooltip.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*
