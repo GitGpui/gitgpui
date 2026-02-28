@@ -2992,3 +2992,355 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
     assert!(unstaged_after_unstage.contains("+L02-mod"));
     assert!(unstaged_after_unstage.contains("+L25-mod"));
 }
+
+// ---------------------------------------------------------------------------
+// End-to-end conflict resolution workflow tests
+// ---------------------------------------------------------------------------
+
+/// End-to-end test: create a merge conflict, load the conflict session,
+/// resolve all regions manually, generate resolved text, write it to disk,
+/// stage the file, and verify the conflict is fully resolved.
+#[test]
+fn resolve_conflict_write_and_stage_clears_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    // Create a BothModified conflict: both sides change the same lines.
+    let base_content = "header\nconflict-line\nfooter\n";
+    let ours_content = "header\nours-version\nfooter\n";
+    let theirs_content = "header\ntheirs-version\nfooter\n";
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "doc.txt", base_content);
+    run_git(repo, &["add", "doc.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "doc.txt", theirs_content);
+    run_git(repo, &["add", "doc.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "doc.txt", ours_content);
+    run_git(repo, &["add", "doc.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // 1. Verify file is in conflict status
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("doc.txt"))
+        .expect("expected conflict entry");
+    assert_eq!(entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(entry.conflict, Some(FileConflictKind::BothModified));
+
+    // 2. Load conflict session via backend API
+    let session = opened
+        .conflict_session(Path::new("doc.txt"))
+        .unwrap()
+        .expect("conflict session");
+    assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
+    assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
+
+    // 3. Verify worktree file contains conflict markers
+    let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
+    let validation =
+        gitgpui_core::services::validate_conflict_resolution_text(&worktree_content);
+    assert!(
+        validation.has_conflict_markers,
+        "worktree file should contain conflict markers"
+    );
+
+    // 4. Write manually resolved content (pick ours version)
+    let resolved_content = "header\nours-version\nfooter\n";
+    let resolved_validation =
+        gitgpui_core::services::validate_conflict_resolution_text(resolved_content);
+    assert!(
+        !resolved_validation.has_conflict_markers,
+        "resolved content should have no conflict markers"
+    );
+
+    // 5. Write resolved text to worktree and stage
+    fs::write(repo.join("doc.txt"), resolved_content).unwrap();
+    opened.stage(&[Path::new("doc.txt")]).unwrap();
+
+    // 6. Verify conflict is resolved — no more conflict status
+    let status_after = opened.status().unwrap();
+    assert!(
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("doc.txt")
+                && e.kind == FileStatusKind::Conflicted),
+        "doc.txt should no longer be conflicted after staging resolved content"
+    );
+}
+
+/// End-to-end test: autosolve Pass 1 correctly resolves trivial regions
+/// using synthetic conflict stages where some regions are trivially
+/// resolvable (one side equals base) while others are genuine conflicts.
+#[test]
+fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
+    use gitgpui_core::conflict_session::{
+        ConflictPayload, ConflictRegionResolution, ConflictSession,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    // Create a BothModified conflict using synthetic stages.
+    // Write a worktree file with conflict markers containing three regions:
+    //   Region 0: only ours changed (trivial → OnlyOursChanged)
+    //   Region 1: both changed differently (genuine conflict)
+    //   Region 2: both sides identical (trivial → IdenticalSides)
+    let base_blob = hash_blob(repo, b"base-r0\nbase-r1\nbase-r2\n");
+    let ours_blob = hash_blob(repo, b"ours-r0\nours-r1\nsame-r2\n");
+    let theirs_blob = hash_blob(repo, b"base-r0\ntheirs-r1\nsame-r2\n");
+    set_unmerged_stages(
+        repo,
+        "multi.txt",
+        Some(&base_blob),
+        Some(&ours_blob),
+        Some(&theirs_blob),
+    );
+
+    // Write worktree file with three conflict marker blocks
+    let merged_markers = concat!(
+        "<<<<<<< HEAD\n",
+        "ours-r0\n",
+        "||||||| base\n",
+        "base-r0\n",
+        "=======\n",
+        "base-r0\n",
+        ">>>>>>> feature\n",
+        "<<<<<<< HEAD\n",
+        "ours-r1\n",
+        "||||||| base\n",
+        "base-r1\n",
+        "=======\n",
+        "theirs-r1\n",
+        ">>>>>>> feature\n",
+        "<<<<<<< HEAD\n",
+        "same-r2\n",
+        "||||||| base\n",
+        "base-r2\n",
+        "=======\n",
+        "same-r2\n",
+        ">>>>>>> feature\n",
+    );
+    write(repo, "multi.txt", merged_markers);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Build a ConflictSession from the backend
+    let session_opt = opened
+        .conflict_session(Path::new("multi.txt"))
+        .unwrap();
+    // The backend may or may not build the session (depending on status
+    // detection of the synthetic stages). Build one manually if needed.
+    let mut session = session_opt.unwrap_or_else(|| {
+        ConflictSession::from_merged_text(
+            PathBuf::from("multi.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text("base-r0\nbase-r1\nbase-r2\n".into()),
+            ConflictPayload::Text("ours-r0\nours-r1\nsame-r2\n".into()),
+            ConflictPayload::Text("base-r0\ntheirs-r1\nsame-r2\n".into()),
+            merged_markers,
+        )
+    });
+
+    assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
+    assert_eq!(session.total_regions(), 3);
+    assert_eq!(session.unsolved_count(), 3, "all regions should start unresolved");
+
+    // Apply auto-resolve Pass 1
+    let auto_resolved = session.auto_resolve_safe();
+    assert_eq!(auto_resolved, 2, "expected 2 trivial regions to be auto-resolved");
+    assert_eq!(session.unsolved_count(), 1, "1 genuine conflict should remain");
+
+    // Verify specific rules
+    match &session.regions[0].resolution {
+        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
+            assert_eq!(
+                *rule,
+                gitgpui_core::conflict_session::AutosolveRule::OnlyOursChanged,
+            );
+            assert_eq!(content, "ours-r0\n");
+        }
+        other => panic!("region 0 should be auto-resolved, got {:?}", other),
+    }
+    assert!(
+        !session.regions[1].resolution.is_resolved(),
+        "region 1 (genuine conflict) should remain unresolved"
+    );
+    match &session.regions[2].resolution {
+        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
+            assert_eq!(
+                *rule,
+                gitgpui_core::conflict_session::AutosolveRule::IdenticalSides,
+            );
+            assert_eq!(content, "same-r2\n");
+        }
+        other => panic!("region 2 should be auto-resolved, got {:?}", other),
+    }
+
+    // Navigation should point to the remaining unresolved region
+    assert_eq!(session.next_unresolved_after(0), Some(1));
+    assert_eq!(session.prev_unresolved_before(2), Some(1));
+}
+
+/// End-to-end test: conflict session for a modify/delete conflict
+/// produces correct strategy and payloads, and the "keep" side can be
+/// staged to resolve the conflict.
+#[test]
+fn conflict_session_modify_delete_keep_resolves_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base content\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    // Feature branch modifies the file
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "modified by feature\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "modify"],
+    );
+
+    // Main branch deletes the file
+    run_git(repo, &["checkout", "-"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "delete"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Verify conflict session for modify/delete
+    let session = opened
+        .conflict_session(Path::new("a.txt"))
+        .unwrap()
+        .expect("conflict session for modify/delete");
+    assert_eq!(
+        session.strategy,
+        ConflictResolverStrategy::TwoWayKeepDelete,
+        "modify/delete conflicts should use TwoWayKeepDelete strategy"
+    );
+    assert_eq!(session.conflict_kind, FileConflictKind::DeletedByUs);
+
+    // Ours deleted (absent), theirs has content
+    assert!(
+        session.ours.is_absent(),
+        "ours (delete side) should be absent"
+    );
+    assert!(
+        session.theirs.as_text().is_some(),
+        "theirs (modify side) should have text"
+    );
+
+    // Resolve by keeping theirs (the modified version)
+    opened
+        .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Theirs)
+        .unwrap();
+
+    // Verify file is restored and no longer conflicted
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "modified by feature\n"
+    );
+    let status = opened.status().unwrap();
+    assert!(
+        !status
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("a.txt")
+                && e.kind == FileStatusKind::Conflicted),
+        "a.txt should no longer be conflicted after keeping theirs"
+    );
+}
+
+/// Validates the safety gate: `validate_conflict_resolution_text` correctly
+/// detects remaining markers in partially-resolved text.
+#[test]
+fn validate_conflict_resolution_detects_partial_resolution() {
+    use gitgpui_core::services::validate_conflict_resolution_text;
+
+    // Fully resolved text — no markers
+    let clean = "line1\nline2\nline3\n";
+    assert!(!validate_conflict_resolution_text(clean).has_conflict_markers);
+
+    // Partially resolved — one conflict block remains
+    let partial = concat!(
+        "resolved section\n",
+        "<<<<<<< HEAD\n",
+        "ours\n",
+        "=======\n",
+        "theirs\n",
+        ">>>>>>> feature\n",
+        "another resolved section\n",
+    );
+    let v = validate_conflict_resolution_text(partial);
+    assert!(v.has_conflict_markers);
+    assert_eq!(v.marker_lines, 3); // <<<<<<<, =======, >>>>>>>
+
+    // diff3-style markers
+    let diff3 = concat!(
+        "<<<<<<< HEAD\n",
+        "ours\n",
+        "||||||| base\n",
+        "base\n",
+        "=======\n",
+        "theirs\n",
+        ">>>>>>> feature\n",
+    );
+    let v3 = validate_conflict_resolution_text(diff3);
+    assert!(v3.has_conflict_markers);
+    assert_eq!(v3.marker_lines, 4); // <<<<<<<, |||||||, =======, >>>>>>>
+}

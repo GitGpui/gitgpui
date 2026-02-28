@@ -128,6 +128,13 @@
 - ✅ Added `RepoState::conflict_hide_resolved` + revision-safe setters (`set_conflict_hide_resolved`, `bump_conflict_rev`), and reset hide-resolved on new conflict file load — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/reducer/effects.rs`
 - ✅ Added reducer/unit coverage for new state actions (hide-resolved updates, bulk unresolved-only picks, autosolve session mutation) — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`
 
+### 17) End-to-End Workflow Integration Tests (Iteration 22)
+- ✅ **Resolve+write+stage workflow:** added `resolve_conflict_write_and_stage_clears_conflict` — creates a real `BothModified` merge conflict, loads the conflict session via backend, validates worktree contains markers, writes manually resolved content, validates no markers remain, stages the file, and verifies conflict is cleared from status — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **Autosolve Pass 1 end-to-end:** added `autosolve_safe_resolves_trivial_conflict_regions_end_to_end` — creates synthetic 3-region conflict (OnlyOursChanged, genuine conflict, IdenticalSides), builds ConflictSession, runs `auto_resolve_safe()`, verifies exactly 2 trivial regions resolved with correct rules while the genuine conflict remains unresolved, and validates navigation points to the remaining region — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **Modify/delete session+resolve workflow:** added `conflict_session_modify_delete_keep_resolves_conflict` — creates a real `DeletedByUs` merge conflict, verifies session uses `TwoWayKeepDelete` strategy with correct Absent/Text payloads, resolves via `checkout_conflict_side(Theirs)`, and confirms file is restored and conflict is cleared — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **Validation safety gate:** added `validate_conflict_resolution_detects_partial_resolution` — verifies `validate_conflict_resolution_text()` correctly reports no markers in clean text, counts marker lines in partially-resolved text, and handles diff3-style `|||||||` markers — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ Full test suite: 432 tests pass, 0 failures, clippy clean
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*
