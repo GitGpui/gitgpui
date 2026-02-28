@@ -1,6 +1,8 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::{CommandOutput, MergetoolResult, Result};
+use gitgpui_core::services::{
+    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
+};
 use std::path::Path;
 use std::process::Command;
 
@@ -147,6 +149,19 @@ impl GixRepo {
             Some(bytes) => bytes,
             None => std::fs::read(&merged_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?,
         };
+
+        // Validate textual merged output and refuse staging if conflict
+        // markers are still present.
+        if let Ok(merged_text) = std::str::from_utf8(&merged_contents) {
+            let validation = validate_conflict_resolution_text(merged_text);
+            if validation.has_conflict_markers {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "Mergetool '{tool_name}' left unresolved conflict markers in {} ({} marker lines); refusing to stage",
+                    path.display(),
+                    validation.marker_lines
+                ))));
+            }
+        }
 
         // Stage the file
         let path_ref: &Path = path;
