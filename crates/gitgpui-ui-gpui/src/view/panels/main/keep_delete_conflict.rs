@@ -78,10 +78,10 @@ fn conflict_side_has_payload(
     }
 }
 
-fn conflict_side_text<'a>(
-    file: &'a gitgpui_state::model::ConflictFile,
+fn conflict_side_text(
+    file: &gitgpui_state::model::ConflictFile,
     side: ConflictSide,
-) -> Option<&'a str> {
+) -> Option<&str> {
     match side {
         ConflictSide::Ours => file.ours.as_deref(),
         ConflictSide::Theirs => file.theirs.as_deref(),
