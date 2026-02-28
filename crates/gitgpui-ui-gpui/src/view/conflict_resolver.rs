@@ -289,7 +289,7 @@ pub fn auto_resolve_segments_regex(
     segments: &mut [ConflictSegment],
     options: &gitgpui_core::conflict_session::RegexAutosolveOptions,
 ) -> usize {
-    use gitgpui_core::conflict_session::{regex_assisted_auto_resolve_pick, AutosolvePickSide};
+    use gitgpui_core::conflict_session::{AutosolvePickSide, regex_assisted_auto_resolve_pick};
 
     let mut count = 0;
     for seg in segments.iter_mut() {
@@ -338,12 +338,9 @@ pub fn auto_resolve_segments_history(
     for seg in segments.drain(..) {
         match seg {
             ConflictSegment::Block(ref block) if !block.resolved => {
-                if let Some(merged) = history_merge_region(
-                    block.base.as_deref(),
-                    &block.ours,
-                    &block.theirs,
-                    options,
-                ) {
+                if let Some(merged) =
+                    history_merge_region(block.base.as_deref(), &block.ours, &block.theirs, options)
+                {
                     // Merge adjacent Text segments for cleanliness.
                     if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                         prev.push_str(&merged);
@@ -371,7 +368,7 @@ pub fn auto_resolve_segments_history(
 ///
 /// Returns the number of original blocks that were split.
 pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
-    use gitgpui_core::conflict_session::{split_conflict_into_subchunks, Subchunk};
+    use gitgpui_core::conflict_session::{Subchunk, split_conflict_into_subchunks};
 
     let mut new_segments = Vec::with_capacity(segments.len());
     let mut split_count = 0;
@@ -388,18 +385,13 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
                         match subchunk {
                             Subchunk::Resolved(text) => {
                                 // Merge adjacent Text segments for cleanliness.
-                                if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut()
-                                {
+                                if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                                     prev.push_str(&text);
                                 } else {
                                     new_segments.push(ConflictSegment::Text(text));
                                 }
                             }
-                            Subchunk::Conflict {
-                                base,
-                                ours,
-                                theirs,
-                            } => {
+                            Subchunk::Conflict { base, ours, theirs } => {
                                 new_segments.push(ConflictSegment::Block(ConflictBlock {
                                     base: Some(base),
                                     ours,
@@ -502,6 +494,105 @@ pub fn build_inline_rows(rows: &[gitgpui_core::file_diff::FileDiffRow]) -> Vec<C
         }
     }
     out
+}
+
+fn text_line_count(text: &str) -> u32 {
+    if text.is_empty() {
+        return 0;
+    }
+    u32::try_from(text.lines().count()).unwrap_or(u32::MAX)
+}
+
+fn build_two_way_conflict_line_ranges(
+    segments: &[ConflictSegment],
+) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+    let mut ranges = Vec::new();
+    let mut ours_line = 1u32;
+    let mut theirs_line = 1u32;
+
+    for seg in segments {
+        match seg {
+            ConflictSegment::Text(text) => {
+                let count = text_line_count(text);
+                ours_line = ours_line.saturating_add(count);
+                theirs_line = theirs_line.saturating_add(count);
+            }
+            ConflictSegment::Block(block) => {
+                let ours_count = text_line_count(&block.ours);
+                let theirs_count = text_line_count(&block.theirs);
+                let ours_end = ours_line.saturating_add(ours_count);
+                let theirs_end = theirs_line.saturating_add(theirs_count);
+                ranges.push((ours_line..ours_end, theirs_line..theirs_end));
+                ours_line = ours_end;
+                theirs_line = theirs_end;
+            }
+        }
+    }
+
+    ranges
+}
+
+fn row_conflict_index_for_lines(
+    old_line: Option<u32>,
+    new_line: Option<u32>,
+    ranges: &[(std::ops::Range<u32>, std::ops::Range<u32>)],
+) -> Option<usize> {
+    ranges.iter().position(|(ours, theirs)| {
+        old_line.is_some_and(|line| ours.contains(&line))
+            || new_line.is_some_and(|line| theirs.contains(&line))
+    })
+}
+
+/// Build conflict-index maps for two-way split and inline rows.
+///
+/// Each output entry is `Some(conflict_index)` when the row belongs to a marker
+/// conflict block, or `None` for non-conflict context rows.
+pub fn map_two_way_rows_to_conflicts(
+    segments: &[ConflictSegment],
+    diff_rows: &[gitgpui_core::file_diff::FileDiffRow],
+    inline_rows: &[ConflictInlineRow],
+) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    let ranges = build_two_way_conflict_line_ranges(segments);
+    let split = diff_rows
+        .iter()
+        .map(|row| row_conflict_index_for_lines(row.old_line, row.new_line, &ranges))
+        .collect();
+    let inline = inline_rows
+        .iter()
+        .map(|row| row_conflict_index_for_lines(row.old_line, row.new_line, &ranges))
+        .collect();
+    (split, inline)
+}
+
+/// Build visible row indices for two-way views.
+///
+/// When `hide_resolved` is true, rows belonging to resolved conflict blocks are
+/// removed from the visible list. Non-conflict rows are always kept visible.
+pub fn build_two_way_visible_indices(
+    row_conflict_map: &[Option<usize>],
+    segments: &[ConflictSegment],
+    hide_resolved: bool,
+) -> Vec<usize> {
+    if !hide_resolved {
+        return (0..row_conflict_map.len()).collect();
+    }
+
+    let resolved_blocks: Vec<bool> = segments
+        .iter()
+        .filter_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b.resolved),
+            _ => None,
+        })
+        .collect();
+
+    row_conflict_map
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, conflict_ix)| match conflict_ix {
+            Some(ci) if resolved_blocks.get(*ci).copied().unwrap_or(false) => None,
+            _ => Some(ix),
+        })
+        .collect()
 }
 
 pub fn collect_split_selection(
@@ -613,7 +704,10 @@ pub fn compute_three_way_word_highlights(
     theirs_lines: &[gpui::SharedString],
     conflict_ranges: &[std::ops::Range<usize>],
 ) -> (WordHighlights, WordHighlights, WordHighlights) {
-    let len = base_lines.len().max(ours_lines.len()).max(theirs_lines.len());
+    let len = base_lines
+        .len()
+        .max(ours_lines.len())
+        .max(theirs_lines.len());
     let mut wh_base: WordHighlights = vec![None; len];
     let mut wh_ours: WordHighlights = vec![None; len];
     let mut wh_theirs: WordHighlights = vec![None; len];
@@ -676,7 +770,8 @@ fn merge_ranges(
 }
 
 /// Per-line pair of (old, new) word-highlight ranges for two-way diff.
-pub type TwoWayWordHighlights = Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
+pub type TwoWayWordHighlights =
+    Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
 
 pub fn compute_two_way_word_highlights(
     diff_rows: &[gitgpui_core::file_diff::FileDiffRow],
@@ -703,10 +798,7 @@ pub fn compute_two_way_word_highlights(
 /// will be `None` even though the git ancestor content (index stage :1:) is available.
 /// This function populates `block.base` by using the Text segments as anchors to
 /// locate the corresponding base content in the ancestor file.
-pub fn populate_block_bases_from_ancestor(
-    segments: &mut [ConflictSegment],
-    ancestor_text: &str,
-) {
+pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ancestor_text: &str) {
     if ancestor_text.is_empty() {
         return;
     }
@@ -886,10 +978,13 @@ mod tests {
         assert_eq!(conflict_count(&segments), 1);
 
         // The block has no base initially (2-way markers)
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert!(block.base.is_none());
 
         // Populate base from ancestor file
@@ -897,10 +992,13 @@ mod tests {
         populate_block_bases_from_ancestor(&mut segments, ancestor);
 
         // Now the block should have base content extracted from the ancestor
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.base.as_deref(), Some("orig\n"));
     }
 
@@ -911,18 +1009,24 @@ mod tests {
         let mut segments = parse_conflict_markers(input);
 
         // Block already has base from markers
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.base.as_deref(), Some("orig\n"));
 
         // populate should not overwrite existing base
         populate_block_bases_from_ancestor(&mut segments, "a\nDIFFERENT\nb\n");
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.base.as_deref(), Some("orig\n")); // unchanged
     }
 
@@ -935,10 +1039,13 @@ mod tests {
         let ancestor = "a\norig_foo\nb\norig_x\nc\n";
         populate_block_bases_from_ancestor(&mut segments, ancestor);
 
-        let blocks: Vec<_> = segments.iter().filter_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).collect();
+        let blocks: Vec<_> = segments
+            .iter()
+            .filter_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .collect();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].base.as_deref(), Some("orig_foo\n"));
         assert_eq!(blocks[1].base.as_deref(), Some("orig_x\n"));
@@ -953,7 +1060,10 @@ mod tests {
         populate_block_bases_from_ancestor(&mut segments, ancestor);
 
         // Pick Base and generate resolved text
-        if let Some(ConflictSegment::Block(block)) = segments.iter_mut().find(|s| matches!(s, ConflictSegment::Block(_))) {
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
             block.choice = ConflictChoice::Base;
         }
         let resolved = generate_resolved_text(&segments);
@@ -975,7 +1085,9 @@ mod tests {
     fn no_false_positives_for_clean_text() {
         assert!(!text_contains_conflict_markers("a\nb\nc\n"));
         assert!(!text_contains_conflict_markers(""));
-        assert!(!text_contains_conflict_markers("some text with < and > arrows"));
+        assert!(!text_contains_conflict_markers(
+            "some text with < and > arrows"
+        ));
         assert!(!text_contains_conflict_markers("====== not quite seven"));
     }
 
@@ -1139,45 +1251,57 @@ mod tests {
         assert_eq!(auto_resolve_segments(&mut segments), 1);
         assert_eq!(resolved_conflict_count(&segments), 1);
 
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.choice, ConflictChoice::Ours);
         assert!(block.resolved);
     }
 
     #[test]
     fn auto_resolve_only_theirs_changed() {
-        let input = "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
+        let input =
+            "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
         let mut segments = parse_conflict_markers(input);
         assert_eq!(auto_resolve_segments(&mut segments), 1);
 
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.choice, ConflictChoice::Theirs);
         assert!(block.resolved);
     }
 
     #[test]
     fn auto_resolve_only_ours_changed() {
-        let input = "a\n<<<<<<< HEAD\nchanged\n||||||| base\norig\n=======\norig\n>>>>>>> other\nb\n";
+        let input =
+            "a\n<<<<<<< HEAD\nchanged\n||||||| base\norig\n=======\norig\n>>>>>>> other\nb\n";
         let mut segments = parse_conflict_markers(input);
         assert_eq!(auto_resolve_segments(&mut segments), 1);
 
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.choice, ConflictChoice::Ours);
         assert!(block.resolved);
     }
 
     #[test]
     fn auto_resolve_both_changed_differently_not_resolved() {
-        let input = "a\n<<<<<<< HEAD\nours\n||||||| base\norig\n=======\ntheirs\n>>>>>>> other\nb\n";
+        let input =
+            "a\n<<<<<<< HEAD\nours\n||||||| base\norig\n=======\ntheirs\n>>>>>>> other\nb\n";
         let mut segments = parse_conflict_markers(input);
         assert_eq!(auto_resolve_segments(&mut segments), 0);
         assert_eq!(resolved_conflict_count(&segments), 0);
@@ -1216,10 +1340,13 @@ mod tests {
         // Auto-resolve should skip it.
         assert_eq!(auto_resolve_segments(&mut segments), 0);
         // Choice should remain Theirs (not overwritten).
-        let block = segments.iter().find_map(|s| match s {
-            ConflictSegment::Block(b) => Some(b),
-            _ => None,
-        }).unwrap();
+        let block = segments
+            .iter()
+            .find_map(|s| match s {
+                ConflictSegment::Block(b) => Some(b),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(block.choice, ConflictChoice::Theirs);
     }
 
@@ -1240,7 +1367,8 @@ mod tests {
 
     #[test]
     fn auto_resolve_generates_correct_text() {
-        let input = "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
+        let input =
+            "a\n<<<<<<< HEAD\norig\n||||||| base\norig\n=======\nchanged\n>>>>>>> other\nb\n";
         let mut segments = parse_conflict_markers(input);
         auto_resolve_segments(&mut segments);
         let text = generate_resolved_text(&segments);
@@ -1297,6 +1425,82 @@ mod tests {
 
         assert_eq!(auto_resolve_segments_regex(&mut segments, &options), 0);
         assert_eq!(resolved_conflict_count(&segments), 0);
+    }
+
+    #[test]
+    fn map_two_way_rows_to_conflicts_tracks_conflict_indices() {
+        let markers = concat!(
+            "a\n",
+            "<<<<<<< HEAD\n",
+            "b\n",
+            "=======\n",
+            "B\n",
+            ">>>>>>> other\n",
+            "mid\n",
+            "<<<<<<< HEAD\n",
+            "c\n",
+            "=======\n",
+            "C\n",
+            ">>>>>>> other\n",
+            "z\n",
+        );
+        let segments = parse_conflict_markers(markers);
+        let diff_rows =
+            gitgpui_core::file_diff::side_by_side_rows("a\nb\nmid\nc\nz\n", "a\nB\nmid\nC\nz\n");
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, inline_map) =
+            map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+
+        let split_conflicts: Vec<usize> = split_map.iter().flatten().copied().collect();
+        let inline_conflicts: Vec<usize> = inline_map.iter().flatten().copied().collect();
+
+        assert_eq!(split_conflicts, vec![0, 1]);
+        assert_eq!(inline_conflicts, vec![0, 0, 1, 1]);
+    }
+
+    #[test]
+    fn map_two_way_rows_to_conflicts_maps_single_sided_rows() {
+        let markers = "<<<<<<< HEAD\n=======\nadd\n>>>>>>> other\n";
+        let segments = parse_conflict_markers(markers);
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows("", "add\n");
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, inline_map) =
+            map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+
+        assert_eq!(split_map, vec![Some(0)]);
+        assert_eq!(inline_map, vec![Some(0)]);
+    }
+
+    #[test]
+    fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
+        let segments = vec![
+            ConflictSegment::Text("a\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "b\n".into(),
+                theirs: "B\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "c\n".into(),
+                theirs: "C\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+        ];
+        let row_conflict_map = vec![None, Some(0), Some(0), None, Some(1), Some(1)];
+
+        assert_eq!(
+            build_two_way_visible_indices(&row_conflict_map, &segments, false),
+            vec![0, 1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            build_two_way_visible_indices(&row_conflict_map, &segments, true),
+            vec![0, 3, 4, 5]
+        );
     }
 
     // -- hide-resolved visible map tests --

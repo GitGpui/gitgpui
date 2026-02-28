@@ -64,7 +64,15 @@ impl MainPaneView {
             match (is_conflict_resolver, self.diff_view) {
                 (true, _) => match self.conflict_resolver.diff_mode {
                     ConflictDiffMode::Split => {
-                        for (ix, row) in self.conflict_resolver.diff_rows.iter().enumerate() {
+                        for (visible_ix, &row_ix) in self
+                            .conflict_resolver
+                            .diff_visible_row_indices
+                            .iter()
+                            .enumerate()
+                        {
+                            let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
+                                continue;
+                            };
                             if row
                                 .old
                                 .as_deref()
@@ -74,14 +82,22 @@ impl MainPaneView {
                                     .as_deref()
                                     .is_some_and(|s| contains_ascii_case_insensitive(s, query))
                             {
-                                self.diff_search_matches.push(ix);
+                                self.diff_search_matches.push(visible_ix);
                             }
                         }
                     }
                     ConflictDiffMode::Inline => {
-                        for (ix, row) in self.conflict_resolver.inline_rows.iter().enumerate() {
+                        for (visible_ix, &row_ix) in self
+                            .conflict_resolver
+                            .inline_visible_row_indices
+                            .iter()
+                            .enumerate()
+                        {
+                            let Some(row) = self.conflict_resolver.inline_rows.get(row_ix) else {
+                                continue;
+                            };
                             if contains_ascii_case_insensitive(row.content.as_str(), query) {
-                                self.diff_search_matches.push(ix);
+                                self.diff_search_matches.push(visible_ix);
                             }
                         }
                     }

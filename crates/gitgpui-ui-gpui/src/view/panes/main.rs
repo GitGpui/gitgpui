@@ -1314,10 +1314,26 @@ impl MainPaneView {
             ConflictResolverViewMode::TwoWayDiff => match self.conflict_resolver.diff_mode {
                 ConflictDiffMode::Split => diff_navigation::conflict_nav_entries_for_split(
                     &self.conflict_resolver.diff_rows,
-                ),
+                )
+                .into_iter()
+                .filter_map(|row_ix| {
+                    self.conflict_resolver
+                        .diff_visible_row_indices
+                        .binary_search(&row_ix)
+                        .ok()
+                })
+                .collect(),
                 ConflictDiffMode::Inline => diff_navigation::conflict_nav_entries_for_inline(
                     &self.conflict_resolver.inline_rows,
-                ),
+                )
+                .into_iter()
+                .filter_map(|row_ix| {
+                    self.conflict_resolver
+                        .inline_visible_row_indices
+                        .binary_search(&row_ix)
+                        .ok()
+                })
+                .collect(),
             },
         }
     }
@@ -1388,6 +1404,38 @@ impl MainPaneView {
                 .three_way_conflict_ranges
                 .iter()
                 .position(|r| r.contains(line_ix)),
+        }
+    }
+
+    fn conflict_resolver_two_way_visible_ix_for_conflict(
+        &self,
+        conflict_ix: usize,
+    ) -> Option<usize> {
+        let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolver.diff_rows,
+            &self.conflict_resolver.inline_rows,
+        );
+
+        match self.conflict_resolver.diff_mode {
+            ConflictDiffMode::Split => split_map
+                .iter()
+                .position(|mapped| *mapped == Some(conflict_ix))
+                .and_then(|row_ix| {
+                    self.conflict_resolver
+                        .diff_visible_row_indices
+                        .binary_search(&row_ix)
+                        .ok()
+                }),
+            ConflictDiffMode::Inline => inline_map
+                .iter()
+                .position(|mapped| *mapped == Some(conflict_ix))
+                .and_then(|row_ix| {
+                    self.conflict_resolver
+                        .inline_visible_row_indices
+                        .binary_search(&row_ix)
+                        .ok()
+                }),
         }
     }
 
@@ -1542,21 +1590,21 @@ impl MainPaneView {
 
         // Use the ConflictSession from state for strategy if available,
         // otherwise fall back to local computation.
-        let (conflict_strategy, is_binary) =
-            if let Some(session) = &repo.conflict_session {
-                let binary = session.base.is_binary()
-                    || session.ours.is_binary()
-                    || session.theirs.is_binary();
-                (Some(session.strategy), binary)
-            } else {
-                let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
-                    bytes.is_some() && text.is_none()
-                };
-                let binary = has_non_text(&file.base_bytes, &file.base)
-                    || has_non_text(&file.ours_bytes, &file.ours)
-                    || has_non_text(&file.theirs_bytes, &file.theirs);
-                (Self::conflict_resolver_strategy(conflict_kind, binary), binary)
-            };
+        let (conflict_strategy, is_binary) = if let Some(session) = &repo.conflict_session {
+            let binary =
+                session.base.is_binary() || session.ours.is_binary() || session.theirs.is_binary();
+            (Some(session.strategy), binary)
+        } else {
+            let has_non_text =
+                |bytes: &Option<Vec<u8>>, text: &Option<String>| bytes.is_some() && text.is_none();
+            let binary = has_non_text(&file.base_bytes, &file.base)
+                || has_non_text(&file.ours_bytes, &file.ours)
+                || has_non_text(&file.theirs_bytes, &file.theirs);
+            (
+                Self::conflict_resolver_strategy(conflict_kind, binary),
+                binary,
+            )
+        };
 
         // For binary conflicts, populate minimal state and return early.
         if is_binary {
@@ -1605,6 +1653,12 @@ impl MainPaneView {
 
         let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
         let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+        let (diff_row_conflict_map, inline_row_conflict_map) =
+            conflict_resolver::map_two_way_rows_to_conflicts(
+                &marker_segments,
+                &diff_rows,
+                &inline_rows,
+            );
 
         fn split_lines_shared(text: &str) -> Vec<SharedString> {
             if text.is_empty() {
@@ -1715,6 +1769,16 @@ impl MainPaneView {
             &marker_segments,
             hide_resolved,
         );
+        let diff_visible_row_indices = conflict_resolver::build_two_way_visible_indices(
+            &diff_row_conflict_map,
+            &marker_segments,
+            hide_resolved,
+        );
+        let inline_visible_row_indices = conflict_resolver::build_two_way_visible_indices(
+            &inline_row_conflict_map,
+            &marker_segments,
+            hide_resolved,
+        );
 
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
@@ -1741,6 +1805,8 @@ impl MainPaneView {
             inline_selected: std::collections::BTreeSet::new(),
             hide_resolved,
             three_way_visible_map,
+            diff_visible_row_indices,
+            inline_visible_row_indices,
             is_binary_conflict: false,
             binary_side_sizes: [None; 3],
             strategy: conflict_strategy,
@@ -1819,6 +1885,42 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
                 self.conflict_resolver.hide_resolved,
             );
+        let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolver.diff_rows,
+            &self.conflict_resolver.inline_rows,
+        );
+        self.conflict_resolver.diff_visible_row_indices =
+            conflict_resolver::build_two_way_visible_indices(
+                &split_map,
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.hide_resolved,
+            );
+        self.conflict_resolver.inline_visible_row_indices =
+            conflict_resolver::build_two_way_visible_indices(
+                &inline_map,
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.hide_resolved,
+            );
+
+        let visible_split_rows: std::collections::BTreeSet<usize> = self
+            .conflict_resolver
+            .diff_visible_row_indices
+            .iter()
+            .copied()
+            .collect();
+        self.conflict_resolver
+            .split_selected
+            .retain(|(row_ix, _)| visible_split_rows.contains(row_ix));
+        let visible_inline_rows: std::collections::BTreeSet<usize> = self
+            .conflict_resolver
+            .inline_visible_row_indices
+            .iter()
+            .copied()
+            .collect();
+        self.conflict_resolver
+            .inline_selected
+            .retain(|row_ix| visible_inline_rows.contains(row_ix));
     }
 
     pub(in super::super) fn conflict_resolver_selection_is_empty(&self) -> bool {
@@ -1839,11 +1941,12 @@ impl MainPaneView {
 
     pub(in super::super) fn conflict_resolver_toggle_split_selected(
         &mut self,
+        visible_row_ix: usize,
         row_ix: usize,
         side: ConflictPickSide,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.conflict_resolver.nav_anchor = Some(row_ix);
+        self.conflict_resolver.nav_anchor = Some(visible_row_ix);
         let key = (row_ix, side);
         if self.conflict_resolver.split_selected.contains(&key) {
             self.conflict_resolver.split_selected.remove(&key);
@@ -1855,10 +1958,11 @@ impl MainPaneView {
 
     pub(in super::super) fn conflict_resolver_toggle_inline_selected(
         &mut self,
+        visible_ix: usize,
         ix: usize,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.conflict_resolver.nav_anchor = Some(ix);
+        self.conflict_resolver.nav_anchor = Some(visible_ix);
         if self.conflict_resolver.inline_selected.contains(&ix) {
             self.conflict_resolver.inline_selected.remove(&ix);
         } else {
@@ -1921,6 +2025,7 @@ impl MainPaneView {
         }
         self.conflict_resolver.marker_segments = segments;
         self.conflict_resolver.active_conflict = 0;
+        self.conflict_resolver_rebuild_visible_map();
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
@@ -2024,12 +2129,20 @@ impl MainPaneView {
         .filter(|&next| next != current)
         {
             self.conflict_resolver.active_conflict = next_unresolved;
-            // Scroll the 3-way view to the new active conflict's visible position.
-            if let Some(vi) = conflict_resolver::visible_index_for_conflict(
-                &self.conflict_resolver.three_way_visible_map,
-                &self.conflict_resolver.three_way_conflict_ranges,
-                self.conflict_resolver.active_conflict,
-            ) {
+            let target_visible_ix = match self.conflict_resolver.view_mode {
+                ConflictResolverViewMode::ThreeWay => {
+                    conflict_resolver::visible_index_for_conflict(
+                        &self.conflict_resolver.three_way_visible_map,
+                        &self.conflict_resolver.three_way_conflict_ranges,
+                        self.conflict_resolver.active_conflict,
+                    )
+                }
+                ConflictResolverViewMode::TwoWayDiff => self
+                    .conflict_resolver_two_way_visible_ix_for_conflict(
+                        self.conflict_resolver.active_conflict,
+                    ),
+            };
+            if let Some(vi) = target_visible_ix {
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(vi, gpui::ScrollStrategy::Center);
             }

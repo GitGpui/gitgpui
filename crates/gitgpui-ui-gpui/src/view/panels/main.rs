@@ -1013,10 +1013,10 @@ impl MainPaneView {
                                 }
                                 ConflictResolverViewMode::TwoWayDiff => match mode {
                                     ConflictDiffMode::Split => {
-                                        self.conflict_resolver.diff_rows.len()
+                                        self.conflict_resolver.diff_visible_row_indices.len()
                                     }
                                     ConflictDiffMode::Inline => {
-                                        self.conflict_resolver.inline_rows.len()
+                                        self.conflict_resolver.inline_visible_row_indices.len()
                                     }
                                 },
                             };
