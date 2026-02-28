@@ -1110,6 +1110,75 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
 }
 
 #[test]
+fn checkout_conflict_side_resolves_non_utf8_binary_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let base_bytes = b"\x00base\xff\n".to_vec();
+    let ours_bytes = b"\x00ours\xff\n".to_vec();
+    let theirs_bytes = b"\x00theirs\xff\n".to_vec();
+
+    write_bytes(repo, "bin.dat", &base_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_bytes(repo, "bin.dat", &theirs_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write_bytes(repo, "bin.dat", &ours_bytes);
+    run_git(repo, &["add", "bin.dat"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let session = opened
+        .conflict_session(Path::new("bin.dat"))
+        .unwrap()
+        .expect("binary conflict session");
+    assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
+
+    opened
+        .checkout_conflict_side(Path::new("bin.dat"), ConflictSide::Theirs)
+        .unwrap();
+
+    assert_eq!(fs::read(repo.join("bin.dat")).unwrap(), theirs_bytes);
+
+    let status_after = opened.status().unwrap();
+    assert!(
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("bin.dat")
+                && e.kind == FileStatusKind::Conflicted),
+        "binary conflict should be cleared after choosing theirs"
+    );
+    assert!(
+        status_after.staged.iter().any(|e| e.path == Path::new("bin.dat")),
+        "chosen binary side should be staged"
+    );
+}
+
+#[test]
 fn conflict_session_both_deleted_binary_prefers_decision_strategy() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

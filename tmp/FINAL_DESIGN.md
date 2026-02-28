@@ -135,6 +135,9 @@
 - ✅ **Validation safety gate:** added `validate_conflict_resolution_detects_partial_resolution` — verifies `validate_conflict_resolution_text()` correctly reports no markers in clean text, counts marker lines in partially-resolved text, and handles diff3-style `|||||||` markers — `crates/gitgpui-git-gix/tests/status_integration.rs`
 - ✅ Full test suite: 432 tests pass, 0 failures, clippy clean
 
+### 18) Binary Conflict End-to-End Path (Iteration 23)
+- ✅ Added `checkout_conflict_side_resolves_non_utf8_binary_conflict` integration test — creates a real non-UTF8 `BothModified` binary conflict, verifies backend session strategy is `BinarySidePick`, resolves by selecting `Theirs`, and asserts both staged output bytes and cleared conflict status. This closes the explicit testing-plan gap for binary/non-UTF8 resolution workflow coverage — `crates/gitgpui-git-gix/tests/status_integration.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*
