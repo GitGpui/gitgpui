@@ -1733,6 +1733,8 @@ impl MainPaneView {
                                         .child("Resolved output"),
                                 )
                                 .child(start_controls);
+                            let autosolve_summary =
+                                self.conflict_resolver.last_autosolve_summary.clone();
 
                             // Vertical resize handle between merge inputs and resolved output
                             let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
@@ -1838,6 +1840,15 @@ impl MainPaneView {
                                 })
                                 .child(vsplit_handle)
                                 .child(output_header)
+                                .when_some(autosolve_summary, |d, summary| {
+                                    d.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .px_1()
+                                            .child(summary),
+                                    )
+                                })
                                 .child({
                                     let mut bottom_section =
                                         div()

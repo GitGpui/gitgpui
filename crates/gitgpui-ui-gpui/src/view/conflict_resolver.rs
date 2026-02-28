@@ -23,6 +23,13 @@ pub enum ConflictPickSide {
     Theirs,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutosolveTraceMode {
+    Safe,
+    Regex,
+    History,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictBlock {
     pub base: Option<String>,
@@ -51,6 +58,38 @@ pub struct ConflictInlineRow {
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
 pub type WordHighlights = Vec<Option<Vec<std::ops::Range<usize>>>>;
+
+/// Build a user-facing summary for the most recent autosolve run.
+///
+/// The summary is shown in the resolver UI so autosolve behavior remains
+/// auditable without opening command logs.
+pub fn format_autosolve_trace_summary(
+    mode: AutosolveTraceMode,
+    unresolved_before: usize,
+    unresolved_after: usize,
+    pass1: usize,
+    pass2_split: usize,
+    pass1_after_split: usize,
+    regex: usize,
+    history: usize,
+) -> String {
+    let resolved = unresolved_before.saturating_sub(unresolved_after);
+    let blocks_word = if resolved == 1 { "block" } else { "blocks" };
+    match mode {
+        AutosolveTraceMode::Safe => format!(
+            "Last autosolve (safe): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}).",
+            unresolved_before, unresolved_after, pass1, pass2_split, pass1_after_split
+        ),
+        AutosolveTraceMode::Regex => format!(
+            "Last autosolve (regex): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}, regex {}).",
+            unresolved_before, unresolved_after, pass1, pass2_split, pass1_after_split, regex
+        ),
+        AutosolveTraceMode::History => format!(
+            "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
+            unresolved_before, unresolved_after, history
+        ),
+    }
+}
 
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
     let mut segments: Vec<ConflictSegment> = Vec::new();
@@ -1089,6 +1128,26 @@ mod tests {
             "some text with < and > arrows"
         ));
         assert!(!text_contains_conflict_markers("====== not quite seven"));
+    }
+
+    #[test]
+    fn autosolve_trace_summary_safe_mode() {
+        let summary = format_autosolve_trace_summary(AutosolveTraceMode::Safe, 5, 2, 2, 1, 0, 0, 0);
+        assert!(summary.contains("Last autosolve (safe)"));
+        assert!(summary.contains("resolved 3 blocks"));
+        assert!(summary.contains("unresolved 5 -> 2"));
+        assert!(summary.contains("pass1 2"));
+        assert!(summary.contains("split 1"));
+    }
+
+    #[test]
+    fn autosolve_trace_summary_history_mode_uses_history_stat() {
+        let summary =
+            format_autosolve_trace_summary(AutosolveTraceMode::History, 4, 1, 0, 0, 0, 0, 3);
+        assert!(summary.contains("Last autosolve (history)"));
+        assert!(summary.contains("resolved 3 blocks"));
+        assert!(summary.contains("history 3"));
+        assert!(!summary.contains("pass1"));
     }
 
     // -- resolved_conflict_count tests --

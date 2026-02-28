@@ -1621,6 +1621,7 @@ impl MainPaneView {
                 binary_side_sizes,
                 strategy: conflict_strategy,
                 conflict_kind,
+                last_autosolve_summary: None,
                 ..ConflictResolverUiState::default()
             };
             return;
@@ -1811,6 +1812,7 @@ impl MainPaneView {
             binary_side_sizes: [None; 3],
             strategy: conflict_strategy,
             conflict_kind,
+            last_autosolve_summary: None,
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
@@ -2025,6 +2027,7 @@ impl MainPaneView {
         }
         self.conflict_resolver.marker_segments = segments;
         self.conflict_resolver.active_conflict = 0;
+        self.conflict_resolver.last_autosolve_summary = None;
         self.conflict_resolver_rebuild_visible_map();
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
@@ -2254,6 +2257,23 @@ impl MainPaneView {
         }
         let total_after = self.conflict_resolver_conflict_count();
         let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        self.conflict_resolver.last_autosolve_summary = Some(
+            conflict_resolver::format_autosolve_trace_summary(
+                if include_regex_pass {
+                    conflict_resolver::AutosolveTraceMode::Regex
+                } else {
+                    conflict_resolver::AutosolveTraceMode::Safe
+                },
+                unresolved_before,
+                unresolved_after,
+                pass1,
+                pass2,
+                pass1_after_split,
+                regex,
+                0,
+            )
+            .into(),
+        );
         self.dispatch_conflict_autosolve_telemetry(
             if include_regex_pass {
                 gitgpui_state::msg::ConflictAutosolveMode::Regex
@@ -2311,6 +2331,19 @@ impl MainPaneView {
         }
         let total_after = self.conflict_resolver_conflict_count();
         let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        self.conflict_resolver.last_autosolve_summary = Some(
+            conflict_resolver::format_autosolve_trace_summary(
+                conflict_resolver::AutosolveTraceMode::History,
+                unresolved_before,
+                unresolved_after,
+                0,
+                0,
+                0,
+                0,
+                count,
+            )
+            .into(),
+        );
         self.dispatch_conflict_autosolve_telemetry(
             gitgpui_state::msg::ConflictAutosolveMode::History,
             total_before,

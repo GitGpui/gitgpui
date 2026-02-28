@@ -457,6 +457,8 @@ struct ConflictResolverUiState {
     strategy: Option<gitgpui_core::conflict_session::ConflictResolverStrategy>,
     /// The conflict kind for the current file (set during sync).
     conflict_kind: Option<gitgpui_core::domain::FileConflictKind>,
+    /// Last autosolve trace summary shown in resolver UI.
+    last_autosolve_summary: Option<SharedString>,
 }
 
 impl Default for ConflictResolverUiState {
@@ -492,6 +494,7 @@ impl Default for ConflictResolverUiState {
             binary_side_sizes: [None; 3],
             strategy: None,
             conflict_kind: None,
+            last_autosolve_summary: None,
         }
     }
 }
