@@ -64,7 +64,13 @@ impl GixRepo {
         std::fs::write(&remote_path, remote_bytes.as_deref().unwrap_or(b""))
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        // 4. Build and invoke the mergetool command
+        // 4. Snapshot the merged file before invoking the tool so we can
+        //    detect modifications when trustExitCode is false.
+        let pre_metadata = std::fs::metadata(&merged_path).ok();
+        let pre_mtime = pre_metadata.as_ref().and_then(|m| m.modified().ok());
+        let pre_len = pre_metadata.as_ref().map(|m| m.len());
+
+        // Build and invoke the mergetool command
         let output = if let Some(ref custom_cmd) = tool_cmd {
             // Custom command template — substitute variables
             let expanded = custom_cmd
@@ -111,12 +117,19 @@ impl GixRepo {
         let tool_success = if trust_exit_code {
             output.status.success()
         } else {
-            // When trustExitCode is false (default), we check if the merged
+            // When trustExitCode is false (default), check if the merged
             // file was modified compared to its state before the tool ran.
             // This mirrors git-mergetool behavior: the user is expected to
-            // save changes into MERGED. We check if the file exists and has
-            // been modified.
-            merged_path.exists()
+            // save changes into MERGED.
+            match std::fs::metadata(&merged_path).ok() {
+                Some(post) => {
+                    let post_mtime = post.modified().ok();
+                    let post_len = post.len();
+                    // File was modified if mtime changed or length changed.
+                    post_mtime != pre_mtime || Some(post_len) != pre_len
+                }
+                None => false, // file doesn't exist
+            }
         };
 
         if !tool_success {

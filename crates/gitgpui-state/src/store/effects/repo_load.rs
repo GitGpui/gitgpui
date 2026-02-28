@@ -1,15 +1,12 @@
 use crate::msg::Msg;
 use gitgpui_core::domain::{Diff, DiffArea, DiffTarget, LogCursor, LogScope};
 use gitgpui_core::error::ErrorKind;
+use gitgpui_core::services::decode_utf8_optional;
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use super::super::{RepoId, executor::TaskExecutor};
 use super::util::{RepoMap, spawn_with_repo};
-
-fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
-    bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
-}
 
 pub(super) fn schedule_load_branches(
     executor: &TaskExecutor,

@@ -2,7 +2,7 @@ use super::GixRepo;
 use crate::util::run_git_capture;
 use gitgpui_core::domain::{DiffArea, DiffTarget, FileDiffImage, FileDiffText};
 use gitgpui_core::error::{Error, ErrorKind};
-use gitgpui_core::services::{ConflictFileStages, Result};
+use gitgpui_core::services::{ConflictFileStages, Result, decode_utf8_optional};
 use std::path::Path;
 use std::process::Command;
 use std::str;
@@ -348,10 +348,6 @@ impl GixRepo {
             theirs,
         }))
     }
-}
-
-fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
-    bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
 }
 
 fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {

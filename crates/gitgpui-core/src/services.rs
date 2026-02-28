@@ -57,6 +57,12 @@ pub struct MergetoolResult {
     pub output: CommandOutput,
 }
 
+/// Try to decode optional bytes as UTF-8. Returns `None` if the bytes are
+/// `None` or not valid UTF-8.
+pub fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
+    bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFileStages {
     pub path: PathBuf,

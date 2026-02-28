@@ -576,18 +576,13 @@ impl MainPaneView {
 
         // Show-whitespace toggle (Alt+W).
         {
-            let ws_label = if self.show_whitespace {
-                "WS"
-            } else {
-                "WS"
-            };
             let ws_style = if self.show_whitespace {
                 zed::ButtonStyle::Filled
             } else {
                 zed::ButtonStyle::Outlined
             };
             controls = controls.child(
-                zed::Button::new("show_whitespace", ws_label)
+                zed::Button::new("show_whitespace", "WS")
                     .style(ws_style)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.show_whitespace = !this.show_whitespace;

@@ -1762,13 +1762,13 @@ impl MainPaneView {
         self.conflict_resolver_rebuild_visible_map();
         // If we just hid resolved conflicts, ensure active_conflict points to
         // an unresolved block so the user doesn't stare at a collapsed row.
-        if self.conflict_resolver.hide_resolved {
-            if let Some(next) = conflict_resolver::next_unresolved_conflict_index(
+        if self.conflict_resolver.hide_resolved
+            && let Some(next) = conflict_resolver::next_unresolved_conflict_index(
                 &self.conflict_resolver.marker_segments,
                 self.conflict_resolver.active_conflict,
-            ) {
-                self.conflict_resolver.active_conflict = next;
-            }
+            )
+        {
+            self.conflict_resolver.active_conflict = next;
         }
         cx.notify();
     }
@@ -1982,18 +1982,18 @@ impl MainPaneView {
         if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
             &self.conflict_resolver.marker_segments,
             current,
-        ) {
-            if next_unresolved != current {
-                self.conflict_resolver.active_conflict = next_unresolved;
-                // Scroll the 3-way view to the new active conflict's visible position.
-                if let Some(vi) = conflict_resolver::visible_index_for_conflict(
-                    &self.conflict_resolver.three_way_visible_map,
-                    &self.conflict_resolver.three_way_conflict_ranges,
-                    self.conflict_resolver.active_conflict,
-                ) {
-                    self.conflict_resolver_diff_scroll
-                        .scroll_to_item_strict(vi, gpui::ScrollStrategy::Center);
-                }
+        )
+        .filter(|&next| next != current)
+        {
+            self.conflict_resolver.active_conflict = next_unresolved;
+            // Scroll the 3-way view to the new active conflict's visible position.
+            if let Some(vi) = conflict_resolver::visible_index_for_conflict(
+                &self.conflict_resolver.three_way_visible_map,
+                &self.conflict_resolver.three_way_conflict_ranges,
+                self.conflict_resolver.active_conflict,
+            ) {
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(vi, gpui::ScrollStrategy::Center);
             }
         }
         cx.notify();

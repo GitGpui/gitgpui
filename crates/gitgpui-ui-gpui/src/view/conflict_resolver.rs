@@ -1,6 +1,5 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictChoice {
-    #[allow(dead_code)]
     Base,
     Ours,
     Theirs,
@@ -49,6 +48,9 @@ pub struct ConflictInlineRow {
     pub new_line: Option<u32>,
     pub content: String,
 }
+
+/// Per-line word-highlight ranges. `None` means no highlights for that line.
+pub type WordHighlights = Vec<Option<Vec<std::ops::Range<usize>>>>;
 
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
     let mut segments: Vec<ConflictSegment> = Vec::new();
@@ -353,8 +355,6 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
                 if let Some(subchunks) =
                     split_conflict_into_subchunks(base, &block.ours, &block.theirs)
                 {
-                    let all_resolved =
-                        subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_)));
                     split_count += 1;
                     for subchunk in subchunks {
                         match subchunk {
@@ -382,13 +382,8 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
                             }
                         }
                     }
-                    // If the split produced only resolved subchunks and the
-                    // original block was the only conflict, there are no more
-                    // Block segments from this split. Mark as fully merged by
-                    // not adding any Block (all became Text above).
-                    if all_resolved {
-                        // All subchunks resolved — nothing more to do.
-                    }
+                    // If all subchunks resolved, no Block segments remain
+                    // from this split (all became Text above).
                 } else {
                     new_segments.push(seg);
                 }
@@ -557,13 +552,12 @@ pub fn build_three_way_visible_map(
             .iter()
             .enumerate()
             .find(|(_, r)| r.contains(&line))
+            .filter(|(ri, _)| resolved_blocks.get(*ri).copied().unwrap_or(false))
         {
-            if resolved_blocks.get(range_ix).copied().unwrap_or(false) {
-                // Emit one collapsed summary row and skip the rest of the range.
-                visible.push(ThreeWayVisibleItem::CollapsedBlock(range_ix));
-                line = range.end;
-                continue;
-            }
+            // Emit one collapsed summary row and skip the rest of the range.
+            visible.push(ThreeWayVisibleItem::CollapsedBlock(range_ix));
+            line = range.end;
+            continue;
         }
         visible.push(ThreeWayVisibleItem::Line(line));
         line += 1;
@@ -590,15 +584,11 @@ pub fn compute_three_way_word_highlights(
     ours_lines: &[gpui::SharedString],
     theirs_lines: &[gpui::SharedString],
     conflict_ranges: &[std::ops::Range<usize>],
-) -> (
-    Vec<Option<Vec<std::ops::Range<usize>>>>,
-    Vec<Option<Vec<std::ops::Range<usize>>>>,
-    Vec<Option<Vec<std::ops::Range<usize>>>>,
-) {
+) -> (WordHighlights, WordHighlights, WordHighlights) {
     let len = base_lines.len().max(ours_lines.len()).max(theirs_lines.len());
-    let mut wh_base: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
-    let mut wh_ours: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
-    let mut wh_theirs: Vec<Option<Vec<std::ops::Range<usize>>>> = vec![None; len];
+    let mut wh_base: WordHighlights = vec![None; len];
+    let mut wh_ours: WordHighlights = vec![None; len];
+    let mut wh_theirs: WordHighlights = vec![None; len];
 
     for range in conflict_ranges {
         for i in range.clone() {
@@ -648,20 +638,21 @@ fn merge_ranges(
     combined.sort_by_key(|r| (r.start, r.end));
     let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(combined.len());
     for r in combined {
-        if let Some(last) = out.last_mut() {
-            if r.start <= last.end {
-                last.end = last.end.max(r.end);
-                continue;
-            }
+        if let Some(last) = out.last_mut().filter(|l| r.start <= l.end) {
+            last.end = last.end.max(r.end);
+            continue;
         }
         out.push(r);
     }
     out
 }
 
+/// Per-line pair of (old, new) word-highlight ranges for two-way diff.
+pub type TwoWayWordHighlights = Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
+
 pub fn compute_two_way_word_highlights(
     diff_rows: &[gitgpui_core::file_diff::FileDiffRow],
-) -> Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>> {
+) -> TwoWayWordHighlights {
     diff_rows
         .iter()
         .map(|row| {

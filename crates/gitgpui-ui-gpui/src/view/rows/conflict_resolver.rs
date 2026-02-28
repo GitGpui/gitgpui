@@ -204,7 +204,7 @@ impl MainPaneView {
                     let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
                     let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
                     let is_in_active_conflict =
-                        active_range.as_ref().map_or(false, |r| r.contains(&ix));
+                        active_range.as_ref().is_some_and(|r| r.contains(&ix));
                     let range_ix = conflict_range_for_ix(ix);
                     let is_in_conflict = range_ix.is_some();
 
@@ -260,21 +260,19 @@ impl MainPaneView {
                             base_styled,
                             show_ws,
                         ));
-                    if let Some(ri) = range_ix {
-                        if base_line.is_some() {
-                            base = base
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
-                                .on_click(cx.listener(
-                                    move |this, _e: &ClickEvent, _w, cx| {
-                                        this.conflict_resolver_pick_at(
-                                            ri,
-                                            conflict_resolver::ConflictChoice::Base,
-                                            cx,
-                                        );
-                                    },
-                                ));
-                        }
+                    if let Some(ri) = range_ix.filter(|_| base_line.is_some()) {
+                        base = base
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .on_click(cx.listener(
+                                move |this, _e: &ClickEvent, _w, cx| {
+                                    this.conflict_resolver_pick_at(
+                                        ri,
+                                        conflict_resolver::ConflictChoice::Base,
+                                        cx,
+                                    );
+                                },
+                            ));
                     }
 
                     let mut ours = div()

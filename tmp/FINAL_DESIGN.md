@@ -58,6 +58,14 @@
 - ✅ "Mergetool" button in text conflict resolver toolbar (next to Save/Save & stage) and "External Mergetool" button in binary conflict resolver panel — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main/binary_conflict.rs`
 - ✅ 3 unit tests for git config reading and stage byte extraction — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
 
+### 8) Quality Pass (Iteration 9)
+- ✅ Fixed mergetool `trustExitCode=false` bug: was checking only `.exists()` which always passes; now compares file mtime and length before/after tool invocation — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
+- ✅ Fixed WS toggle button label clippy warning (identical `if`/`else` branches) — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- ✅ Removed stale `#[allow(dead_code)]` on `ConflictChoice::Base` (actively used) — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
+- ✅ Removed dead `if all_resolved` no-op block and unused variable in `auto_resolve_segments_pass2` — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
+- ✅ Fixed all conflict-resolution clippy warnings: collapsible `if` chains (4 sites), `derivable_impls` for `HistoryAutosolveOptions`, `needless_range_loop` (2 sites), `type_complexity` (added `WordHighlights` and `TwoWayWordHighlights` type aliases), `map_or` → `is_some_and` — across `conflict_session.rs`, `conflict_resolver.rs`, `panes/main.rs`, `panels/main.rs`, `rows/conflict_resolver.rs`, `view/mod.rs`
+- ✅ Deduplicated `decode_utf8_optional` helper: extracted to `gitgpui_core::services::decode_utf8_optional()`, removed copies from `gitgpui-git-gix/src/repo/diff.rs` and `gitgpui-state/src/store/effects/repo_load.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

@@ -433,21 +433,20 @@ impl ConflictSession {
             };
             if let Some(subchunks) =
                 split_conflict_into_subchunks(base, &region.ours, &region.theirs)
+                    .filter(|sc| sc.iter().all(|c| matches!(c, Subchunk::Resolved(_))))
             {
-                if subchunks.iter().all(|c| matches!(c, Subchunk::Resolved(_))) {
-                    let merged: String = subchunks
-                        .iter()
-                        .map(|c| match c {
-                            Subchunk::Resolved(text) => text.as_str(),
-                            _ => unreachable!(),
-                        })
-                        .collect();
-                    region.resolution = ConflictRegionResolution::AutoResolved {
-                        rule: AutosolveRule::SubchunkFullyMerged,
-                        content: merged,
-                    };
-                    count += 1;
-                }
+                let merged: String = subchunks
+                    .iter()
+                    .map(|c| match c {
+                        Subchunk::Resolved(text) => text.as_str(),
+                        _ => unreachable!(),
+                    })
+                    .collect();
+                region.resolution = ConflictRegionResolution::AutoResolved {
+                    rule: AutosolveRule::SubchunkFullyMerged,
+                    content: merged,
+                };
+                count += 1;
             }
         }
         count
@@ -610,7 +609,7 @@ fn regex_assisted_auto_resolve_pick_with_compiled(
 /// Inspired by kdiff3's "history merge" feature for `$Log$` sections.
 ///
 /// Disabled by default; opt-in via settings.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct HistoryAutosolveOptions {
     /// Regex pattern that marks the start of a history section within a file.
     /// For example, `r".*\$Log.*\$.*"` for RCS/CVS-style history, or
@@ -626,17 +625,6 @@ pub struct HistoryAutosolveOptions {
     pub sort_entries: bool,
     /// Maximum number of entries to keep. `None` means keep all.
     pub max_entries: Option<usize>,
-}
-
-impl Default for HistoryAutosolveOptions {
-    fn default() -> Self {
-        Self {
-            section_start: String::new(),
-            entry_start: String::new(),
-            sort_entries: false,
-            max_entries: None,
-        }
-    }
 }
 
 impl HistoryAutosolveOptions {
@@ -1273,9 +1261,7 @@ fn side_content(
     for hunk in hunks {
         // Unchanged base lines before this hunk.
         let base_limit = hunk.base_start.min(range_end).min(base_lines.len());
-        for p in pos..base_limit {
-            lines.push(base_lines[p]);
-        }
+        lines.extend_from_slice(&base_lines[pos..base_limit]);
         // Hunk replacement content.
         for line in &hunk.new_lines {
             lines.push(line.as_str());
@@ -1285,9 +1271,7 @@ fn side_content(
 
     // Remaining base lines after last hunk.
     let tail_limit = range_end.min(base_lines.len());
-    for p in pos..tail_limit {
-        lines.push(base_lines[p]);
-    }
+    lines.extend_from_slice(&base_lines[pos..tail_limit]);
 
     lines_to_text(&lines)
 }
