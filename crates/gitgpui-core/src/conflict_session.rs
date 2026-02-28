@@ -26,6 +26,24 @@ impl ConflictPayload {
         }
     }
 
+    /// Returns the raw bytes for this payload.
+    ///
+    /// For UTF-8 text payloads this returns the encoded text bytes.
+    /// For binary payloads this returns the original bytes.
+    /// For absent payloads this returns `None`.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            ConflictPayload::Text(s) => Some(s.as_bytes()),
+            ConflictPayload::Binary(bytes) => Some(bytes.as_slice()),
+            ConflictPayload::Absent => None,
+        }
+    }
+
+    /// Returns the payload size in bytes, or `None` when absent.
+    pub fn byte_len(&self) -> Option<usize> {
+        self.as_bytes().map(<[u8]>::len)
+    }
+
     /// Returns `true` if this side has no content.
     pub fn is_absent(&self) -> bool {
         matches!(self, ConflictPayload::Absent)
@@ -426,6 +444,21 @@ impl ConflictSession {
             self.regions.push(region);
         }
         self.regions.len()
+    }
+
+    /// Returns the base side bytes (stage 1 payload), when present.
+    pub fn base_bytes(&self) -> Option<&[u8]> {
+        self.base.as_bytes()
+    }
+
+    /// Returns the ours side bytes (stage 2 payload), when present.
+    pub fn ours_bytes(&self) -> Option<&[u8]> {
+        self.ours.as_bytes()
+    }
+
+    /// Returns the theirs side bytes (stage 3 payload), when present.
+    pub fn theirs_bytes(&self) -> Option<&[u8]> {
+        self.theirs.as_bytes()
     }
 
     /// Total number of conflict regions.
@@ -1559,15 +1592,20 @@ mod tests {
     fn payload_from_bytes_utf8() {
         let p = ConflictPayload::from_bytes(b"hello".to_vec());
         assert_eq!(p.as_text(), Some("hello"));
+        assert_eq!(p.as_bytes(), Some("hello".as_bytes()));
+        assert_eq!(p.byte_len(), Some(5));
         assert!(!p.is_binary());
         assert!(!p.is_absent());
     }
 
     #[test]
     fn payload_from_bytes_binary() {
-        let p = ConflictPayload::from_bytes(vec![0xFF, 0xFE, 0x00]);
+        let bytes = vec![0xFF, 0xFE, 0x00];
+        let p = ConflictPayload::from_bytes(bytes.clone());
         assert!(p.is_binary());
         assert!(p.as_text().is_none());
+        assert_eq!(p.as_bytes(), Some(bytes.as_slice()));
+        assert_eq!(p.byte_len(), Some(bytes.len()));
     }
 
     #[test]
@@ -1575,6 +1613,8 @@ mod tests {
         let p = ConflictPayload::Absent;
         assert!(p.is_absent());
         assert!(p.as_text().is_none());
+        assert!(p.as_bytes().is_none());
+        assert_eq!(p.byte_len(), None);
         assert!(!p.is_binary());
     }
 
@@ -2353,6 +2393,20 @@ unterminated content with no separator
         );
         assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
         assert_eq!(session.total_regions(), 0); // No regions parsed yet
+    }
+
+    #[test]
+    fn session_side_byte_accessors_expose_all_payload_bytes() {
+        let session = ConflictSession::new(
+            PathBuf::from("file.bin"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Binary(vec![0x00, 0x01]),
+            ConflictPayload::Text("ours\n".into()),
+            ConflictPayload::Absent,
+        );
+        assert_eq!(session.base_bytes(), Some([0x00_u8, 0x01].as_slice()));
+        assert_eq!(session.ours_bytes(), Some("ours\n".as_bytes()));
+        assert_eq!(session.theirs_bytes(), None);
     }
 
     #[test]

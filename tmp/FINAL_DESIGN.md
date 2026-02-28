@@ -4,6 +4,7 @@
 
 ### 1) Unified Conflict Session Model
 - ✅ `ConflictPayload` enum (Text, Binary, Absent) with `from_bytes` conversion — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ **Bytes-first payload accessors (Iteration 48):** added `ConflictPayload::as_bytes()` and `byte_len()` plus `ConflictSession::{base_bytes, ours_bytes, theirs_bytes}` so unified sessions expose raw stage payload bytes directly for text, binary, and absent sides; added unit coverage for payload/session byte accessors — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictRegion` struct with base/ours/theirs + resolution state — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictRegionResolution` enum (Unresolved, PickBase/Ours/Theirs/Both, ManualEdit, AutoResolved) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictSession` struct with path, kind, strategy, payloads, regions, counters, navigation — `crates/gitgpui-core/src/conflict_session.rs`
