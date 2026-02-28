@@ -3768,3 +3768,301 @@ fn validate_conflict_resolution_detects_partial_resolution() {
     assert!(v3.has_conflict_markers);
     assert_eq!(v3.marker_lines, 4); // <<<<<<<, |||||||, =======, >>>>>>>
 }
+
+/// End-to-end test: BothDeleted text conflict session uses DecisionOnly
+/// strategy, and restoring from base via `checkout_conflict_side(Base)`
+/// resolves the conflict.
+#[test]
+fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    // BothDeleted: only base stage present, no ours or theirs
+    let base_blob = hash_blob(repo, b"original content\n");
+    set_unmerged_stages(repo, "removed.txt", Some(base_blob.as_str()), None, None);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Verify conflict session
+    let session = opened
+        .conflict_session(Path::new("removed.txt"))
+        .unwrap()
+        .expect("conflict session for BothDeleted");
+    assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
+    assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
+    assert!(matches!(session.base, ConflictPayload::Text(ref t) if t == "original content\n"));
+    assert!(session.ours.is_absent());
+    assert!(session.theirs.is_absent());
+    assert_eq!(session.unsolved_count(), 1);
+
+    // Resolve by accepting deletion
+    opened
+        .accept_conflict_deletion(Path::new("removed.txt"))
+        .unwrap();
+
+    // Verify conflict is resolved
+    let status = opened.status().unwrap();
+    assert!(
+        !status
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("removed.txt") && e.kind == FileStatusKind::Conflicted),
+        "removed.txt should no longer be conflicted after accepting deletion"
+    );
+    assert!(
+        !repo.join("removed.txt").exists(),
+        "file should be deleted after accepting deletion"
+    );
+}
+
+/// End-to-end test: AddedByUs conflict session uses TwoWayKeepDelete
+/// strategy, and keeping the file via `checkout_conflict_side(Ours)`
+/// resolves the conflict.
+#[test]
+fn conflict_session_added_by_us_keep_resolves_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    // AddedByUs: only ours stage present (no base, no theirs)
+    let ours_blob = hash_blob(repo, b"added by us\n");
+    set_unmerged_stages(repo, "new.txt", None, Some(ours_blob.as_str()), None);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Verify status
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("new.txt"))
+        .expect("expected AddedByUs conflict entry");
+    assert_eq!(entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(entry.conflict, Some(FileConflictKind::AddedByUs));
+
+    // Verify conflict session
+    let session = opened
+        .conflict_session(Path::new("new.txt"))
+        .unwrap()
+        .expect("conflict session for AddedByUs");
+    assert_eq!(session.conflict_kind, FileConflictKind::AddedByUs);
+    assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
+    assert!(session.base.is_absent());
+    assert!(matches!(session.ours, ConflictPayload::Text(ref t) if t == "added by us\n"));
+    assert!(session.theirs.is_absent());
+    assert_eq!(session.unsolved_count(), 1);
+
+    // Resolve by keeping ours (the added file)
+    opened
+        .checkout_conflict_side(Path::new("new.txt"), ConflictSide::Ours)
+        .unwrap();
+
+    // Verify file exists and conflict is resolved
+    assert_eq!(
+        fs::read_to_string(repo.join("new.txt")).unwrap(),
+        "added by us\n"
+    );
+    let status_after = opened.status().unwrap();
+    assert!(
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("new.txt") && e.kind == FileStatusKind::Conflicted),
+        "new.txt should no longer be conflicted after keeping ours"
+    );
+    assert!(
+        status_after
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("new.txt")),
+        "new.txt should be staged after resolution"
+    );
+}
+
+/// End-to-end test: AddedByThem conflict session uses TwoWayKeepDelete
+/// strategy, and keeping the file via `checkout_conflict_side(Theirs)`
+/// resolves the conflict.
+#[test]
+fn conflict_session_added_by_them_keep_resolves_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "seed"],
+    );
+
+    // AddedByThem: only theirs stage present (no base, no ours)
+    let theirs_blob = hash_blob(repo, b"added by them\n");
+    set_unmerged_stages(repo, "their_new.txt", None, None, Some(theirs_blob.as_str()));
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Verify status
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("their_new.txt"))
+        .expect("expected AddedByThem conflict entry");
+    assert_eq!(entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(entry.conflict, Some(FileConflictKind::AddedByThem));
+
+    // Verify conflict session
+    let session = opened
+        .conflict_session(Path::new("their_new.txt"))
+        .unwrap()
+        .expect("conflict session for AddedByThem");
+    assert_eq!(session.conflict_kind, FileConflictKind::AddedByThem);
+    assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
+    assert!(session.base.is_absent());
+    assert!(session.ours.is_absent());
+    assert!(matches!(session.theirs, ConflictPayload::Text(ref t) if t == "added by them\n"));
+    assert_eq!(session.unsolved_count(), 1);
+
+    // Resolve by keeping theirs (the added file)
+    opened
+        .checkout_conflict_side(Path::new("their_new.txt"), ConflictSide::Theirs)
+        .unwrap();
+
+    // Verify file exists and conflict is resolved
+    assert_eq!(
+        fs::read_to_string(repo.join("their_new.txt")).unwrap(),
+        "added by them\n"
+    );
+    let status_after = opened.status().unwrap();
+    assert!(
+        !status_after.unstaged.iter().any(
+            |e| e.path == Path::new("their_new.txt") && e.kind == FileStatusKind::Conflicted
+        ),
+        "their_new.txt should no longer be conflicted after keeping theirs"
+    );
+    assert!(
+        status_after
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("their_new.txt")),
+        "their_new.txt should be staged after resolution"
+    );
+}
+
+/// End-to-end test: DeletedByThem conflict session uses TwoWayKeepDelete
+/// strategy (base+ours present, theirs absent), and keeping ours
+/// via `checkout_conflict_side(Ours)` resolves the conflict.
+#[test]
+fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base content\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    // Feature branch deletes the file
+    run_git(repo, &["checkout", "-b", "feature"]);
+    run_git(repo, &["rm", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "delete"],
+    );
+
+    // Main branch modifies the file
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "modified by us\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "modify"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Verify status shows DeletedByThem
+    let status = opened.status().unwrap();
+    let entry = status
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Conflicted)
+        .expect("expected DeletedByThem conflict entry");
+    assert_eq!(entry.conflict, Some(FileConflictKind::DeletedByThem));
+
+    // Verify conflict session
+    let session = opened
+        .conflict_session(Path::new("a.txt"))
+        .unwrap()
+        .expect("conflict session for DeletedByThem");
+    assert_eq!(session.conflict_kind, FileConflictKind::DeletedByThem);
+    assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
+    assert!(session.base.as_text().is_some());
+    assert!(
+        matches!(session.ours, ConflictPayload::Text(ref t) if t == "modified by us\n"),
+        "ours (modified side) should have text"
+    );
+    assert!(session.theirs.is_absent(), "theirs (delete side) should be absent");
+    assert_eq!(session.unsolved_count(), 1);
+    assert_eq!(session.regions[0].ours, "modified by us\n");
+    assert_eq!(session.regions[0].theirs, "");
+
+    // Resolve by keeping ours (the modified version)
+    opened
+        .checkout_conflict_side(Path::new("a.txt"), ConflictSide::Ours)
+        .unwrap();
+
+    // Verify file is kept and conflict is resolved
+    assert_eq!(
+        fs::read_to_string(repo.join("a.txt")).unwrap(),
+        "modified by us\n"
+    );
+    let status_after = opened.status().unwrap();
+    assert!(
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("a.txt") && e.kind == FileStatusKind::Conflicted),
+        "a.txt should no longer be conflicted after keeping ours"
+    );
+}

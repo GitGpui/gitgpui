@@ -171,6 +171,13 @@
 ### 18) Binary Conflict End-to-End Path (Iteration 23)
 - ✅ Added `checkout_conflict_side_resolves_non_utf8_binary_conflict` integration test — creates a real non-UTF8 `BothModified` binary conflict, verifies backend session strategy is `BinarySidePick`, resolves by selecting `Theirs`, and asserts both staged output bytes and cleared conflict status. This closes the explicit testing-plan gap for binary/non-UTF8 resolution workflow coverage — `crates/gitgpui-git-gix/tests/status_integration.rs`
 
+### 20) Complete Per-Kind Conflict Session Save+Stage Integration Tests (Iteration 50)
+- ✅ **BothDeleted session + accept-deletion flow:** added `conflict_session_both_deleted_restore_from_base_resolves_conflict` — creates a text `BothDeleted` conflict (base-only stages), verifies session uses `DecisionOnly` strategy with `Text` base and `Absent` ours/theirs, resolves via `accept_conflict_deletion()`, and confirms file removed and conflict cleared — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **AddedByUs session + keep flow:** added `conflict_session_added_by_us_keep_resolves_conflict` — creates `AddedByUs` conflict (ours-only stage), verifies session uses `TwoWayKeepDelete` strategy with correct absent/text payloads, resolves via `checkout_conflict_side(Ours)`, and confirms file content, staged status, and conflict clearance — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **AddedByThem session + keep flow:** added `conflict_session_added_by_them_keep_resolves_conflict` — creates `AddedByThem` conflict (theirs-only stage), verifies session uses `TwoWayKeepDelete` strategy with correct absent/text payloads, resolves via `checkout_conflict_side(Theirs)`, and confirms file content, staged status, and conflict clearance — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ **DeletedByThem session + keep-ours flow:** added `conflict_session_deleted_by_them_keep_ours_resolves_conflict` — creates a real `DeletedByThem` merge conflict (feature deletes, main modifies), verifies session uses `TwoWayKeepDelete` strategy with `Text` base/ours and `Absent` theirs, validates synthetic region content, resolves via `checkout_conflict_side(Ours)`, and confirms file kept with modified content and conflict cleared — `crates/gitgpui-git-gix/tests/status_integration.rs`
+- ✅ This completes the design testing plan requirement of "one fixture per FileConflictKind" for integration tests — all 7 kinds now have end-to-end conflict session + resolution coverage
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*
