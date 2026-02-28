@@ -2,6 +2,7 @@ use super::*;
 use crate::model::ConflictFile;
 use gitgpui_core::conflict_session::{ConflictPayload, ConflictResolverStrategy, ConflictSession};
 use gitgpui_core::domain::{FileConflictKind, FileStatus, FileStatusKind, RepoStatus};
+use gitgpui_core::services::ConflictSide;
 
 /// Helper: set up a repo state with a conflicted status entry.
 fn setup_repo_with_conflict(
@@ -1231,4 +1232,246 @@ theirs one\n\
             .resolution,
         gitgpui_core::conflict_session::ConflictRegionResolution::Unresolved
     );
+}
+
+#[test]
+fn repo_command_finished_checkout_conflict_side_syncs_all_session_regions() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    let current = "\
+<<<<<<< ours\n\
+ours one\n\
+=======\n\
+theirs one\n\
+>>>>>>> theirs\n\
+middle\n\
+<<<<<<< ours\n\
+ours two\n\
+=======\n\
+theirs two\n\
+>>>>>>> theirs\n\
+";
+    let file = ConflictFile {
+        path: PathBuf::from("file.txt"),
+        base_bytes: Some(b"base\n".to_vec()),
+        ours_bytes: Some(b"ours\n".to_vec()),
+        theirs_bytes: Some(b"theirs\n".to_vec()),
+        current_bytes: Some(current.as_bytes().to_vec()),
+        base: Some("base\n".to_string()),
+        ours: Some("ours\n".to_string()),
+        theirs: Some("theirs\n".to_string()),
+        current: Some(current.to_string()),
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CheckoutConflict {
+                path: PathBuf::from("file.txt"),
+                side: ConflictSide::Theirs,
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git checkout --theirs -- file.txt",
+            )),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert!(session.regions.iter().all(|region| matches!(
+        region.resolution,
+        gitgpui_core::conflict_session::ConflictRegionResolution::PickTheirs
+    )));
+    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+}
+
+#[test]
+fn repo_command_finished_checkout_conflict_base_syncs_regions_with_base() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    let current = "\
+<<<<<<< ours\n\
+ours one\n\
+||||||| base\n\
+base one\n\
+=======\n\
+theirs one\n\
+>>>>>>> theirs\n\
+middle\n\
+<<<<<<< ours\n\
+ours two\n\
+||||||| base\n\
+base two\n\
+=======\n\
+theirs two\n\
+>>>>>>> theirs\n\
+";
+    let file = ConflictFile {
+        path: PathBuf::from("file.txt"),
+        base_bytes: Some(b"base one\nbase two\n".to_vec()),
+        ours_bytes: Some(b"ours one\nours two\n".to_vec()),
+        theirs_bytes: Some(b"theirs one\ntheirs two\n".to_vec()),
+        current_bytes: Some(current.as_bytes().to_vec()),
+        base: Some("base one\nbase two\n".to_string()),
+        ours: Some("ours one\nours two\n".to_string()),
+        theirs: Some("theirs one\ntheirs two\n".to_string()),
+        current: Some(current.to_string()),
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CheckoutConflictBase {
+                path: PathBuf::from("file.txt"),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git checkout :1:file.txt -- file.txt",
+            )),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert!(session.regions.iter().all(|region| matches!(
+        region.resolution,
+        gitgpui_core::conflict_session::ConflictRegionResolution::PickBase
+    )));
+    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+}
+
+#[test]
+fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolution() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::AddedByUs,
+    );
+
+    let file = ConflictFile {
+        path: PathBuf::from("file.txt"),
+        base_bytes: None,
+        ours_bytes: Some(b"ours only\n".to_vec()),
+        theirs_bytes: None,
+        current_bytes: Some(b"ours only\n".to_vec()),
+        base: None,
+        ours: Some("ours only\n".to_string()),
+        theirs: None,
+        current: Some("ours only\n".to_string()),
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::AcceptConflictDeletion {
+                path: PathBuf::from("file.txt"),
+            },
+            result: Ok(CommandOutput::empty_success("git rm -- file.txt")),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(
+        session.regions[0].resolution,
+        gitgpui_core::conflict_session::ConflictRegionResolution::PickTheirs
+    );
+    assert_eq!(repo_state.conflict_rev, before_rev + 1);
 }

@@ -2,9 +2,10 @@ use super::util::{
     diff_target_is_svg, diff_target_wants_image_preview, format_failure_summary, push_action_log,
     push_command_log, refresh_full_effects, refresh_primary_effects,
 };
-use crate::model::{AppState, Loadable, RepoId};
+use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
-use gitgpui_core::domain::DiffTarget;
+use gitgpui_core::conflict_session::ConflictRegionResolution;
+use gitgpui_core::domain::{DiffTarget, FileConflictKind};
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
 use rustc_hash::FxHashMap as HashMap;
@@ -478,6 +479,7 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
+    let command_succeeded = result.is_ok();
 
     let mut extra_effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
@@ -533,6 +535,10 @@ pub(super) fn repo_command_finished(
                     .last()
                     .map(|entry| entry.summary.clone());
             }
+        }
+        if command_succeeded && sync_conflict_session_after_resolution_command(repo_state, &command)
+        {
+            repo_state.bump_conflict_rev();
         }
 
         if refresh_worktrees {
@@ -593,4 +599,73 @@ pub(super) fn repo_command_finished(
     };
     effects.extend(extra_effects);
     effects
+}
+
+fn sync_conflict_session_after_resolution_command(
+    repo_state: &mut RepoState,
+    command: &RepoCommandKind,
+) -> bool {
+    let (path, resolution) = match command {
+        RepoCommandKind::CheckoutConflict { path, side } => (
+            path,
+            match side {
+                gitgpui_core::services::ConflictSide::Ours => ConflictRegionResolution::PickOurs,
+                gitgpui_core::services::ConflictSide::Theirs => {
+                    ConflictRegionResolution::PickTheirs
+                }
+            },
+        ),
+        RepoCommandKind::CheckoutConflictBase { path } => {
+            (path, ConflictRegionResolution::PickBase)
+        }
+        RepoCommandKind::AcceptConflictDeletion { path } => (
+            path,
+            repo_state
+                .conflict_session
+                .as_ref()
+                .map(|session| deletion_resolution_for_kind(session.conflict_kind))
+                .unwrap_or(ConflictRegionResolution::PickOurs),
+        ),
+        _ => return false,
+    };
+
+    let Some(session) = repo_state.conflict_session.as_mut() else {
+        return false;
+    };
+    if session.path.as_path() != path.as_path() {
+        return false;
+    }
+
+    apply_resolution_to_all_regions(session, &resolution) > 0
+}
+
+fn deletion_resolution_for_kind(conflict_kind: FileConflictKind) -> ConflictRegionResolution {
+    match conflict_kind {
+        FileConflictKind::DeletedByUs
+        | FileConflictKind::AddedByThem
+        | FileConflictKind::BothDeleted => ConflictRegionResolution::PickOurs,
+        FileConflictKind::DeletedByThem | FileConflictKind::AddedByUs => {
+            ConflictRegionResolution::PickTheirs
+        }
+        FileConflictKind::BothAdded | FileConflictKind::BothModified => {
+            ConflictRegionResolution::PickOurs
+        }
+    }
+}
+
+fn apply_resolution_to_all_regions(
+    session: &mut gitgpui_core::conflict_session::ConflictSession,
+    resolution: &ConflictRegionResolution,
+) -> usize {
+    let mut changed = 0usize;
+    for region in &mut session.regions {
+        if matches!(resolution, ConflictRegionResolution::PickBase) && region.base.is_none() {
+            continue;
+        }
+        if &region.resolution != resolution {
+            region.resolution = resolution.clone();
+            changed += 1;
+        }
+    }
+    changed
 }
