@@ -589,6 +589,10 @@ enum PopoverKind {
     MergeAbortConfirm {
         repo_id: RepoId,
     },
+    ConflictSaveStageConfirm {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,
         name: String,

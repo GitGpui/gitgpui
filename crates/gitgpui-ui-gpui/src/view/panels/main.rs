@@ -268,6 +268,25 @@ impl MainPaneView {
                 )
                 .when_some(next_file_btn, |d, btn| d.child(btn));
 
+            // Show warning if resolved text still contains conflict markers.
+            let resolved_has_markers = self
+                .conflict_resolved_preview_lines
+                .iter()
+                .any(|line| {
+                    line.starts_with("<<<<<<<")
+                        || line.starts_with(">>>>>>>")
+                        || line.starts_with("=======")
+                        || line.starts_with("|||||||")
+                });
+            if resolved_has_markers {
+                controls = controls.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.danger)
+                        .child("markers remain"),
+                );
+            }
+
             if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
                 let save_path = path.clone();
                 controls = controls
@@ -290,16 +309,28 @@ impl MainPaneView {
                         let save_path = path.clone();
                         zed::Button::new("conflict_save_stage", "Save & stage")
                             .style(zed::ButtonStyle::Filled)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                            .on_click(theme, cx, move |this, e, window, cx| {
                                 let text = this
                                     .conflict_resolver_input
                                     .read_with(cx, |i, _| i.text().to_string());
-                                this.store.dispatch(Msg::SaveWorktreeFile {
-                                    repo_id,
-                                    path: save_path.clone(),
-                                    contents: text,
-                                    stage: true,
-                                });
+                                if conflict_resolver::text_contains_conflict_markers(&text) {
+                                    this.open_popover_at(
+                                        PopoverKind::ConflictSaveStageConfirm {
+                                            repo_id,
+                                            path: save_path.clone(),
+                                        },
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    this.store.dispatch(Msg::SaveWorktreeFile {
+                                        repo_id,
+                                        path: save_path.clone(),
+                                        contents: text,
+                                        stage: true,
+                                    });
+                                }
                             })
                     });
             }

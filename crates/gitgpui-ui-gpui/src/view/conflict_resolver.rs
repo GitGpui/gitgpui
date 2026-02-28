@@ -417,6 +417,21 @@ pub fn populate_block_bases_from_ancestor(
     }
 }
 
+/// Check whether the given text still contains git conflict markers.
+/// Used as a safety gate before "Save & stage" to warn the user about unresolved conflicts.
+pub fn text_contains_conflict_markers(text: &str) -> bool {
+    for line in text.lines() {
+        if line.starts_with("<<<<<<<")
+            || line.starts_with(">>>>>>>")
+            || line.starts_with("=======")
+            || line.starts_with("|||||||")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -608,5 +623,24 @@ mod tests {
         }
         let resolved = generate_resolved_text(&segments);
         assert_eq!(resolved, "a\norig\nb\n");
+    }
+
+    #[test]
+    fn detects_conflict_markers_in_text() {
+        assert!(text_contains_conflict_markers(
+            "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nb\n"
+        ));
+        assert!(text_contains_conflict_markers("<<<<<<< HEAD\n"));
+        assert!(text_contains_conflict_markers("=======\n"));
+        assert!(text_contains_conflict_markers(">>>>>>> branch\n"));
+        assert!(text_contains_conflict_markers("||||||| base\n"));
+    }
+
+    #[test]
+    fn no_false_positives_for_clean_text() {
+        assert!(!text_contains_conflict_markers("a\nb\nc\n"));
+        assert!(!text_contains_conflict_markers(""));
+        assert!(!text_contains_conflict_markers("some text with < and > arrows"));
+        assert!(!text_contains_conflict_markers("====== not quite seven"));
     }
 }

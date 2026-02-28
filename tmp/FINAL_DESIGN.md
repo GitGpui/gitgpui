@@ -17,11 +17,11 @@
 ### 3) Resolver UX Model
 - 🔧 Existing: A/B/C picks, next/prev conflict navigation, split/inline modes
 - ✅ Solved/unsolved counters in domain model (ready for UI binding)
-- ⬜ Show solved/unsolved counters in UI
+- ✅ Safety gate: detect unresolved markers before "Save & stage" — `text_contains_conflict_markers()` in `conflict_resolver.rs`, `ConflictSaveStageConfirm` popover with cancel/stage-anyway actions, warning indicator in header when markers remain
+- 🔧 Marker-based conflict counter (Conflict N/M) already in panel UI; full solved/unsolved counters need `ConflictSession` integration
 - ⬜ Next/previous *unresolved* navigation in UI (wrap-around)
 - ⬜ Hide-resolved toggle
 - ⬜ Bulk actions: apply pick to all unresolved, autosolve safe conflicts
-- ⬜ Safety gate: detect unresolved markers before "Save & stage"
 
 ### 4) Auto-Resolution Engine (Safe-First)
 - ✅ Pass 1 safe auto-resolve rules: identical sides, only-ours-changed, only-theirs-changed — `crates/gitgpui-core/src/conflict_session.rs`

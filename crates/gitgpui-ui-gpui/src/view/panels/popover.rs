@@ -5,6 +5,7 @@ mod blame;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod clone_repo;
+mod conflict_save_stage_confirm;
 mod context_menu;
 mod create_branch;
 mod create_tag_prompt;
@@ -932,6 +933,7 @@ impl PopoverHost {
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
+            | PopoverKind::ConflictSaveStageConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
@@ -1386,6 +1388,9 @@ impl PopoverHost {
             }
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::ConflictSaveStageConfirm { repo_id, path } => {
+                conflict_save_stage_confirm::panel(self, repo_id, &path, cx)
             }
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
