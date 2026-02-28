@@ -2298,7 +2298,20 @@ impl MainPaneView {
     }
 
     pub(in super::super) fn conflict_resolver_conflict_count(&self) -> usize {
-        conflict_resolver::conflict_count(&self.conflict_resolver.marker_segments)
+        let (total, _) = conflict_resolver::effective_conflict_counts(
+            &self.conflict_resolver.marker_segments,
+            self.conflict_resolver_session_counts(),
+        );
+        total
+    }
+
+    fn conflict_resolver_session_counts(&self) -> Option<(usize, usize)> {
+        let resolver_path = self.conflict_resolver.path.as_ref()?;
+        let session = self.active_repo()?.conflict_session.as_ref()?;
+        if session.path.as_path() != resolver_path.as_path() {
+            return None;
+        }
+        Some((session.total_regions(), session.solved_count()))
     }
 
     pub(in super::super) fn conflict_resolver_focus_conflict(
@@ -2503,7 +2516,11 @@ impl MainPaneView {
     }
 
     pub(in super::super) fn conflict_resolver_resolved_count(&self) -> usize {
-        conflict_resolver::resolved_conflict_count(&self.conflict_resolver.marker_segments)
+        let (_, resolved) = conflict_resolver::effective_conflict_counts(
+            &self.conflict_resolver.marker_segments,
+            self.conflict_resolver_session_counts(),
+        );
+        resolved
     }
 
     fn dispatch_conflict_autosolve_telemetry(

@@ -269,6 +269,29 @@ impl MainPaneView {
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
                 .when_some(next_file_btn, |d, btn| d.child(btn));
+            let conflict_count = self.conflict_resolver_conflict_count();
+            if conflict_count > 0 {
+                let resolved_count = self.conflict_resolver_resolved_count();
+                let unresolved_count = conflict_count.saturating_sub(resolved_count);
+                controls = controls.child(
+                    div()
+                        .text_xs()
+                        .text_color(if unresolved_count == 0 {
+                            theme.colors.success
+                        } else {
+                            theme.colors.text_muted
+                        })
+                        .child(format!("Resolved {resolved_count}/{conflict_count}")),
+                );
+                if unresolved_count > 0 {
+                    controls = controls.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.danger)
+                            .child(format!("{unresolved_count} unresolved")),
+                    );
+                }
+            }
         } else if is_conflict_resolver {
             let nav_entries = self.conflict_nav_entries();
             let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);

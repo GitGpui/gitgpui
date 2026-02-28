@@ -528,6 +528,25 @@ pub fn resolved_conflict_count(segments: &[ConflictSegment]) -> usize {
         .count()
 }
 
+/// Compute effective conflict counters for resolver UI state.
+///
+/// Marker segments are authoritative for text-based conflict flows. For
+/// non-marker strategies (binary side-pick / keep-delete / decision-only),
+/// callers can pass state-layer session counters as a fallback.
+pub fn effective_conflict_counts(
+    segments: &[ConflictSegment],
+    session_counts: Option<(usize, usize)>,
+) -> (usize, usize) {
+    let total = conflict_count(segments);
+    if total > 0 {
+        return (total, resolved_conflict_count(segments));
+    }
+    if let Some((session_total, session_resolved)) = session_counts {
+        return (session_total, session_resolved.min(session_total));
+    }
+    (0, 0)
+}
+
 /// Return conflict indices for currently unresolved blocks in queue order.
 pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     let mut out = Vec::new();
@@ -2522,6 +2541,32 @@ theirs only line
             block.resolved = true;
         }
         assert_eq!(resolved_conflict_count(&segments), 1);
+    }
+
+    #[test]
+    fn effective_counts_use_marker_segments_when_blocks_exist() {
+        let input = "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n";
+        let mut segments = parse_conflict_markers(input);
+        if let ConflictSegment::Block(block) = &mut segments[0] {
+            block.resolved = true;
+        }
+
+        assert_eq!(effective_conflict_counts(&segments, Some((99, 98))), (1, 1));
+    }
+
+    #[test]
+    fn effective_counts_fall_back_to_session_counts_without_blocks() {
+        let segments = vec![ConflictSegment::Text("resolved text\n".into())];
+
+        assert_eq!(effective_conflict_counts(&segments, Some((1, 0))), (1, 0));
+        assert_eq!(effective_conflict_counts(&segments, Some((2, 9))), (2, 2));
+    }
+
+    #[test]
+    fn effective_counts_return_zero_without_blocks_or_session() {
+        let segments = vec![ConflictSegment::Text("plain text\n".into())];
+
+        assert_eq!(effective_conflict_counts(&segments, None), (0, 0));
     }
 
     fn mark_block_resolved(segments: &mut [ConflictSegment], target: usize) {
