@@ -45,6 +45,27 @@ impl ConflictPayload {
     }
 }
 
+/// Confidence level assigned to an auto-resolve decision.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutosolveConfidence {
+    /// Deterministic and effectively risk-free in the current model.
+    High,
+    /// Conservative heuristic or normalization-based decision.
+    Medium,
+    /// Advanced heuristic decision that should be reviewed by users.
+    Low,
+}
+
+impl AutosolveConfidence {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AutosolveConfidence::High => "high",
+            AutosolveConfidence::Medium => "medium",
+            AutosolveConfidence::Low => "low",
+        }
+    }
+}
+
 /// How a single conflict region has been resolved.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictRegionResolution {
@@ -63,6 +84,8 @@ pub enum ConflictRegionResolution {
     /// Automatically resolved by a safe rule.
     AutoResolved {
         rule: AutosolveRule,
+        /// Confidence assigned to the applied auto-resolve rule.
+        confidence: AutosolveConfidence,
         /// The text chosen by the auto-resolver.
         content: String,
     },
@@ -112,6 +135,21 @@ impl AutosolveRule {
             AutosolveRule::RegexOnlyOursChanged => "regex-normalized: only ours changed from base",
             AutosolveRule::SubchunkFullyMerged => "line-level subchunk merge",
             AutosolveRule::HistoryMerged => "history/changelog section merge",
+        }
+    }
+
+    /// Confidence classification for this rule.
+    pub fn confidence(&self) -> AutosolveConfidence {
+        match self {
+            AutosolveRule::IdenticalSides
+            | AutosolveRule::OnlyOursChanged
+            | AutosolveRule::OnlyTheirsChanged => AutosolveConfidence::High,
+            AutosolveRule::WhitespaceOnly
+            | AutosolveRule::RegexEquivalentSides
+            | AutosolveRule::RegexOnlyTheirsChanged
+            | AutosolveRule::RegexOnlyOursChanged
+            | AutosolveRule::SubchunkFullyMerged => AutosolveConfidence::Medium,
+            AutosolveRule::HistoryMerged => AutosolveConfidence::Low,
         }
     }
 }
@@ -412,7 +450,11 @@ impl ConflictSession {
                 continue;
             }
             if let Some((rule, content)) = safe_auto_resolve(region, whitespace_normalize) {
-                region.resolution = ConflictRegionResolution::AutoResolved { rule, content };
+                region.resolution = ConflictRegionResolution::AutoResolved {
+                    confidence: rule.confidence(),
+                    rule,
+                    content,
+                };
                 count += 1;
             }
         }
@@ -446,7 +488,11 @@ impl ConflictSession {
                     AutosolvePickSide::Ours => region.ours.clone(),
                     AutosolvePickSide::Theirs => region.theirs.clone(),
                 };
-                region.resolution = ConflictRegionResolution::AutoResolved { rule, content };
+                region.resolution = ConflictRegionResolution::AutoResolved {
+                    confidence: rule.confidence(),
+                    rule,
+                    content,
+                };
                 count += 1;
             }
         }
@@ -481,6 +527,7 @@ impl ConflictSession {
                     })
                     .collect();
                 region.resolution = ConflictRegionResolution::AutoResolved {
+                    confidence: AutosolveRule::SubchunkFullyMerged.confidence(),
                     rule: AutosolveRule::SubchunkFullyMerged,
                     content: merged,
                 };
@@ -514,6 +561,7 @@ impl ConflictSession {
                 options,
             ) {
                 region.resolution = ConflictRegionResolution::AutoResolved {
+                    confidence: AutosolveRule::HistoryMerged.confidence(),
                     rule: AutosolveRule::HistoryMerged,
                     content: merged,
                 };
@@ -1482,6 +1530,7 @@ mod tests {
         assert!(
             ConflictRegionResolution::AutoResolved {
                 rule: AutosolveRule::IdenticalSides,
+                confidence: AutosolveRule::IdenticalSides.confidence(),
                 content: "x".into(),
             }
             .is_resolved()
@@ -1861,9 +1910,11 @@ end
 
     #[test]
     fn auto_resolve_whitespace_session_with_options() {
-        let mut session = make_session(vec![
-            make_region(Some("base\n"), "let  x = 1;\n", "let x  =  1;\n"),
-        ]);
+        let mut session = make_session(vec![make_region(
+            Some("base\n"),
+            "let  x = 1;\n",
+            "let x  =  1;\n",
+        )]);
         // Without whitespace toggle, nothing resolves.
         assert_eq!(session.auto_resolve_safe(), 0);
         // With whitespace toggle, it resolves.
@@ -1994,8 +2045,13 @@ end
         assert_eq!(session.solved_count(), 1);
         assert_eq!(session.unsolved_count(), 1);
         match &session.regions[0].resolution {
-            ConflictRegionResolution::AutoResolved { rule, content } => {
+            ConflictRegionResolution::AutoResolved {
+                rule,
+                confidence,
+                content,
+            } => {
                 assert_eq!(*rule, AutosolveRule::RegexEquivalentSides);
+                assert_eq!(*confidence, AutosolveConfidence::Medium);
                 assert_eq!(content, "let  answer = 42;\n");
             }
             other => panic!("expected regex auto-resolved region, got {:?}", other),
@@ -2081,6 +2137,41 @@ end
         assert!(!AutosolveRule::RegexOnlyOursChanged.description().is_empty());
         assert!(!AutosolveRule::SubchunkFullyMerged.description().is_empty());
         assert!(!AutosolveRule::HistoryMerged.description().is_empty());
+    }
+
+    #[test]
+    fn autosolve_rule_confidence_levels() {
+        assert_eq!(
+            AutosolveRule::IdenticalSides.confidence(),
+            AutosolveConfidence::High
+        );
+        assert_eq!(
+            AutosolveRule::OnlyOursChanged.confidence(),
+            AutosolveConfidence::High
+        );
+        assert_eq!(
+            AutosolveRule::WhitespaceOnly.confidence(),
+            AutosolveConfidence::Medium
+        );
+        assert_eq!(
+            AutosolveRule::RegexEquivalentSides.confidence(),
+            AutosolveConfidence::Medium
+        );
+        assert_eq!(
+            AutosolveRule::SubchunkFullyMerged.confidence(),
+            AutosolveConfidence::Medium
+        );
+        assert_eq!(
+            AutosolveRule::HistoryMerged.confidence(),
+            AutosolveConfidence::Low
+        );
+    }
+
+    #[test]
+    fn autosolve_confidence_labels() {
+        assert_eq!(AutosolveConfidence::High.label(), "high");
+        assert_eq!(AutosolveConfidence::Medium.label(), "medium");
+        assert_eq!(AutosolveConfidence::Low.label(), "low");
     }
 
     // -- Pass 2: subchunk splitting tests --
@@ -2247,8 +2338,13 @@ end
         assert!(session.is_fully_resolved());
 
         match &session.regions[0].resolution {
-            ConflictRegionResolution::AutoResolved { rule, content } => {
+            ConflictRegionResolution::AutoResolved {
+                rule,
+                confidence,
+                content,
+            } => {
                 assert_eq!(*rule, AutosolveRule::SubchunkFullyMerged);
+                assert_eq!(*confidence, AutosolveConfidence::Medium);
                 assert_eq!(content, "LINE1\nline2\nLINE3\n");
             }
             other => panic!("expected AutoResolved, got {:?}", other),
@@ -2467,8 +2563,13 @@ end
         assert_eq!(resolved, 1);
         assert!(session.is_fully_resolved());
         match &session.regions[0].resolution {
-            ConflictRegionResolution::AutoResolved { rule, content } => {
+            ConflictRegionResolution::AutoResolved {
+                rule,
+                confidence,
+                content,
+            } => {
                 assert_eq!(*rule, AutosolveRule::HistoryMerged);
+                assert_eq!(*confidence, AutosolveConfidence::Low);
                 assert!(content.contains("- Added by ours"));
                 assert!(content.contains("- Added by theirs"));
             }
