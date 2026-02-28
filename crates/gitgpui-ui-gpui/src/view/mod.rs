@@ -850,6 +850,9 @@ impl GitGpuiView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let conflict_enable_whitespace_autosolve = ui_session
+            .conflict_enable_whitespace_autosolve
+            .unwrap_or(false);
         let conflict_enable_regex_autosolve =
             ui_session.conflict_enable_regex_autosolve.unwrap_or(false);
         let conflict_enable_history_autosolve = ui_session
@@ -946,6 +949,7 @@ impl GitGpuiView {
                 history_show_author,
                 history_show_date,
                 history_show_sha,
+                conflict_enable_whitespace_autosolve,
                 conflict_enable_regex_autosolve,
                 conflict_enable_history_autosolve,
                 weak_view.clone(),

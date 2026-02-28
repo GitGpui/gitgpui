@@ -36,7 +36,7 @@
 - ✅ Auto-resolve safe conflicts wired with Pass 1 + Pass 2 subchunk splitting (see §4)
 
 ### 4) Auto-Resolution Engine (Safe-First)
-- ✅ Pass 1 safe auto-resolve rules: identical sides, only-ours-changed, only-theirs-changed — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ Pass 1 safe auto-resolve rules: identical sides, only-ours-changed, only-theirs-changed, whitespace-only (optional toggle) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `AutosolveRule` enum with traceability (rule ID + description) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictSession::auto_resolve_safe()` applies Pass 1 to all unresolved regions — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `auto_resolve_segments()` applies Pass 1 safe rules directly to UI marker segments — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
@@ -47,6 +47,8 @@
 - ✅ Pass 3: regex-assisted opt-in mode implemented with `RegexAutosolveOptions`, `regex_assisted_auto_resolve_pick()`, and `ConflictSession::auto_resolve_regex()` in core plus explicit "Auto-resolve regex" toolbar action and UI wiring — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ Pass 3: history-aware auto-resolve mode (kdiff3-inspired) — `HistoryAutosolveOptions` with configurable section/entry regex patterns and presets (keepachangelog, bullet-list), `history_merge_region()` detects changelog sections and merges entries by deduplication with optional sorting and max-entry truncation, `AutosolveRule::HistoryMerged` variant, `ConflictSession::auto_resolve_history()` method, `auto_resolve_segments_history()` UI-layer function, "Auto-resolve history" toolbar button; 11 core tests + 3 UI-layer tests — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ Autosolve decision traceability in resolver UI (Iteration 15): added `format_autosolve_trace_summary()` + `AutosolveTraceMode`, persisted `last_autosolve_summary` in resolver UI state, and surfaced a "Last autosolve (...)" summary line in the conflict resolver panel after safe/regex/history runs so pass-level decisions are visible without opening logs; includes unit coverage for summary formatting — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- ✅ **Whitespace-only Pass 1 toggle (Iteration 16):** added `AutosolveRule::WhitespaceOnly` variant, `is_whitespace_only_diff()` helper, and optional `whitespace_normalize` parameter to `safe_auto_resolve()` / `auto_resolve_segments_with_options()` — when enabled, conflicts with whitespace-only differences between ours/theirs auto-resolve by picking ours; persisted `conflict_enable_whitespace_autosolve` setting in session file with Settings popover toggle; 3 new core unit tests — `crates/gitgpui-core/src/conflict_session.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-state/src/session.rs`, `crates/gitgpui-ui-gpui/src/view/panels/popover/settings.rs`
+- ✅ **Clippy cleanup (Iteration 16):** refactored `format_autosolve_trace_summary()` from 8 positional args to struct-based `ConflictAutosolveStats` param, eliminating `too_many_arguments` clippy warning — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 
 ### 5) Diff and Text Fidelity Upgrades
 - ✅ Modeled missing trailing newline states in `file_diff.rs` via `FileDiffEofNewline` row metadata and EOF delta annotation (including newline-only diffs promoted to `Modify`) with dedicated tests — `crates/gitgpui-core/src/file_diff.rs`
@@ -76,10 +78,10 @@
 - ✅ Deduplicated `decode_utf8_optional` helper: extracted to `gitgpui_core::services::decode_utf8_optional()`, removed copies from `gitgpui-git-gix/src/repo/diff.rs` and `gitgpui-state/src/store/effects/repo_load.rs`
 
 ### 9) Rollout and Compatibility Flags
-- ✅ Added persisted UI settings flags for advanced autosolve modes (`conflict_enable_regex_autosolve`, `conflict_enable_history_autosolve`) with round-trip tests — `crates/gitgpui-state/src/session.rs`
+- ✅ Added persisted UI settings flags for autosolve modes (`conflict_enable_whitespace_autosolve`, `conflict_enable_regex_autosolve`, `conflict_enable_history_autosolve`) with round-trip tests — `crates/gitgpui-state/src/session.rs`
 - ✅ Threaded advanced autosolve flags from session load into `MainPaneView` startup defaults (`false` unless explicitly enabled) — `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ Gated Pass 3 actions and toolbar buttons behind opt-in flags; safe autosolve remains always available — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
-- ✅ Added Settings popover toggles to enable/disable regex/history autosolve and persist changes — `crates/gitgpui-ui-gpui/src/view/panels/popover/settings.rs`, `crates/gitgpui-ui-gpui/src/view/panels/popover.rs`, `crates/gitgpui-ui-gpui/src/view/tooltip.rs`
+- ✅ Added Settings popover toggles to enable/disable whitespace/regex/history autosolve and persist changes — `crates/gitgpui-ui-gpui/src/view/panels/popover/settings.rs`, `crates/gitgpui-ui-gpui/src/view/panels/popover.rs`, `crates/gitgpui-ui-gpui/src/view/tooltip.rs`
 
 ### 10) Autosolve Telemetry Hooks (Iteration 10)
 - ✅ Added telemetry/logging hook for autosolve decisions and unresolved counters: new `Msg::RecordConflictAutosolveTelemetry` with typed `ConflictAutosolveMode` + per-pass `ConflictAutosolveStats` payloads, wired from conflict resolver actions (safe/regex/history) with before/after unresolved and conflict counts — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`

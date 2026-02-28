@@ -84,6 +84,8 @@ pub enum AutosolveRule {
     OnlyOursChanged,
     /// Only "theirs" changed from base; "ours" equals base.
     OnlyTheirsChanged,
+    /// Whitespace-only difference between sides (optional Pass 1 toggle).
+    WhitespaceOnly,
     /// Regex-assisted mode: sides differ textually but normalize to equal.
     RegexEquivalentSides,
     /// Regex-assisted mode: ours normalizes to base; theirs differs.
@@ -102,6 +104,7 @@ impl AutosolveRule {
             AutosolveRule::IdenticalSides => "both sides identical",
             AutosolveRule::OnlyOursChanged => "only ours changed from base",
             AutosolveRule::OnlyTheirsChanged => "only theirs changed from base",
+            AutosolveRule::WhitespaceOnly => "whitespace-only difference",
             AutosolveRule::RegexEquivalentSides => "regex-normalized sides equivalent",
             AutosolveRule::RegexOnlyTheirsChanged => {
                 "regex-normalized: only theirs changed from base"
@@ -394,15 +397,21 @@ impl ConflictSession {
     /// 1. `ours == theirs` — both sides made the same change.
     /// 2. `ours == base` and `theirs != base` — only theirs changed.
     /// 3. `theirs == base` and `ours != base` — only ours changed.
+    /// 4. (if `whitespace_normalize`) whitespace-only difference → pick ours.
     ///
     /// Returns the number of regions auto-resolved.
     pub fn auto_resolve_safe(&mut self) -> usize {
+        self.auto_resolve_safe_with_options(false)
+    }
+
+    /// Like [`auto_resolve_safe`] but with an optional whitespace-normalization toggle.
+    pub fn auto_resolve_safe_with_options(&mut self, whitespace_normalize: bool) -> usize {
         let mut count = 0;
         for region in &mut self.regions {
             if region.resolution.is_resolved() {
                 continue;
             }
-            if let Some((rule, content)) = safe_auto_resolve(region) {
+            if let Some((rule, content)) = safe_auto_resolve(region, whitespace_normalize) {
                 region.resolution = ConflictRegionResolution::AutoResolved { rule, content };
                 count += 1;
             }
@@ -587,26 +596,49 @@ fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
     regions
 }
 
+/// Normalize a string by collapsing all whitespace runs into a single space.
+fn normalize_whitespace(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Returns `true` if `a` and `b` differ only in whitespace.
+pub fn is_whitespace_only_diff(a: &str, b: &str) -> bool {
+    a != b && normalize_whitespace(a) == normalize_whitespace(b)
+}
+
 /// Attempt to auto-resolve a single conflict region using Pass 1 safe rules.
 ///
+/// When `whitespace_normalize` is true, an additional rule checks whether
+/// the ours/theirs difference is whitespace-only, in which case "ours" is
+/// picked (the design specifies this as an optional Pass 1 toggle).
+///
 /// Returns `Some((rule, resolved_content))` if a safe resolution is found.
-fn safe_auto_resolve(region: &ConflictRegion) -> Option<(AutosolveRule, String)> {
+fn safe_auto_resolve(
+    region: &ConflictRegion,
+    whitespace_normalize: bool,
+) -> Option<(AutosolveRule, String)> {
     // Rule 1: both sides identical.
     if region.ours == region.theirs {
         return Some((AutosolveRule::IdenticalSides, region.ours.clone()));
     }
 
     // Rules 2 & 3 require a base.
-    let base = region.base.as_deref()?;
+    if let Some(base) = region.base.as_deref() {
+        // Rule 2: only theirs changed (ours == base).
+        if region.ours == base && region.theirs != base {
+            return Some((AutosolveRule::OnlyTheirsChanged, region.theirs.clone()));
+        }
 
-    // Rule 2: only theirs changed (ours == base).
-    if region.ours == base && region.theirs != base {
-        return Some((AutosolveRule::OnlyTheirsChanged, region.theirs.clone()));
+        // Rule 3: only ours changed (theirs == base).
+        if region.theirs == base && region.ours != base {
+            return Some((AutosolveRule::OnlyOursChanged, region.ours.clone()));
+        }
     }
 
-    // Rule 3: only ours changed (theirs == base).
-    if region.theirs == base && region.ours != base {
-        return Some((AutosolveRule::OnlyOursChanged, region.ours.clone()));
+    // Rule 4 (optional): whitespace-only difference between sides.
+    // This rule does not require a base.
+    if whitespace_normalize && is_whitespace_only_diff(&region.ours, &region.theirs) {
+        return Some((AutosolveRule::WhitespaceOnly, region.ours.clone()));
     }
 
     None
@@ -1752,7 +1784,7 @@ end
     #[test]
     fn auto_resolve_identical_sides() {
         let region = make_region(Some("base\n"), "same\n", "same\n");
-        let result = safe_auto_resolve(&region);
+        let result = safe_auto_resolve(&region, false);
         assert!(result.is_some());
         let (rule, content) = result.unwrap();
         assert_eq!(rule, AutosolveRule::IdenticalSides);
@@ -1767,7 +1799,7 @@ end
     #[test]
     fn auto_resolve_only_ours_changed() {
         let region = make_region(Some("base\n"), "changed\n", "base\n");
-        let result = safe_auto_resolve(&region);
+        let result = safe_auto_resolve(&region, false);
         assert!(result.is_some());
         let (rule, content) = result.unwrap();
         assert_eq!(rule, AutosolveRule::OnlyOursChanged);
@@ -1777,7 +1809,7 @@ end
     #[test]
     fn auto_resolve_only_theirs_changed() {
         let region = make_region(Some("base\n"), "base\n", "changed\n");
-        let result = safe_auto_resolve(&region);
+        let result = safe_auto_resolve(&region, false);
         assert!(result.is_some());
         let (rule, content) = result.unwrap();
         assert_eq!(rule, AutosolveRule::OnlyTheirsChanged);
@@ -1787,21 +1819,56 @@ end
     #[test]
     fn auto_resolve_both_changed_differently_returns_none() {
         let region = make_region(Some("base\n"), "ours\n", "theirs\n");
-        assert!(safe_auto_resolve(&region).is_none());
+        assert!(safe_auto_resolve(&region, false).is_none());
     }
 
     #[test]
     fn auto_resolve_no_base_both_different_returns_none() {
         let region = make_region(None, "ours\n", "theirs\n");
-        assert!(safe_auto_resolve(&region).is_none());
+        assert!(safe_auto_resolve(&region, false).is_none());
     }
 
     #[test]
     fn auto_resolve_no_base_identical_sides() {
         let region = make_region(None, "same\n", "same\n");
-        let result = safe_auto_resolve(&region);
+        let result = safe_auto_resolve(&region, false);
         assert!(result.is_some());
         assert_eq!(result.unwrap().0, AutosolveRule::IdenticalSides);
+    }
+
+    #[test]
+    fn auto_resolve_whitespace_only_diff_resolves_when_enabled() {
+        let region = make_region(Some("base\n"), "let  x = 1;\n", "let x  =  1;\n");
+        // Without whitespace normalization, should not resolve.
+        assert!(safe_auto_resolve(&region, false).is_none());
+        // With whitespace normalization, should resolve picking ours.
+        let result = safe_auto_resolve(&region, true);
+        assert!(result.is_some());
+        let (rule, content) = result.unwrap();
+        assert_eq!(rule, AutosolveRule::WhitespaceOnly);
+        assert_eq!(content, "let  x = 1;\n");
+    }
+
+    #[test]
+    fn auto_resolve_whitespace_only_no_base_resolves_when_enabled() {
+        // 2-way conflict (no base) with whitespace-only diff.
+        let region = make_region(None, "hello  world\n", "hello world\n");
+        assert!(safe_auto_resolve(&region, false).is_none());
+        let result = safe_auto_resolve(&region, true);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, AutosolveRule::WhitespaceOnly);
+    }
+
+    #[test]
+    fn auto_resolve_whitespace_session_with_options() {
+        let mut session = make_session(vec![
+            make_region(Some("base\n"), "let  x = 1;\n", "let x  =  1;\n"),
+        ]);
+        // Without whitespace toggle, nothing resolves.
+        assert_eq!(session.auto_resolve_safe(), 0);
+        // With whitespace toggle, it resolves.
+        assert_eq!(session.auto_resolve_safe_with_options(true), 1);
+        assert!(session.is_fully_resolved());
     }
 
     #[test]

@@ -67,26 +67,22 @@ pub fn format_autosolve_trace_summary(
     mode: AutosolveTraceMode,
     unresolved_before: usize,
     unresolved_after: usize,
-    pass1: usize,
-    pass2_split: usize,
-    pass1_after_split: usize,
-    regex: usize,
-    history: usize,
+    stats: &gitgpui_state::msg::ConflictAutosolveStats,
 ) -> String {
     let resolved = unresolved_before.saturating_sub(unresolved_after);
     let blocks_word = if resolved == 1 { "block" } else { "blocks" };
     match mode {
         AutosolveTraceMode::Safe => format!(
             "Last autosolve (safe): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}).",
-            unresolved_before, unresolved_after, pass1, pass2_split, pass1_after_split
+            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.pass1_after_split
         ),
         AutosolveTraceMode::Regex => format!(
             "Last autosolve (regex): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}, regex {}).",
-            unresolved_before, unresolved_after, pass1, pass2_split, pass1_after_split, regex
+            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.pass1_after_split, stats.regex
         ),
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
-            unresolved_before, unresolved_after, history
+            unresolved_before, unresolved_after, stats.history
         ),
     }
 }
@@ -276,9 +272,19 @@ pub fn prev_unresolved_conflict_index(
 /// 1. `ours == theirs` — both sides made the same change → pick ours.
 /// 2. `ours == base` and `theirs != base` — only theirs changed → pick theirs.
 /// 3. `theirs == base` and `ours != base` — only ours changed → pick ours.
+/// 4. (if `whitespace_normalize`) whitespace-only difference → pick ours.
 ///
 /// Returns the number of blocks auto-resolved.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
+    auto_resolve_segments_with_options(segments, false)
+}
+
+/// Like [`auto_resolve_segments`] but with an optional whitespace-normalization toggle.
+pub fn auto_resolve_segments_with_options(
+    segments: &mut [ConflictSegment],
+    whitespace_normalize: bool,
+) -> usize {
     let mut count = 0;
     for seg in segments.iter_mut() {
         let ConflictSegment::Block(block) = seg else {
@@ -297,24 +303,31 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
         }
 
         // Rules 2 & 3 require a base.
-        let Some(base) = block.base.as_deref() else {
-            continue;
-        };
+        if let Some(base) = block.base.as_deref() {
+            // Rule 2: only theirs changed (ours == base).
+            if block.ours == base && block.theirs != base {
+                block.choice = ConflictChoice::Theirs;
+                block.resolved = true;
+                count += 1;
+                continue;
+            }
 
-        // Rule 2: only theirs changed (ours == base).
-        if block.ours == base && block.theirs != base {
-            block.choice = ConflictChoice::Theirs;
-            block.resolved = true;
-            count += 1;
-            continue;
+            // Rule 3: only ours changed (theirs == base).
+            if block.theirs == base && block.ours != base {
+                block.choice = ConflictChoice::Ours;
+                block.resolved = true;
+                count += 1;
+                continue;
+            }
         }
 
-        // Rule 3: only ours changed (theirs == base).
-        if block.theirs == base && block.ours != base {
+        // Rule 4 (optional): whitespace-only difference.
+        if whitespace_normalize
+            && gitgpui_core::conflict_session::is_whitespace_only_diff(&block.ours, &block.theirs)
+        {
             block.choice = ConflictChoice::Ours;
             block.resolved = true;
             count += 1;
-            continue;
         }
     }
     count
@@ -1132,7 +1145,10 @@ mod tests {
 
     #[test]
     fn autosolve_trace_summary_safe_mode() {
-        let summary = format_autosolve_trace_summary(AutosolveTraceMode::Safe, 5, 2, 2, 1, 0, 0, 0);
+        let stats = gitgpui_state::msg::ConflictAutosolveStats {
+            pass1: 2, pass2_split: 1, pass1_after_split: 0, regex: 0, history: 0,
+        };
+        let summary = format_autosolve_trace_summary(AutosolveTraceMode::Safe, 5, 2, &stats);
         assert!(summary.contains("Last autosolve (safe)"));
         assert!(summary.contains("resolved 3 blocks"));
         assert!(summary.contains("unresolved 5 -> 2"));
@@ -1142,8 +1158,10 @@ mod tests {
 
     #[test]
     fn autosolve_trace_summary_history_mode_uses_history_stat() {
-        let summary =
-            format_autosolve_trace_summary(AutosolveTraceMode::History, 4, 1, 0, 0, 0, 0, 3);
+        let stats = gitgpui_state::msg::ConflictAutosolveStats {
+            pass1: 0, pass2_split: 0, pass1_after_split: 0, regex: 0, history: 3,
+        };
+        let summary = format_autosolve_trace_summary(AutosolveTraceMode::History, 4, 1, &stats);
         assert!(summary.contains("Last autosolve (history)"));
         assert!(summary.contains("resolved 3 blocks"));
         assert!(summary.contains("history 3"));

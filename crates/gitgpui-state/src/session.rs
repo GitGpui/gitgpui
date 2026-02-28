@@ -20,6 +20,7 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub conflict_enable_whitespace_autosolve: Option<bool>,
     pub conflict_enable_regex_autosolve: Option<bool>,
     pub conflict_enable_history_autosolve: Option<bool>,
 }
@@ -70,6 +71,7 @@ struct UiSessionFileV2 {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    conflict_enable_whitespace_autosolve: Option<bool>,
     conflict_enable_regex_autosolve: Option<bool>,
     conflict_enable_history_autosolve: Option<bool>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
@@ -109,6 +111,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        conflict_enable_whitespace_autosolve: file.conflict_enable_whitespace_autosolve,
         conflict_enable_regex_autosolve: file.conflict_enable_regex_autosolve,
         conflict_enable_history_autosolve: file.conflict_enable_history_autosolve,
     }
@@ -156,6 +159,7 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub conflict_enable_whitespace_autosolve: Option<bool>,
     pub conflict_enable_regex_autosolve: Option<bool>,
     pub conflict_enable_history_autosolve: Option<bool>,
 }
@@ -194,6 +198,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
+    }
+    if let Some(value) = settings.conflict_enable_whitespace_autosolve {
+        file.conflict_enable_whitespace_autosolve = Some(value);
     }
     if let Some(value) = settings.conflict_enable_regex_autosolve {
         file.conflict_enable_regex_autosolve = Some(value);
@@ -658,6 +665,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                conflict_enable_whitespace_autosolve: None,
                 conflict_enable_regex_autosolve: None,
                 conflict_enable_history_autosolve: None,
             },
@@ -704,6 +712,7 @@ mod tests {
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
+                conflict_enable_whitespace_autosolve: Some(true),
                 conflict_enable_regex_autosolve: Some(true),
                 conflict_enable_history_autosolve: Some(false),
             },
@@ -712,6 +721,7 @@ mod tests {
         .expect("persist ui settings");
 
         let loaded = load_from_path(&path);
+        assert_eq!(loaded.conflict_enable_whitespace_autosolve, Some(true));
         assert_eq!(loaded.conflict_enable_regex_autosolve, Some(true));
         assert_eq!(loaded.conflict_enable_history_autosolve, Some(false));
     }

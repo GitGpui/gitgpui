@@ -4,7 +4,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let current_format = this.date_time_format;
     let current_timezone = this.timezone;
-    let (conflict_enable_regex_autosolve, conflict_enable_history_autosolve) = this
+    let (
+        conflict_enable_whitespace_autosolve,
+        conflict_enable_regex_autosolve,
+        conflict_enable_history_autosolve,
+    ) = this
         .main_pane
         .read(cx)
         .conflict_advanced_autosolve_settings();
@@ -234,13 +238,27 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .text_color(theme.colors.text_muted)
         .child("Conflict resolver");
 
+    let whitespace_row = toggle_row(
+        "settings_conflict_whitespace_autosolve",
+        "Auto-resolve whitespace-only",
+        conflict_enable_whitespace_autosolve,
+    )
+    .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+        let (enabled, _, _) = this
+            .main_pane
+            .read(cx)
+            .conflict_advanced_autosolve_settings();
+        this.set_conflict_enable_whitespace_autosolve(!enabled, cx);
+        cx.notify();
+    }));
+
     let regex_row = toggle_row(
         "settings_conflict_regex_autosolve",
         "Enable regex auto-resolve",
         conflict_enable_regex_autosolve,
     )
     .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-        let (enabled, _) = this
+        let (_, enabled, _) = this
             .main_pane
             .read(cx)
             .conflict_advanced_autosolve_settings();
@@ -254,7 +272,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         conflict_enable_history_autosolve,
     )
     .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-        let (_, enabled) = this
+        let (_, _, enabled) = this
             .main_pane
             .read(cx)
             .conflict_advanced_autosolve_settings();
@@ -269,6 +287,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .flex()
             .flex_col()
             .gap_1()
+            .child(whitespace_row)
             .child(regex_row)
             .child(history_row),
     );

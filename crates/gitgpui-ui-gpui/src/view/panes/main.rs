@@ -21,6 +21,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) last_window_size: Size<Pixels>,
 
     pub(in super::super) show_whitespace: bool,
+    pub(in super::super) conflict_enable_whitespace_autosolve: bool,
     pub(in super::super) conflict_enable_regex_autosolve: bool,
     pub(in super::super) conflict_enable_history_autosolve: bool,
     pub(in super::super) diff_view: DiffViewMode,
@@ -176,6 +177,7 @@ impl MainPaneView {
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
+        conflict_enable_whitespace_autosolve: bool,
         conflict_enable_regex_autosolve: bool,
         conflict_enable_history_autosolve: bool,
         root_view: WeakEntity<GitGpuiView>,
@@ -314,6 +316,7 @@ impl MainPaneView {
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
             show_whitespace: false,
+            conflict_enable_whitespace_autosolve,
             conflict_enable_regex_autosolve,
             conflict_enable_history_autosolve,
             diff_view: DiffViewMode::Split,
@@ -498,11 +501,24 @@ impl MainPaneView {
             .history_visible_column_preferences()
     }
 
-    pub(in super::super) fn conflict_advanced_autosolve_settings(&self) -> (bool, bool) {
+    pub(in super::super) fn conflict_advanced_autosolve_settings(&self) -> (bool, bool, bool) {
         (
+            self.conflict_enable_whitespace_autosolve,
             self.conflict_enable_regex_autosolve,
             self.conflict_enable_history_autosolve,
         )
+    }
+
+    pub(in super::super) fn set_conflict_enable_whitespace_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_enable_whitespace_autosolve == enabled {
+            return;
+        }
+        self.conflict_enable_whitespace_autosolve = enabled;
+        cx.notify();
     }
 
     pub(in super::super) fn set_conflict_enable_regex_autosolve(
@@ -2216,9 +2232,12 @@ impl MainPaneView {
         }
         let unresolved_before =
             total_before.saturating_sub(self.conflict_resolver_resolved_count());
+        let ws = self.conflict_enable_whitespace_autosolve;
         // Pass 1: safe whole-block auto-resolve.
-        let pass1 =
-            conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments);
+        let pass1 = conflict_resolver::auto_resolve_segments_with_options(
+            &mut self.conflict_resolver.marker_segments,
+            ws,
+        );
         // Pass 2: heuristic subchunk splitting — split remaining unresolved
         // blocks into finer line-level subchunks where possible.
         let pass2 = conflict_resolver::auto_resolve_segments_pass2(
@@ -2227,7 +2246,10 @@ impl MainPaneView {
         let pass1_after_split = if pass2 > 0 {
             // Re-run Pass 1 on newly created sub-blocks (they may now
             // satisfy whole-block rules after splitting).
-            conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments)
+            conflict_resolver::auto_resolve_segments_with_options(
+                &mut self.conflict_resolver.marker_segments,
+                ws,
+            )
         } else {
             0
         };
@@ -2257,20 +2279,24 @@ impl MainPaneView {
         }
         let total_after = self.conflict_resolver_conflict_count();
         let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        let stats = gitgpui_state::msg::ConflictAutosolveStats {
+            pass1,
+            pass2_split: pass2,
+            pass1_after_split,
+            regex,
+            history: 0,
+        };
+        let trace_mode = if include_regex_pass {
+            conflict_resolver::AutosolveTraceMode::Regex
+        } else {
+            conflict_resolver::AutosolveTraceMode::Safe
+        };
         self.conflict_resolver.last_autosolve_summary = Some(
             conflict_resolver::format_autosolve_trace_summary(
-                if include_regex_pass {
-                    conflict_resolver::AutosolveTraceMode::Regex
-                } else {
-                    conflict_resolver::AutosolveTraceMode::Safe
-                },
+                trace_mode,
                 unresolved_before,
                 unresolved_after,
-                pass1,
-                pass2,
-                pass1_after_split,
-                regex,
-                0,
+                &stats,
             )
             .into(),
         );
@@ -2284,13 +2310,7 @@ impl MainPaneView {
             total_after,
             unresolved_before,
             unresolved_after,
-            gitgpui_state::msg::ConflictAutosolveStats {
-                pass1,
-                pass2_split: pass2,
-                pass1_after_split,
-                regex,
-                history: 0,
-            },
+            stats,
         );
         cx.notify();
     }
@@ -2331,16 +2351,19 @@ impl MainPaneView {
         }
         let total_after = self.conflict_resolver_conflict_count();
         let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        let stats = gitgpui_state::msg::ConflictAutosolveStats {
+            pass1: 0,
+            pass2_split: 0,
+            pass1_after_split: 0,
+            regex: 0,
+            history: count,
+        };
         self.conflict_resolver.last_autosolve_summary = Some(
             conflict_resolver::format_autosolve_trace_summary(
                 conflict_resolver::AutosolveTraceMode::History,
                 unresolved_before,
                 unresolved_after,
-                0,
-                0,
-                0,
-                0,
-                count,
+                &stats,
             )
             .into(),
         );
@@ -2350,13 +2373,7 @@ impl MainPaneView {
             total_after,
             unresolved_before,
             unresolved_after,
-            gitgpui_state::msg::ConflictAutosolveStats {
-                pass1: 0,
-                pass2_split: 0,
-                pass1_after_split: 0,
-                regex: 0,
-                history: count,
-            },
+            stats,
         );
         cx.notify();
     }

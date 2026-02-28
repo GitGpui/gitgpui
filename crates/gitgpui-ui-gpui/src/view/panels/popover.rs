@@ -806,6 +806,17 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(super) fn set_conflict_enable_whitespace_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_whitespace_autosolve(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
     pub(super) fn set_conflict_enable_regex_autosolve(
         &mut self,
         enabled: bool,

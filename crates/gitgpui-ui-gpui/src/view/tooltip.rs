@@ -26,10 +26,14 @@ impl GitGpuiView {
                             .main_pane
                             .read(cx)
                             .history_visible_column_preferences(cx);
-                        let (conflict_enable_regex_autosolve, conflict_enable_history_autosolve) =
-                            this.main_pane
-                                .read(cx)
-                                .conflict_advanced_autosolve_settings();
+                        let (
+                            conflict_enable_whitespace_autosolve,
+                            conflict_enable_regex_autosolve,
+                            conflict_enable_history_autosolve,
+                        ) = this
+                            .main_pane
+                            .read(cx)
+                            .conflict_advanced_autosolve_settings();
 
                         let settings = session::UiSettings {
                             window_width,
@@ -43,6 +47,9 @@ impl GitGpuiView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            conflict_enable_whitespace_autosolve: Some(
+                                conflict_enable_whitespace_autosolve,
+                            ),
                             conflict_enable_regex_autosolve: Some(conflict_enable_regex_autosolve),
                             conflict_enable_history_autosolve: Some(
                                 conflict_enable_history_autosolve,
