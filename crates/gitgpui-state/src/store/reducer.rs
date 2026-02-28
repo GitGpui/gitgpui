@@ -339,6 +339,11 @@ pub(super) fn reduce(
             region_index,
             choice,
         } => conflict_interactions::set_region_choice(state, repo_id, path, region_index, choice),
+        Msg::ConflictSyncRegionResolutions {
+            repo_id,
+            path,
+            updates,
+        } => conflict_interactions::sync_region_resolutions(state, repo_id, path, updates),
         Msg::ConflictApplyAutosolve {
             repo_id,
             path,

@@ -82,9 +82,12 @@ pub(super) fn panel(
                     zed::Button::new("conflict_stage_anyway", "Stage anyway")
                         .style(zed::ButtonStyle::Danger)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let text = this.main_pane.read_with(cx, |main, cx| {
-                                main.conflict_resolver_input
-                                    .read_with(cx, |i, _| i.text().to_string())
+                            let text = this.main_pane.update(cx, |main, cx| {
+                                let text = main
+                                    .conflict_resolver_input
+                                    .read_with(cx, |i, _| i.text().to_string());
+                                main.conflict_resolver_sync_session_resolutions_from_output(&text);
+                                text
                             });
                             this.store.dispatch(Msg::SaveWorktreeFile {
                                 repo_id,

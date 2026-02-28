@@ -244,6 +244,106 @@ fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<C
         .then_some(ConflictChoice::Both)
 }
 
+fn content_matches_block_choice(block: &ConflictBlock, content: &str) -> bool {
+    match block.choice {
+        ConflictChoice::Base => block.base.as_deref().is_some_and(|base| content == base),
+        ConflictChoice::Ours => content == block.ours,
+        ConflictChoice::Theirs => content == block.theirs,
+        ConflictChoice::Both => content
+            .strip_prefix(block.ours.as_str())
+            .is_some_and(|rest| rest == block.theirs),
+    }
+}
+
+fn extract_block_contents_from_output(
+    segments: &[ConflictSegment],
+    output_text: &str,
+) -> Option<Vec<String>> {
+    let mut cursor = 0usize;
+    let mut block_contents = Vec::new();
+
+    for (seg_ix, seg) in segments.iter().enumerate() {
+        match seg {
+            ConflictSegment::Text(text) => {
+                let tail = output_text.get(cursor..)?;
+                if !tail.starts_with(text) {
+                    return None;
+                }
+                cursor = cursor.saturating_add(text.len());
+            }
+            ConflictSegment::Block(_) => {
+                let next_anchor = segments[seg_ix + 1..].iter().find_map(|next| match next {
+                    ConflictSegment::Text(text) if !text.is_empty() => Some(text.as_str()),
+                    _ => None,
+                });
+                let end = match next_anchor {
+                    Some(anchor) => {
+                        let rel = output_text.get(cursor..)?.find(anchor)?;
+                        cursor.saturating_add(rel)
+                    }
+                    None => output_text.len(),
+                };
+                if end < cursor {
+                    return None;
+                }
+                block_contents.push(output_text[cursor..end].to_string());
+                cursor = end;
+            }
+        }
+    }
+
+    (cursor == output_text.len()).then_some(block_contents)
+}
+
+/// Derive per-region session resolution updates from the current resolved output.
+///
+/// This is used to persist manual resolver edits back into state without
+/// requiring marker reparse in the reducer.
+pub fn derive_region_resolution_updates_from_output(
+    segments: &[ConflictSegment],
+    block_region_indices: &[usize],
+    output_text: &str,
+) -> Option<
+    Vec<(
+        usize,
+        gitgpui_core::conflict_session::ConflictRegionResolution,
+    )>,
+> {
+    use gitgpui_core::conflict_session::ConflictRegionResolution as R;
+
+    let block_contents = extract_block_contents_from_output(segments, output_text)?;
+    let mut updates = Vec::with_capacity(block_contents.len());
+
+    let mut block_ix = 0usize;
+    for seg in segments {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        let content = block_contents.get(block_ix)?;
+        let region_ix = block_region_indices
+            .get(block_ix)
+            .copied()
+            .unwrap_or(block_ix);
+
+        let resolution = if !block.resolved && content_matches_block_choice(block, content) {
+            R::Unresolved
+        } else if let Some(choice) = choice_for_resolved_content(block, content) {
+            match choice {
+                ConflictChoice::Base => R::PickBase,
+                ConflictChoice::Ours => R::PickOurs,
+                ConflictChoice::Theirs => R::PickTheirs,
+                ConflictChoice::Both => R::PickBoth,
+            }
+        } else {
+            R::ManualEdit(content.clone())
+        };
+        updates.push((region_ix, resolution));
+        block_ix += 1;
+    }
+
+    Some(updates)
+}
+
 /// Result of applying state-layer region resolutions to UI marker segments.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionRegionApplyResult {
@@ -1342,6 +1442,96 @@ mod tests {
         assert_eq!(out, "a\nb\nc\n");
         let out = append_lines_to_output("a", &["b".into()]);
         assert_eq!(out, "a\nb\n");
+    }
+
+    #[test]
+    fn derive_region_resolution_updates_preserves_unresolved_defaults() {
+        use gitgpui_core::conflict_session::ConflictRegionResolution as R;
+
+        let input = concat!(
+            "pre\n",
+            "<<<<<<< ours\n",
+            "ours\n",
+            "=======\n",
+            "theirs\n",
+            ">>>>>>> theirs\n",
+            "post\n"
+        );
+        let segments = parse_conflict_markers(input);
+        let output = generate_resolved_text(&segments);
+        let updates = derive_region_resolution_updates_from_output(
+            &segments,
+            &sequential_conflict_region_indices(&segments),
+            &output,
+        )
+        .expect("updates");
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].0, 0);
+        assert_eq!(updates[0].1, R::Unresolved);
+    }
+
+    #[test]
+    fn derive_region_resolution_updates_detects_manual_and_pick() {
+        use gitgpui_core::conflict_session::ConflictRegionResolution as R;
+
+        let input = concat!(
+            "pre\n",
+            "<<<<<<< ours\n",
+            "ours1\n",
+            "=======\n",
+            "theirs1\n",
+            ">>>>>>> theirs\n",
+            "mid\n",
+            "<<<<<<< ours\n",
+            "ours2\n",
+            "=======\n",
+            "theirs2\n",
+            ">>>>>>> theirs\n",
+            "post\n"
+        );
+        let mut segments = parse_conflict_markers(input);
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .filter(|seg| matches!(seg, ConflictSegment::Block(_)))
+            .nth(1)
+        {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+        }
+        let output = "pre\nmanual one\nmid\ntheirs2\npost\n";
+        let updates = derive_region_resolution_updates_from_output(
+            &segments,
+            &sequential_conflict_region_indices(&segments),
+            output,
+        )
+        .expect("updates");
+
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].0, 0);
+        assert_eq!(updates[0].1, R::ManualEdit("manual one\n".into()));
+        assert_eq!(updates[1].0, 1);
+        assert_eq!(updates[1].1, R::PickTheirs);
+    }
+
+    #[test]
+    fn derive_region_resolution_updates_returns_none_when_context_changed() {
+        let input = concat!(
+            "pre\n",
+            "<<<<<<< ours\n",
+            "ours\n",
+            "=======\n",
+            "theirs\n",
+            ">>>>>>> theirs\n",
+            "post\n"
+        );
+        let segments = parse_conflict_markers(input);
+        let output = "changed-pre\nours\npost\n";
+        let updates = derive_region_resolution_updates_from_output(
+            &segments,
+            &sequential_conflict_region_indices(&segments),
+            output,
+        );
+        assert!(updates.is_none());
     }
 
     #[test]

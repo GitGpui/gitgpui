@@ -2223,6 +2223,46 @@ impl MainPaneView {
         });
     }
 
+    pub(in super::super) fn conflict_resolver_sync_session_resolutions_from_output(
+        &mut self,
+        output_text: &str,
+    ) {
+        let Some(repo_id) = self
+            .conflict_resolver
+            .repo_id
+            .or_else(|| self.active_repo_id())
+        else {
+            return;
+        };
+        let Some(path) = self.conflict_resolver.path.clone() else {
+            return;
+        };
+        let Some(updates) = conflict_resolver::derive_region_resolution_updates_from_output(
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolver.conflict_region_indices,
+            output_text,
+        ) else {
+            return;
+        };
+        if updates.is_empty() {
+            return;
+        }
+        let updates = updates
+            .into_iter()
+            .map(
+                |(region_index, resolution)| gitgpui_state::msg::ConflictRegionResolutionUpdate {
+                    region_index,
+                    resolution,
+                },
+            )
+            .collect();
+        self.store.dispatch(Msg::ConflictSyncRegionResolutions {
+            repo_id,
+            path,
+            updates,
+        });
+    }
+
     pub(in super::super) fn conflict_resolver_reset_output_from_markers(
         &mut self,
         cx: &mut gpui::Context<Self>,

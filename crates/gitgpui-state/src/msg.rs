@@ -7,7 +7,8 @@ mod store_event;
 
 pub use effect::Effect;
 pub use message::{
-    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice, Msg,
+    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice,
+    ConflictRegionResolutionUpdate, Msg,
 };
 pub use repo_command_kind::RepoCommandKind;
 pub use repo_external_change::RepoExternalChange;

@@ -348,6 +348,7 @@ impl MainPaneView {
                                 let text = this
                                     .conflict_resolver_input
                                     .read_with(cx, |i, _| i.text().to_string());
+                                this.conflict_resolver_sync_session_resolutions_from_output(&text);
                                 this.store.dispatch(Msg::SaveWorktreeFile {
                                     repo_id,
                                     path: save_path.clone(),
@@ -381,6 +382,9 @@ impl MainPaneView {
                                         cx,
                                     );
                                 } else {
+                                    this.conflict_resolver_sync_session_resolutions_from_output(
+                                        &text,
+                                    );
                                     this.store.dispatch(Msg::SaveWorktreeFile {
                                         repo_id,
                                         path: save_path.clone(),

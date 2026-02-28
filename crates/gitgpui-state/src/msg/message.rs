@@ -43,6 +43,12 @@ pub enum ConflictRegionChoice {
     Both,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConflictRegionResolutionUpdate {
+    pub region_index: usize,
+    pub resolution: gitgpui_core::conflict_session::ConflictRegionResolution,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConflictAutosolveStats {
     pub pass1: usize,
@@ -382,6 +388,11 @@ pub enum Msg {
         path: PathBuf,
         region_index: usize,
         choice: ConflictRegionChoice,
+    },
+    ConflictSyncRegionResolutions {
+        repo_id: RepoId,
+        path: PathBuf,
+        updates: Vec<ConflictRegionResolutionUpdate>,
     },
     ConflictApplyAutosolve {
         repo_id: RepoId,
