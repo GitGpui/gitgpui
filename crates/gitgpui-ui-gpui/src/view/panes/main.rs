@@ -1829,13 +1829,17 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.conflict_resolver_conflict_count() == 0 {
+        let current = self.conflict_resolver.active_conflict;
+        let Some(target) = conflict_resolver::prev_unresolved_conflict_index(
+            &self.conflict_resolver.marker_segments,
+            current,
+        ) else {
+            return;
+        };
+        if target == current {
             return;
         }
-        if self.conflict_resolver.active_conflict == 0 {
-            return;
-        }
-        self.conflict_resolver.active_conflict -= 1;
+        self.conflict_resolver.active_conflict = target;
         cx.notify();
     }
 
@@ -1843,14 +1847,17 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
-        let total = self.conflict_resolver_conflict_count();
-        if total == 0 {
+        let current = self.conflict_resolver.active_conflict;
+        let Some(target) = conflict_resolver::next_unresolved_conflict_index(
+            &self.conflict_resolver.marker_segments,
+            current,
+        ) else {
+            return;
+        };
+        if target == current {
             return;
         }
-        if self.conflict_resolver.active_conflict + 1 >= total {
-            return;
-        }
-        self.conflict_resolver.active_conflict += 1;
+        self.conflict_resolver.active_conflict = target;
         cx.notify();
     }
 
@@ -1884,19 +1891,24 @@ impl MainPaneView {
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
 
-        // Auto-advance to the next conflict (kdiff3-style).
-        let total = self.conflict_resolver_conflict_count();
-        if total > 0 && self.conflict_resolver.active_conflict + 1 < total {
-            self.conflict_resolver.active_conflict += 1;
-            // Scroll the 3-way view to the new active conflict's range.
-            if let Some(range) = self
-                .conflict_resolver
-                .three_way_conflict_ranges
-                .get(self.conflict_resolver.active_conflict)
-                .cloned()
-            {
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(range.start, gpui::ScrollStrategy::Center);
+        // Auto-advance to the next unresolved conflict (kdiff3-style).
+        let current = self.conflict_resolver.active_conflict;
+        if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
+            &self.conflict_resolver.marker_segments,
+            current,
+        ) {
+            if next_unresolved != current {
+                self.conflict_resolver.active_conflict = next_unresolved;
+                // Scroll the 3-way view to the new active conflict's range.
+                if let Some(range) = self
+                    .conflict_resolver
+                    .three_way_conflict_ranges
+                    .get(self.conflict_resolver.active_conflict)
+                    .cloned()
+                {
+                    self.conflict_resolver_diff_scroll
+                        .scroll_to_item_strict(range.start, gpui::ScrollStrategy::Center);
+                }
             }
         }
         cx.notify();
@@ -1922,6 +1934,13 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
             );
             self.conflict_resolver_set_output(resolved, cx);
+            // Keep focus aligned with unresolved navigation after auto-resolve.
+            if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.active_conflict,
+            ) {
+                self.conflict_resolver.active_conflict = next_unresolved;
+            }
         }
         cx.notify();
     }

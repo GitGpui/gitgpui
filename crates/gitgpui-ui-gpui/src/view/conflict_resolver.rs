@@ -157,6 +157,50 @@ pub fn resolved_conflict_count(segments: &[ConflictSegment]) -> usize {
         .count()
 }
 
+fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut conflict_ix = 0usize;
+    for seg in segments {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        if !block.resolved {
+            out.push(conflict_ix);
+        }
+        conflict_ix += 1;
+    }
+    out
+}
+
+/// Find the next unresolved conflict index after `current`.
+/// Wraps around to the first unresolved conflict.
+pub fn next_unresolved_conflict_index(
+    segments: &[ConflictSegment],
+    current: usize,
+) -> Option<usize> {
+    let unresolved = unresolved_conflict_indices(segments);
+    unresolved
+        .iter()
+        .copied()
+        .find(|&ix| ix > current)
+        .or_else(|| unresolved.first().copied())
+}
+
+/// Find the previous unresolved conflict index before `current`.
+/// Wraps around to the last unresolved conflict.
+pub fn prev_unresolved_conflict_index(
+    segments: &[ConflictSegment],
+    current: usize,
+) -> Option<usize> {
+    let unresolved = unresolved_conflict_indices(segments);
+    unresolved
+        .iter()
+        .rev()
+        .copied()
+        .find(|&ix| ix < current)
+        .or_else(|| unresolved.last().copied())
+}
+
 /// Apply safe auto-resolve rules (Pass 1) to all unresolved conflict blocks.
 ///
 /// Safe rules:
@@ -729,6 +773,76 @@ mod tests {
             block.resolved = true;
         }
         assert_eq!(resolved_conflict_count(&segments), 1);
+    }
+
+    fn mark_block_resolved(segments: &mut [ConflictSegment], target: usize) {
+        let mut seen = 0usize;
+        for seg in segments {
+            let ConflictSegment::Block(block) = seg else {
+                continue;
+            };
+            if seen == target {
+                block.resolved = true;
+                return;
+            }
+            seen += 1;
+        }
+        panic!("missing block index {target}");
+    }
+
+    #[test]
+    fn next_unresolved_wraps_to_first() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+            "<<<<<<< HEAD\nthree\n=======\ntres\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        mark_block_resolved(&mut segments, 1);
+
+        assert_eq!(next_unresolved_conflict_index(&segments, 2), Some(0));
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(2));
+    }
+
+    #[test]
+    fn prev_unresolved_wraps_to_last() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+            "<<<<<<< HEAD\nthree\n=======\ntres\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        mark_block_resolved(&mut segments, 1);
+
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), Some(2));
+        assert_eq!(prev_unresolved_conflict_index(&segments, 2), Some(0));
+    }
+
+    #[test]
+    fn unresolved_navigation_returns_none_when_fully_resolved() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        mark_block_resolved(&mut segments, 0);
+        mark_block_resolved(&mut segments, 1);
+
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), None);
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), None);
+    }
+
+    #[test]
+    fn unresolved_navigation_can_jump_from_resolved_active_conflict() {
+        let input = concat!(
+            "<<<<<<< HEAD\none\n=======\nuno\n>>>>>>> other\n",
+            "<<<<<<< HEAD\ntwo\n=======\ndos\n>>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        mark_block_resolved(&mut segments, 0);
+
+        assert_eq!(next_unresolved_conflict_index(&segments, 0), Some(1));
+        assert_eq!(prev_unresolved_conflict_index(&segments, 0), Some(1));
     }
 
     // -- auto_resolve_segments tests --

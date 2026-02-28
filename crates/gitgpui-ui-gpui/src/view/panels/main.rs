@@ -1098,13 +1098,13 @@ impl MainPaneView {
                                     .child(
                                         zed::Button::new("conflict_pick_prev", "Prev")
                                             .style(zed::ButtonStyle::Transparent)
-                                            .disabled(active_conflict == 0)
+                                            .disabled(unresolved_count == 0)
                                             .on_click(theme, cx, prev_conflict),
                                     )
                                     .child(
                                         zed::Button::new("conflict_pick_next", "Next")
                                             .style(zed::ButtonStyle::Transparent)
-                                            .disabled(active_conflict + 1 >= conflict_count)
+                                            .disabled(unresolved_count == 0)
                                             .on_click(theme, cx, next_conflict),
                                     )
                                 })
