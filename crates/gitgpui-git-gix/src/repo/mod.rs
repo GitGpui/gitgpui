@@ -4,8 +4,8 @@ use gitgpui_core::domain::{
     UpstreamDivergence, Worktree,
 };
 use gitgpui_core::services::{
-    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, PullMode,
-    RemoteUrlKind, ResetMode, Result,
+    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
+    PullMode, RemoteUrlKind, ResetMode, Result,
 };
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ mod diff;
 mod discard;
 mod history;
 mod log;
+mod mergetool;
 mod patch;
 mod porcelain;
 mod refs;
@@ -303,6 +304,10 @@ impl GitRepository for GixRepo {
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {
         self.checkout_conflict_side_impl(path, side)
+    }
+
+    fn launch_mergetool(&self, path: &Path) -> Result<MergetoolResult> {
+        self.launch_mergetool_impl(path)
     }
 
     fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {

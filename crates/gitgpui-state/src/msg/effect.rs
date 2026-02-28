@@ -290,6 +290,10 @@ pub enum Effect {
         path: PathBuf,
         side: ConflictSide,
     },
+    LaunchMergetool {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     Stash {
         repo_id: RepoId,
         message: String,

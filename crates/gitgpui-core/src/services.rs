@@ -44,6 +44,19 @@ pub enum ConflictSide {
     Theirs,
 }
 
+/// Result of launching an external mergetool.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergetoolResult {
+    /// The tool command that was invoked.
+    pub tool_name: String,
+    /// Whether the tool reported success (exit code 0 or trust-exit-code semantics).
+    pub success: bool,
+    /// The merged file contents read back after the tool exited, if available.
+    pub merged_contents: Option<Vec<u8>>,
+    /// Combined stdout/stderr from the tool invocation for diagnostics.
+    pub output: CommandOutput,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFileStages {
     pub path: PathBuf,
@@ -313,6 +326,17 @@ pub trait GitRepository: Send + Sync {
     fn checkout_conflict_side(&self, _path: &Path, _side: ConflictSide) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "conflict resolution is not implemented for this backend",
+        )))
+    }
+
+    /// Launch an external mergetool for a conflicted file.
+    ///
+    /// Materializes BASE, LOCAL, REMOTE temp files from the conflict stages,
+    /// invokes the configured (or specified) mergetool, reads back the merged
+    /// output, writes it to the worktree, and stages the result.
+    fn launch_mergetool(&self, _path: &Path) -> Result<MergetoolResult> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "external mergetool is not implemented for this backend",
         )))
     }
 

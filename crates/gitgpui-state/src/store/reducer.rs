@@ -287,6 +287,9 @@ pub(super) fn reduce(
             path,
             side,
         } => actions_emit_effects::checkout_conflict_side(repo_id, path, side),
+        Msg::LaunchMergetool { repo_id, path } => {
+            actions_emit_effects::launch_mergetool(repo_id, path)
+        }
         Msg::Stash {
             repo_id,
             message,

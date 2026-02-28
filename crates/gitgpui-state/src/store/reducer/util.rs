@@ -343,6 +343,7 @@ fn summarize_command(
                 ConflictSide::Ours => "Checkout ours",
                 ConflictSide::Theirs => "Checkout theirs",
             },
+            RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
@@ -450,6 +451,9 @@ fn summarize_command(
             ConflictSide::Ours => "Resolved using ours".to_string(),
             ConflictSide::Theirs => "Resolved using theirs".to_string(),
         },
+        RepoCommandKind::LaunchMergetool { path } => {
+            format!("Mergetool: Resolved {}", path.display())
+        }
         RepoCommandKind::SaveWorktreeFile { path, stage } => {
             if *stage {
                 format!("Saved and staged → {}", path.display())

@@ -283,6 +283,9 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_checkout_conflict_side(
             executor, repos, msg_tx, repo_id, path, side,
         ),
+        Effect::LaunchMergetool { repo_id, path } => {
+            repo_commands::schedule_launch_mergetool(executor, repos, msg_tx, repo_id, path);
+        }
         Effect::Stash {
             repo_id,
             message,

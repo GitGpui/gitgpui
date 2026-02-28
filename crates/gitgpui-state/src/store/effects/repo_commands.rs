@@ -557,3 +557,40 @@ pub(super) fn schedule_checkout_conflict_side(
         });
     });
 }
+
+pub(super) fn schedule_launch_mergetool(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.launch_mergetool(&path);
+        let cmd_result = match result {
+            Ok(mergetool_result) => {
+                if mergetool_result.success {
+                    Ok(CommandOutput {
+                        command: format!("mergetool ({})", mergetool_result.tool_name),
+                        stdout: mergetool_result.output.stdout,
+                        stderr: mergetool_result.output.stderr,
+                        exit_code: mergetool_result.output.exit_code,
+                    })
+                } else {
+                    Err(gitgpui_core::error::Error::new(
+                        gitgpui_core::error::ErrorKind::Backend(format!(
+                            "Mergetool '{}' did not complete successfully",
+                            mergetool_result.tool_name
+                        )),
+                    ))
+                }
+            }
+            Err(e) => Err(e),
+        };
+        let _ = msg_tx.send(Msg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LaunchMergetool { path: path.clone() },
+            result: cmd_result,
+        });
+    });
+}

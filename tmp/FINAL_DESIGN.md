@@ -48,9 +48,11 @@
 - ✅ Binary/non-UTF8 resolver UI mode — `conflict_resolver_strategy()` now accepts `is_binary` flag (detects non-UTF8 bytes from loaded conflict file), `sync_conflict_resolver()` short-circuits text processing for binary files, dedicated `render_binary_conflict_resolver()` panel shows file sizes and "Use Ours"/"Use Theirs" buttons dispatching `Msg::CheckoutConflictSide`, binary conflicts skip text-specific header controls — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main/binary_conflict.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/mod.rs` — 2 new test assertions for BinarySidePick strategy
 
 ### 7) Optional External Mergetool Bridge
-- ⬜ Materialize BASE/LOCAL/REMOTE/MERGED temp files
-- ⬜ Invoke configured tool command
-- ⬜ Reload/validate merged output, stage on success
+- ✅ `MergetoolResult` struct and `launch_mergetool()` method on `GitRepository` trait — `crates/gitgpui-core/src/services.rs`
+- ✅ Full mergetool implementation: reads `merge.tool` and `mergetool.<tool>.cmd` from git config, materializes BASE/LOCAL/REMOTE temp files from conflict stages (`:1:/:2:/:3:`), invokes tool with variable substitution ($BASE/$LOCAL/$REMOTE/$MERGED), respects `trustExitCode` config, reads back merged output and stages on success — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
+- ✅ `Msg::LaunchMergetool`, `Effect::LaunchMergetool`, `RepoCommandKind::LaunchMergetool` message/effect/command plumbing with full reducer, effect scheduler, and command log integration — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg/effect.rs`, `crates/gitgpui-state/src/msg/repo_command_kind.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/actions_emit_effects.rs`, `crates/gitgpui-state/src/store/effects.rs`, `crates/gitgpui-state/src/store/effects/repo_commands.rs`, `crates/gitgpui-state/src/store/reducer/util.rs`
+- ✅ "Mergetool" button in text conflict resolver toolbar (next to Save/Save & stage) and "External Mergetool" button in binary conflict resolver panel — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main/binary_conflict.rs`
+- ✅ 3 unit tests for git config reading and stage byte extraction — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
 
 ---
 

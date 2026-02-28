@@ -312,8 +312,25 @@ impl MainPaneView {
             }
 
             if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
+                let mergetool_path = path.clone();
                 let save_path = path.clone();
                 controls = controls
+                    .child(
+                        div()
+                            .w(px(1.0))
+                            .h(px(12.0))
+                            .bg(theme.colors.border),
+                    )
+                    .child(
+                        zed::Button::new("conflict_launch_mergetool", "Mergetool")
+                            .style(zed::ButtonStyle::Transparent)
+                            .on_click(theme, cx, move |this, _e, _w, _cx| {
+                                this.store.dispatch(Msg::LaunchMergetool {
+                                    repo_id,
+                                    path: mergetool_path.clone(),
+                                });
+                            }),
+                    )
                     .child(
                         zed::Button::new("conflict_save", "Save")
                             .style(zed::ButtonStyle::Outlined)

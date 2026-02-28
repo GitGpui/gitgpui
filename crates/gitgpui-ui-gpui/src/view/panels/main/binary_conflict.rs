@@ -85,6 +85,7 @@ impl MainPaneView {
 
         let ours_path = path.clone();
         let theirs_path = path.clone();
+        let mergetool_path = path.clone();
 
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
@@ -115,6 +116,22 @@ impl MainPaneView {
                             repo_id,
                             path: theirs_path.clone(),
                             side: ConflictSide::Theirs,
+                        });
+                    }),
+            )
+            .child(
+                div()
+                    .w(px(1.0))
+                    .h(px(16.0))
+                    .bg(theme.colors.border),
+            )
+            .child(
+                zed::Button::new("binary_launch_mergetool", "External Mergetool")
+                    .style(zed::ButtonStyle::Outlined)
+                    .on_click(theme, cx, move |this, _e, _w, _cx| {
+                        this.store.dispatch(Msg::LaunchMergetool {
+                            repo_id,
+                            path: mergetool_path.clone(),
                         });
                     }),
             );
