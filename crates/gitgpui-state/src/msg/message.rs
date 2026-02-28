@@ -1,4 +1,5 @@
 use crate::model::RepoId;
+use gitgpui_core::conflict_session::ConflictSession;
 use gitgpui_core::domain::*;
 use gitgpui_core::error::Error;
 use gitgpui_core::services::GitRepository;
@@ -440,6 +441,7 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
         result: Result<Option<crate::model::ConflictFile>, Error>,
+        conflict_session: Option<ConflictSession>,
     },
     WorktreesLoaded {
         repo_id: RepoId,

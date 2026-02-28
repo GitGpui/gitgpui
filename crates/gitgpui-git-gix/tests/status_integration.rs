@@ -1,3 +1,4 @@
+use gitgpui_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitgpui_core::domain::{DiffArea, DiffTarget, FileConflictKind, FileStatusKind};
 use gitgpui_core::services::ConflictSide;
 use gitgpui_core::services::GitBackend;
@@ -593,6 +594,17 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
         .expect("file diff for conflicted changes");
     assert_eq!(diff.old.as_deref(), Some("ours\n"));
     assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+
+    let session = opened
+        .conflict_session(Path::new("a.txt"))
+        .unwrap()
+        .expect("conflict session");
+    assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
+    assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
+    assert_eq!(session.total_regions(), 1);
+    assert_eq!(session.unsolved_count(), 1);
+    assert_eq!(session.regions[0].ours, "ours\n");
+    assert_eq!(session.regions[0].theirs, "theirs\n");
 }
 
 #[test]
@@ -730,6 +742,20 @@ fn status_and_conflict_stages_cover_all_conflict_kinds() {
             "theirs stage mismatch for {}",
             fixture.path
         );
+
+        let session = opened
+            .conflict_session(path)
+            .unwrap()
+            .expect("conflict session");
+        assert_eq!(session.path, PathBuf::from(fixture.path));
+        assert_eq!(session.conflict_kind, fixture.kind);
+        assert_eq!(
+            session.strategy,
+            ConflictResolverStrategy::for_conflict(fixture.kind, false)
+        );
+        assert_eq!(session.base.is_absent(), !fixture.has_base);
+        assert_eq!(session.ours.is_absent(), !fixture.has_ours);
+        assert_eq!(session.theirs.is_absent(), !fixture.has_theirs);
     }
 }
 
@@ -889,6 +915,17 @@ fn conflict_file_stages_preserve_non_utf8_bytes() {
     assert_eq!(stages.base, None);
     assert_eq!(stages.ours, None);
     assert_eq!(stages.theirs, None);
+
+    let session = opened
+        .conflict_session(Path::new("bin.dat"))
+        .unwrap()
+        .expect("conflict session");
+    assert_eq!(session.path, PathBuf::from("bin.dat"));
+    assert_eq!(session.strategy, ConflictResolverStrategy::BinarySidePick);
+    assert_eq!(session.total_regions(), 0);
+    assert!(matches!(session.base, ConflictPayload::Binary(_)));
+    assert!(matches!(session.ours, ConflictPayload::Binary(_)));
+    assert!(matches!(session.theirs, ConflictPayload::Binary(_)));
 }
 
 #[test]

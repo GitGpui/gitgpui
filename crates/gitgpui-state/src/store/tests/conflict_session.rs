@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::ConflictFile;
-use gitgpui_core::conflict_session::ConflictResolverStrategy;
+use gitgpui_core::conflict_session::{ConflictPayload, ConflictResolverStrategy, ConflictSession};
 use gitgpui_core::domain::{FileConflictKind, FileStatus, FileStatusKind, RepoStatus};
 
 /// Helper: set up a repo state with a conflicted status entry.
@@ -83,6 +83,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Ok(Some(file)),
+            conflict_session: None,
         },
     );
 
@@ -138,6 +139,7 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
             repo_id,
             path: PathBuf::from("deleted.txt"),
             result: Ok(Some(file)),
+            conflict_session: None,
         },
     );
 
@@ -188,6 +190,7 @@ fn conflict_file_loaded_builds_binary_session() {
             repo_id,
             path: PathBuf::from("image.png"),
             result: Ok(Some(file)),
+            conflict_session: None,
         },
     );
 
@@ -224,6 +227,7 @@ fn conflict_file_loaded_clears_session_on_error() {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Err(Error::new(ErrorKind::Backend("test error".into()))),
+            conflict_session: None,
         },
     );
 
@@ -266,6 +270,7 @@ fn load_conflict_file_clears_previous_session() {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Ok(Some(file)),
+            conflict_session: None,
         },
     );
     assert!(
@@ -288,9 +293,11 @@ fn load_conflict_file_clears_previous_session() {
             path: PathBuf::from("other.txt"),
         },
     );
-    assert!(effects
-        .iter()
-        .any(|e| matches!(e, Effect::LoadConflictFile { .. })));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadConflictFile { .. }))
+    );
     assert!(
         state
             .repos
@@ -300,4 +307,59 @@ fn load_conflict_file_clears_previous_session() {
             .conflict_session
             .is_none()
     );
+}
+
+#[test]
+fn conflict_file_loaded_prefers_backend_session_when_provided() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    let file = ConflictFile {
+        path: PathBuf::from("file.txt"),
+        base_bytes: Some(b"base\n".to_vec()),
+        ours_bytes: Some(b"ours\n".to_vec()),
+        theirs_bytes: Some(b"theirs\n".to_vec()),
+        current_bytes: Some(b"<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n".to_vec()),
+        base: Some("base\n".to_string()),
+        ours: Some("ours\n".to_string()),
+        theirs: Some("theirs\n".to_string()),
+        current: Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n".to_string()),
+    };
+    let provided_session = ConflictSession::new(
+        PathBuf::from("file.txt"),
+        FileConflictKind::BothDeleted,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Ok(Some(file)),
+            conflict_session: Some(provided_session.clone()),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(session.path, provided_session.path);
+    assert_eq!(session.conflict_kind, provided_session.conflict_kind);
+    assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
 }

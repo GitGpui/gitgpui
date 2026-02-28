@@ -1,3 +1,4 @@
+use crate::conflict_session::ConflictSession;
 use crate::domain::*;
 use crate::error::{Error, ErrorKind};
 use std::path::Path;
@@ -61,6 +62,31 @@ pub struct MergetoolResult {
 /// `None` or not valid UTF-8.
 pub fn decode_utf8_optional(bytes: Option<&[u8]>) -> Option<String> {
     bytes.and_then(|b| std::str::from_utf8(b).ok().map(str::to_owned))
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictTextValidation {
+    pub has_conflict_markers: bool,
+    pub marker_lines: usize,
+}
+
+/// Validate merged text before staging by scanning for unresolved
+/// conflict marker lines.
+pub fn validate_conflict_resolution_text(text: &str) -> ConflictTextValidation {
+    let marker_lines = text
+        .lines()
+        .filter(|line| {
+            line.starts_with("<<<<<<<")
+                || line.starts_with(">>>>>>>")
+                || line.starts_with("=======")
+                || line.starts_with("|||||||")
+        })
+        .count();
+
+    ConflictTextValidation {
+        has_conflict_markers: marker_lines > 0,
+        marker_lines,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,6 +171,16 @@ pub trait GitRepository: Send + Sync {
     fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
         Err(Error::new(ErrorKind::Unsupported(
             "conflict stage reading is not implemented for this backend",
+        )))
+    }
+
+    /// Build a backend-native conflict session for a conflicted path.
+    ///
+    /// Backends that support conflict stages and conflict-kind detection should
+    /// return a populated session; unsupported backends return Unsupported.
+    fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "conflict session loading is not implemented for this backend",
         )))
     }
 
@@ -442,4 +478,24 @@ pub enum PullMode {
 
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_conflict_resolution_text;
+
+    #[test]
+    fn validate_conflict_resolution_text_reports_no_markers() {
+        let validation = validate_conflict_resolution_text("line 1\nline 2\n");
+        assert!(!validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 0);
+    }
+
+    #[test]
+    fn validate_conflict_resolution_text_counts_marker_lines() {
+        let text = "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n";
+        let validation = validate_conflict_resolution_text(text);
+        assert!(validation.has_conflict_markers);
+        assert_eq!(validation.marker_lines, 3);
+    }
 }

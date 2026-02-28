@@ -1,3 +1,4 @@
+use gitgpui_core::conflict_session::ConflictSession;
 use gitgpui_core::domain::{
     Branch, CommitDetails, CommitId, DiffTarget, FileDiffImage, FileDiffText, LogCursor, LogPage,
     ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry, Submodule, Tag,
@@ -124,6 +125,10 @@ impl GitRepository for GixRepo {
         self.conflict_file_stages_impl(path)
     }
 
+    fn conflict_session(&self, path: &Path) -> Result<Option<ConflictSession>> {
+        self.conflict_session_impl(path)
+    }
+
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
         self.create_branch_impl(name, target)
     }
@@ -140,12 +145,7 @@ impl GitRepository for GixRepo {
         self.checkout_branch_impl(name)
     }
 
-    fn checkout_remote_branch(
-        &self,
-        remote: &str,
-        branch: &str,
-        local_branch: &str,
-    ) -> Result<()> {
+    fn checkout_remote_branch(&self, remote: &str, branch: &str, local_branch: &str) -> Result<()> {
         self.checkout_remote_branch_impl(remote, branch, local_branch)
     }
 

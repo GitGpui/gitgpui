@@ -242,10 +242,12 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
                 repo_id: rid,
                 path,
                 result,
+                conflict_session,
             } = msg
         {
             assert_eq!(rid, repo_id);
             assert_eq!(path, rel);
+            assert!(conflict_session.is_none());
             let file = result.unwrap().unwrap();
             assert_eq!(file.path, PathBuf::from("conflict.txt"));
             assert_eq!(file.base_bytes, None);

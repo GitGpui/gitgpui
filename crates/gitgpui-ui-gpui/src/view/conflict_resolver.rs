@@ -733,16 +733,7 @@ pub fn populate_block_bases_from_ancestor(
 /// Check whether the given text still contains git conflict markers.
 /// Used as a safety gate before "Save & stage" to warn the user about unresolved conflicts.
 pub fn text_contains_conflict_markers(text: &str) -> bool {
-    for line in text.lines() {
-        if line.starts_with("<<<<<<<")
-            || line.starts_with(">>>>>>>")
-            || line.starts_with("=======")
-            || line.starts_with("|||||||")
-        {
-            return true;
-        }
-    }
-    false
+    gitgpui_core::services::validate_conflict_resolution_text(text).has_conflict_markers
 }
 
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {

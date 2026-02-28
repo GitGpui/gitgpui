@@ -57,14 +57,15 @@ pub(super) fn conflict_file_loaded(
     repo_id: RepoId,
     path: PathBuf,
     result: std::result::Result<Option<crate::model::ConflictFile>, Error>,
+    conflict_session: Option<ConflictSession>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.conflict_file_path.as_ref() == Some(&path)
     {
-        let session = match &result {
+        let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
             _ => None,
-        };
+        });
         let value = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {

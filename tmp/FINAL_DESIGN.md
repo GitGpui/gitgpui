@@ -92,6 +92,12 @@
 - ✅ Fixed remaining clippy warnings in conflict test code: replaced `vec![range]` with `[range]` for single-element range arrays and suppressed `clippy::single_range_in_vec_init` for intentional test data — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
 - ✅ 5 new reducer tests: session built with regions from markers (BothModified), session for delete conflicts (TwoWayKeepDelete strategy), binary session detection (BinarySidePick), session cleared on load error, session cleared on new file load — `crates/gitgpui-state/src/store/tests/conflict_session.rs`
 
+### 12) Service-Layer Conflict APIs (Iteration 12)
+- ✅ Added service-level validation API `validate_conflict_resolution_text()` + `ConflictTextValidation` in core, and wired resolver staging safety checks to use this shared API instead of ad-hoc UI-only marker detection — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`
+- ✅ Added `GitRepository::conflict_session(path)` optional API in core services and implemented it in `gitgpui-git-gix` by combining status-derived `FileConflictKind`, bytes-first stage payloads (`:1/:2/:3`), and merged worktree text marker parsing when UTF-8 is available — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-git-gix/src/repo/diff.rs`, `crates/gitgpui-git-gix/src/repo/mod.rs`
+- ✅ State effect pipeline now carries backend-provided sessions in `Msg::ConflictFileLoaded { conflict_session }`; reducer prefers backend session and falls back to local reconstruction for compatibility — `crates/gitgpui-state/src/store/effects/repo_load.rs`, `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg/message_debug.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/effects.rs`
+- ✅ Added coverage for new APIs: core validation unit tests, state reducer test for backend-session precedence, and git-gix integration assertions that `conflict_session()` works for all `FileConflictKind` values and non-UTF8/binary conflicts — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`, `crates/gitgpui-state/src/store/tests/effects.rs`, `crates/gitgpui-git-gix/tests/status_integration.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

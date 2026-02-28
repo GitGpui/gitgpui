@@ -159,6 +159,8 @@ pub(super) fn schedule_load_conflict_file(
     path: PathBuf,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let conflict_session = repo.conflict_session(&path).ok().flatten();
+
         let stages = match repo.conflict_file_stages(&path) {
             Ok(v) => Ok(v),
             Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
@@ -217,6 +219,7 @@ pub(super) fn schedule_load_conflict_file(
             repo_id,
             path,
             result,
+            conflict_session,
         });
     });
 }

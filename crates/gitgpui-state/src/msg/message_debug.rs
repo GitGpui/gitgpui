@@ -582,11 +582,13 @@ impl std::fmt::Debug for Msg {
                 repo_id,
                 path,
                 result,
+                conflict_session,
             } => f
                 .debug_struct("ConflictFileLoaded")
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .field("result", result)
+                .field("conflict_session", conflict_session)
                 .finish(),
             Msg::WorktreesLoaded { repo_id, result } => f
                 .debug_struct("WorktreesLoaded")
