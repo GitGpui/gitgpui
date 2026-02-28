@@ -447,6 +447,10 @@ struct ConflictResolverUiState {
     inline_selected: std::collections::BTreeSet<usize>,
     hide_resolved: bool,
     three_way_visible_map: Vec<conflict_resolver::ThreeWayVisibleItem>,
+    /// True when any conflict side contains non-UTF8 binary data.
+    is_binary_conflict: bool,
+    /// Byte sizes of the three conflict sides (for binary UI display).
+    binary_side_sizes: [Option<usize>; 3],
 }
 
 impl Default for ConflictResolverUiState {
@@ -476,6 +480,8 @@ impl Default for ConflictResolverUiState {
             inline_selected: std::collections::BTreeSet::new(),
             hide_resolved: false,
             three_way_visible_map: Vec::new(),
+            is_binary_conflict: false,
+            binary_side_sizes: [None; 3],
         }
     }
 }

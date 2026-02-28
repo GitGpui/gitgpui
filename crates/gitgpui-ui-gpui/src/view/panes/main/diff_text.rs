@@ -886,7 +886,7 @@ impl MainPaneView {
             .find(|e| e.path == *path && e.kind == FileStatusKind::Conflicted)
             .and_then(|e| e.conflict);
 
-        Self::conflict_resolver_strategy(conflict_kind).is_some()
+        Self::conflict_resolver_strategy(conflict_kind, false).is_some()
     }
 
     fn scroll_handle_for_diff_text_autoscroll_target(

@@ -17,34 +17,44 @@ fn conflict_resolver_strategy_maps_conflict_kinds() {
     use gitgpui_core::conflict_session::ConflictResolverStrategy as S;
 
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothModified)),
+        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), false),
         Some(S::FullTextResolver),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothAdded)),
+        MainPaneView::conflict_resolver_strategy(Some(K::BothAdded), false),
         Some(S::FullTextResolver),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::AddedByUs)),
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByUs), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::AddedByThem)),
+        MainPaneView::conflict_resolver_strategy(Some(K::AddedByThem), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs)),
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByThem)),
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByThem), false),
         Some(S::TwoWayKeepDelete),
     );
     assert_eq!(
-        MainPaneView::conflict_resolver_strategy(Some(K::BothDeleted)),
+        MainPaneView::conflict_resolver_strategy(Some(K::BothDeleted), false),
         Some(S::DecisionOnly),
     );
-    assert_eq!(MainPaneView::conflict_resolver_strategy(None), None);
+    assert_eq!(MainPaneView::conflict_resolver_strategy(None, false), None);
+
+    // Binary flag overrides any conflict kind to BinarySidePick.
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::BothModified), true),
+        Some(S::BinarySidePick),
+    );
+    assert_eq!(
+        MainPaneView::conflict_resolver_strategy(Some(K::DeletedByUs), true),
+        Some(S::BinarySidePick),
+    );
 }
 
 struct TestBackend;

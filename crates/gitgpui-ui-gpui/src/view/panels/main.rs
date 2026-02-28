@@ -1,5 +1,6 @@
 use super::*;
 
+mod binary_conflict;
 mod diff;
 mod history;
 mod status_nav;
@@ -137,7 +138,24 @@ impl MainPaneView {
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
-        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind);
+        // Detect binary from loaded conflict file bytes (has bytes but no text).
+        let is_binary_conflict = repo
+            .and_then(|r| match &r.conflict_file {
+                Loadable::Ready(Some(file)) => {
+                    let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
+                        bytes.is_some() && text.is_none()
+                    };
+                    Some(
+                        has_non_text(&file.base_bytes, &file.base)
+                            || has_non_text(&file.ours_bytes, &file.ours)
+                            || has_non_text(&file.theirs_bytes, &file.theirs),
+                    )
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+        let conflict_strategy =
+            Self::conflict_resolver_strategy(conflict_kind, is_binary_conflict);
         let is_conflict_resolver = conflict_strategy.is_some();
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
 
@@ -236,7 +254,13 @@ impl MainPaneView {
         .unwrap_or((None, None));
 
         let mut controls = div().flex().items_center().gap_1();
-        if is_conflict_resolver {
+        if is_conflict_resolver && self.conflict_resolver.is_binary_conflict {
+            // Binary conflicts use CheckoutConflictSide directly; only show
+            // prev/next file navigation in the controls bar.
+            controls = controls
+                .when_some(prev_file_btn, |d, btn| d.child(btn))
+                .when_some(next_file_btn, |d, btn| d.child(btn));
+        } else if is_conflict_resolver {
             let nav_entries = self.conflict_nav_entries();
             let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
             let can_nav_prev =
@@ -731,6 +755,23 @@ impl MainPaneView {
                         }
                         Loadable::Ready(None) => {
                             zed::empty_state(theme, title, "No conflict data.").into_any_element()
+                        }
+                        Loadable::Ready(Some(file)) if self.conflict_resolver.is_binary_conflict => {
+                            // Binary/non-UTF8 side-pick resolver panel.
+                            // Clone the file data so we can release the immutable
+                            // borrow on `self` through `repo`.
+                            let file_clone = file.clone();
+                            let rid = repo_id.unwrap();
+                            // Shadow `repo` to drop the borrow.
+                            #[allow(unused_variables)]
+                            let repo = ();
+                            self.render_binary_conflict_resolver(
+                                theme,
+                                rid,
+                                path,
+                                &file_clone,
+                                cx,
+                            )
                         }
                         Loadable::Ready(Some(file)) => {
                             let base = file.base.clone().unwrap_or_default();
@@ -2443,7 +2484,7 @@ impl MainPaneView {
                             && e.kind == gitgpui_core::domain::FileStatusKind::Conflicted
                     });
                     conflict
-                        .and_then(|e| Self::conflict_resolver_strategy(e.conflict))
+                        .and_then(|e| Self::conflict_resolver_strategy(e.conflict, false))
                         .is_some()
                 });
 

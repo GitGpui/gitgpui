@@ -1474,7 +1474,6 @@ impl MainPaneView {
             return;
         };
         let conflict_kind = conflict_entry.conflict;
-        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind);
 
         let path = path.clone();
 
@@ -1515,6 +1514,33 @@ impl MainPaneView {
 
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_segments_cache_inline.clear();
+
+        // Detect binary conflict: has bytes but no text for any side.
+        let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
+            bytes.is_some() && text.is_none()
+        };
+        let is_binary = has_non_text(&file.base_bytes, &file.base)
+            || has_non_text(&file.ours_bytes, &file.ours)
+            || has_non_text(&file.theirs_bytes, &file.theirs);
+        let conflict_strategy = Self::conflict_resolver_strategy(conflict_kind, is_binary);
+
+        // For binary conflicts, populate minimal state and return early.
+        if is_binary {
+            let binary_side_sizes = [
+                file.base_bytes.as_ref().map(|b| b.len()),
+                file.ours_bytes.as_ref().map(|b| b.len()),
+                file.theirs_bytes.as_ref().map(|b| b.len()),
+            ];
+            self.conflict_resolver = ConflictResolverUiState {
+                repo_id: Some(repo_id),
+                path: Some(path),
+                source_hash: Some(source_hash),
+                is_binary_conflict: true,
+                binary_side_sizes,
+                ..ConflictResolverUiState::default()
+            };
+            return;
+        }
 
         let (mut marker_segments, resolved) = if let Some(cur) = file.current.as_deref() {
             let segments = conflict_resolver::parse_conflict_markers(cur);
@@ -1679,6 +1705,8 @@ impl MainPaneView {
             inline_selected: std::collections::BTreeSet::new(),
             hide_resolved,
             three_way_visible_map,
+            is_binary_conflict: false,
+            binary_side_sizes: [None; 3],
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);

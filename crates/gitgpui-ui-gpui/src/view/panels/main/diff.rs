@@ -3,14 +3,10 @@ use super::*;
 impl MainPaneView {
     pub(in crate::view) fn conflict_resolver_strategy(
         conflict: Option<gitgpui_core::domain::FileConflictKind>,
+        is_binary: bool,
     ) -> Option<gitgpui_core::conflict_session::ConflictResolverStrategy> {
         conflict.map(|kind| {
-            gitgpui_core::conflict_session::ConflictResolverStrategy::for_conflict(
-                kind,
-                // Binary conflicts are handled separately once byte-backed payloads
-                // are threaded through UI state.
-                false,
-            )
+            gitgpui_core::conflict_session::ConflictResolverStrategy::for_conflict(kind, is_binary)
         })
     }
 

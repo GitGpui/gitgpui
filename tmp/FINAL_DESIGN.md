@@ -12,7 +12,7 @@
 ### 2) Conflict Strategy by Kind
 - ✅ `ConflictResolverStrategy` enum (FullTextResolver, TwoWayKeepDelete, DecisionOnly, BinarySidePick) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictResolverStrategy::for_conflict()` maps every `FileConflictKind` + binary flag to strategy — `crates/gitgpui-core/src/conflict_session.rs`
-- ✅ Wired strategy dispatch into UI: removed `conflict_requires_resolver` gating, switched activation/search/preview hotpaths to `conflict_resolver_strategy()`, and defaulted non-full-text kinds to 2-way resolver mode — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Wired strategy dispatch into UI: removed `conflict_requires_resolver` gating, switched activation/search/preview hotpaths to `conflict_resolver_strategy()`, defaulted non-full-text kinds to 2-way resolver mode, and threaded `is_binary` flag through for binary detection — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 
 ### 3) Resolver UX Model
 - ✅ Existing: A/B/C picks, next/prev conflict navigation, split/inline modes
@@ -45,7 +45,7 @@
 - ✅ `BinarySidePick` strategy auto-selected when any payload is binary — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Upgraded `ConflictFileStages` to carry `base_bytes/ours_bytes/theirs_bytes` plus optional decoded text views — `crates/gitgpui-core/src/services.rs`, `crates/gitgpui-git-gix/src/repo/diff.rs`
 - ✅ Updated state loading to preserve bytes-first conflict payloads (`base/ours/theirs/current`) with lazy UTF-8 decode for UI text fields — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/effects/repo_load.rs`
-- ⬜ Binary/non-UTF8 resolver UI mode
+- ✅ Binary/non-UTF8 resolver UI mode — `conflict_resolver_strategy()` now accepts `is_binary` flag (detects non-UTF8 bytes from loaded conflict file), `sync_conflict_resolver()` short-circuits text processing for binary files, dedicated `render_binary_conflict_resolver()` panel shows file sizes and "Use Ours"/"Use Theirs" buttons dispatching `Msg::CheckoutConflictSide`, binary conflicts skip text-specific header controls — `crates/gitgpui-ui-gpui/src/view/panels/main/diff.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main/binary_conflict.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/mod.rs` — 2 new test assertions for BinarySidePick strategy
 
 ### 7) Optional External Mergetool Bridge
 - ⬜ Materialize BASE/LOCAL/REMOTE/MERGED temp files
