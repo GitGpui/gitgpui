@@ -92,6 +92,8 @@ pub enum AutosolveRule {
     RegexOnlyOursChanged,
     /// Pass 2: block was split into line-level subchunks and all could be merged.
     SubchunkFullyMerged,
+    /// History-aware mode: entries in a history/changelog section were merged.
+    HistoryMerged,
 }
 
 impl AutosolveRule {
@@ -106,6 +108,7 @@ impl AutosolveRule {
             }
             AutosolveRule::RegexOnlyOursChanged => "regex-normalized: only ours changed from base",
             AutosolveRule::SubchunkFullyMerged => "line-level subchunk merge",
+            AutosolveRule::HistoryMerged => "history/changelog section merge",
         }
     }
 }
@@ -450,6 +453,39 @@ impl ConflictSession {
         count
     }
 
+    /// Apply auto-resolve history mode to unresolved regions.
+    ///
+    /// Detects history/changelog sections within conflict blocks and merges
+    /// their entries by deduplication (kdiff3-inspired). Only resolves
+    /// regions that match the configured section/entry patterns.
+    ///
+    /// Returns the number of regions auto-resolved.
+    pub fn auto_resolve_history(&mut self, options: &HistoryAutosolveOptions) -> usize {
+        if !options.is_valid() {
+            return 0;
+        }
+
+        let mut count = 0;
+        for region in &mut self.regions {
+            if region.resolution.is_resolved() {
+                continue;
+            }
+            if let Some(merged) = history_merge_region(
+                region.base.as_deref(),
+                &region.ours,
+                &region.theirs,
+                options,
+            ) {
+                region.resolution = ConflictRegionResolution::AutoResolved {
+                    rule: AutosolveRule::HistoryMerged,
+                    content: merged,
+                };
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Check whether the resolved output still contains unresolved conflict markers.
     /// This is the safety gate before staging.
     pub fn has_unresolved_markers(&self) -> bool {
@@ -561,6 +597,307 @@ fn regex_assisted_auto_resolve_pick_with_compiled(
     }
 
     None
+}
+
+// ---------------------------------------------------------------------------
+// History-aware auto-resolve (kdiff3-inspired)
+// ---------------------------------------------------------------------------
+
+/// Options for history-aware auto-resolve mode.
+///
+/// This mode detects structured history/changelog sections within conflict
+/// blocks and merges their entries by deduplication and optional sorting.
+/// Inspired by kdiff3's "history merge" feature for `$Log$` sections.
+///
+/// Disabled by default; opt-in via settings.
+#[derive(Clone, Debug)]
+pub struct HistoryAutosolveOptions {
+    /// Regex pattern that marks the start of a history section within a file.
+    /// For example, `r".*\$Log.*\$.*"` for RCS/CVS-style history, or
+    /// `r"^## Changelog"` for markdown changelogs.
+    pub section_start: String,
+    /// Regex pattern that marks the beginning of each individual history entry.
+    /// For example, `r"^## \[.*\]"` for keepachangelog-style entries, or
+    /// `r"^\s*\*\s+"` for bullet-list entries.
+    pub entry_start: String,
+    /// If true, sort entries using the sort key extracted from `entry_start`
+    /// capture groups. If false, preserve order from both sides (ours first,
+    /// then theirs additions).
+    pub sort_entries: bool,
+    /// Maximum number of entries to keep. `None` means keep all.
+    pub max_entries: Option<usize>,
+}
+
+impl Default for HistoryAutosolveOptions {
+    fn default() -> Self {
+        Self {
+            section_start: String::new(),
+            entry_start: String::new(),
+            sort_entries: false,
+            max_entries: None,
+        }
+    }
+}
+
+impl HistoryAutosolveOptions {
+    /// Preset for keepachangelog-style markdown changelogs.
+    /// Section starts with `## Changelog` or `## [Unreleased]`, entries start
+    /// with version headers like `## [1.2.3]`.
+    pub fn keepachangelog() -> Self {
+        Self {
+            section_start: r"^##\s+\[".to_string(),
+            entry_start: r"^##\s+\[".to_string(),
+            sort_entries: false,
+            max_entries: None,
+        }
+    }
+
+    /// Preset for bullet-list changelogs (`* Added foo`, `- Fixed bar`).
+    pub fn bullet_list() -> Self {
+        Self {
+            section_start: r"(?i)^#+\s*(changelog|changes|history|release\s*notes)".to_string(),
+            entry_start: r"^[-*]\s+".to_string(),
+            sort_entries: false,
+            max_entries: None,
+        }
+    }
+
+    /// Returns true if this configuration has the minimum required patterns.
+    pub fn is_valid(&self) -> bool {
+        !self.section_start.is_empty() && !self.entry_start.is_empty()
+    }
+}
+
+/// A parsed history entry within a history section.
+#[derive(Clone, Debug)]
+struct HistoryEntry {
+    /// The full text of this entry (including the entry-start line and any
+    /// continuation lines until the next entry or end of section).
+    text: String,
+    /// Normalized key for deduplication (trimmed, whitespace-collapsed).
+    dedup_key: String,
+}
+
+/// Attempt to auto-resolve a conflict region by merging history/changelog entries.
+///
+/// Returns `Some(merged_text)` if the conflict looks like a history section
+/// conflict and can be merged via entry deduplication. Returns `None` if:
+/// - Options are invalid or patterns don't compile
+/// - Neither side's content matches the section start pattern
+/// - The conflict doesn't look like a history section
+pub fn history_merge_region(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    options: &HistoryAutosolveOptions,
+) -> Option<String> {
+    if !options.is_valid() {
+        return None;
+    }
+
+    let section_re = Regex::new(&options.section_start).ok()?;
+    let entry_re = Regex::new(&options.entry_start).ok()?;
+
+    // At least one side must contain a history section marker.
+    let ours_has_section = ours.lines().any(|l| section_re.is_match(l));
+    let theirs_has_section = theirs.lines().any(|l| section_re.is_match(l));
+    if !ours_has_section && !theirs_has_section {
+        return None;
+    }
+
+    let ours_entries = parse_history_entries(ours, &section_re, &entry_re);
+    let theirs_entries = parse_history_entries(theirs, &section_re, &entry_re);
+
+    // Need at least some entries on at least one side.
+    if ours_entries.is_empty() && theirs_entries.is_empty() {
+        return None;
+    }
+
+    // Build merged entry list by deduplication.
+    let base_entries = base.map(|b| parse_history_entries(b, &section_re, &entry_re));
+
+    let merged = merge_history_entries(
+        base_entries.as_deref(),
+        &ours_entries,
+        &theirs_entries,
+        options.sort_entries,
+        options.max_entries,
+    );
+
+    // Reconstruct: use the "ours" prefix (text before the first entry), merged
+    // entries, then the "ours" suffix (text after the last entry).
+    let prefix = history_section_prefix(ours, &section_re, &entry_re);
+    let suffix = history_section_suffix(ours, &entry_re);
+
+    let mut result = String::new();
+    result.push_str(&prefix);
+    for entry in &merged {
+        result.push_str(&entry.text);
+    }
+    result.push_str(&suffix);
+
+    Some(result)
+}
+
+/// Parse text into history entries. Returns entries found after the section
+/// start marker (or from the beginning if the entire text is a history block).
+fn parse_history_entries(text: &str, section_re: &Regex, entry_re: &Regex) -> Vec<HistoryEntry> {
+    let mut entries = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Find where the history section starts.
+    let section_start = lines
+        .iter()
+        .position(|l| section_re.is_match(l))
+        .unwrap_or(0);
+
+    // Determine if the section start line is itself an entry start.
+    let scan_start = if entry_re.is_match(lines.get(section_start).unwrap_or(&"")) {
+        section_start
+    } else {
+        // Skip the section header line, look for first entry after it.
+        section_start + 1
+    };
+
+    let mut current_entry_text = String::new();
+
+    for &line in lines.iter().skip(scan_start) {
+        if entry_re.is_match(line) && !current_entry_text.is_empty() {
+            // Finish previous entry.
+            entries.push(make_history_entry(std::mem::take(&mut current_entry_text)));
+        }
+        current_entry_text.push_str(line);
+        current_entry_text.push('\n');
+    }
+
+    // Don't forget the last entry.
+    if !current_entry_text.is_empty() {
+        entries.push(make_history_entry(current_entry_text));
+    }
+
+    entries
+}
+
+fn make_history_entry(text: String) -> HistoryEntry {
+    // Normalize for dedup: trim, collapse whitespace.
+    let dedup_key = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    HistoryEntry { text, dedup_key }
+}
+
+/// Merge history entries from ours and theirs, deduplicating against base.
+///
+/// Strategy:
+/// 1. Start with all entries from "ours" (preserving order).
+/// 2. Add entries from "theirs" that aren't already present (by dedup key).
+/// 3. If base is available, entries deleted by one side and present in the
+///    other are kept (conservative — don't lose entries).
+/// 4. Optionally sort and/or truncate.
+fn merge_history_entries(
+    base_entries: Option<&[HistoryEntry]>,
+    ours_entries: &[HistoryEntry],
+    theirs_entries: &[HistoryEntry],
+    sort: bool,
+    max_entries: Option<usize>,
+) -> Vec<HistoryEntry> {
+    use std::collections::HashSet;
+
+    let mut seen_keys: HashSet<String> = HashSet::new();
+    let mut merged: Vec<HistoryEntry> = Vec::new();
+
+    // Add all "ours" entries.
+    for entry in ours_entries {
+        if seen_keys.insert(entry.dedup_key.clone()) {
+            merged.push(entry.clone());
+        }
+    }
+
+    // Determine where to insert "theirs" new entries.
+    // Find entries in base that are also in ours — theirs-only entries
+    // should be inserted at the position they would naturally appear.
+    let base_keys: HashSet<String> = base_entries
+        .map(|entries| entries.iter().map(|e| e.dedup_key.clone()).collect())
+        .unwrap_or_default();
+
+    // Add entries from "theirs" that we haven't seen yet.
+    // Insert new theirs entries at the beginning (they're typically newer).
+    let mut theirs_new: Vec<HistoryEntry> = Vec::new();
+    for entry in theirs_entries {
+        if seen_keys.insert(entry.dedup_key.clone()) {
+            // This entry is unique to theirs.
+            if !base_keys.contains(&entry.dedup_key) {
+                // Truly new entry (not in base either) — insert near top.
+                theirs_new.push(entry.clone());
+            } else {
+                // Was in base, deleted by ours — keep it conservatively.
+                merged.push(entry.clone());
+            }
+        }
+    }
+
+    // Insert theirs-new entries after any existing ours-new entries
+    // (entries not in base) to interleave chronologically.
+    if !theirs_new.is_empty() {
+        // Find the first entry that was also in base (i.e., not new from ours).
+        let insert_pos = merged
+            .iter()
+            .position(|e| base_keys.contains(&e.dedup_key))
+            .unwrap_or(merged.len());
+        for (i, entry) in theirs_new.into_iter().enumerate() {
+            merged.insert(insert_pos + i, entry);
+        }
+    }
+
+    if sort {
+        merged.sort_by(|a, b| a.dedup_key.cmp(&b.dedup_key));
+    }
+
+    if let Some(max) = max_entries {
+        merged.truncate(max);
+    }
+
+    merged
+}
+
+/// Extract the text before the first history entry (section header, etc.).
+fn history_section_prefix(text: &str, section_re: &Regex, entry_re: &Regex) -> String {
+    let mut prefix = String::new();
+    for line in text.lines() {
+        if entry_re.is_match(line) {
+            // If the section start is also the entry start (e.g., keepachangelog),
+            // the prefix is everything before this line.
+            break;
+        }
+        prefix.push_str(line);
+        prefix.push('\n');
+        if section_re.is_match(line) {
+            // Include the section header line, then stop after it.
+            // The next entry_re match will be the first entry.
+            // But we need to also include any lines between header and first entry.
+            continue;
+        }
+    }
+    prefix
+}
+
+/// Extract text after the last history entry (trailing content).
+fn history_section_suffix(text: &str, entry_re: &Regex) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    // Find the last entry start.
+    let last_entry_start = lines.iter().rposition(|l| entry_re.is_match(l));
+    let Some(last_start) = last_entry_start else {
+        return String::new();
+    };
+
+    // Find where this last entry ends — at the next blank line followed by
+    // non-entry content, or at end of text. For simplicity, we consider
+    // everything after the last entry's block as suffix only if there are
+    // blank-line-separated trailing lines that don't match entry_re.
+    // For now, return empty — entries typically go to end of section.
+    let _ = last_start;
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -1503,6 +1840,7 @@ mod tests {
         );
         assert!(!AutosolveRule::RegexOnlyOursChanged.description().is_empty());
         assert!(!AutosolveRule::SubchunkFullyMerged.description().is_empty());
+        assert!(!AutosolveRule::HistoryMerged.description().is_empty());
     }
 
     // -- Pass 2: subchunk splitting tests --
@@ -1726,5 +2064,195 @@ mod tests {
             })
             .collect();
         assert_eq!(merged, "aaa\nCCC\n");
+    }
+
+    // -- History-aware auto-resolve tests --
+
+    #[test]
+    fn history_merge_deduplicates_bullet_entries() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let base = "# Changelog\n- Added foo\n- Fixed bar\n";
+        let ours = "# Changelog\n- Added foo\n- Fixed bar\n- Added baz\n";
+        let theirs = "# Changelog\n- Added foo\n- Fixed bar\n- Fixed qux\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some(), "should merge changelog entries");
+        let merged = result.unwrap();
+
+        // Both new entries should be present.
+        assert!(merged.contains("- Added baz"), "should contain ours' new entry");
+        assert!(merged.contains("- Fixed qux"), "should contain theirs' new entry");
+        // Common entries should appear exactly once.
+        assert_eq!(
+            merged.matches("- Added foo").count(),
+            1,
+            "deduped: Added foo"
+        );
+        assert_eq!(
+            merged.matches("- Fixed bar").count(),
+            1,
+            "deduped: Fixed bar"
+        );
+    }
+
+    #[test]
+    fn history_merge_no_section_marker_returns_none() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        // Text without any changelog section header.
+        let ours = "let x = 1;\nlet y = 2;\n";
+        let theirs = "let x = 3;\nlet y = 4;\n";
+
+        let result = history_merge_region(None, ours, theirs, &options);
+        assert!(result.is_none(), "should not match non-changelog text");
+    }
+
+    #[test]
+    fn history_merge_invalid_options_returns_none() {
+        let options = HistoryAutosolveOptions::default(); // empty patterns
+        assert!(!options.is_valid());
+
+        let result = history_merge_region(None, "a\n", "b\n", &options);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn history_merge_keepachangelog_style() {
+        let options = HistoryAutosolveOptions::keepachangelog();
+        let base = "## [1.0.0] - 2024-01-01\n- Initial release\n";
+        let ours = "## [1.1.0] - 2024-02-01\n- Added feature A\n## [1.0.0] - 2024-01-01\n- Initial release\n";
+        let theirs = "## [1.0.1] - 2024-01-15\n- Fixed bug B\n## [1.0.0] - 2024-01-01\n- Initial release\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some(), "should merge keepachangelog entries");
+        let merged = result.unwrap();
+
+        assert!(merged.contains("## [1.1.0]"), "should contain ours' entry");
+        assert!(merged.contains("## [1.0.1]"), "should contain theirs' entry");
+        assert!(merged.contains("## [1.0.0]"), "should contain base entry");
+        // The base entry should appear only once (deduped).
+        assert_eq!(
+            merged.matches("## [1.0.0]").count(),
+            1,
+            "deduped base entry"
+        );
+    }
+
+    #[test]
+    fn history_merge_identical_additions_deduped() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let base = "# Changes\n- Existing\n";
+        let ours = "# Changes\n- Existing\n- New feature\n";
+        let theirs = "# Changes\n- Existing\n- New feature\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+        assert_eq!(
+            merged.matches("- New feature").count(),
+            1,
+            "identical additions should be deduped"
+        );
+    }
+
+    #[test]
+    fn history_merge_with_sort() {
+        let mut options = HistoryAutosolveOptions::bullet_list();
+        options.sort_entries = true;
+
+        let base = "# Changes\n";
+        let ours = "# Changes\n- B entry\n- D entry\n";
+        let theirs = "# Changes\n- A entry\n- C entry\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+
+        // With sorting, entries should be in alphabetical order.
+        let a_pos = merged.find("- A entry").unwrap();
+        let b_pos = merged.find("- B entry").unwrap();
+        let c_pos = merged.find("- C entry").unwrap();
+        let d_pos = merged.find("- D entry").unwrap();
+        assert!(a_pos < b_pos, "A before B");
+        assert!(b_pos < c_pos, "B before C");
+        assert!(c_pos < d_pos, "C before D");
+    }
+
+    #[test]
+    fn history_merge_with_max_entries() {
+        let mut options = HistoryAutosolveOptions::bullet_list();
+        options.max_entries = Some(2);
+
+        let base = "# Changes\n";
+        let ours = "# Changes\n- Entry 1\n- Entry 2\n- Entry 3\n";
+        let theirs = "# Changes\n- Entry 4\n";
+
+        let result = history_merge_region(Some(base), ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+
+        // Should only have 2 entries (truncated).
+        let entry_count = merged.matches("\n- ").count();
+        assert!(entry_count <= 2, "should be truncated to max 2 entries, got {}", entry_count);
+    }
+
+    #[test]
+    fn history_merge_session_method() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let base_text = "# Changelog\n- Original\n";
+        let ours_text = "# Changelog\n- Original\n- Added by ours\n";
+        let theirs_text = "# Changelog\n- Original\n- Added by theirs\n";
+
+        let mut session = make_session(vec![ConflictRegion {
+            base: Some(base_text.to_string()),
+            ours: ours_text.to_string(),
+            theirs: theirs_text.to_string(),
+            resolution: ConflictRegionResolution::Unresolved,
+        }]);
+
+        let resolved = session.auto_resolve_history(&options);
+        assert_eq!(resolved, 1);
+        assert!(session.is_fully_resolved());
+        match &session.regions[0].resolution {
+            ConflictRegionResolution::AutoResolved { rule, content } => {
+                assert_eq!(*rule, AutosolveRule::HistoryMerged);
+                assert!(content.contains("- Added by ours"));
+                assert!(content.contains("- Added by theirs"));
+            }
+            other => panic!("expected HistoryMerged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn history_merge_skips_already_resolved() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let mut session = make_session(vec![ConflictRegion {
+            base: Some("# Changelog\n- Original\n".to_string()),
+            ours: "# Changelog\n- Original\n- New\n".to_string(),
+            theirs: "# Changelog\n- Original\n- Other\n".to_string(),
+            resolution: ConflictRegionResolution::PickOurs,
+        }]);
+
+        let resolved = session.auto_resolve_history(&options);
+        assert_eq!(resolved, 0);
+    }
+
+    #[test]
+    fn history_merge_no_base_still_works() {
+        let options = HistoryAutosolveOptions::bullet_list();
+        let ours = "# Changes\n- Feature A\n- Feature B\n";
+        let theirs = "# Changes\n- Feature B\n- Feature C\n";
+
+        let result = history_merge_region(None, ours, theirs, &options);
+        assert!(result.is_some());
+        let merged = result.unwrap();
+        assert!(merged.contains("- Feature A"));
+        assert!(merged.contains("- Feature B"));
+        assert!(merged.contains("- Feature C"));
+        assert_eq!(merged.matches("- Feature B").count(), 1, "deduped");
+    }
+
+    #[test]
+    fn history_autosolve_rule_description() {
+        assert!(!AutosolveRule::HistoryMerged.description().is_empty());
     }
 }

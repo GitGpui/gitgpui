@@ -289,6 +289,50 @@ pub fn auto_resolve_segments_regex(
     count
 }
 
+/// Apply history-aware auto-resolve to unresolved conflict blocks.
+///
+/// Detects history/changelog sections and merges entries by deduplication.
+/// When a block is resolved by history merge, it is replaced with a `Text`
+/// segment containing the merged content.
+///
+/// Returns the number of blocks resolved.
+pub fn auto_resolve_segments_history(
+    segments: &mut Vec<ConflictSegment>,
+    options: &gitgpui_core::conflict_session::HistoryAutosolveOptions,
+) -> usize {
+    use gitgpui_core::conflict_session::history_merge_region;
+
+    let mut new_segments = Vec::with_capacity(segments.len());
+    let mut count = 0;
+
+    for seg in segments.drain(..) {
+        match seg {
+            ConflictSegment::Block(ref block) if !block.resolved => {
+                if let Some(merged) = history_merge_region(
+                    block.base.as_deref(),
+                    &block.ours,
+                    &block.theirs,
+                    options,
+                ) {
+                    // Merge adjacent Text segments for cleanliness.
+                    if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
+                        prev.push_str(&merged);
+                    } else {
+                        new_segments.push(ConflictSegment::Text(merged));
+                    }
+                    count += 1;
+                } else {
+                    new_segments.push(seg);
+                }
+            }
+            other => new_segments.push(other),
+        }
+    }
+
+    *segments = new_segments;
+    count
+}
+
 /// Apply Pass 2 (heuristic subchunk splitting) to unresolved conflict blocks.
 ///
 /// For each unresolved block that has a base, attempts to split it into
@@ -1441,5 +1485,91 @@ mod tests {
         // "before\n" + merged subchunks + "after\n" — exact count depends on
         // merging, but should be compact.
         assert!(text_count <= 3, "should have at most 3 text segments");
+    }
+
+    // -- History-aware auto-resolve tests --
+
+    #[test]
+    fn history_auto_resolve_merges_changelog_block() {
+        use gitgpui_core::conflict_session::HistoryAutosolveOptions;
+
+        // Simulate a conflict in a changelog section.
+        let input = concat!(
+            "# README\n",
+            "<<<<<<< HEAD\n",
+            "# Changes\n",
+            "- Added feature A\n",
+            "- Existing entry\n",
+            "||||||| base\n",
+            "# Changes\n",
+            "- Existing entry\n",
+            "=======\n",
+            "# Changes\n",
+            "- Fixed bug B\n",
+            "- Existing entry\n",
+            ">>>>>>> other\n",
+            "# Footer\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        assert_eq!(conflict_count(&segments), 1);
+
+        let options = HistoryAutosolveOptions::bullet_list();
+        let resolved = auto_resolve_segments_history(&mut segments, &options);
+        assert_eq!(resolved, 1);
+        assert_eq!(conflict_count(&segments), 0);
+
+        let text = generate_resolved_text(&segments);
+        assert!(text.contains("- Added feature A"), "ours' new entry");
+        assert!(text.contains("- Fixed bug B"), "theirs' new entry");
+        assert!(text.contains("- Existing entry"), "common entry");
+        assert_eq!(
+            text.matches("- Existing entry").count(),
+            1,
+            "deduped common entry"
+        );
+    }
+
+    #[test]
+    fn history_auto_resolve_skips_non_changelog_blocks() {
+        use gitgpui_core::conflict_session::HistoryAutosolveOptions;
+
+        // Regular code conflict, no changelog markers.
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "let x = 1;\n",
+            "=======\n",
+            "let x = 2;\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let options = HistoryAutosolveOptions::bullet_list();
+        let resolved = auto_resolve_segments_history(&mut segments, &options);
+        assert_eq!(resolved, 0);
+        assert_eq!(conflict_count(&segments), 1);
+    }
+
+    #[test]
+    fn history_auto_resolve_skips_already_resolved() {
+        use gitgpui_core::conflict_session::HistoryAutosolveOptions;
+
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "# Changes\n- New\n",
+            "=======\n",
+            "# Changes\n- Other\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        // Resolve manually first.
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            block.resolved = true;
+        }
+
+        let options = HistoryAutosolveOptions::bullet_list();
+        let resolved = auto_resolve_segments_history(&mut segments, &options);
+        assert_eq!(resolved, 0);
     }
 }

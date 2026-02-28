@@ -2075,6 +2075,38 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// Apply history-aware auto-resolve to unresolved conflict blocks.
+    /// Detects changelog/history sections and merges entries by deduplication.
+    pub(in super::super) fn conflict_resolver_auto_resolve_history(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver_conflict_count() == 0 {
+            return;
+        }
+        // Use bullet_list preset as default; in a real settings integration
+        // this would come from user configuration.
+        let options = gitgpui_core::conflict_session::HistoryAutosolveOptions::bullet_list();
+        let count = conflict_resolver::auto_resolve_segments_history(
+            &mut self.conflict_resolver.marker_segments,
+            &options,
+        );
+        if count > 0 {
+            let resolved = conflict_resolver::generate_resolved_text(
+                &self.conflict_resolver.marker_segments,
+            );
+            self.conflict_resolver_set_output(resolved, cx);
+            self.conflict_resolver_rebuild_visible_map();
+            if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.active_conflict,
+            ) {
+                self.conflict_resolver.active_conflict = next_unresolved;
+            }
+        }
+        cx.notify();
+    }
+
     pub(in super::super) fn conflict_resolver_pick_all_conflicts(
         &mut self,
         choice: conflict_resolver::ConflictChoice,
