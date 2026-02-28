@@ -1270,9 +1270,14 @@ impl MainPaneView {
     pub(in super::super) fn conflict_nav_entries(&self) -> Vec<usize> {
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => {
-                diff_navigation::conflict_nav_entries_for_three_way(
-                    &self.conflict_resolver.three_way_conflict_ranges,
-                )
+                // Return visible indices for each conflict range.
+                let ranges = &self.conflict_resolver.three_way_conflict_ranges;
+                let map = &self.conflict_resolver.three_way_visible_map;
+                (0..ranges.len())
+                    .filter_map(|ri| {
+                        conflict_resolver::visible_index_for_conflict(map, ranges, ri)
+                    })
+                    .collect()
             }
             ConflictResolverViewMode::TwoWayDiff => match self.conflict_resolver.diff_mode {
                 ConflictDiffMode::Split => diff_navigation::conflict_nav_entries_for_split(
@@ -1298,15 +1303,12 @@ impl MainPaneView {
 
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => {
-                // In ThreeWay mode, entries are line indices directly from conflict ranges.
+                // target is now a visible index; scroll directly.
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
-                // Update active_conflict to the range index that starts at this target.
-                if let Some(range_ix) = self
-                    .conflict_resolver
-                    .three_way_conflict_ranges
-                    .iter()
-                    .position(|r| r.start == target)
+                // Map visible index back to conflict range index.
+                if let Some(range_ix) =
+                    self.conflict_resolver_range_ix_for_visible(target)
                 {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
@@ -1331,15 +1333,12 @@ impl MainPaneView {
 
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => {
-                // In ThreeWay mode, entries are line indices directly from conflict ranges.
+                // target is now a visible index; scroll directly.
                 self.conflict_resolver_diff_scroll
                     .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
-                // Update active_conflict to the range index that starts at this target.
-                if let Some(range_ix) = self
-                    .conflict_resolver
-                    .three_way_conflict_ranges
-                    .iter()
-                    .position(|r| r.start == target)
+                // Map visible index back to conflict range index.
+                if let Some(range_ix) =
+                    self.conflict_resolver_range_ix_for_visible(target)
                 {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
@@ -1349,6 +1348,19 @@ impl MainPaneView {
                 .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
         }
         self.conflict_resolver.nav_anchor = Some(target);
+    }
+
+    /// Map a visible index back to the conflict range index it belongs to.
+    fn conflict_resolver_range_ix_for_visible(&self, vi: usize) -> Option<usize> {
+        let item = self.conflict_resolver.three_way_visible_map.get(vi)?;
+        match item {
+            conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(ri) => Some(*ri),
+            conflict_resolver::ThreeWayVisibleItem::Line(line_ix) => self
+                .conflict_resolver
+                .three_way_conflict_ranges
+                .iter()
+                .position(|r| r.contains(line_ix)),
+        }
     }
 
     pub(in super::super) fn scroll_diff_to_item(
@@ -1589,6 +1601,13 @@ impl MainPaneView {
             ConflictResolverViewMode::TwoWayDiff
         };
 
+        let hide_resolved = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.hide_resolved
+        } else {
+            false
+        };
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
         {
@@ -1628,6 +1647,13 @@ impl MainPaneView {
 
         self.conflict_three_way_segments_cache.clear();
 
+        let three_way_visible_map = conflict_resolver::build_three_way_visible_map(
+            three_way_len,
+            &three_way_conflict_ranges,
+            &marker_segments,
+            hide_resolved,
+        );
+
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
@@ -1651,6 +1677,8 @@ impl MainPaneView {
             nav_anchor,
             split_selected: std::collections::BTreeSet::new(),
             inline_selected: std::collections::BTreeSet::new(),
+            hide_resolved,
+            three_way_visible_map,
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
@@ -1696,6 +1724,35 @@ impl MainPaneView {
         self.conflict_resolver.split_selected.clear();
         self.conflict_resolver.inline_selected.clear();
         cx.notify();
+    }
+
+    pub(in super::super) fn conflict_resolver_toggle_hide_resolved(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.hide_resolved = !self.conflict_resolver.hide_resolved;
+        self.conflict_resolver_rebuild_visible_map();
+        // If we just hid resolved conflicts, ensure active_conflict points to
+        // an unresolved block so the user doesn't stare at a collapsed row.
+        if self.conflict_resolver.hide_resolved {
+            if let Some(next) = conflict_resolver::next_unresolved_conflict_index(
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.active_conflict,
+            ) {
+                self.conflict_resolver.active_conflict = next;
+            }
+        }
+        cx.notify();
+    }
+
+    fn conflict_resolver_rebuild_visible_map(&mut self) {
+        self.conflict_resolver.three_way_visible_map =
+            conflict_resolver::build_three_way_visible_map(
+                self.conflict_resolver.three_way_len,
+                &self.conflict_resolver.three_way_conflict_ranges,
+                &self.conflict_resolver.marker_segments,
+                self.conflict_resolver.hide_resolved,
+            );
     }
 
     pub(in super::super) fn conflict_resolver_selection_is_empty(&self) -> bool {
@@ -1890,6 +1947,7 @@ impl MainPaneView {
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
+        self.conflict_resolver_rebuild_visible_map();
 
         // Auto-advance to the next unresolved conflict (kdiff3-style).
         let current = self.conflict_resolver.active_conflict;
@@ -1899,15 +1957,14 @@ impl MainPaneView {
         ) {
             if next_unresolved != current {
                 self.conflict_resolver.active_conflict = next_unresolved;
-                // Scroll the 3-way view to the new active conflict's range.
-                if let Some(range) = self
-                    .conflict_resolver
-                    .three_way_conflict_ranges
-                    .get(self.conflict_resolver.active_conflict)
-                    .cloned()
-                {
+                // Scroll the 3-way view to the new active conflict's visible position.
+                if let Some(vi) = conflict_resolver::visible_index_for_conflict(
+                    &self.conflict_resolver.three_way_visible_map,
+                    &self.conflict_resolver.three_way_conflict_ranges,
+                    self.conflict_resolver.active_conflict,
+                ) {
                     self.conflict_resolver_diff_scroll
-                        .scroll_to_item_strict(range.start, gpui::ScrollStrategy::Center);
+                        .scroll_to_item_strict(vi, gpui::ScrollStrategy::Center);
                 }
             }
         }
@@ -1934,6 +1991,7 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
             );
             self.conflict_resolver_set_output(resolved, cx);
+            self.conflict_resolver_rebuild_visible_map();
             // Keep focus aligned with unresolved navigation after auto-resolve.
             if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
                 &self.conflict_resolver.marker_segments,
@@ -1967,6 +2025,7 @@ impl MainPaneView {
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
+        self.conflict_resolver_rebuild_visible_map();
         cx.notify();
     }
 }

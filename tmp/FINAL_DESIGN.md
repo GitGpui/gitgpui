@@ -21,7 +21,7 @@
 - ✅ Resolved/total counter display in conflict resolver toolbar — shows "Resolved X/Y" with green color when fully resolved — `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ Per-block resolved tracking (`ConflictBlock.resolved` field) — set on A/B/C picks, all-pick, and auto-resolve — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 - ✅ Next/previous *unresolved* navigation in UI (wrap-around) — added unresolved index helpers + tests and wired toolbar/auto-advance to unresolved-only navigation — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
-- ⬜ Hide-resolved toggle
+- ✅ Hide-resolved toggle — `ThreeWayVisibleItem` enum and `build_three_way_visible_map()` for collapsing resolved conflicts in three-way view, toggle button in toolbar ("Hide resolved" / "Show resolved"), collapsed rows render with green summary banner — `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`, `crates/gitgpui-ui-gpui/src/view/mod.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`, `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs` — 4 unit tests
 - 🔧 Bulk actions: "All → A/B/C" exists; auto-resolve safe conflicts now wired (see §4)
 
 ### 4) Auto-Resolution Engine (Safe-First)

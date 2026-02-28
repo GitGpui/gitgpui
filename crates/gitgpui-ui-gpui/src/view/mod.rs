@@ -445,6 +445,8 @@ struct ConflictResolverUiState {
     nav_anchor: Option<usize>,
     split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
     inline_selected: std::collections::BTreeSet<usize>,
+    hide_resolved: bool,
+    three_way_visible_map: Vec<conflict_resolver::ThreeWayVisibleItem>,
 }
 
 impl Default for ConflictResolverUiState {
@@ -472,6 +474,8 @@ impl Default for ConflictResolverUiState {
             nav_anchor: None,
             split_selected: std::collections::BTreeSet::new(),
             inline_selected: std::collections::BTreeSet::new(),
+            hide_resolved: false,
+            three_way_visible_map: Vec::new(),
         }
     }
 }

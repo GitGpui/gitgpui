@@ -369,6 +369,72 @@ pub fn collect_inline_selection(
     out
 }
 
+/// Represents a visible row in the three-way view when hide-resolved is active.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreeWayVisibleItem {
+    /// A normal line at the given index in the three-way data.
+    Line(usize),
+    /// A collapsed summary row for a resolved conflict block (by conflict index).
+    CollapsedBlock(usize),
+}
+
+/// Build the mapping from visible row indices to actual three-way data items.
+///
+/// When `hide_resolved` is false, every line maps directly.
+/// When true, resolved conflict ranges are collapsed to a single summary row.
+pub fn build_three_way_visible_map(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    segments: &[ConflictSegment],
+    hide_resolved: bool,
+) -> Vec<ThreeWayVisibleItem> {
+    if !hide_resolved {
+        return (0..total_lines).map(ThreeWayVisibleItem::Line).collect();
+    }
+
+    let resolved_blocks: Vec<bool> = segments
+        .iter()
+        .filter_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b.resolved),
+            _ => None,
+        })
+        .collect();
+
+    let mut visible = Vec::with_capacity(total_lines);
+    let mut line = 0usize;
+    while line < total_lines {
+        if let Some((range_ix, range)) = conflict_ranges
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.contains(&line))
+        {
+            if resolved_blocks.get(range_ix).copied().unwrap_or(false) {
+                // Emit one collapsed summary row and skip the rest of the range.
+                visible.push(ThreeWayVisibleItem::CollapsedBlock(range_ix));
+                line = range.end;
+                continue;
+            }
+        }
+        visible.push(ThreeWayVisibleItem::Line(line));
+        line += 1;
+    }
+    visible
+}
+
+/// Find the visible index for the first line of a conflict range, or the
+/// collapsed block entry. Returns `None` if the range is not visible.
+pub fn visible_index_for_conflict(
+    visible_map: &[ThreeWayVisibleItem],
+    conflict_ranges: &[std::ops::Range<usize>],
+    range_ix: usize,
+) -> Option<usize> {
+    let range = conflict_ranges.get(range_ix)?;
+    visible_map.iter().position(|item| match item {
+        ThreeWayVisibleItem::Line(ix) => range.contains(ix),
+        ThreeWayVisibleItem::CollapsedBlock(ci) => *ci == range_ix,
+    })
+}
+
 pub fn compute_three_way_word_highlights(
     base_lines: &[gpui::SharedString],
     ours_lines: &[gpui::SharedString],
@@ -960,5 +1026,123 @@ mod tests {
         auto_resolve_segments(&mut segments);
         let text = generate_resolved_text(&segments);
         assert_eq!(text, "a\nchanged\nb\n");
+    }
+
+    // -- hide-resolved visible map tests --
+
+    #[test]
+    fn visible_map_identity_when_not_hiding() {
+        // 3 lines of text, 1 conflict with 2 lines = 5 total lines
+        // conflict range: 1..3
+        let segments = vec![
+            ConflictSegment::Text("a\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "b\nc\n".into(),
+                theirs: "x\ny\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("d\ne\n".into()),
+        ];
+        let ranges = vec![1..3];
+        let map = build_three_way_visible_map(5, &ranges, &segments, false);
+        assert_eq!(map.len(), 5);
+        for (i, item) in map.iter().enumerate() {
+            assert_eq!(*item, ThreeWayVisibleItem::Line(i));
+        }
+    }
+
+    #[test]
+    fn visible_map_collapses_resolved_block() {
+        let segments = vec![
+            ConflictSegment::Text("a\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "b\nc\n".into(),
+                theirs: "x\ny\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true, // resolved
+            }),
+            ConflictSegment::Text("d\ne\n".into()),
+        ];
+        let ranges = vec![1..3];
+        let map = build_three_way_visible_map(5, &ranges, &segments, true);
+        // Should be: Line(0), CollapsedBlock(0), Line(3), Line(4)
+        assert_eq!(map.len(), 4);
+        assert_eq!(map[0], ThreeWayVisibleItem::Line(0));
+        assert_eq!(map[1], ThreeWayVisibleItem::CollapsedBlock(0));
+        assert_eq!(map[2], ThreeWayVisibleItem::Line(3));
+        assert_eq!(map[3], ThreeWayVisibleItem::Line(4));
+    }
+
+    #[test]
+    fn visible_map_keeps_unresolved_blocks_expanded() {
+        let segments = vec![
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "a\nb\n".into(),
+                theirs: "x\ny\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false, // unresolved — keep expanded
+            }),
+            ConflictSegment::Text("c\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "d\n".into(),
+                theirs: "z\n".into(),
+                choice: ConflictChoice::Theirs,
+                resolved: true, // resolved — collapse
+            }),
+        ];
+        let ranges = vec![0..2, 3..4];
+        let map = build_three_way_visible_map(4, &ranges, &segments, true);
+        // Unresolved block: Line(0), Line(1)
+        // Text: Line(2)
+        // Resolved block: CollapsedBlock(1)
+        assert_eq!(map.len(), 4);
+        assert_eq!(map[0], ThreeWayVisibleItem::Line(0));
+        assert_eq!(map[1], ThreeWayVisibleItem::Line(1));
+        assert_eq!(map[2], ThreeWayVisibleItem::Line(2));
+        assert_eq!(map[3], ThreeWayVisibleItem::CollapsedBlock(1));
+    }
+
+    #[test]
+    fn visible_index_for_conflict_finds_collapsed() {
+        let segments = vec![
+            ConflictSegment::Text("a\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "b\nc\n".into(),
+                theirs: "x\ny\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true,
+            }),
+            ConflictSegment::Text("d\n".into()),
+        ];
+        let ranges = vec![1..3];
+        let map = build_three_way_visible_map(4, &ranges, &segments, true);
+        // map: Line(0), CollapsedBlock(0), Line(3)
+        let vi = visible_index_for_conflict(&map, &ranges, 0);
+        assert_eq!(vi, Some(1)); // CollapsedBlock is at visible index 1
+    }
+
+    #[test]
+    fn visible_index_for_conflict_finds_expanded() {
+        let segments = vec![
+            ConflictSegment::Text("a\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "b\nc\n".into(),
+                theirs: "x\ny\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+        ];
+        let ranges = vec![1..3];
+        let map = build_three_way_visible_map(3, &ranges, &segments, false);
+        // map: Line(0), Line(1), Line(2)
+        let vi = visible_index_for_conflict(&map, &ranges, 0);
+        assert_eq!(vi, Some(1)); // First line of conflict at visible index 1
     }
 }

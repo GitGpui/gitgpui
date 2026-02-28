@@ -931,7 +931,7 @@ impl MainPaneView {
 
                             let diff_len = match view_mode {
                                 ConflictResolverViewMode::ThreeWay => {
-                                    self.conflict_resolver.three_way_len
+                                    self.conflict_resolver.three_way_visible_map.len()
                                 }
                                 ConflictResolverViewMode::TwoWayDiff => match mode {
                                     ConflictDiffMode::Split => {
@@ -1061,6 +1061,14 @@ impl MainPaneView {
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_auto_resolve(cx);
                                 };
+                            let toggle_hide_resolved =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_toggle_hide_resolved(cx);
+                                };
+                            let hide_resolved = self.conflict_resolver.hide_resolved;
 
                             let start_controls = div()
                                 .flex()
@@ -1181,6 +1189,24 @@ impl MainPaneView {
                                         )
                                         .style(zed::ButtonStyle::Outlined)
                                         .on_click(theme, cx, auto_resolve),
+                                    )
+                                })
+                                .when(has_conflicts && resolved_count > 0, |d| {
+                                    d.child(
+                                        zed::Button::new(
+                                            "conflict_hide_resolved",
+                                            if hide_resolved {
+                                                "Show resolved"
+                                            } else {
+                                                "Hide resolved"
+                                            },
+                                        )
+                                        .style(if hide_resolved {
+                                            zed::ButtonStyle::Outlined
+                                        } else {
+                                            zed::ButtonStyle::Transparent
+                                        })
+                                        .on_click(theme, cx, toggle_hide_resolved),
                                     )
                                 });
 

@@ -37,10 +37,21 @@ impl MainPaneView {
             })
             .collect();
 
+        // Collect the real line indices we need to render (from visible map).
+        let real_line_indices: Vec<usize> = range
+            .clone()
+            .filter_map(|vi| {
+                match this.conflict_resolver.three_way_visible_map.get(vi) {
+                    Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) => Some(*ix),
+                    _ => None,
+                }
+            })
+            .collect();
+
         let word_hl_color = Some(theme.colors.warning);
 
         // Pre-build styled text cache entries for lines with word highlights.
-        for ix in range.clone() {
+        for &ix in &real_line_indices {
             for (col, highlights_vec) in [
                 (
                     ThreeWayColumn::Base,
@@ -113,201 +124,307 @@ impl MainPaneView {
         );
 
         let mut elements = Vec::with_capacity(range.len());
-        for ix in range {
-            let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
-            let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
-            let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
-            let is_in_active_conflict =
-                active_range.as_ref().map_or(false, |r| r.contains(&ix));
-            let range_ix = conflict_range_for_ix(ix);
-            let is_in_conflict = range_ix.is_some();
+        for vi in range {
+            let Some(visible_item) = this.conflict_resolver.three_way_visible_map.get(vi) else {
+                continue;
+            };
 
-            // Which column is chosen for this conflict?
-            let choice_for_row = range_ix.and_then(|ri| conflict_choices.get(ri).copied());
-            let base_is_chosen =
-                choice_for_row == Some(conflict_resolver::ConflictChoice::Base);
-            let ours_is_chosen =
-                choice_for_row == Some(conflict_resolver::ConflictChoice::Ours);
-            let theirs_is_chosen =
-                choice_for_row == Some(conflict_resolver::ConflictChoice::Theirs);
+            match *visible_item {
+                conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
+                    // Render a collapsed summary row for a resolved conflict.
+                    let choice_label = conflict_choices
+                        .get(range_ix)
+                        .map(|c| match c {
+                            conflict_resolver::ConflictChoice::Base => "Base (A)",
+                            conflict_resolver::ConflictChoice::Ours => "Local (B)",
+                            conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
+                        })
+                        .unwrap_or("?");
+                    let label: SharedString =
+                        format!("  Resolved: picked {choice_label}").into();
+                    let handle_w = px(PANE_RESIZE_HANDLE_PX);
+                    elements.push(
+                        div()
+                            .id(("conflict_three_way_collapsed", vi))
+                            .w_full()
+                            .h(px(20.0))
+                            .flex()
+                            .items_center()
+                            .bg(with_alpha(
+                                theme.colors.success,
+                                if theme.is_dark { 0.08 } else { 0.06 },
+                            ))
+                            .child(
+                                div()
+                                    .w(col_a_w)
+                                    .min_w(px(0.0))
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .px_2()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(label),
+                            )
+                            .child(
+                                div()
+                                    .w(handle_w)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h_full()
+                                            .bg(theme.colors.border),
+                                    ),
+                            )
+                            .child(div().w(col_b_w).min_w(px(0.0)).h_full())
+                            .child(
+                                div()
+                                    .w(handle_w)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h_full()
+                                            .bg(theme.colors.border),
+                                    ),
+                            )
+                            .child(div().w(col_c_w).flex_grow().min_w(px(0.0)).h_full())
+                            .into_any_element(),
+                    );
+                }
+                conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
+                    let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
+                    let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
+                    let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
+                    let is_in_active_conflict =
+                        active_range.as_ref().map_or(false, |r| r.contains(&ix));
+                    let range_ix = conflict_range_for_ix(ix);
+                    let is_in_conflict = range_ix.is_some();
 
-            let base_styled = this
-                .conflict_three_way_segments_cache
-                .get(&(ix, ThreeWayColumn::Base));
-            let ours_styled = this
-                .conflict_three_way_segments_cache
-                .get(&(ix, ThreeWayColumn::Ours));
-            let theirs_styled = this
-                .conflict_three_way_segments_cache
-                .get(&(ix, ThreeWayColumn::Theirs));
+                    // Which column is chosen for this conflict?
+                    let choice_for_row =
+                        range_ix.and_then(|ri| conflict_choices.get(ri).copied());
+                    let base_is_chosen =
+                        choice_for_row == Some(conflict_resolver::ConflictChoice::Base);
+                    let ours_is_chosen =
+                        choice_for_row == Some(conflict_resolver::ConflictChoice::Ours);
+                    let theirs_is_chosen =
+                        choice_for_row == Some(conflict_resolver::ConflictChoice::Theirs);
 
-            let mut base = div()
-                .id(("conflict_three_way_base", ix))
-                .w(col_a_w)
-                .min_w(px(0.0))
-                .h(px(20.0))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(if base_line.is_some() {
-                    theme.colors.text
-                } else {
-                    theme.colors.text_muted
-                })
-                .whitespace_nowrap()
-                .when(base_is_chosen, |d| d.bg(chosen_bg))
-                .child(
-                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                        line_number_string(
-                            base_line
-                                .is_some()
-                                .then(|| u32::try_from(ix + 1).ok())
-                                .flatten(),
-                        ),
-                    ),
-                )
-                .child(conflict_diff_text_cell(
-                    base_line.cloned().unwrap_or_default(),
-                    base_styled,
-                    show_ws,
-                ));
-            if let Some(ri) = range_ix {
-                if base_line.is_some() {
-                    base = base
-                        .cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
-                        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                            this.conflict_resolver_pick_at(
-                                ri,
-                                conflict_resolver::ConflictChoice::Base,
-                                cx,
-                            );
-                        }));
+                    let base_styled = this
+                        .conflict_three_way_segments_cache
+                        .get(&(ix, ThreeWayColumn::Base));
+                    let ours_styled = this
+                        .conflict_three_way_segments_cache
+                        .get(&(ix, ThreeWayColumn::Ours));
+                    let theirs_styled = this
+                        .conflict_three_way_segments_cache
+                        .get(&(ix, ThreeWayColumn::Theirs));
+
+                    let mut base = div()
+                        .id(("conflict_three_way_base", ix))
+                        .w(col_a_w)
+                        .min_w(px(0.0))
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(if base_line.is_some() {
+                            theme.colors.text
+                        } else {
+                            theme.colors.text_muted
+                        })
+                        .whitespace_nowrap()
+                        .when(base_is_chosen, |d| d.bg(chosen_bg))
+                        .child(
+                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                                line_number_string(
+                                    base_line
+                                        .is_some()
+                                        .then(|| u32::try_from(ix + 1).ok())
+                                        .flatten(),
+                                ),
+                            ),
+                        )
+                        .child(conflict_diff_text_cell(
+                            base_line.cloned().unwrap_or_default(),
+                            base_styled,
+                            show_ws,
+                        ));
+                    if let Some(ri) = range_ix {
+                        if base_line.is_some() {
+                            base = base
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                                .on_click(cx.listener(
+                                    move |this, _e: &ClickEvent, _w, cx| {
+                                        this.conflict_resolver_pick_at(
+                                            ri,
+                                            conflict_resolver::ConflictChoice::Base,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                        }
+                    }
+
+                    let mut ours = div()
+                        .id(("conflict_three_way_ours", ix))
+                        .w(col_b_w)
+                        .min_w(px(0.0))
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(if ours_line.is_some() {
+                            theme.colors.text
+                        } else {
+                            theme.colors.text_muted
+                        })
+                        .whitespace_nowrap()
+                        .when(ours_is_chosen, |d| d.bg(chosen_bg))
+                        .child(
+                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                                line_number_string(
+                                    ours_line
+                                        .is_some()
+                                        .then(|| u32::try_from(ix + 1).ok())
+                                        .flatten(),
+                                ),
+                            ),
+                        )
+                        .child(conflict_diff_text_cell(
+                            ours_line.cloned().unwrap_or_default(),
+                            ours_styled,
+                            show_ws,
+                        ));
+                    if let Some(ri) = range_ix {
+                        ours = ours
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .on_click(cx.listener(
+                                move |this, _e: &ClickEvent, _w, cx| {
+                                    this.conflict_resolver_pick_at(
+                                        ri,
+                                        conflict_resolver::ConflictChoice::Ours,
+                                        cx,
+                                    );
+                                },
+                            ));
+                    }
+
+                    let mut theirs = div()
+                        .id(("conflict_three_way_theirs", ix))
+                        .w(col_c_w)
+                        .flex_grow()
+                        .min_w(px(0.0))
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(if theirs_line.is_some() {
+                            theme.colors.text
+                        } else {
+                            theme.colors.text_muted
+                        })
+                        .whitespace_nowrap()
+                        .when(theirs_is_chosen, |d| d.bg(chosen_bg))
+                        .child(
+                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
+                                line_number_string(
+                                    theirs_line
+                                        .is_some()
+                                        .then(|| u32::try_from(ix + 1).ok())
+                                        .flatten(),
+                                ),
+                            ),
+                        )
+                        .child(conflict_diff_text_cell(
+                            theirs_line.cloned().unwrap_or_default(),
+                            theirs_styled,
+                            show_ws,
+                        ));
+                    if let Some(ri) = range_ix {
+                        theirs = theirs
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
+                            .on_click(cx.listener(
+                                move |this, _e: &ClickEvent, _w, cx| {
+                                    this.conflict_resolver_pick_at(
+                                        ri,
+                                        conflict_resolver::ConflictChoice::Theirs,
+                                        cx,
+                                    );
+                                },
+                            ));
+                    }
+
+                    let handle_w = px(PANE_RESIZE_HANDLE_PX);
+                    elements.push(
+                        div()
+                            .id(("conflict_three_way_row", ix))
+                            .w_full()
+                            .flex()
+                            .when(is_in_active_conflict, |d| {
+                                d.bg(with_alpha(
+                                    theme.colors.accent,
+                                    if theme.is_dark { 0.08 } else { 0.06 },
+                                ))
+                            })
+                            .when(is_in_conflict && !is_in_active_conflict, |d| {
+                                d.bg(with_alpha(
+                                    theme.colors.accent,
+                                    if theme.is_dark { 0.03 } else { 0.02 },
+                                ))
+                            })
+                            .child(base)
+                            .child(
+                                div()
+                                    .w(handle_w)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h_full()
+                                            .bg(theme.colors.border),
+                                    ),
+                            )
+                            .child(ours)
+                            .child(
+                                div()
+                                    .w(handle_w)
+                                    .h_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .w(px(1.0))
+                                            .h_full()
+                                            .bg(theme.colors.border),
+                                    ),
+                            )
+                            .child(theirs)
+                            .into_any_element(),
+                    );
                 }
             }
-
-            let mut ours = div()
-                .id(("conflict_three_way_ours", ix))
-                .w(col_b_w)
-                .min_w(px(0.0))
-                .h(px(20.0))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(if ours_line.is_some() {
-                    theme.colors.text
-                } else {
-                    theme.colors.text_muted
-                })
-                .whitespace_nowrap()
-                .when(ours_is_chosen, |d| d.bg(chosen_bg))
-                .child(
-                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                        line_number_string(
-                            ours_line
-                                .is_some()
-                                .then(|| u32::try_from(ix + 1).ok())
-                                .flatten(),
-                        ),
-                    ),
-                )
-                .child(conflict_diff_text_cell(
-                    ours_line.cloned().unwrap_or_default(),
-                    ours_styled,
-                    show_ws,
-                ));
-            if let Some(ri) = range_ix {
-                ours = ours
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.conflict_resolver_pick_at(
-                            ri,
-                            conflict_resolver::ConflictChoice::Ours,
-                            cx,
-                        );
-                    }));
-            }
-
-            let mut theirs = div()
-                .id(("conflict_three_way_theirs", ix))
-                .w(col_c_w)
-                .flex_grow()
-                .min_w(px(0.0))
-                .h(px(20.0))
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_2()
-                .text_xs()
-                .text_color(if theirs_line.is_some() {
-                    theme.colors.text
-                } else {
-                    theme.colors.text_muted
-                })
-                .whitespace_nowrap()
-                .when(theirs_is_chosen, |d| d.bg(chosen_bg))
-                .child(
-                    div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                        line_number_string(
-                            theirs_line
-                                .is_some()
-                                .then(|| u32::try_from(ix + 1).ok())
-                                .flatten(),
-                        ),
-                    ),
-                )
-                .child(conflict_diff_text_cell(
-                    theirs_line.cloned().unwrap_or_default(),
-                    theirs_styled,
-                    show_ws,
-                ));
-            if let Some(ri) = range_ix {
-                theirs = theirs
-                    .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.5)))
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-                        this.conflict_resolver_pick_at(
-                            ri,
-                            conflict_resolver::ConflictChoice::Theirs,
-                            cx,
-                        );
-                    }));
-            }
-
-            let handle_w = px(PANE_RESIZE_HANDLE_PX);
-            elements.push(
-                div()
-                    .id(("conflict_three_way_row", ix))
-                    .w_full()
-                    .flex()
-                    .when(is_in_active_conflict, |d| {
-                        d.bg(with_alpha(
-                            theme.colors.accent,
-                            if theme.is_dark { 0.08 } else { 0.06 },
-                        ))
-                    })
-                    .when(is_in_conflict && !is_in_active_conflict, |d| {
-                        d.bg(with_alpha(
-                            theme.colors.accent,
-                            if theme.is_dark { 0.03 } else { 0.02 },
-                        ))
-                    })
-                    .child(base)
-                    .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
-                        div().w(px(1.0)).h_full().bg(theme.colors.border),
-                    ))
-                    .child(ours)
-                    .child(div().w(handle_w).h_full().flex().items_center().justify_center().child(
-                        div().w(px(1.0)).h_full().bg(theme.colors.border),
-                    ))
-                    .child(theirs)
-                    .into_any_element(),
-            );
         }
         elements
     }
