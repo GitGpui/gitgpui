@@ -412,6 +412,7 @@ pub(super) fn status_loaded(
                 if !status_unchanged {
                     repo_state.set_status(Loadable::Ready(Arc::new(next)));
                 }
+                clear_resolved_conflict_context(repo_state);
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -423,6 +424,29 @@ pub(super) fn status_loaded(
         }
     }
     effects
+}
+
+/// Clear conflict-file/session state when the tracked conflict path is no longer
+/// present as an unresolved conflict in status.
+fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
+    let Some(conflict_path) = repo_state.conflict_file_path.as_ref() else {
+        return;
+    };
+    let still_conflicted = match &repo_state.status {
+        Loadable::Ready(status) => status
+            .unstaged
+            .iter()
+            .any(|entry| entry.path == *conflict_path && entry.kind == FileStatusKind::Conflicted),
+        _ => true,
+    };
+    if still_conflicted {
+        return;
+    }
+
+    repo_state.set_conflict_file_path(None);
+    repo_state.set_conflict_file(Loadable::NotLoaded);
+    repo_state.set_conflict_session(None);
+    repo_state.set_conflict_hide_resolved(false);
 }
 
 pub(super) fn head_branch_loaded(

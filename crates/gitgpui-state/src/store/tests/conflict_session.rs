@@ -47,6 +47,22 @@ fn setup_repo_with_conflict(
     repo_id
 }
 
+fn sample_marker_conflict_file(path: &str) -> ConflictFile {
+    ConflictFile {
+        path: PathBuf::from(path),
+        base_bytes: Some(b"base\n".to_vec()),
+        ours_bytes: Some(b"ours\n".to_vec()),
+        theirs_bytes: Some(b"theirs\n".to_vec()),
+        current_bytes: Some(
+            b"a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n".to_vec(),
+        ),
+        base: Some("base\n".to_string()),
+        ours: Some("ours\n".to_string()),
+        theirs: Some("theirs\n".to_string()),
+        current: Some("a\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nb\n".to_string()),
+    }
+}
+
 #[test]
 fn conflict_file_loaded_builds_session_with_regions() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -307,6 +323,130 @@ fn load_conflict_file_clears_previous_session() {
             .conflict_session
             .is_none()
     );
+}
+
+#[test]
+fn status_loaded_clears_conflict_context_when_path_is_resolved() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
+            conflict_session: None,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetHideResolved {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            hide_resolved: true,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StatusLoaded {
+            repo_id,
+            result: Ok(RepoStatus {
+                unstaged: vec![],
+                staged: vec![],
+            }),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    assert_eq!(repo_state.conflict_file_path, None);
+    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
+    assert!(repo_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_rev > before_rev);
+}
+
+#[test]
+fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
+            conflict_session: None,
+        },
+    );
+
+    let before_rev = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .unwrap()
+        .conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::StatusLoaded {
+            repo_id,
+            result: Ok(RepoStatus {
+                unstaged: vec![FileStatus {
+                    path: PathBuf::from("file.txt"),
+                    kind: FileStatusKind::Conflicted,
+                    conflict: Some(FileConflictKind::BothModified),
+                }],
+                staged: vec![],
+            }),
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    assert_eq!(
+        repo_state.conflict_file_path,
+        Some(PathBuf::from("file.txt"))
+    );
+    assert!(matches!(repo_state.conflict_file, Loadable::Ready(Some(_))));
+    assert!(repo_state.conflict_session.is_some());
+    assert_eq!(repo_state.conflict_rev, before_rev);
 }
 
 #[test]
