@@ -37,7 +37,7 @@
 
 ### 5) Diff and Text Fidelity Upgrades
 - ✅ Modeled missing trailing newline states in `file_diff.rs` via `FileDiffEofNewline` row metadata and EOF delta annotation (including newline-only diffs promoted to `Modify`) with dedicated tests — `crates/gitgpui-core/src/file_diff.rs`
-- ⬜ Stronger pairing semantics for asymmetric modify/delete blocks
+- ✅ Stronger pairing semantics for asymmetric modify/delete blocks — replaced positional delete/add pairing with bounded cost-based alignment (Levenshtein + boundary similarity heuristic) so asymmetric replacement runs align best-matching lines while leaving clearly dissimilar lines as add/remove; includes regression tests for prefix insertions and contextual asymmetric replacements — `crates/gitgpui-core/src/file_diff.rs`
 - ⬜ Stable row/region anchors for conflict-region mapping
 
 ### 6) Non-UTF8/Binary-Safe Data Path
