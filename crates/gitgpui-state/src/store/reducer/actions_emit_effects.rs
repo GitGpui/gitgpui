@@ -4,7 +4,7 @@ use super::util::{
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
-use gitgpui_core::conflict_session::ConflictRegionResolution;
+use gitgpui_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitgpui_core::domain::{DiffTarget, FileConflictKind};
 use gitgpui_core::error::Error;
 use gitgpui_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
@@ -605,38 +605,71 @@ fn sync_conflict_session_after_resolution_command(
     repo_state: &mut RepoState,
     command: &RepoCommandKind,
 ) -> bool {
-    let (path, resolution) = match command {
-        RepoCommandKind::CheckoutConflict { path, side } => (
-            path,
-            match side {
-                gitgpui_core::services::ConflictSide::Ours => ConflictRegionResolution::PickOurs,
-                gitgpui_core::services::ConflictSide::Theirs => {
-                    ConflictRegionResolution::PickTheirs
-                }
-            },
-        ),
-        RepoCommandKind::CheckoutConflictBase { path } => {
-            (path, ConflictRegionResolution::PickBase)
+    let Some(path) = resolution_command_path(command) else {
+        return false;
+    };
+
+    let tracked_path_matches = repo_state
+        .conflict_file_path
+        .as_ref()
+        .is_some_and(|tracked| tracked.as_path() == path.as_path());
+    if !tracked_path_matches {
+        return false;
+    }
+
+    if matches!(command, RepoCommandKind::LaunchMergetool { .. }) {
+        clear_conflict_context(repo_state);
+        return true;
+    }
+
+    let Some(session_view) = repo_state.conflict_session.as_ref() else {
+        return false;
+    };
+    if session_view.path.as_path() != path.as_path() {
+        return false;
+    }
+
+    if session_view.strategy == ConflictResolverStrategy::BinarySidePick
+        && session_view.regions.is_empty()
+    {
+        clear_conflict_context(repo_state);
+        return true;
+    }
+
+    let resolution = match command {
+        RepoCommandKind::CheckoutConflict { side, .. } => match side {
+            gitgpui_core::services::ConflictSide::Ours => ConflictRegionResolution::PickOurs,
+            gitgpui_core::services::ConflictSide::Theirs => ConflictRegionResolution::PickTheirs,
+        },
+        RepoCommandKind::CheckoutConflictBase { .. } => ConflictRegionResolution::PickBase,
+        RepoCommandKind::AcceptConflictDeletion { .. } => {
+            deletion_resolution_for_kind(session_view.conflict_kind)
         }
-        RepoCommandKind::AcceptConflictDeletion { path } => (
-            path,
-            repo_state
-                .conflict_session
-                .as_ref()
-                .map(|session| deletion_resolution_for_kind(session.conflict_kind))
-                .unwrap_or(ConflictRegionResolution::PickOurs),
-        ),
         _ => return false,
     };
 
     let Some(session) = repo_state.conflict_session.as_mut() else {
         return false;
     };
-    if session.path.as_path() != path.as_path() {
-        return false;
-    }
 
     apply_resolution_to_all_regions(session, &resolution) > 0
+}
+
+fn resolution_command_path(command: &RepoCommandKind) -> Option<&std::path::PathBuf> {
+    match command {
+        RepoCommandKind::CheckoutConflict { path, .. }
+        | RepoCommandKind::CheckoutConflictBase { path }
+        | RepoCommandKind::AcceptConflictDeletion { path }
+        | RepoCommandKind::LaunchMergetool { path } => Some(path),
+        _ => None,
+    }
+}
+
+fn clear_conflict_context(repo_state: &mut RepoState) {
+    repo_state.conflict_file_path = None;
+    repo_state.conflict_file = Loadable::NotLoaded;
+    repo_state.conflict_session = None;
+    repo_state.conflict_hide_resolved = false;
 }
 
 fn deletion_resolution_for_kind(conflict_kind: FileConflictKind) -> ConflictRegionResolution {
