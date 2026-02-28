@@ -389,6 +389,10 @@ pub enum Msg {
         mode: ConflictAutosolveMode,
         whitespace_normalize: bool,
     },
+    ConflictResetResolutions {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     Stash {
         repo_id: RepoId,
         message: String,

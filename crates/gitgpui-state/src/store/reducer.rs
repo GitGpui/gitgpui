@@ -347,6 +347,9 @@ pub(super) fn reduce(
         } => {
             conflict_interactions::apply_autosolve(state, repo_id, path, mode, whitespace_normalize)
         }
+        Msg::ConflictResetResolutions { repo_id, path } => {
+            conflict_interactions::reset_resolutions(state, repo_id, path)
+        }
         Msg::Stash {
             repo_id,
             message,

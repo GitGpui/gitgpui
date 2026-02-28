@@ -117,6 +117,31 @@ pub(super) fn apply_autosolve(
     Vec::new()
 }
 
+pub(super) fn reset_resolutions(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, &path) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path {
+        return Vec::new();
+    }
+
+    let reset_count = reset_session_resolutions(session);
+    if reset_count > 0 {
+        repo_state.bump_conflict_rev();
+    }
+    Vec::new()
+}
+
 fn matches_current_conflict_path(repo_state: &crate::model::RepoState, path: &Path) -> bool {
     repo_state.conflict_file_path.as_deref() == Some(path)
         || repo_state
@@ -185,4 +210,18 @@ fn apply_autosolve_to_session(
             session.auto_resolve_history(&HistoryAutosolveOptions::bullet_list())
         }
     }
+}
+
+fn reset_session_resolutions(
+    session: &mut gitgpui_core::conflict_session::ConflictSession,
+) -> usize {
+    let mut reset = 0usize;
+    for region in &mut session.regions {
+        if matches!(region.resolution, ConflictRegionResolution::Unresolved) {
+            continue;
+        }
+        region.resolution = ConflictRegionResolution::Unresolved;
+        reset += 1;
+    }
+    reset
 }

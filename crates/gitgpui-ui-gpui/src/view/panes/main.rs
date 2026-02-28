@@ -2233,6 +2233,15 @@ impl MainPaneView {
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         self.conflict_resolver_set_output(resolved, cx);
+        if let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.path.clone(),
+        ) {
+            self.store
+                .dispatch(Msg::ConflictResetResolutions { repo_id, path });
+        }
         cx.notify();
     }
 

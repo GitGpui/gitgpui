@@ -497,6 +497,11 @@ impl std::fmt::Debug for Msg {
                 .field("mode", mode)
                 .field("whitespace_normalize", whitespace_normalize)
                 .finish(),
+            Msg::ConflictResetResolutions { repo_id, path } => f
+                .debug_struct("ConflictResetResolutions")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .finish(),
             Msg::Stash {
                 repo_id,
                 message,
