@@ -159,6 +159,38 @@ fn setup_both_modified_text_conflict(repo: &Path, path: &str, ours: &str, theirs
     run_git_expect_failure(repo, &["merge", "feature"]);
 }
 
+fn setup_both_added_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &str) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "seed.txt", "seed\n");
+    run_git(repo, &["add", "seed.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, path, theirs);
+    run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "theirs_add"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, path, ours);
+    run_git(repo, &["add", path]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "ours_add"],
+    );
+
+    run_git_expect_failure(repo, &["merge", "feature"]);
+}
+
 fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
     fn push_be_u32(out: &mut Vec<u8>, v: u32) {
         out.extend_from_slice(&v.to_be_bytes());
@@ -3411,6 +3443,65 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
             .any(|e| e.path == Path::new("doc.txt") && e.kind == FileStatusKind::Conflicted),
         "doc.txt should no longer be conflicted after staging resolved content"
     );
+}
+
+#[test]
+fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let before = opened.status().unwrap();
+    let conflict_entry = before
+        .unstaged
+        .iter()
+        .find(|e| e.path == Path::new("new.txt"))
+        .expect("expected both-added conflict path in unstaged status");
+    assert_eq!(conflict_entry.kind, FileStatusKind::Conflicted);
+    assert_eq!(conflict_entry.conflict, Some(FileConflictKind::BothAdded));
+
+    let merged_before = fs::read_to_string(repo.join("new.txt")).unwrap();
+    assert!(
+        merged_before.contains("<<<<<<<"),
+        "expected merge markers before resolution"
+    );
+
+    let session = opened
+        .conflict_session(Path::new("new.txt"))
+        .unwrap()
+        .expect("conflict session for both-added path");
+    assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
+    assert_eq!(session.conflict_kind, FileConflictKind::BothAdded);
+    assert_eq!(session.total_regions(), 1);
+    assert_eq!(session.unsolved_count(), 1);
+
+    let resolved = "resolved both-added\n";
+    write(repo, "new.txt", resolved);
+    opened.stage(&[Path::new("new.txt")]).unwrap();
+
+    let validation = gitgpui_core::services::validate_conflict_resolution_text(resolved);
+    assert!(!validation.has_conflict_markers);
+    assert_eq!(validation.marker_lines, 0);
+
+    let after = opened.status().unwrap();
+    assert!(
+        after
+            .unstaged
+            .iter()
+            .all(|e| e.path != Path::new("new.txt")),
+        "expected conflict path to be removed from unstaged after save+stage; status={after:?}"
+    );
+    assert!(
+        after.staged.iter().any(|e| {
+            e.path == Path::new("new.txt")
+                && matches!(e.kind, FileStatusKind::Modified | FileStatusKind::Added)
+        }),
+        "expected resolved both-added file to be staged as modified/added; status={after:?}"
+    );
+    assert_eq!(fs::read_to_string(repo.join("new.txt")).unwrap(), resolved);
 }
 
 /// End-to-end test: autosolve Pass 1 correctly resolves trivial regions
