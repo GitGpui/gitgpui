@@ -1132,6 +1132,17 @@ impl MainPaneView {
                             let has_conflicts = conflict_count > 0;
                             let resolved_count = self.conflict_resolver_resolved_count();
                             let unresolved_count = conflict_count - resolved_count;
+                            let active_autosolve_trace = repo
+                                .conflict_session
+                                .as_ref()
+                                .and_then(|session| {
+                                    conflict_resolver::active_conflict_autosolve_trace_label(
+                                        session,
+                                        &self.conflict_resolver.conflict_region_indices,
+                                        active_conflict,
+                                    )
+                                })
+                                .map(SharedString::from);
 
                             let any_unresolved_block_missing_base = has_conflicts
                                 && self.conflict_resolver.marker_segments.iter().any(|seg| {
@@ -1248,6 +1259,14 @@ impl MainPaneView {
                                             })
                                             .child(resolved_label),
                                     );
+                                    if let Some(label) = active_autosolve_trace.as_ref() {
+                                        d = d.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(theme.colors.accent)
+                                                .child(label.clone()),
+                                        );
+                                    }
 
                                     if !unresolved_indices.is_empty() {
                                         d = d.child(

@@ -125,6 +125,33 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
+/// Build a per-conflict autosolve trace label for the active conflict.
+///
+/// Returns `None` when the active conflict does not map to an auto-resolved
+/// session region.
+pub fn active_conflict_autosolve_trace_label(
+    session: &gitgpui_core::conflict_session::ConflictSession,
+    conflict_region_indices: &[usize],
+    active_conflict: usize,
+) -> Option<String> {
+    use gitgpui_core::conflict_session::ConflictRegionResolution;
+
+    let region_index = *conflict_region_indices.get(active_conflict)?;
+    let region = session.regions.get(region_index)?;
+    if let ConflictRegionResolution::AutoResolved {
+        rule, confidence, ..
+    } = &region.resolution
+    {
+        Some(format!(
+            "Auto: {} ({})",
+            rule.description(),
+            confidence.label()
+        ))
+    } else {
+        None
+    }
+}
+
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
     let mut segments: Vec<ConflictSegment> = Vec::new();
     let mut buf = String::new();
@@ -1540,7 +1567,11 @@ missing end
 dangling
 ";
         let segments = parse_conflict_markers(input);
-        assert_eq!(conflict_count(&segments), 1, "only valid conflict should be parsed");
+        assert_eq!(
+            conflict_count(&segments),
+            1,
+            "only valid conflict should be parsed"
+        );
         let block = segments
             .iter()
             .find_map(|s| match s {
@@ -2328,6 +2359,84 @@ theirs only line
         assert!(summary.contains("resolved 3 blocks"));
         assert!(summary.contains("history 3"));
         assert!(!summary.contains("pass1"));
+    }
+
+    #[test]
+    fn active_conflict_autosolve_trace_label_reports_rule_and_confidence() {
+        use gitgpui_core::conflict_session::{
+            AutosolveConfidence, AutosolveRule, ConflictPayload, ConflictRegion,
+            ConflictRegionResolution as R, ConflictSession,
+        };
+        use gitgpui_core::domain::FileConflictKind;
+        use std::path::PathBuf;
+
+        let mut session = ConflictSession::new(
+            PathBuf::from("a.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text(String::new()),
+            ConflictPayload::Text(String::new()),
+            ConflictPayload::Text(String::new()),
+        );
+        session.regions = vec![
+            ConflictRegion {
+                base: Some("base\n".into()),
+                ours: "ours\n".into(),
+                theirs: "theirs\n".into(),
+                resolution: R::AutoResolved {
+                    rule: AutosolveRule::OnlyOursChanged,
+                    confidence: AutosolveConfidence::High,
+                    content: "ours\n".into(),
+                },
+            },
+            ConflictRegion {
+                base: Some("base2\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                resolution: R::PickTheirs,
+            },
+        ];
+
+        let label = active_conflict_autosolve_trace_label(&session, &[0, 1], 0);
+        assert_eq!(
+            label.as_deref(),
+            Some("Auto: only ours changed from base (high)")
+        );
+    }
+
+    #[test]
+    fn active_conflict_autosolve_trace_label_returns_none_when_not_auto_or_oob() {
+        use gitgpui_core::conflict_session::{
+            ConflictPayload, ConflictRegion, ConflictRegionResolution as R, ConflictSession,
+        };
+        use gitgpui_core::domain::FileConflictKind;
+        use std::path::PathBuf;
+
+        let mut session = ConflictSession::new(
+            PathBuf::from("a.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text(String::new()),
+            ConflictPayload::Text(String::new()),
+            ConflictPayload::Text(String::new()),
+        );
+        session.regions = vec![ConflictRegion {
+            base: Some("base\n".into()),
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            resolution: R::PickOurs,
+        }];
+
+        assert_eq!(
+            active_conflict_autosolve_trace_label(&session, &[0], 0),
+            None
+        );
+        assert_eq!(
+            active_conflict_autosolve_trace_label(&session, &[2], 0),
+            None
+        );
+        assert_eq!(
+            active_conflict_autosolve_trace_label(&session, &[0], 1),
+            None
+        );
     }
 
     #[test]
