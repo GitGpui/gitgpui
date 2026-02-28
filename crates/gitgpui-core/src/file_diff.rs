@@ -150,7 +150,7 @@ fn split_lines(text: &str) -> Vec<&str> {
         return Vec::new();
     }
 
-    // Keep this simple: we render by rows and don't currently model "missing trailing newline".
+    // Keep row tokenization line-oriented; EOF newline deltas are annotated separately.
     text.lines().collect()
 }
 
