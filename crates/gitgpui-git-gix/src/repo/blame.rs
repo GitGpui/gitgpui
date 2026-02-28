@@ -3,6 +3,7 @@ use crate::util::{run_git_capture, run_git_with_output};
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
 use rustc_hash::FxHashMap as HashMap;
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -32,33 +33,7 @@ impl GixRepo {
             ConflictSide::Theirs => 3,
         };
 
-        let mut ls = Command::new("git");
-        ls.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("ls-files")
-            .arg("-u")
-            .arg("--")
-            .arg(path);
-        let output = ls
-            .output()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Error::new(ErrorKind::Backend(format!(
-                "git ls-files -u failed: {}",
-                stderr.trim()
-            ))));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stage_exists = stdout.lines().any(|line| {
-            let mut parts = line.split_whitespace();
-            let _mode = parts.next();
-            let _sha = parts.next();
-            let stage = parts.next().and_then(|s| s.parse::<u8>().ok());
-            stage == Some(desired_stage)
-        });
+        let stage_exists = unmerged_stage_exists(&self.spec.workdir, path, desired_stage)?;
 
         if !stage_exists {
             let mut rm = Command::new("git");
@@ -106,6 +81,95 @@ impl GixRepo {
             exit_code: add_out.exit_code.or(checkout_out.exit_code),
         })
     }
+
+    pub(super) fn checkout_conflict_base_impl(&self, path: &Path) -> Result<CommandOutput> {
+        if !unmerged_stage_exists(&self.spec.workdir, path, 1)? {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "base conflict stage is not available for {}",
+                path.display()
+            ))));
+        }
+
+        let base_bytes = read_unmerged_stage_bytes(&self.spec.workdir, path, 1)?;
+        let abs_path = self.spec.workdir.join(path);
+        if let Some(parent) = abs_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        }
+        fs::write(&abs_path, base_bytes).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+        let mut add = Command::new("git");
+        add.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("add")
+            .arg("--")
+            .arg(path);
+        let add_out = run_git_with_output(add, "git add --")?;
+
+        Ok(CommandOutput {
+            command: format!("git show :1:{} + git add --", path.display()),
+            stdout: add_out.stdout,
+            stderr: add_out.stderr,
+            exit_code: add_out.exit_code,
+        })
+    }
+}
+
+fn unmerged_stage_exists(workdir: &Path, path: &Path, desired_stage: u8) -> Result<bool> {
+    let mut ls = Command::new("git");
+    ls.arg("-C")
+        .arg(workdir)
+        .arg("ls-files")
+        .arg("-u")
+        .arg("--")
+        .arg(path);
+    let output = ls
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "git ls-files -u failed: {}",
+            stderr.trim()
+        ))));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().any(|line| {
+        let mut parts = line.split_whitespace();
+        let _mode = parts.next();
+        let _sha = parts.next();
+        let stage = parts.next().and_then(|s| s.parse::<u8>().ok());
+        stage == Some(desired_stage)
+    }))
+}
+
+fn read_unmerged_stage_bytes(workdir: &Path, path: &Path, stage: u8) -> Result<Vec<u8>> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
+        .arg(workdir)
+        .arg("-c")
+        .arg("color.ui=false")
+        .arg("--no-pager")
+        .arg("show")
+        .arg("--no-ext-diff")
+        .arg("--pretty=format:")
+        .arg(format!(":{stage}:{}", path.to_string_lossy()));
+
+    let output = cmd
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(Error::new(ErrorKind::Backend(format!(
+        "git show :{stage}:{} failed: {}",
+        path.display(),
+        stderr.trim()
+    ))))
 }
 
 fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {

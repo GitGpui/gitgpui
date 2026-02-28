@@ -371,6 +371,16 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Restore a conflicted file from stage-1 (base) contents and stage it.
+    ///
+    /// Useful for decision-style conflicts where users want to explicitly
+    /// recover the base version as the resolution result.
+    fn checkout_conflict_base(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "base conflict checkout is not implemented for this backend",
+        )))
+    }
+
     /// Launch an external mergetool for a conflicted file.
     ///
     /// Materializes BASE, LOCAL, REMOTE temp files from the conflict stages,

@@ -306,6 +306,10 @@ impl GitRepository for GixRepo {
         self.checkout_conflict_side_impl(path, side)
     }
 
+    fn checkout_conflict_base(&self, path: &Path) -> Result<CommandOutput> {
+        self.checkout_conflict_base_impl(path)
+    }
+
     fn launch_mergetool(&self, path: &Path) -> Result<MergetoolResult> {
         self.launch_mergetool_impl(path)
     }
