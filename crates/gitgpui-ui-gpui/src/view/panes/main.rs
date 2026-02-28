@@ -1736,7 +1736,7 @@ impl MainPaneView {
         {
             self.conflict_resolver.hide_resolved
         } else {
-            false
+            repo.conflict_hide_resolved
         };
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
@@ -1891,6 +1891,18 @@ impl MainPaneView {
             )
         {
             self.conflict_resolver.active_conflict = next;
+        }
+        if let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.path.clone(),
+        ) {
+            self.store.dispatch(Msg::ConflictSetHideResolved {
+                repo_id,
+                path,
+                hide_resolved: self.conflict_resolver.hide_resolved,
+            });
         }
         cx.notify();
     }
@@ -2312,6 +2324,25 @@ impl MainPaneView {
             unresolved_after,
             stats,
         );
+        if count > 0
+            && let (Some(repo_id), Some(path)) = (
+                self.conflict_resolver
+                    .repo_id
+                    .or_else(|| self.active_repo_id()),
+                self.conflict_resolver.path.clone(),
+            )
+        {
+            self.store.dispatch(Msg::ConflictApplyAutosolve {
+                repo_id,
+                path,
+                mode: if include_regex_pass {
+                    gitgpui_state::msg::ConflictAutosolveMode::Regex
+                } else {
+                    gitgpui_state::msg::ConflictAutosolveMode::Safe
+                },
+                whitespace_normalize: ws,
+            });
+        }
         cx.notify();
     }
 
@@ -2375,6 +2406,21 @@ impl MainPaneView {
             unresolved_after,
             stats,
         );
+        if count > 0
+            && let (Some(repo_id), Some(path)) = (
+                self.conflict_resolver
+                    .repo_id
+                    .or_else(|| self.active_repo_id()),
+                self.conflict_resolver.path.clone(),
+            )
+        {
+            self.store.dispatch(Msg::ConflictApplyAutosolve {
+                repo_id,
+                path,
+                mode: gitgpui_state::msg::ConflictAutosolveMode::History,
+                whitespace_normalize: false,
+            });
+        }
         cx.notify();
     }
 
@@ -2402,6 +2448,32 @@ impl MainPaneView {
             self.conflict_resolver.active_conflict,
         ) {
             self.conflict_resolver.active_conflict = next_unresolved;
+        }
+        if let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.path.clone(),
+        ) {
+            let bulk_choice = match choice {
+                conflict_resolver::ConflictChoice::Base => {
+                    gitgpui_state::msg::ConflictBulkChoice::Base
+                }
+                conflict_resolver::ConflictChoice::Ours => {
+                    gitgpui_state::msg::ConflictBulkChoice::Ours
+                }
+                conflict_resolver::ConflictChoice::Theirs => {
+                    gitgpui_state::msg::ConflictBulkChoice::Theirs
+                }
+                conflict_resolver::ConflictChoice::Both => {
+                    gitgpui_state::msg::ConflictBulkChoice::Both
+                }
+            };
+            self.store.dispatch(Msg::ConflictApplyBulkChoice {
+                repo_id,
+                path,
+                choice: bulk_choice,
+            });
         }
         cx.notify();
     }

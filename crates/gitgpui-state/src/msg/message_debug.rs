@@ -448,6 +448,38 @@ impl std::fmt::Debug for Msg {
                 .field("unresolved_after", unresolved_after)
                 .field("stats", stats)
                 .finish(),
+            Msg::ConflictSetHideResolved {
+                repo_id,
+                path,
+                hide_resolved,
+            } => f
+                .debug_struct("ConflictSetHideResolved")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("hide_resolved", hide_resolved)
+                .finish(),
+            Msg::ConflictApplyBulkChoice {
+                repo_id,
+                path,
+                choice,
+            } => f
+                .debug_struct("ConflictApplyBulkChoice")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("choice", choice)
+                .finish(),
+            Msg::ConflictApplyAutosolve {
+                repo_id,
+                path,
+                mode,
+                whitespace_normalize,
+            } => f
+                .debug_struct("ConflictApplyAutosolve")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("mode", mode)
+                .field("whitespace_normalize", whitespace_normalize)
+                .finish(),
             Msg::Stash {
                 repo_id,
                 message,

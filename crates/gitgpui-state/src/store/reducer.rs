@@ -1,4 +1,5 @@
 mod actions_emit_effects;
+mod conflict_interactions;
 mod diff_selection;
 mod effects;
 mod external_and_history;
@@ -318,6 +319,24 @@ pub(super) fn reduce(
                 );
             }
             Vec::new()
+        }
+        Msg::ConflictSetHideResolved {
+            repo_id,
+            path,
+            hide_resolved,
+        } => conflict_interactions::set_hide_resolved(state, repo_id, path, hide_resolved),
+        Msg::ConflictApplyBulkChoice {
+            repo_id,
+            path,
+            choice,
+        } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice),
+        Msg::ConflictApplyAutosolve {
+            repo_id,
+            path,
+            mode,
+            whitespace_normalize,
+        } => {
+            conflict_interactions::apply_autosolve(state, repo_id, path, mode, whitespace_normalize)
         }
         Msg::Stash {
             repo_id,

@@ -122,6 +122,12 @@
 - ✅ Fixed 6 pre-existing integration tests (`push_with_output`, `force_push_with_output`, `pull_with_output` ×2, `list_remote_branches`, `rebase_replays_commits`) that hardcoded `"master"` branch name — replaced with `git init -b main` and `"main"` references for portable behavior across systems where `init.defaultBranch` differs — `crates/gitgpui-git-gix/tests/status_integration.rs`
 - ✅ Full test suite now passes: 424 tests pass, 0 failures, clippy clean
 
+### 16) State-Layer Conflict Interaction Messages (Iteration 21)
+- ✅ Added reducer-level conflict interaction messages for design-requested state actions: `Msg::ConflictSetHideResolved`, `Msg::ConflictApplyBulkChoice`, and `Msg::ConflictApplyAutosolve` plus `ConflictBulkChoice` type and debug formatting — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg.rs`, `crates/gitgpui-state/src/msg/message_debug.rs`, `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/conflict_interactions.rs`
+- ✅ Wired conflict resolver UI actions to dispatch state messages for hide-resolved toggle, bulk unresolved picks, and autosolve modes while preserving existing local UI behavior — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Added `RepoState::conflict_hide_resolved` + revision-safe setters (`set_conflict_hide_resolved`, `bump_conflict_rev`), and reset hide-resolved on new conflict file load — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/reducer/effects.rs`
+- ✅ Added reducer/unit coverage for new state actions (hide-resolved updates, bulk unresolved-only picks, autosolve session mutation) — `crates/gitgpui-state/src/model.rs`, `crates/gitgpui-state/src/store/tests/conflict_session.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

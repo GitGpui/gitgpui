@@ -27,6 +27,14 @@ impl ConflictAutosolveMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictBulkChoice {
+    Base,
+    Ours,
+    Theirs,
+    Both,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ConflictAutosolveStats {
     pub pass1: usize,
@@ -346,6 +354,22 @@ pub enum Msg {
         unresolved_before: usize,
         unresolved_after: usize,
         stats: ConflictAutosolveStats,
+    },
+    ConflictSetHideResolved {
+        repo_id: RepoId,
+        path: PathBuf,
+        hide_resolved: bool,
+    },
+    ConflictApplyBulkChoice {
+        repo_id: RepoId,
+        path: PathBuf,
+        choice: ConflictBulkChoice,
+    },
+    ConflictApplyAutosolve {
+        repo_id: RepoId,
+        path: PathBuf,
+        mode: ConflictAutosolveMode,
+        whitespace_normalize: bool,
     },
     Stash {
         repo_id: RepoId,

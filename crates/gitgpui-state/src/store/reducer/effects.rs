@@ -250,6 +250,7 @@ pub(super) fn load_conflict_file(
     repo_state.set_conflict_file_path(Some(path.clone()));
     repo_state.set_conflict_file(Loadable::Loading);
     repo_state.set_conflict_session(None);
+    repo_state.set_conflict_hide_resolved(false);
     vec![Effect::LoadConflictFile { repo_id, path }]
 }
 
