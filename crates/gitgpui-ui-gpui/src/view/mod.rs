@@ -615,6 +615,8 @@ enum PopoverKind {
     ConflictSaveStageConfirm {
         repo_id: RepoId,
         path: std::path::PathBuf,
+        has_conflict_markers: bool,
+        unresolved_blocks: usize,
     },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,

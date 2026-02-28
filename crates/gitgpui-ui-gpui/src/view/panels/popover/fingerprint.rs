@@ -489,10 +489,17 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             51u8.hash(hasher);
             repo_id.hash(hasher);
         }
-        PopoverKind::ConflictSaveStageConfirm { repo_id, path } => {
+        PopoverKind::ConflictSaveStageConfirm {
+            repo_id,
+            path,
+            has_conflict_markers,
+            unresolved_blocks,
+        } => {
             52u8.hash(hasher);
             repo_id.hash(hasher);
             path.hash(hasher);
+            has_conflict_markers.hash(hasher);
+            unresolved_blocks.hash(hasher);
         }
     }
 }

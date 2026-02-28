@@ -923,6 +923,35 @@ pub fn text_contains_conflict_markers(text: &str) -> bool {
     gitgpui_core::services::validate_conflict_resolution_text(text).has_conflict_markers
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictStageSafetyCheck {
+    pub has_conflict_markers: bool,
+    pub unresolved_blocks: usize,
+}
+
+impl ConflictStageSafetyCheck {
+    pub fn requires_confirmation(self) -> bool {
+        self.has_conflict_markers || self.unresolved_blocks > 0
+    }
+}
+
+/// Compute stage-safety status for the current conflict resolver output/state.
+///
+/// This gate is stricter than marker-only checks: unresolved conflict blocks
+/// should still require explicit confirmation even if the current output text
+/// no longer contains marker lines.
+pub fn conflict_stage_safety_check(
+    output_text: &str,
+    segments: &[ConflictSegment],
+) -> ConflictStageSafetyCheck {
+    let total_blocks = conflict_count(segments);
+    let resolved_blocks = resolved_conflict_count(segments);
+    ConflictStageSafetyCheck {
+        has_conflict_markers: text_contains_conflict_markers(output_text),
+        unresolved_blocks: total_blocks.saturating_sub(resolved_blocks),
+    }
+}
+
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -1171,6 +1200,45 @@ mod tests {
             "some text with < and > arrows"
         ));
         assert!(!text_contains_conflict_markers("====== not quite seven"));
+    }
+
+    #[test]
+    fn stage_safety_requires_confirmation_for_unresolved_blocks_without_markers() {
+        let input = "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nb\n";
+        let segments = parse_conflict_markers(input);
+        let output_text = generate_resolved_text(&segments);
+
+        let safety = conflict_stage_safety_check(&output_text, &segments);
+        assert!(!safety.has_conflict_markers);
+        assert_eq!(safety.unresolved_blocks, 1);
+        assert!(safety.requires_confirmation());
+    }
+
+    #[test]
+    fn stage_safety_does_not_require_confirmation_when_fully_resolved_and_clean() {
+        let input = "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\nb\n";
+        let mut segments = parse_conflict_markers(input);
+        if let Some(ConflictSegment::Block(block)) = segments
+            .iter_mut()
+            .find(|s| matches!(s, ConflictSegment::Block(_)))
+        {
+            block.choice = ConflictChoice::Theirs;
+            block.resolved = true;
+        }
+        let output_text = generate_resolved_text(&segments);
+
+        let safety = conflict_stage_safety_check(&output_text, &segments);
+        assert!(!safety.has_conflict_markers);
+        assert_eq!(safety.unresolved_blocks, 0);
+        assert!(!safety.requires_confirmation());
+    }
+
+    #[test]
+    fn stage_safety_requires_confirmation_when_markers_remain() {
+        let safety = conflict_stage_safety_check("<<<<<<< HEAD\nours\n", &[]);
+        assert!(safety.has_conflict_markers);
+        assert_eq!(safety.unresolved_blocks, 0);
+        assert!(safety.requires_confirmation());
     }
 
     #[test]
@@ -1980,13 +2048,13 @@ mod tests {
         // Scenario: 3 conflicts with context. Resolve block 0 manually, then bulk-pick
         // remaining. The three-way visible map should collapse all 3 blocks.
         let input = concat!(
-            "ctx\n",                                       // line 0
-            "<<<<<<< HEAD\nA\n=======\na\n>>>>>>> o\n",   // conflict 0, lines 1..2
-            "mid\n",                                       // line 3 (after conflict)
-            "<<<<<<< HEAD\nB\n=======\nb\n>>>>>>> o\n",   // conflict 1, lines 4..5
-            "mid2\n",                                      // line 6
-            "<<<<<<< HEAD\nC\n=======\nc\n>>>>>>> o\n",   // conflict 2, lines 7..8
-            "end\n",                                       // line 9
+            "ctx\n",                                    // line 0
+            "<<<<<<< HEAD\nA\n=======\na\n>>>>>>> o\n", // conflict 0, lines 1..2
+            "mid\n",                                    // line 3 (after conflict)
+            "<<<<<<< HEAD\nB\n=======\nb\n>>>>>>> o\n", // conflict 1, lines 4..5
+            "mid2\n",                                   // line 6
+            "<<<<<<< HEAD\nC\n=======\nc\n>>>>>>> o\n", // conflict 2, lines 7..8
+            "end\n",                                    // line 9
         );
         let mut segments = parse_conflict_markers(input);
         assert_eq!(conflict_count(&segments), 3);
@@ -2162,7 +2230,10 @@ mod tests {
         assert_eq!(resolved_conflict_count(&segments), 0);
         let map = build_three_way_visible_map(total_lines, &conflict_ranges, &segments, true);
         assert_eq!(map.len(), 8);
-        assert!(map.iter().all(|item| matches!(item, ThreeWayVisibleItem::Line(_))));
+        assert!(
+            map.iter()
+                .all(|item| matches!(item, ThreeWayVisibleItem::Line(_)))
+        );
 
         // Step 1: resolve block 0 (2 lines → 1 collapsed row)
         mark_block_resolved(&mut segments, 0);
@@ -2279,13 +2350,15 @@ mod tests {
         }
 
         // Both should still show the unresolved conflict 1 rows
-        let split_has_conflict_1 = split_visible
-            .iter()
-            .any(|&ix| split_map[ix] == Some(1));
-        let inline_has_conflict_1 = inline_visible
-            .iter()
-            .any(|&ix| inline_map[ix] == Some(1));
-        assert!(split_has_conflict_1, "split should show unresolved conflict 1");
-        assert!(inline_has_conflict_1, "inline should show unresolved conflict 1");
+        let split_has_conflict_1 = split_visible.iter().any(|&ix| split_map[ix] == Some(1));
+        let inline_has_conflict_1 = inline_visible.iter().any(|&ix| inline_map[ix] == Some(1));
+        assert!(
+            split_has_conflict_1,
+            "split should show unresolved conflict 1"
+        );
+        assert!(
+            inline_has_conflict_1,
+            "inline should show unresolved conflict 1"
+        );
     }
 }

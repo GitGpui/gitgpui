@@ -4,10 +4,41 @@ pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
     path: &std::path::Path,
+    has_conflict_markers: bool,
+    unresolved_blocks: usize,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let path = path.to_path_buf();
+    let has_unresolved_blocks = unresolved_blocks > 0;
+
+    let title = match (has_conflict_markers, has_unresolved_blocks) {
+        (true, true) => "Unresolved conflict content detected",
+        (true, false) => "Unresolved conflict markers detected",
+        (false, true) => "Unresolved conflict blocks detected",
+        (false, false) => "Confirm staging",
+    };
+
+    let mut detail = String::new();
+    if has_conflict_markers {
+        detail.push_str(
+            "The resolved text still contains conflict markers (<<<<<<<, =======, >>>>>>>). ",
+        );
+    }
+    if has_unresolved_blocks {
+        let block_word = if unresolved_blocks == 1 {
+            "block is"
+        } else {
+            "blocks are"
+        };
+        detail.push_str(&format!(
+            "{unresolved_blocks} conflict {block_word} still unresolved in the resolver."
+        ));
+    }
+    if detail.is_empty() {
+        detail.push_str("The file may still be in an unresolved state.");
+    }
+    detail.push_str(" Staging this file may leave it in a broken state.");
 
     div()
         .flex()
@@ -19,7 +50,7 @@ pub(super) fn panel(
                 .py_1()
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
-                .child("Unresolved conflict markers detected"),
+                .child(title),
         )
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
@@ -28,7 +59,7 @@ pub(super) fn panel(
                 .py_1()
                 .text_sm()
                 .text_color(theme.colors.text_muted)
-                .child("The resolved text still contains conflict markers (<<<<<<<, =======, >>>>>>>). Staging this file may leave it in a broken state."),
+                .child(detail),
         )
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
@@ -51,12 +82,10 @@ pub(super) fn panel(
                     zed::Button::new("conflict_stage_anyway", "Stage anyway")
                         .style(zed::ButtonStyle::Danger)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let text = this
-                                .main_pane
-                                .read_with(cx, |main, cx| {
-                                    main.conflict_resolver_input
-                                        .read_with(cx, |i, _| i.text().to_string())
-                                });
+                            let text = this.main_pane.read_with(cx, |main, cx| {
+                                main.conflict_resolver_input
+                                    .read_with(cx, |i, _| i.text().to_string())
+                            });
                             this.store.dispatch(Msg::SaveWorktreeFile {
                                 repo_id,
                                 path: path.clone(),

@@ -1419,9 +1419,19 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ConflictSaveStageConfirm { repo_id, path } => {
-                conflict_save_stage_confirm::panel(self, repo_id, &path, cx)
-            }
+            PopoverKind::ConflictSaveStageConfirm {
+                repo_id,
+                path,
+                has_conflict_markers,
+                unresolved_blocks,
+            } => conflict_save_stage_confirm::panel(
+                self,
+                repo_id,
+                &path,
+                has_conflict_markers,
+                unresolved_blocks,
+                cx,
+            ),
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }

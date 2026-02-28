@@ -301,19 +301,28 @@ impl MainPaneView {
                 )
                 .when_some(next_file_btn, |d, btn| d.child(btn));
 
-            // Show warning if resolved text still contains conflict markers.
-            let resolved_has_markers = self.conflict_resolved_preview_lines.iter().any(|line| {
-                line.starts_with("<<<<<<<")
-                    || line.starts_with(">>>>>>>")
-                    || line.starts_with("=======")
-                    || line.starts_with("|||||||")
-            });
-            if resolved_has_markers {
+            let resolved_output_text = self
+                .conflict_resolver_input
+                .read_with(cx, |i, _| i.text().to_string());
+            let stage_safety = conflict_resolver::conflict_stage_safety_check(
+                &resolved_output_text,
+                &self.conflict_resolver.marker_segments,
+            );
+
+            if stage_safety.has_conflict_markers {
                 controls = controls.child(
                     div()
                         .text_xs()
                         .text_color(theme.colors.danger)
                         .child("markers remain"),
+                );
+            }
+            if stage_safety.unresolved_blocks > 0 {
+                controls = controls.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.colors.danger)
+                        .child(format!("{} unresolved", stage_safety.unresolved_blocks)),
                 );
             }
 
@@ -355,11 +364,17 @@ impl MainPaneView {
                                 let text = this
                                     .conflict_resolver_input
                                     .read_with(cx, |i, _| i.text().to_string());
-                                if conflict_resolver::text_contains_conflict_markers(&text) {
+                                let stage_safety = conflict_resolver::conflict_stage_safety_check(
+                                    &text,
+                                    &this.conflict_resolver.marker_segments,
+                                );
+                                if stage_safety.requires_confirmation() {
                                     this.open_popover_at(
                                         PopoverKind::ConflictSaveStageConfirm {
                                             repo_id,
                                             path: save_path.clone(),
+                                            has_conflict_markers: stage_safety.has_conflict_markers,
+                                            unresolved_blocks: stage_safety.unresolved_blocks,
                                         },
                                         e.position(),
                                         window,
