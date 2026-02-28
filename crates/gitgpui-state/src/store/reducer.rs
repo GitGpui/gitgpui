@@ -290,6 +290,35 @@ pub(super) fn reduce(
         Msg::LaunchMergetool { repo_id, path } => {
             actions_emit_effects::launch_mergetool(repo_id, path)
         }
+        Msg::RecordConflictAutosolveTelemetry {
+            repo_id,
+            path,
+            mode,
+            total_conflicts_before,
+            total_conflicts_after,
+            unresolved_before,
+            unresolved_after,
+            stats,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                util::push_action_log(
+                    repo_state,
+                    true,
+                    util::conflict_autosolve_telemetry_command(mode, path.as_deref()),
+                    util::conflict_autosolve_telemetry_summary(
+                        mode,
+                        path.as_deref(),
+                        total_conflicts_before,
+                        total_conflicts_after,
+                        unresolved_before,
+                        unresolved_after,
+                        stats,
+                    ),
+                    None,
+                );
+            }
+            Vec::new()
+        }
         Msg::Stash {
             repo_id,
             message,

@@ -428,6 +428,26 @@ impl std::fmt::Debug for Msg {
                 .field("repo_id", repo_id)
                 .field("path", path)
                 .finish(),
+            Msg::RecordConflictAutosolveTelemetry {
+                repo_id,
+                path,
+                mode,
+                total_conflicts_before,
+                total_conflicts_after,
+                unresolved_before,
+                unresolved_after,
+                stats,
+            } => f
+                .debug_struct("RecordConflictAutosolveTelemetry")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("mode", mode)
+                .field("total_conflicts_before", total_conflicts_before)
+                .field("total_conflicts_after", total_conflicts_after)
+                .field("unresolved_before", unresolved_before)
+                .field("unresolved_after", unresolved_after)
+                .field("stats", stats)
+                .finish(),
             Msg::Stash {
                 repo_id,
                 message,

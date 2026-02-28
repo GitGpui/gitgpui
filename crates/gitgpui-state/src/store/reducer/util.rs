@@ -2,7 +2,7 @@ use crate::model::{
     AppNotification, AppNotificationKind, AppState, CommandLogEntry, DiagnosticEntry,
     DiagnosticKind, RepoId, RepoLoadsInFlight, RepoState,
 };
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 use gitgpui_core::domain::DiffTarget;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::CommandOutput;
@@ -309,6 +309,65 @@ pub(super) fn push_action_log(
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
         repo_state.command_log.drain(0..extra);
     }
+}
+
+pub(super) fn conflict_autosolve_telemetry_command(
+    mode: ConflictAutosolveMode,
+    path: Option<&Path>,
+) -> String {
+    let mut command = format!("telemetry.conflict_autosolve.{}", mode.as_str());
+    if let Some(path) = path {
+        command.push(' ');
+        command.push_str(path.to_string_lossy().as_ref());
+    }
+    command
+}
+
+pub(super) fn conflict_autosolve_telemetry_summary(
+    mode: ConflictAutosolveMode,
+    path: Option<&Path>,
+    total_conflicts_before: usize,
+    total_conflicts_after: usize,
+    unresolved_before: usize,
+    unresolved_after: usize,
+    stats: ConflictAutosolveStats,
+) -> String {
+    let resolved = stats.total_resolved();
+    let mode_label = match mode {
+        ConflictAutosolveMode::Safe => "safe",
+        ConflictAutosolveMode::Regex => "regex",
+        ConflictAutosolveMode::History => "history",
+    };
+
+    let path_label = path
+        .map(|p| format!(" in {}", p.display()))
+        .unwrap_or_default();
+
+    let mut details = Vec::new();
+    if stats.pass1 > 0 {
+        details.push(format!("pass1={}", stats.pass1));
+    }
+    if stats.pass2_split > 0 {
+        details.push(format!("pass2_split={}", stats.pass2_split));
+    }
+    if stats.pass1_after_split > 0 {
+        details.push(format!("pass1_after_split={}", stats.pass1_after_split));
+    }
+    if stats.regex > 0 {
+        details.push(format!("regex={}", stats.regex));
+    }
+    if stats.history > 0 {
+        details.push(format!("history={}", stats.history));
+    }
+    let details = if details.is_empty() {
+        "details=none".to_string()
+    } else {
+        details.join(", ")
+    };
+
+    format!(
+        "Conflict autosolve ({mode_label}): resolved {resolved}; unresolved {unresolved_before} -> {unresolved_after}; conflicts {total_conflicts_before} -> {total_conflicts_after}{path_label} ({details})"
+    )
 }
 
 fn summarize_command(

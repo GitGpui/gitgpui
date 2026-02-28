@@ -72,6 +72,12 @@
 - ✅ Gated Pass 3 actions and toolbar buttons behind opt-in flags; safe autosolve remains always available — `crates/gitgpui-ui-gpui/src/view/panes/main.rs`, `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 - ✅ Added Settings popover toggles to enable/disable regex/history autosolve and persist changes — `crates/gitgpui-ui-gpui/src/view/panels/popover/settings.rs`, `crates/gitgpui-ui-gpui/src/view/panels/popover.rs`, `crates/gitgpui-ui-gpui/src/view/tooltip.rs`
 
+### 10) Autosolve Telemetry Hooks (Iteration 10)
+- ✅ Added telemetry/logging hook for autosolve decisions and unresolved counters: new `Msg::RecordConflictAutosolveTelemetry` with typed `ConflictAutosolveMode` + per-pass `ConflictAutosolveStats` payloads, wired from conflict resolver actions (safe/regex/history) with before/after unresolved and conflict counts — `crates/gitgpui-state/src/msg/message.rs`, `crates/gitgpui-state/src/msg.rs`, `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- ✅ Reducer now records autosolve telemetry in repo command logs using `telemetry.conflict_autosolve.*` command keys and structured summary text for tuning (`pass1`, `pass2_split`, `pass1_after_split`, `regex`, `history`) — `crates/gitgpui-state/src/store/reducer.rs`, `crates/gitgpui-state/src/store/reducer/util.rs`
+- ✅ Suppressed toast popups for telemetry log entries to keep instrumentation non-intrusive while preserving command-log visibility — `crates/gitgpui-ui-gpui/src/view/state_apply.rs`
+- ✅ Added reducer test coverage for telemetry logging path and summary content — `crates/gitgpui-state/src/store/tests/conflict_telemetry.rs`, `crates/gitgpui-state/src/store/tests.rs`
+
 ---
 
 *Design reference: `tmp/conflict_resolution.md`*

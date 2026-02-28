@@ -2027,6 +2027,34 @@ impl MainPaneView {
         conflict_resolver::resolved_conflict_count(&self.conflict_resolver.marker_segments)
     }
 
+    fn dispatch_conflict_autosolve_telemetry(
+        &self,
+        mode: gitgpui_state::msg::ConflictAutosolveMode,
+        total_conflicts_before: usize,
+        total_conflicts_after: usize,
+        unresolved_before: usize,
+        unresolved_after: usize,
+        stats: gitgpui_state::msg::ConflictAutosolveStats,
+    ) {
+        let Some(repo_id) = self
+            .conflict_resolver
+            .repo_id
+            .or_else(|| self.active_repo_id())
+        else {
+            return;
+        };
+        self.store.dispatch(Msg::RecordConflictAutosolveTelemetry {
+            repo_id,
+            path: self.conflict_resolver.path.clone(),
+            mode,
+            total_conflicts_before,
+            total_conflicts_after,
+            unresolved_before,
+            unresolved_after,
+            stats,
+        });
+    }
+
     /// Apply safe auto-resolve rules to all unresolved conflict blocks.
     /// Updates the resolved output text and notifies the UI.
     pub(in super::super) fn conflict_resolver_auto_resolve(
@@ -2052,9 +2080,12 @@ impl MainPaneView {
         include_regex_pass: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.conflict_resolver_conflict_count() == 0 {
+        let total_before = self.conflict_resolver_conflict_count();
+        if total_before == 0 {
             return;
         }
+        let unresolved_before =
+            total_before.saturating_sub(self.conflict_resolver_resolved_count());
         // Pass 1: safe whole-block auto-resolve.
         let pass1 =
             conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments);
@@ -2063,27 +2094,24 @@ impl MainPaneView {
         let pass2 = conflict_resolver::auto_resolve_segments_pass2(
             &mut self.conflict_resolver.marker_segments,
         );
-        let count = pass1
-            + pass2
-            + if pass2 > 0 {
-                // Re-run Pass 1 on newly created sub-blocks (they may now
-                // satisfy whole-block rules after splitting).
-                conflict_resolver::auto_resolve_segments(
-                    &mut self.conflict_resolver.marker_segments,
-                )
-            } else {
-                0
-            }
-            + if include_regex_pass {
-                let options =
-                    gitgpui_core::conflict_session::RegexAutosolveOptions::whitespace_insensitive();
-                conflict_resolver::auto_resolve_segments_regex(
-                    &mut self.conflict_resolver.marker_segments,
-                    &options,
-                )
-            } else {
-                0
-            };
+        let pass1_after_split = if pass2 > 0 {
+            // Re-run Pass 1 on newly created sub-blocks (they may now
+            // satisfy whole-block rules after splitting).
+            conflict_resolver::auto_resolve_segments(&mut self.conflict_resolver.marker_segments)
+        } else {
+            0
+        };
+        let regex = if include_regex_pass {
+            let options =
+                gitgpui_core::conflict_session::RegexAutosolveOptions::whitespace_insensitive();
+            conflict_resolver::auto_resolve_segments_regex(
+                &mut self.conflict_resolver.marker_segments,
+                &options,
+            )
+        } else {
+            0
+        };
+        let count = pass1 + pass2 + pass1_after_split + regex;
         if count > 0 {
             let resolved =
                 conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
@@ -2097,6 +2125,26 @@ impl MainPaneView {
                 self.conflict_resolver.active_conflict = next_unresolved;
             }
         }
+        let total_after = self.conflict_resolver_conflict_count();
+        let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        self.dispatch_conflict_autosolve_telemetry(
+            if include_regex_pass {
+                gitgpui_state::msg::ConflictAutosolveMode::Regex
+            } else {
+                gitgpui_state::msg::ConflictAutosolveMode::Safe
+            },
+            total_before,
+            total_after,
+            unresolved_before,
+            unresolved_after,
+            gitgpui_state::msg::ConflictAutosolveStats {
+                pass1,
+                pass2_split: pass2,
+                pass1_after_split,
+                regex,
+                history: 0,
+            },
+        );
         cx.notify();
     }
 
@@ -2109,9 +2157,12 @@ impl MainPaneView {
         if !self.conflict_enable_history_autosolve {
             return;
         }
-        if self.conflict_resolver_conflict_count() == 0 {
+        let total_before = self.conflict_resolver_conflict_count();
+        if total_before == 0 {
             return;
         }
+        let unresolved_before =
+            total_before.saturating_sub(self.conflict_resolver_resolved_count());
         // Use bullet_list preset as default; in a real settings integration
         // this would come from user configuration.
         let options = gitgpui_core::conflict_session::HistoryAutosolveOptions::bullet_list();
@@ -2131,6 +2182,22 @@ impl MainPaneView {
                 self.conflict_resolver.active_conflict = next_unresolved;
             }
         }
+        let total_after = self.conflict_resolver_conflict_count();
+        let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
+        self.dispatch_conflict_autosolve_telemetry(
+            gitgpui_state::msg::ConflictAutosolveMode::History,
+            total_before,
+            total_after,
+            unresolved_before,
+            unresolved_after,
+            gitgpui_state::msg::ConflictAutosolveStats {
+                pass1: 0,
+                pass2_split: 0,
+                pass1_after_split: 0,
+                regex: 0,
+                history: count,
+            },
+        );
         cx.notify();
     }
 

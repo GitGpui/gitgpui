@@ -9,6 +9,38 @@ use std::sync::Arc;
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConflictAutosolveMode {
+    Safe,
+    Regex,
+    History,
+}
+
+impl ConflictAutosolveMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Safe => "safe",
+            Self::Regex => "regex",
+            Self::History => "history",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictAutosolveStats {
+    pub pass1: usize,
+    pub pass2_split: usize,
+    pub pass1_after_split: usize,
+    pub regex: usize,
+    pub history: usize,
+}
+
+impl ConflictAutosolveStats {
+    pub fn total_resolved(self) -> usize {
+        self.pass1 + self.pass2_split + self.pass1_after_split + self.regex + self.history
+    }
+}
+
 pub enum Msg {
     OpenRepo(PathBuf),
     RestoreSession {
@@ -303,6 +335,16 @@ pub enum Msg {
     LaunchMergetool {
         repo_id: RepoId,
         path: PathBuf,
+    },
+    RecordConflictAutosolveTelemetry {
+        repo_id: RepoId,
+        path: Option<PathBuf>,
+        mode: ConflictAutosolveMode,
+        total_conflicts_before: usize,
+        total_conflicts_after: usize,
+        unresolved_before: usize,
+        unresolved_after: usize,
+        stats: ConflictAutosolveStats,
     },
     Stash {
         repo_id: RepoId,
