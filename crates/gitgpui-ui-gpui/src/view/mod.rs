@@ -428,6 +428,8 @@ struct ConflictResolverUiState {
     source_hash: Option<u64>,
     current: Option<String>,
     marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    /// Mapping from visible block index to `ConflictSession` region index.
+    conflict_region_indices: Vec<usize>,
     active_conflict: usize,
     view_mode: ConflictResolverViewMode,
     diff_rows: Vec<FileDiffRow>,
@@ -473,6 +475,7 @@ impl Default for ConflictResolverUiState {
             source_hash: None,
             current: None,
             marker_segments: Vec::new(),
+            conflict_region_indices: Vec::new(),
             active_conflict: 0,
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             diff_rows: Vec::new(),

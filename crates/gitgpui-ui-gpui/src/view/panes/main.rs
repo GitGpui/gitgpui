@@ -1680,11 +1680,14 @@ impl MainPaneView {
         if !base_text.is_empty() {
             conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
         }
+        let mut conflict_region_indices =
+            conflict_resolver::sequential_conflict_region_indices(&marker_segments);
         if let Some(session) = &repo.conflict_session {
-            conflict_resolver::apply_session_region_resolutions(
+            let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
                 &mut marker_segments,
                 &session.regions,
             );
+            conflict_region_indices = applied.block_region_indices;
         }
 
         let resolved = if marker_segments.is_empty() {
@@ -1828,6 +1831,7 @@ impl MainPaneView {
             source_hash: Some(source_hash),
             current: file.current.clone(),
             marker_segments,
+            conflict_region_indices,
             active_conflict,
             view_mode,
             diff_rows,
@@ -1902,13 +1906,16 @@ impl MainPaneView {
         if !base_text.is_empty() {
             conflict_resolver::populate_block_bases_from_ancestor(&mut marker_segments, base_text);
         }
+        let mut conflict_region_indices =
+            conflict_resolver::sequential_conflict_region_indices(&marker_segments);
 
         // Re-apply session region resolutions from state.
         if let Some(session) = &repo.conflict_session {
-            conflict_resolver::apply_session_region_resolutions(
+            let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
                 &mut marker_segments,
                 &session.regions,
             );
+            conflict_region_indices = applied.block_region_indices;
         }
 
         // Regenerate resolved text.
@@ -1990,6 +1997,7 @@ impl MainPaneView {
 
         // Update only the fields that change during a state re-sync.
         self.conflict_resolver.marker_segments = marker_segments;
+        self.conflict_resolver.conflict_region_indices = conflict_region_indices;
         self.conflict_resolver.hide_resolved = hide_resolved;
         self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_ranges;
         self.conflict_resolver.three_way_visible_map = three_way_visible_map;
@@ -2227,6 +2235,10 @@ impl MainPaneView {
             return;
         }
         self.conflict_resolver.marker_segments = segments;
+        self.conflict_resolver.conflict_region_indices =
+            conflict_resolver::sequential_conflict_region_indices(
+                &self.conflict_resolver.marker_segments,
+            );
         self.conflict_resolver.active_conflict = 0;
         self.conflict_resolver.last_autosolve_summary = None;
         self.conflict_resolver_rebuild_visible_map();
@@ -2372,6 +2384,12 @@ impl MainPaneView {
             return;
         }
         let picked_conflict_index = self.conflict_resolver.active_conflict;
+        let picked_region_index = self
+            .conflict_resolver
+            .conflict_region_indices
+            .get(picked_conflict_index)
+            .copied()
+            .unwrap_or(picked_conflict_index);
         {
             let Some(block) = self.conflict_resolver_active_block_mut() else {
                 return;
@@ -2405,7 +2423,7 @@ impl MainPaneView {
             self.store.dispatch(Msg::ConflictSetRegionChoice {
                 repo_id,
                 path,
-                region_index: picked_conflict_index,
+                region_index: picked_region_index,
                 choice: region_choice,
             });
         }
@@ -2515,8 +2533,9 @@ impl MainPaneView {
         );
         // Pass 2: heuristic subchunk splitting — split remaining unresolved
         // blocks into finer line-level subchunks where possible.
-        let pass2 = conflict_resolver::auto_resolve_segments_pass2(
+        let pass2 = conflict_resolver::auto_resolve_segments_pass2_with_region_indices(
             &mut self.conflict_resolver.marker_segments,
+            &mut self.conflict_resolver.conflict_region_indices,
         );
         let pass1_after_split = if pass2 > 0 {
             // Re-run Pass 1 on newly created sub-blocks (they may now
@@ -2627,9 +2646,10 @@ impl MainPaneView {
         // Use bullet_list preset as default; in a real settings integration
         // this would come from user configuration.
         let options = gitgpui_core::conflict_session::HistoryAutosolveOptions::bullet_list();
-        let count = conflict_resolver::auto_resolve_segments_history(
+        let count = conflict_resolver::auto_resolve_segments_history_with_region_indices(
             &mut self.conflict_resolver.marker_segments,
             &options,
+            &mut self.conflict_resolver.conflict_region_indices,
         );
         if count > 0 {
             let resolved =

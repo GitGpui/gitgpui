@@ -244,6 +244,28 @@ fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<C
         .then_some(ConflictChoice::Both)
 }
 
+/// Result of applying state-layer region resolutions to UI marker segments.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionRegionApplyResult {
+    /// Number of source regions visited/applied.
+    pub applied_regions: usize,
+    /// Mapping from visible block index -> source `ConflictSession` region index.
+    pub block_region_indices: Vec<usize>,
+}
+
+/// Build a default visible block -> region index mapping by position.
+pub fn sequential_conflict_region_indices(segments: &[ConflictSegment]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut conflict_ix = 0usize;
+    for seg in segments {
+        if matches!(seg, ConflictSegment::Block(_)) {
+            out.push(conflict_ix);
+            conflict_ix += 1;
+        }
+    }
+    out
+}
+
 fn apply_region_resolution_to_block(
     block: &mut ConflictBlock,
     resolution: &gitgpui_core::conflict_session::ConflictRegionResolution,
@@ -305,16 +327,33 @@ fn apply_region_resolution_to_block(
 /// non-side-pick text into plain `Text` segments when needed.
 ///
 /// Returns how many conflict regions were applied.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn apply_session_region_resolutions(
     segments: &mut Vec<ConflictSegment>,
     regions: &[gitgpui_core::conflict_session::ConflictRegion],
 ) -> usize {
-    if segments.is_empty() || regions.is_empty() {
-        return 0;
+    apply_session_region_resolutions_with_index_map(segments, regions).applied_regions
+}
+
+/// Like [`apply_session_region_resolutions`] but also returns a visible block
+/// index map back to the original `ConflictSession` region indices.
+pub fn apply_session_region_resolutions_with_index_map(
+    segments: &mut Vec<ConflictSegment>,
+    regions: &[gitgpui_core::conflict_session::ConflictRegion],
+) -> SessionRegionApplyResult {
+    if segments.is_empty() {
+        return SessionRegionApplyResult::default();
+    }
+    if regions.is_empty() {
+        return SessionRegionApplyResult {
+            applied_regions: 0,
+            block_region_indices: sequential_conflict_region_indices(segments),
+        };
     }
 
     let mut applied = 0usize;
     let mut conflict_ix = 0usize;
+    let mut block_region_indices = Vec::new();
     let mut synced: Vec<ConflictSegment> = Vec::with_capacity(segments.len());
 
     for seg in segments.drain(..) {
@@ -328,10 +367,12 @@ pub fn apply_session_region_resolutions(
                         append_text_segment(&mut synced, materialized_text);
                     } else {
                         synced.push(ConflictSegment::Block(block));
+                        block_region_indices.push(conflict_ix);
                     }
                     applied += 1;
                 } else {
                     synced.push(ConflictSegment::Block(block));
+                    block_region_indices.push(conflict_ix);
                 }
                 conflict_ix += 1;
             }
@@ -339,7 +380,10 @@ pub fn apply_session_region_resolutions(
     }
 
     *segments = synced;
-    applied
+    SessionRegionApplyResult {
+        applied_regions: applied,
+        block_region_indices,
+    }
 }
 
 pub fn conflict_count(segments: &[ConflictSegment]) -> usize {
@@ -542,20 +586,43 @@ pub fn auto_resolve_segments_regex(
 /// segment containing the merged content.
 ///
 /// Returns the number of blocks resolved.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn auto_resolve_segments_history(
     segments: &mut Vec<ConflictSegment>,
     options: &gitgpui_core::conflict_session::HistoryAutosolveOptions,
 ) -> usize {
+    let mut block_region_indices = sequential_conflict_region_indices(segments);
+    auto_resolve_segments_history_with_region_indices(segments, options, &mut block_region_indices)
+}
+
+/// Like [`auto_resolve_segments_history`] but keeps block->region mappings in sync.
+pub fn auto_resolve_segments_history_with_region_indices(
+    segments: &mut Vec<ConflictSegment>,
+    options: &gitgpui_core::conflict_session::HistoryAutosolveOptions,
+    block_region_indices: &mut Vec<usize>,
+) -> usize {
     use gitgpui_core::conflict_session::history_merge_region;
 
     let mut new_segments = Vec::with_capacity(segments.len());
+    let mut new_block_region_indices = Vec::with_capacity(block_region_indices.len());
+    let mut block_ix = 0usize;
     let mut count = 0;
 
     for seg in segments.drain(..) {
         match seg {
-            ConflictSegment::Block(ref block) if !block.resolved => {
-                if let Some(merged) =
-                    history_merge_region(block.base.as_deref(), &block.ours, &block.theirs, options)
+            ConflictSegment::Block(block) => {
+                let region_ix = block_region_indices
+                    .get(block_ix)
+                    .copied()
+                    .unwrap_or(block_ix);
+                block_ix += 1;
+                if !block.resolved
+                    && let Some(merged) = history_merge_region(
+                        block.base.as_deref(),
+                        &block.ours,
+                        &block.theirs,
+                        options,
+                    )
                 {
                     // Merge adjacent Text segments for cleanliness.
                     if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
@@ -564,15 +631,17 @@ pub fn auto_resolve_segments_history(
                         new_segments.push(ConflictSegment::Text(merged));
                     }
                     count += 1;
-                } else {
-                    new_segments.push(seg);
+                    continue;
                 }
+                new_segments.push(ConflictSegment::Block(block));
+                new_block_region_indices.push(region_ix);
             }
             other => new_segments.push(other),
         }
     }
 
     *segments = new_segments;
+    *block_region_indices = new_block_region_indices;
     count
 }
 
@@ -583,18 +652,36 @@ pub fn auto_resolve_segments_history(
 /// become `Text` segments; remaining conflicts become smaller `Block` segments.
 ///
 /// Returns the number of original blocks that were split.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
+    let mut block_region_indices = sequential_conflict_region_indices(segments);
+    auto_resolve_segments_pass2_with_region_indices(segments, &mut block_region_indices)
+}
+
+/// Like [`auto_resolve_segments_pass2`] but keeps block->region mappings in sync.
+pub fn auto_resolve_segments_pass2_with_region_indices(
+    segments: &mut Vec<ConflictSegment>,
+    block_region_indices: &mut Vec<usize>,
+) -> usize {
     use gitgpui_core::conflict_session::{Subchunk, split_conflict_into_subchunks};
 
     let mut new_segments = Vec::with_capacity(segments.len());
+    let mut new_block_region_indices = Vec::with_capacity(block_region_indices.len());
+    let mut block_ix = 0usize;
     let mut split_count = 0;
 
     for seg in segments.drain(..) {
         match seg {
-            ConflictSegment::Block(ref block) if !block.resolved && block.base.is_some() => {
-                let base = block.base.as_deref().unwrap();
-                if let Some(subchunks) =
-                    split_conflict_into_subchunks(base, &block.ours, &block.theirs)
+            ConflictSegment::Block(block) => {
+                let region_ix = block_region_indices
+                    .get(block_ix)
+                    .copied()
+                    .unwrap_or(block_ix);
+                block_ix += 1;
+                if !block.resolved
+                    && let Some(base) = block.base.as_deref()
+                    && let Some(subchunks) =
+                        split_conflict_into_subchunks(base, &block.ours, &block.theirs)
                 {
                     split_count += 1;
                     for subchunk in subchunks {
@@ -615,20 +702,23 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
                                     choice: ConflictChoice::Ours,
                                     resolved: false,
                                 }));
+                                new_block_region_indices.push(region_ix);
                             }
                         }
                     }
                     // If all subchunks resolved, no Block segments remain
                     // from this split (all became Text above).
-                } else {
-                    new_segments.push(seg);
+                    continue;
                 }
+                new_segments.push(ConflictSegment::Block(block));
+                new_block_region_indices.push(region_ix);
             }
             other => new_segments.push(other),
         }
     }
 
     *segments = new_segments;
+    *block_region_indices = new_block_region_indices;
     split_count
 }
 
@@ -1479,6 +1569,57 @@ mod tests {
 
         let resolved = generate_resolved_text(&segments);
         assert_eq!(resolved, "start\nmerged-custom\nbetween\ntheirs2\nend\n");
+    }
+
+    #[test]
+    fn apply_session_region_resolutions_with_index_map_tracks_remaining_blocks() {
+        use gitgpui_core::conflict_session::{
+            AutosolveConfidence, AutosolveRule, ConflictRegion, ConflictRegionResolution as R,
+        };
+
+        let input = concat!(
+            "start\n",
+            "<<<<<<< ours\n",
+            "ours1\n",
+            "||||||| base\n",
+            "base1\n",
+            "=======\n",
+            "theirs1\n",
+            ">>>>>>> theirs\n",
+            "middle\n",
+            "<<<<<<< ours\n",
+            "ours2\n",
+            "||||||| base\n",
+            "base2\n",
+            "=======\n",
+            "theirs2\n",
+            ">>>>>>> theirs\n",
+            "end\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let regions = vec![
+            ConflictRegion {
+                base: Some("base1\n".into()),
+                ours: "ours1\n".into(),
+                theirs: "theirs1\n".into(),
+                resolution: R::ManualEdit("custom-first\n".into()),
+            },
+            ConflictRegion {
+                base: Some("base2\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                resolution: R::AutoResolved {
+                    rule: AutosolveRule::SubchunkFullyMerged,
+                    confidence: AutosolveConfidence::Medium,
+                    content: "theirs2\n".into(),
+                },
+            },
+        ];
+
+        let result = apply_session_region_resolutions_with_index_map(&mut segments, &regions);
+        assert_eq!(result.applied_regions, 2);
+        assert_eq!(result.block_region_indices, vec![1]);
+        assert_eq!(conflict_count(&segments), 1);
     }
 
     /// Simulates the lightweight re-sync: re-parse markers from the original
@@ -2353,6 +2494,27 @@ mod tests {
     }
 
     #[test]
+    fn pass2_with_region_indices_preserves_parent_region_mapping() {
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "AAA\nBBB\nccc\n",
+            "||||||| base\n",
+            "aaa\nbbb\nccc\n",
+            "=======\n",
+            "aaa\nYYY\nCCC\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let mut region_indices = vec![42];
+
+        let split =
+            auto_resolve_segments_pass2_with_region_indices(&mut segments, &mut region_indices);
+        assert_eq!(split, 1);
+        assert_eq!(conflict_count(&segments), 1);
+        assert_eq!(region_indices, vec![42]);
+    }
+
+    #[test]
     fn pass2_no_base_skips_block() {
         // 2-way markers (no base) — Pass 2 can't split without a base.
         let input = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n";
@@ -2459,6 +2621,46 @@ mod tests {
             1,
             "deduped common entry"
         );
+    }
+
+    #[test]
+    fn history_auto_resolve_with_region_indices_drops_materialized_block_mapping() {
+        use gitgpui_core::conflict_session::HistoryAutosolveOptions;
+
+        let input = concat!(
+            "<<<<<<< HEAD\n",
+            "# Changes\n",
+            "- Added feature A\n",
+            "- Existing entry\n",
+            "||||||| base\n",
+            "# Changes\n",
+            "- Existing entry\n",
+            "=======\n",
+            "# Changes\n",
+            "- Fixed bug B\n",
+            "- Existing entry\n",
+            ">>>>>>> other\n",
+            "middle\n",
+            "<<<<<<< HEAD\n",
+            "left\n",
+            "||||||| base\n",
+            "base\n",
+            "=======\n",
+            "right\n",
+            ">>>>>>> other\n",
+        );
+        let mut segments = parse_conflict_markers(input);
+        let mut region_indices = vec![11, 22];
+        let options = HistoryAutosolveOptions::bullet_list();
+
+        let resolved = auto_resolve_segments_history_with_region_indices(
+            &mut segments,
+            &options,
+            &mut region_indices,
+        );
+        assert_eq!(resolved, 1);
+        assert_eq!(conflict_count(&segments), 1);
+        assert_eq!(region_indices, vec![22]);
     }
 
     #[test]
