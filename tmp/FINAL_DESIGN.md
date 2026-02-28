@@ -7,9 +7,10 @@
 - ✅ `ConflictRegion` struct with base/ours/theirs + resolution state — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictRegionResolution` enum (Unresolved, PickBase/Ours/Theirs/Both, ManualEdit, AutoResolved) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ `ConflictSession` struct with path, kind, strategy, payloads, regions, counters, navigation — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ Marker-region parsing in core session model: added `ConflictSession::from_merged_text()` and `parse_regions_from_merged_text()` plus conservative parser for 2-way and diff3 conflict markers (malformed blocks stop parsing safely) with 5 dedicated unit tests — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Solved/unsolved counters (`solved_count`, `unsolved_count`, `is_fully_resolved`) — `crates/gitgpui-core/src/conflict_session.rs`
 - ✅ Next/previous unresolved navigation with wrap-around — `crates/gitgpui-core/src/conflict_session.rs`
-- ✅ 36 unit tests covering all types and behaviors — `crates/gitgpui-core/src/conflict_session.rs`
+- ✅ Expanded unit-test coverage for conflict-session domain behavior (payload typing, strategy mapping, counters/navigation, autosolve, and marker parsing) — `crates/gitgpui-core/src/conflict_session.rs`
 
 ### 2) Conflict Strategy by Kind
 - ✅ `ConflictResolverStrategy` enum (FullTextResolver, TwoWayKeepDelete, DecisionOnly, BinarySidePick) — `crates/gitgpui-core/src/conflict_session.rs`

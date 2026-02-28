@@ -302,6 +302,35 @@ impl ConflictSession {
         }
     }
 
+    /// Build a session and parse conflict regions from merged marker text.
+    ///
+    /// This is a convenience for loading a conflicted worktree file where the
+    /// merged content still contains conflict markers.
+    pub fn from_merged_text(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        merged_text: &str,
+    ) -> Self {
+        let mut session = Self::new(path, conflict_kind, base, ours, theirs);
+        session.parse_regions_from_merged_text(merged_text);
+        session
+    }
+
+    /// Parse marker-based conflict regions from merged text and replace the
+    /// current region list.
+    ///
+    /// Recognizes both 2-way (`<<<<<<<` / `=======` / `>>>>>>>`) and
+    /// diff3-style (`|||||||` base section) markers.
+    ///
+    /// Returns the number of parsed regions.
+    pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
+        self.regions = parse_conflict_regions_from_markers(merged_text);
+        self.regions.len()
+    }
+
     /// Total number of conflict regions.
     pub fn total_regions(&self) -> usize {
         self.regions.len()
@@ -490,6 +519,72 @@ impl ConflictSession {
     pub fn has_unresolved_markers(&self) -> bool {
         self.unsolved_count() > 0
     }
+}
+
+/// Parse conflict marker blocks from merged text into conflict regions.
+///
+/// Parsing is intentionally conservative: if a malformed/incomplete block is
+/// encountered, parsing stops and returns regions successfully parsed so far.
+fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
+    let mut regions = Vec::new();
+    let mut it = text.split_inclusive('\n').peekable();
+
+    while let Some(line) = it.next() {
+        if !line.starts_with("<<<<<<<") {
+            continue;
+        }
+
+        let mut base: Option<String> = None;
+        let mut ours = String::new();
+        let mut found_sep = false;
+
+        while let Some(l) = it.next() {
+            if l.starts_with("=======") {
+                found_sep = true;
+                break;
+            }
+            if l.starts_with("|||||||") {
+                let mut base_buf = String::new();
+                for base_line in it.by_ref() {
+                    if base_line.starts_with("=======") {
+                        found_sep = true;
+                        break;
+                    }
+                    base_buf.push_str(base_line);
+                }
+                base = Some(base_buf);
+                break;
+            }
+            ours.push_str(l);
+        }
+
+        if !found_sep {
+            break;
+        }
+
+        let mut theirs = String::new();
+        let mut found_end = false;
+        for l in it.by_ref() {
+            if l.starts_with(">>>>>>>") {
+                found_end = true;
+                break;
+            }
+            theirs.push_str(l);
+        }
+
+        if !found_end {
+            break;
+        }
+
+        regions.push(ConflictRegion {
+            base,
+            ours,
+            theirs,
+            resolution: ConflictRegionResolution::Unresolved,
+        });
+    }
+
+    regions
 }
 
 /// Attempt to auto-resolve a single conflict region using Pass 1 safe rules.
@@ -768,10 +863,7 @@ fn parse_history_entries(text: &str, section_re: &Regex, entry_re: &Regex) -> Ve
 
 fn make_history_entry(text: String) -> HistoryEntry {
     // Normalize for dedup: trim, collapse whitespace.
-    let dedup_key = text
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let dedup_key = text.split_whitespace().collect::<Vec<_>>().join(" ");
     HistoryEntry { text, dedup_key }
 }
 
@@ -1465,6 +1557,103 @@ mod tests {
         );
     }
 
+    // -- Marker parsing tests --
+
+    #[test]
+    fn parse_regions_two_way_markers() {
+        let merged = "before\n<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\nafter\n";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].base, None);
+        assert_eq!(regions[0].ours, "local 1\n");
+        assert_eq!(regions[0].theirs, "remote 1\n");
+        assert_eq!(regions[0].resolution, ConflictRegionResolution::Unresolved);
+    }
+
+    #[test]
+    fn parse_regions_diff3_markers() {
+        let merged = "\
+<<<<<<< ours
+local line
+||||||| base
+base line
+=======
+remote line
+>>>>>>> theirs
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].base.as_deref(), Some("base line\n"));
+        assert_eq!(regions[0].ours, "local line\n");
+        assert_eq!(regions[0].theirs, "remote line\n");
+    }
+
+    #[test]
+    fn parse_regions_stops_on_malformed_block() {
+        let merged = "\
+<<<<<<< ours
+local ok
+=======
+remote ok
+>>>>>>> theirs
+middle
+<<<<<<< ours
+unterminated
+";
+        let regions = parse_conflict_regions_from_markers(merged);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].ours, "local ok\n");
+        assert_eq!(regions[0].theirs, "remote ok\n");
+    }
+
+    #[test]
+    fn session_from_merged_text_populates_regions_and_navigation() {
+        let merged = "\
+start
+<<<<<<< ours
+local one
+=======
+remote one
+>>>>>>> theirs
+mid
+<<<<<<< ours
+local two
+=======
+remote two
+>>>>>>> theirs
+end
+";
+        let mut session = ConflictSession::from_merged_text(
+            PathBuf::from("file.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text("base\n".into()),
+            ConflictPayload::Text("ours\n".into()),
+            ConflictPayload::Text("theirs\n".into()),
+            merged,
+        );
+
+        assert_eq!(session.total_regions(), 2);
+        assert_eq!(session.solved_count(), 0);
+        assert_eq!(session.unsolved_count(), 2);
+        assert!(!session.is_fully_resolved());
+        assert_eq!(session.next_unresolved_after(0), Some(1));
+        assert_eq!(session.prev_unresolved_before(0), Some(1));
+
+        session.regions[0].resolution = ConflictRegionResolution::PickOurs;
+        assert_eq!(session.solved_count(), 1);
+        assert_eq!(session.unsolved_count(), 1);
+        assert_eq!(session.next_unresolved_after(0), Some(1));
+    }
+
+    #[test]
+    fn parse_regions_from_merged_text_replaces_existing_regions() {
+        let mut session = make_session(vec![make_region(Some("b"), "o", "t")]);
+        assert_eq!(session.total_regions(), 1);
+        let parsed = session.parse_regions_from_merged_text("plain text without markers\n");
+        assert_eq!(parsed, 0);
+        assert!(session.regions.is_empty());
+    }
+
     // -- ConflictSession counter & navigation tests --
 
     #[test]
@@ -2064,8 +2253,14 @@ mod tests {
         let merged = result.unwrap();
 
         // Both new entries should be present.
-        assert!(merged.contains("- Added baz"), "should contain ours' new entry");
-        assert!(merged.contains("- Fixed qux"), "should contain theirs' new entry");
+        assert!(
+            merged.contains("- Added baz"),
+            "should contain ours' new entry"
+        );
+        assert!(
+            merged.contains("- Fixed qux"),
+            "should contain theirs' new entry"
+        );
         // Common entries should appear exactly once.
         assert_eq!(
             merged.matches("- Added foo").count(),
@@ -2104,14 +2299,18 @@ mod tests {
         let options = HistoryAutosolveOptions::keepachangelog();
         let base = "## [1.0.0] - 2024-01-01\n- Initial release\n";
         let ours = "## [1.1.0] - 2024-02-01\n- Added feature A\n## [1.0.0] - 2024-01-01\n- Initial release\n";
-        let theirs = "## [1.0.1] - 2024-01-15\n- Fixed bug B\n## [1.0.0] - 2024-01-01\n- Initial release\n";
+        let theirs =
+            "## [1.0.1] - 2024-01-15\n- Fixed bug B\n## [1.0.0] - 2024-01-01\n- Initial release\n";
 
         let result = history_merge_region(Some(base), ours, theirs, &options);
         assert!(result.is_some(), "should merge keepachangelog entries");
         let merged = result.unwrap();
 
         assert!(merged.contains("## [1.1.0]"), "should contain ours' entry");
-        assert!(merged.contains("## [1.0.1]"), "should contain theirs' entry");
+        assert!(
+            merged.contains("## [1.0.1]"),
+            "should contain theirs' entry"
+        );
         assert!(merged.contains("## [1.0.0]"), "should contain base entry");
         // The base entry should appear only once (deduped).
         assert_eq!(
@@ -2176,7 +2375,11 @@ mod tests {
 
         // Should only have 2 entries (truncated).
         let entry_count = merged.matches("\n- ").count();
-        assert!(entry_count <= 2, "should be truncated to max 2 entries, got {}", entry_count);
+        assert!(
+            entry_count <= 2,
+            "should be truncated to max 2 entries, got {}",
+            entry_count
+        );
     }
 
     #[test]
