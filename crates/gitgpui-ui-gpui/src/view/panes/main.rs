@@ -2089,8 +2089,12 @@ impl MainPaneView {
             return;
         }
         self.conflict_resolver.view_mode = view_mode;
+        self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.split_selected.clear();
         self.conflict_resolver.inline_selected.clear();
+        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            self.diff_search_recompute_matches();
+        }
         cx.notify();
     }
 

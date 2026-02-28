@@ -62,46 +62,24 @@ impl MainPaneView {
                 Self::conflict_resolver_strategy(conflict_kind, false).is_some();
 
             match (is_conflict_resolver, self.diff_view) {
-                (true, _) => match self.conflict_resolver.diff_mode {
-                    ConflictDiffMode::Split => {
-                        for (visible_ix, &row_ix) in self
+                (true, _) => {
+                    let ctx = ConflictResolverSearchContext {
+                        view_mode: self.conflict_resolver.view_mode,
+                        diff_mode: self.conflict_resolver.diff_mode,
+                        marker_segments: &self.conflict_resolver.marker_segments,
+                        three_way_visible_map: &self.conflict_resolver.three_way_visible_map,
+                        three_way_base_lines: &self.conflict_resolver.three_way_base_lines,
+                        three_way_ours_lines: &self.conflict_resolver.three_way_ours_lines,
+                        three_way_theirs_lines: &self.conflict_resolver.three_way_theirs_lines,
+                        diff_visible_row_indices: &self.conflict_resolver.diff_visible_row_indices,
+                        inline_visible_row_indices: &self
                             .conflict_resolver
-                            .diff_visible_row_indices
-                            .iter()
-                            .enumerate()
-                        {
-                            let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
-                                continue;
-                            };
-                            if row
-                                .old
-                                .as_deref()
-                                .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                                || row
-                                    .new
-                                    .as_deref()
-                                    .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                            {
-                                self.diff_search_matches.push(visible_ix);
-                            }
-                        }
-                    }
-                    ConflictDiffMode::Inline => {
-                        for (visible_ix, &row_ix) in self
-                            .conflict_resolver
-                            .inline_visible_row_indices
-                            .iter()
-                            .enumerate()
-                        {
-                            let Some(row) = self.conflict_resolver.inline_rows.get(row_ix) else {
-                                continue;
-                            };
-                            if contains_ascii_case_insensitive(row.content.as_str(), query) {
-                                self.diff_search_matches.push(visible_ix);
-                            }
-                        }
-                    }
-                },
+                            .inline_visible_row_indices,
+                        diff_rows: &self.conflict_resolver.diff_rows,
+                        inline_rows: &self.conflict_resolver.inline_rows,
+                    };
+                    self.diff_search_matches = conflict_resolver_visible_match_indices(query, &ctx);
+                }
                 (false, DiffViewMode::Split) => {
                     for (ix, row) in self.conflict_resolver.diff_rows.iter().enumerate() {
                         if row
@@ -253,9 +231,139 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
     false
 }
 
+struct ConflictResolverSearchContext<'a> {
+    view_mode: ConflictResolverViewMode,
+    diff_mode: ConflictDiffMode,
+    marker_segments: &'a [conflict_resolver::ConflictSegment],
+    three_way_visible_map: &'a [conflict_resolver::ThreeWayVisibleItem],
+    three_way_base_lines: &'a [gpui::SharedString],
+    three_way_ours_lines: &'a [gpui::SharedString],
+    three_way_theirs_lines: &'a [gpui::SharedString],
+    diff_visible_row_indices: &'a [usize],
+    inline_visible_row_indices: &'a [usize],
+    diff_rows: &'a [gitgpui_core::file_diff::FileDiffRow],
+    inline_rows: &'a [conflict_resolver::ConflictInlineRow],
+}
+
+fn conflict_resolver_visible_match_indices(
+    query: &str,
+    ctx: &ConflictResolverSearchContext<'_>,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    match ctx.view_mode {
+        ConflictResolverViewMode::ThreeWay => {
+            for (visible_ix, item) in ctx.three_way_visible_map.iter().copied().enumerate() {
+                if three_way_visible_item_matches_query(item, ctx, query) {
+                    out.push(visible_ix);
+                }
+            }
+        }
+        ConflictResolverViewMode::TwoWayDiff => match ctx.diff_mode {
+            ConflictDiffMode::Split => {
+                for (visible_ix, &row_ix) in ctx.diff_visible_row_indices.iter().enumerate() {
+                    let Some(row) = ctx.diff_rows.get(row_ix) else {
+                        continue;
+                    };
+                    if row
+                        .old
+                        .as_deref()
+                        .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                        || row
+                            .new
+                            .as_deref()
+                            .is_some_and(|s| contains_ascii_case_insensitive(s, query))
+                    {
+                        out.push(visible_ix);
+                    }
+                }
+            }
+            ConflictDiffMode::Inline => {
+                for (visible_ix, &row_ix) in ctx.inline_visible_row_indices.iter().enumerate() {
+                    let Some(row) = ctx.inline_rows.get(row_ix) else {
+                        continue;
+                    };
+                    if contains_ascii_case_insensitive(row.content.as_str(), query) {
+                        out.push(visible_ix);
+                    }
+                }
+            }
+        },
+    }
+    out
+}
+
+fn conflict_choice_for_index(
+    segments: &[conflict_resolver::ConflictSegment],
+    conflict_ix: usize,
+) -> Option<conflict_resolver::ConflictChoice> {
+    segments
+        .iter()
+        .filter_map(|seg| match seg {
+            conflict_resolver::ConflictSegment::Block(block) => Some(block.choice),
+            _ => None,
+        })
+        .nth(conflict_ix)
+}
+
+fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static str {
+    match choice {
+        conflict_resolver::ConflictChoice::Base => "Base (A)",
+        conflict_resolver::ConflictChoice::Ours => "Local (B)",
+        conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
+        conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+    }
+}
+
+fn three_way_visible_item_matches_query(
+    item: conflict_resolver::ThreeWayVisibleItem,
+    ctx: &ConflictResolverSearchContext<'_>,
+    query: &str,
+) -> bool {
+    match item {
+        conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
+            let base = ctx
+                .three_way_base_lines
+                .get(ix)
+                .map(|s| s.as_ref())
+                .unwrap_or("");
+            let ours = ctx
+                .three_way_ours_lines
+                .get(ix)
+                .map(|s| s.as_ref())
+                .unwrap_or("");
+            let theirs = ctx
+                .three_way_theirs_lines
+                .get(ix)
+                .map(|s| s.as_ref())
+                .unwrap_or("");
+
+            contains_ascii_case_insensitive(base, query)
+                || contains_ascii_case_insensitive(ours, query)
+                || contains_ascii_case_insensitive(theirs, query)
+        }
+        conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
+            let choice_label = conflict_choice_for_index(ctx.marker_segments, conflict_ix)
+                .map(conflict_choice_label)
+                .unwrap_or("?");
+            let summary = format!("Resolved: picked {choice_label}");
+            contains_ascii_case_insensitive(&summary, query)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::contains_ascii_case_insensitive;
+    use super::{
+        ConflictResolverSearchContext, conflict_resolver_visible_match_indices,
+        contains_ascii_case_insensitive,
+    };
+    use crate::view::conflict_resolver::{
+        ConflictBlock, ConflictChoice, ConflictDiffMode, ConflictResolverViewMode, ConflictSegment,
+        ThreeWayVisibleItem,
+    };
+    use gitgpui_core::domain::DiffLineKind;
+    use gitgpui_core::file_diff::{FileDiffRow, FileDiffRowKind};
+    use gpui::SharedString;
 
     #[test]
     fn matches_empty_needle() {
@@ -272,5 +380,112 @@ mod tests {
     #[test]
     fn does_not_match_absent_substring() {
         assert!(!contains_ascii_case_insensitive("Hello", "world"));
+    }
+
+    #[test]
+    fn conflict_search_three_way_mode_uses_three_way_visible_rows() {
+        let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base".into()),
+            ours: "ours".into(),
+            theirs: "theirs".into(),
+            choice: ConflictChoice::Theirs,
+            resolved: true,
+        })];
+        let diff_rows = vec![FileDiffRow {
+            kind: FileDiffRowKind::Modify,
+            old_line: Some(1),
+            new_line: Some(1),
+            old: Some("split-only".into()),
+            new: Some("split-only".into()),
+            eof_newline: None,
+        }];
+        let inline_rows = vec![crate::view::conflict_resolver::ConflictInlineRow {
+            side: crate::view::conflict_resolver::ConflictPickSide::Ours,
+            kind: DiffLineKind::Add,
+            old_line: Some(1),
+            new_line: Some(1),
+            content: "inline-only".into(),
+        }];
+        let three_way_visible_map = vec![ThreeWayVisibleItem::Line(0)];
+        let three_way_base_lines = vec![SharedString::from("base text")];
+        let three_way_ours_lines = vec![SharedString::from("needle")];
+        let three_way_theirs_lines = vec![SharedString::from("remote text")];
+
+        let three_way_ctx = ConflictResolverSearchContext {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            diff_mode: ConflictDiffMode::Split,
+            marker_segments: &marker_segments,
+            three_way_visible_map: &three_way_visible_map,
+            three_way_base_lines: &three_way_base_lines,
+            three_way_ours_lines: &three_way_ours_lines,
+            three_way_theirs_lines: &three_way_theirs_lines,
+            diff_visible_row_indices: &[0],
+            inline_visible_row_indices: &[0],
+            diff_rows: &diff_rows,
+            inline_rows: &inline_rows,
+        };
+
+        assert_eq!(
+            conflict_resolver_visible_match_indices("needle", &three_way_ctx),
+            vec![0]
+        );
+        assert!(
+            conflict_resolver_visible_match_indices("split-only", &three_way_ctx).is_empty(),
+            "three-way search should ignore two-way rows",
+        );
+
+        let two_way_ctx = ConflictResolverSearchContext {
+            view_mode: ConflictResolverViewMode::TwoWayDiff,
+            diff_mode: ConflictDiffMode::Split,
+            marker_segments: &marker_segments,
+            three_way_visible_map: &three_way_visible_map,
+            three_way_base_lines: &three_way_base_lines,
+            three_way_ours_lines: &three_way_ours_lines,
+            three_way_theirs_lines: &three_way_theirs_lines,
+            diff_visible_row_indices: &[0],
+            inline_visible_row_indices: &[0],
+            diff_rows: &diff_rows,
+            inline_rows: &inline_rows,
+        };
+        assert_eq!(
+            conflict_resolver_visible_match_indices("split-only", &two_way_ctx),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn conflict_search_three_way_collapsed_rows_match_choice_summary() {
+        let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base".into()),
+            ours: "ours".into(),
+            theirs: "theirs".into(),
+            choice: ConflictChoice::Theirs,
+            resolved: true,
+        })];
+        let three_way_visible_map = vec![ThreeWayVisibleItem::CollapsedBlock(0)];
+        let empty_lines: Vec<SharedString> = Vec::new();
+
+        let ctx = ConflictResolverSearchContext {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            diff_mode: ConflictDiffMode::Split,
+            marker_segments: &marker_segments,
+            three_way_visible_map: &three_way_visible_map,
+            three_way_base_lines: &empty_lines,
+            three_way_ours_lines: &empty_lines,
+            three_way_theirs_lines: &empty_lines,
+            diff_visible_row_indices: &[],
+            inline_visible_row_indices: &[],
+            diff_rows: &[],
+            inline_rows: &[],
+        };
+
+        assert_eq!(
+            conflict_resolver_visible_match_indices("resolved", &ctx),
+            vec![0]
+        );
+        assert_eq!(
+            conflict_resolver_visible_match_indices("remote", &ctx),
+            vec![0]
+        );
     }
 }
