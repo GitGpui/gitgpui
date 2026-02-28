@@ -1320,36 +1320,37 @@ impl MainPaneView {
     pub(in super::super) fn conflict_nav_entries(&self) -> Vec<usize> {
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => {
-                // Return visible indices for each conflict range.
-                let ranges = &self.conflict_resolver.three_way_conflict_ranges;
-                let map = &self.conflict_resolver.three_way_visible_map;
-                (0..ranges.len())
-                    .filter_map(|ri| conflict_resolver::visible_index_for_conflict(map, ranges, ri))
-                    .collect()
+                conflict_resolver::unresolved_visible_nav_entries_for_three_way(
+                    &self.conflict_resolver.marker_segments,
+                    &self.conflict_resolver.three_way_visible_map,
+                    &self.conflict_resolver.three_way_conflict_ranges,
+                )
             }
             ConflictResolverViewMode::TwoWayDiff => match self.conflict_resolver.diff_mode {
-                ConflictDiffMode::Split => diff_navigation::conflict_nav_entries_for_split(
-                    &self.conflict_resolver.diff_rows,
-                )
-                .into_iter()
-                .filter_map(|row_ix| {
-                    self.conflict_resolver
-                        .diff_visible_row_indices
-                        .binary_search(&row_ix)
-                        .ok()
-                })
-                .collect(),
-                ConflictDiffMode::Inline => diff_navigation::conflict_nav_entries_for_inline(
-                    &self.conflict_resolver.inline_rows,
-                )
-                .into_iter()
-                .filter_map(|row_ix| {
-                    self.conflict_resolver
-                        .inline_visible_row_indices
-                        .binary_search(&row_ix)
-                        .ok()
-                })
-                .collect(),
+                ConflictDiffMode::Split => {
+                    let (split_map, _) = conflict_resolver::map_two_way_rows_to_conflicts(
+                        &self.conflict_resolver.marker_segments,
+                        &self.conflict_resolver.diff_rows,
+                        &self.conflict_resolver.inline_rows,
+                    );
+                    conflict_resolver::unresolved_visible_nav_entries_for_two_way(
+                        &self.conflict_resolver.marker_segments,
+                        &split_map,
+                        &self.conflict_resolver.diff_visible_row_indices,
+                    )
+                }
+                ConflictDiffMode::Inline => {
+                    let (_, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
+                        &self.conflict_resolver.marker_segments,
+                        &self.conflict_resolver.diff_rows,
+                        &self.conflict_resolver.inline_rows,
+                    );
+                    conflict_resolver::unresolved_visible_nav_entries_for_two_way(
+                        &self.conflict_resolver.marker_segments,
+                        &inline_map,
+                        &self.conflict_resolver.inline_visible_row_indices,
+                    )
+                }
             },
         }
     }
@@ -1375,9 +1376,15 @@ impl MainPaneView {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
             }
-            ConflictResolverViewMode::TwoWayDiff => self
-                .conflict_resolver_diff_scroll
-                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::TwoWayDiff => {
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                if let Some(conflict_ix) =
+                    self.conflict_resolver_two_way_conflict_ix_for_visible(target)
+                {
+                    self.conflict_resolver.active_conflict = conflict_ix;
+                }
+            }
         }
         self.conflict_resolver.nav_anchor = Some(target);
     }
@@ -1403,9 +1410,15 @@ impl MainPaneView {
                     self.conflict_resolver.active_conflict = range_ix;
                 }
             }
-            ConflictResolverViewMode::TwoWayDiff => self
-                .conflict_resolver_diff_scroll
-                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center),
+            ConflictResolverViewMode::TwoWayDiff => {
+                self.conflict_resolver_diff_scroll
+                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                if let Some(conflict_ix) =
+                    self.conflict_resolver_two_way_conflict_ix_for_visible(target)
+                {
+                    self.conflict_resolver.active_conflict = conflict_ix;
+                }
+            }
         }
         self.conflict_resolver.nav_anchor = Some(target);
     }
@@ -1420,6 +1433,30 @@ impl MainPaneView {
                 .three_way_conflict_ranges
                 .iter()
                 .position(|r| r.contains(line_ix)),
+        }
+    }
+
+    fn conflict_resolver_two_way_conflict_ix_for_visible(
+        &self,
+        visible_ix: usize,
+    ) -> Option<usize> {
+        let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolver.diff_rows,
+            &self.conflict_resolver.inline_rows,
+        );
+
+        match self.conflict_resolver.diff_mode {
+            ConflictDiffMode::Split => conflict_resolver::two_way_conflict_index_for_visible_row(
+                &split_map,
+                &self.conflict_resolver.diff_visible_row_indices,
+                visible_ix,
+            ),
+            ConflictDiffMode::Inline => conflict_resolver::two_way_conflict_index_for_visible_row(
+                &inline_map,
+                &self.conflict_resolver.inline_visible_row_indices,
+                visible_ix,
+            ),
         }
     }
 

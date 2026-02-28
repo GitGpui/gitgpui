@@ -1071,6 +1071,33 @@ pub fn visible_index_for_two_way_conflict(
     })
 }
 
+/// Build unresolved-only visible navigation entries for two-way views.
+///
+/// Returns visible list indices (not source row indices) in unresolved queue
+/// order so callers can feed them directly into shared diff navigation helpers.
+pub fn unresolved_visible_nav_entries_for_two_way(
+    segments: &[ConflictSegment],
+    row_conflict_map: &[Option<usize>],
+    visible_row_indices: &[usize],
+) -> Vec<usize> {
+    unresolved_conflict_indices(segments)
+        .into_iter()
+        .filter_map(|conflict_ix| {
+            visible_index_for_two_way_conflict(row_conflict_map, visible_row_indices, conflict_ix)
+        })
+        .collect()
+}
+
+/// Map a two-way visible index back to its conflict index.
+pub fn two_way_conflict_index_for_visible_row(
+    row_conflict_map: &[Option<usize>],
+    visible_row_indices: &[usize],
+    visible_ix: usize,
+) -> Option<usize> {
+    let row_ix = *visible_row_indices.get(visible_ix)?;
+    row_conflict_map.get(row_ix).copied().flatten()
+}
+
 pub fn collect_split_selection(
     rows: &[gitgpui_core::file_diff::FileDiffRow],
     selected: &std::collections::BTreeSet<(usize, ConflictPickSide)>,
@@ -1172,6 +1199,22 @@ pub fn visible_index_for_conflict(
         ThreeWayVisibleItem::Line(ix) => range.contains(ix),
         ThreeWayVisibleItem::CollapsedBlock(ci) => *ci == range_ix,
     })
+}
+
+/// Build unresolved-only visible navigation entries for three-way views.
+///
+/// Returns visible indices in unresolved queue order.
+pub fn unresolved_visible_nav_entries_for_three_way(
+    segments: &[ConflictSegment],
+    visible_map: &[ThreeWayVisibleItem],
+    conflict_ranges: &[std::ops::Range<usize>],
+) -> Vec<usize> {
+    unresolved_conflict_indices(segments)
+        .into_iter()
+        .filter_map(|conflict_ix| {
+            visible_index_for_conflict(visible_map, conflict_ranges, conflict_ix)
+        })
+        .collect()
 }
 
 pub fn compute_three_way_word_highlights(
@@ -3770,6 +3813,123 @@ theirs only line
         assert!(
             visible_index_for_two_way_conflict(&inline_map, &inline_visible, 1).is_some(),
             "unresolved conflict should remain visible in inline mode"
+        );
+    }
+
+    #[test]
+    fn unresolved_visible_nav_entries_for_three_way_skip_resolved_blocks_even_when_visible() {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base-a\n".into()),
+                ours: "ours-a\n".into(),
+                theirs: "theirs-a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base-b\n".into()),
+                ours: "ours-b\n".into(),
+                theirs: "theirs-b\n".into(),
+                choice: ConflictChoice::Theirs,
+                resolved: true,
+            }),
+            ConflictSegment::Text("tail\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base-c\n".into()),
+                ours: "ours-c\n".into(),
+                theirs: "theirs-c\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        let ranges = vec![1..2, 3..4, 5..6];
+        let visible_map = build_three_way_visible_map(7, &ranges, &segments, false);
+
+        assert_eq!(
+            unresolved_visible_nav_entries_for_three_way(&segments, &visible_map, &ranges),
+            vec![1, 5]
+        );
+    }
+
+    #[test]
+    fn unresolved_visible_nav_entries_for_two_way_skip_resolved_conflicts() {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".into(),
+                theirs: "a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: true,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "B\n".into(),
+                theirs: "b\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        let ours_text = "ctx\nA\nmid\nB\nend\n";
+        let theirs_text = "ctx\na\nmid\nb\nend\n";
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, _) = map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+        let visible_rows = build_two_way_visible_indices(&split_map, &segments, false);
+
+        let resolved_visible =
+            visible_index_for_two_way_conflict(&split_map, &visible_rows, 0).expect("visible");
+        let unresolved_visible =
+            visible_index_for_two_way_conflict(&split_map, &visible_rows, 1).expect("visible");
+
+        let nav_entries =
+            unresolved_visible_nav_entries_for_two_way(&segments, &split_map, &visible_rows);
+        assert_eq!(nav_entries, vec![unresolved_visible]);
+        assert!(!nav_entries.contains(&resolved_visible));
+    }
+
+    #[test]
+    fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "A\n".into(),
+                theirs: "a\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("mid\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "B\n".into(),
+                theirs: "b\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        let ours_text = "ctx\nA\nmid\nB\nend\n";
+        let theirs_text = "ctx\na\nmid\nb\nend\n";
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(ours_text, theirs_text);
+        let inline_rows = build_inline_rows(&diff_rows);
+        let (split_map, _) = map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+        let visible_rows = build_two_way_visible_indices(&split_map, &segments, false);
+        let conflict_1_visible =
+            visible_index_for_two_way_conflict(&split_map, &visible_rows, 1).expect("visible");
+
+        assert_eq!(
+            two_way_conflict_index_for_visible_row(&split_map, &visible_rows, conflict_1_visible),
+            Some(1)
+        );
+        assert_eq!(
+            two_way_conflict_index_for_visible_row(&split_map, &visible_rows, usize::MAX),
+            None
         );
     }
 }
