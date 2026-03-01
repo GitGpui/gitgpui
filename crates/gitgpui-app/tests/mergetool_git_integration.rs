@@ -425,6 +425,44 @@ fn git_mergetool_handles_path_with_spaces() {
 }
 
 #[test]
+fn git_mergetool_handles_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    let unicode_path = "docs/\u{65e5}\u{672c}\u{8a9e}-\u{0444}\u{0430}\u{0439}\u{043b}.txt";
+    write_file(repo, unicode_path, "original\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_file(repo, unicode_path, "remote change\n");
+    commit_all(repo, "feature: change unicode file");
+
+    run_git(repo, &["checkout", "main"]);
+    write_file(repo, unicode_path, "local change\n");
+    commit_all(repo, "main: change unicode file");
+
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !output.status.success(),
+        "expected merge conflict for unicode path"
+    );
+
+    configure_gitgpui_mergetool(repo);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    let merged = fs::read_to_string(repo.join(unicode_path)).unwrap();
+    assert!(
+        merged.contains("local change")
+            || merged.contains("remote change")
+            || merged.contains("<<<<<<<"),
+        "expected mergetool to process unicode-path file\nmerged:\n{merged}\ngit output:\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_works_from_subdirectory() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

@@ -194,6 +194,31 @@ fn git_difftool_handles_path_with_spaces() {
 }
 
 #[test]
+fn git_difftool_handles_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    let unicode_path = "docs/\u{65e5}\u{672c}\u{8a9e}-\u{0444}\u{0430}\u{0439}\u{043b}.txt";
+    write_file(repo, unicode_path, "left unicode side\n");
+    commit_all(repo, "base");
+
+    write_file(repo, unicode_path, "right unicode side\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", unicode_path]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool failed for unicode path\n{text}"
+    );
+    assert!(
+        text.contains("-left unicode side") && text.contains("+right unicode side"),
+        "missing expected line delta in output\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_works_from_subdirectory() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
