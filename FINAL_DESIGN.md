@@ -1,14 +1,15 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 22 closes the remaining external-tool compatibility gap by adding KDiff3-style positional invocation support (no-subcommand mode) and validating `*.path`-based Git invocation flows.
+All components from both design documents are fully implemented. Iteration 23 closes the remaining external-tool compatibility gap by enforcing strict no-subcommand compatibility validation (actionable errors for `--auto`/output constraints and invalid positional argument counts).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 22 — Final)
+### Progress Snapshot (Iteration 23 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ KDiff3-style compatibility fallback is implemented for no-subcommand invocations (positional args + `--L1/--L2/--L3` + `-o/--output/--out` + optional `--auto`), enabling Git built-in tool flows that invoke the binary directly via `*.path`.
+- ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, diff-mode `--L3` rejection, and too-many-positional guards).
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
@@ -43,7 +44,8 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ KDiff3-style no-subcommand compatibility parser implemented in `crates/gitgpui-app/src/cli.rs`:
   - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--L1/--L2/--L3`, `-o/--output/--out`)
   - maps to validated `difftool`/`mergetool` app modes
-  - coverage: 4 new CLI unit tests + git-invoked `kdiff3` path-override integration tests
+  - enforces strict compatibility validation with actionable errors (`--auto` requires output path, merge positional count checks, diff-mode `--L3` rejection, too-many-positional checks)
+  - coverage: 9 CLI parser tests (4 happy-path + 5 invalid-combination checks) + git-invoked `kdiff3` path-override integration tests
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
@@ -151,6 +153,24 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 23) — Strict External Compat Validation
+
+- Hardened no-subcommand external-tool parsing in `crates/gitgpui-app/src/cli.rs`:
+  - `--auto` now requires `-o`/`--output`/`--out <MERGED>` (merge mode constraint).
+  - merge-mode compatibility invocation now fails fast on invalid positional counts (must be 2 or 3).
+  - diff-mode compatibility invocation now rejects merge-only `--L3` usage and extra positional args with actionable errors.
+- Added 5 regression tests in CLI parser suite:
+  - `compat_auto_requires_output_path`
+  - `compat_merge_requires_two_or_three_positionals_after_output_flag`
+  - `compat_merge_rejects_too_many_positionals`
+  - `compat_diff_rejects_l3_without_output_path`
+  - `compat_diff_rejects_too_many_positionals`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app compat_`
+  - `cargo test -p gitgpui-app --bin gitgpui-app`
+  - `cargo test -p gitgpui-app --test difftool_git_integration git_difftool_kdiff3_path_override_invokes_compat_mode -- --nocapture`
+  - `cargo test -p gitgpui-app --test mergetool_git_integration git_mergetool_kdiff3_path_override_invokes_compat_mode -- --nocapture`
 
 ### Latest Component Delivered (Iteration 22) — KDiff3 Positional Compatibility + `*.path` Git E2E
 

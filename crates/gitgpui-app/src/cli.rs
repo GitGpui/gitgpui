@@ -347,6 +347,7 @@ fn parse_compat_external_mode(
     let mut label_l3: Option<String> = None;
     let mut merged_output: Option<PathBuf> = None;
     let mut positionals: Vec<PathBuf> = Vec::new();
+    let mut has_auto = false;
 
     let mut idx = 0usize;
     while idx < raw_args.len() {
@@ -354,6 +355,7 @@ fn parse_compat_external_mode(
         let token = arg.to_string_lossy();
 
         if token == "--auto" {
+            has_auto = true;
             idx += 1;
             continue;
         }
@@ -430,6 +432,13 @@ fn parse_compat_external_mode(
         idx += 1;
     }
 
+    if has_auto && merged_output.is_none() {
+        return Err(
+            "Invalid external merge invocation: --auto requires -o/--output/--out <MERGED>."
+                .to_string(),
+        );
+    }
+
     if let Some(merged) = merged_output {
         let (base, local, remote, label_base, label_local, label_remote) = match positionals.len() {
             3 => (
@@ -448,7 +457,12 @@ fn parse_compat_external_mode(
                 label_l1,
                 label_l2,
             ),
-            _ => return Ok(None),
+            0 | 1 => {
+                return Err("Invalid external merge invocation: expected 2 positional paths (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE) after -o/--output/--out.".to_string());
+            }
+            _ => {
+                return Err("Invalid external merge invocation: too many positional paths; expected 2 (LOCAL REMOTE) or 3 (BASE LOCAL REMOTE).".to_string());
+            }
         };
 
         let args = MergetoolArgs {
@@ -467,6 +481,20 @@ fn parse_compat_external_mode(
             .map(Some);
     }
 
+    if label_l3.is_some() {
+        return Err(
+            "Invalid external diff invocation: --L3 is only valid for merge mode with -o/--output/--out."
+                .to_string(),
+        );
+    }
+
+    if positionals.is_empty() && (label_l1.is_some() || label_l2.is_some()) {
+        return Err(
+            "Invalid external diff invocation: expected 2 positional paths (LOCAL REMOTE)."
+                .to_string(),
+        );
+    }
+
     if positionals.len() == 2 {
         let args = DifftoolArgs {
             local: Some(positionals[0].clone()),
@@ -478,6 +506,10 @@ fn parse_compat_external_mode(
         return resolve_difftool_with_env(args, env)
             .map(AppMode::Difftool)
             .map(Some);
+    }
+
+    if positionals.len() > 2 {
+        return Err("Invalid external diff invocation: too many positional paths; expected exactly 2 (LOCAL REMOTE). Use -o/--output/--out for merge mode.".to_string());
     }
 
     Ok(None)
@@ -1425,6 +1457,134 @@ mod tests {
             }
             _ => panic!("expected Mergetool mode"),
         }
+    }
+
+    #[test]
+    fn compat_auto_requires_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--auto requires -o/--output/--out"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_merge_requires_two_or_three_positionals_after_output_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--output"),
+                merged.into_os_string(),
+                local.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("expected 2 positional paths (LOCAL REMOTE) or 3"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_merge_rejects_too_many_positionals() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "base\n");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+        let extra = tmp_file(&dir, "extra.txt", "extra\n");
+        let merged = dir.path().join("merged.txt");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--out"),
+                merged.into_os_string(),
+                base.into_os_string(),
+                local.into_os_string(),
+                remote.into_os_string(),
+                extra.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("too many positional paths"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_diff_rejects_l3_without_output_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--L3"),
+                OsString::from("REMOTE"),
+                local.into_os_string(),
+                remote.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("--L3 is only valid for merge mode"),
+            "error: {err}"
+        );
+    }
+
+    #[test]
+    fn compat_diff_rejects_too_many_positionals() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "left.txt", "left\n");
+        let remote = tmp_file(&dir, "right.txt", "right\n");
+        let extra = tmp_file(&dir, "third.txt", "third\n");
+        let env = TestEnv::new();
+
+        let err = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                local.into_os_string(),
+                remote.into_os_string(),
+                extra.into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap_err();
+
+        assert!(
+            err.contains("too many positional paths; expected exactly 2"),
+            "error: {err}"
+        );
     }
 
     // ── Conflict style and diff algorithm ─────────────────────────────
