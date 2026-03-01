@@ -1,5 +1,7 @@
 use crate::cli::{MergetoolConfig, exit_code};
-use gitgpui_core::merge::{merge_file, ConflictStyle, MergeLabels, MergeOptions, MergeResult};
+use gitgpui_core::merge::{
+    ConflictStyle, MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes,
+};
 use std::fs;
 
 /// Result of running the dedicated mergetool mode.
@@ -36,21 +38,6 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         None => Vec::new(),
     };
 
-    // Detect binary content. If any input is not valid UTF-8, we cannot
-    // perform a text merge. Write LOCAL to MERGED and report a conflict.
-    let base_text = match std::str::from_utf8(&base_bytes) {
-        Ok(s) => s,
-        Err(_) => return handle_binary_conflict(config, &local_bytes),
-    };
-    let local_text = match std::str::from_utf8(&local_bytes) {
-        Ok(s) => s,
-        Err(_) => return handle_binary_conflict(config, &local_bytes),
-    };
-    let remote_text = match std::str::from_utf8(&remote_bytes) {
-        Ok(s) => s,
-        Err(_) => return handle_binary_conflict(config, &local_bytes),
-    };
-
     // Build merge options from config labels.
     let options = MergeOptions {
         style: ConflictStyle::Merge,
@@ -62,8 +49,11 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         ..MergeOptions::default()
     };
 
-    // Run the 3-way merge algorithm.
-    let result = merge_file(base_text, local_text, remote_text, &options);
+    // Run the 3-way merge algorithm with byte-level binary detection.
+    let result = match merge_file_bytes(&base_bytes, &local_bytes, &remote_bytes, &options) {
+        Ok(result) => result,
+        Err(MergeError::BinaryContent) => return handle_binary_conflict(config, &local_bytes),
+    };
     let is_clean = result.is_clean();
     let conflict_count = result.conflict_count;
 
@@ -370,6 +360,41 @@ mod tests {
         let result = run_mergetool(&config).expect("mergetool run");
         assert_eq!(result.exit_code, exit_code::CANCELED);
         assert!(result.stderr.contains("binary"));
+    }
+
+    #[test]
+    fn null_byte_content_is_treated_as_binary_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+        let base_path = tmp.path().join("base.txt");
+
+        let local_bytes = b"hello\0world\n".to_vec();
+        let remote_bytes = b"hello world\n".to_vec();
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &local_bytes);
+        write_bytes(&remote_path, &remote_bytes);
+        write_file(&base_path, "hello world\n");
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert!(result.merge_result.is_none(), "binary files skip text merge");
+        assert!(result.stderr.contains("binary"));
+
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, local_bytes);
     }
 
     // ── File I/O errors ──────────────────────────────────────────────
