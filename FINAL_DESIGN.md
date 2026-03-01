@@ -102,21 +102,19 @@
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 13) — Trailing-LF improvement + dir-vs-submodule E2E
+### Latest Component Delivered (Iteration 13) — Meld Sync-Point Matcher Portability
 
-- Improved trailing-newline handling in `crates/gitgpui-core/src/merge.rs`:
-  - Previous logic only stripped trailing LF when ALL THREE inputs lacked it.
-  - New logic applies 3-way merge to the trailing-LF bit based on which input contributed the output's last line: if only ours changed it, use ours' value; if only theirs changed it, use theirs' value; if both changed, use ours.
-  - Handles git's `test_expect_failure "merge without conflict (missing LF at EOF)"` cleanly — an improvement over git's merge-file algorithm.
-- Added 2 new tests in `crates/gitgpui-core/tests/merge_algorithm.rs`:
-  - `t6403_merge_missing_lf_at_eof`: remote lacks trailing LF, non-overlapping changes merge cleanly (git fails on this case).
-  - `t6403_merge_missing_lf_at_eof_away_from_change`: ours removed trailing LF, theirs changed content far from EOF, output preserves missing LF.
-- Added `git_mergetool_directory_vs_submodule_conflict` E2E test in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
-  - Parity with git t7610 "directory vs modified submodule" — one branch replaces a submodule with a regular directory, the other modifies the submodule.
-  - Verifies the mergetool pipeline completes without hanging or crashing.
-  - Mergetool E2E suite expanded from 30 to 31 tests.
-- Fixed Phase 1A tracker marker from 🔧 to ✅ (all sub-items were already complete).
-- Verified all 194 library tests + 96 core tests + 31 mergetool E2E tests + 14 difftool E2E tests pass.
+- Implemented sync-point-aware matching in `crates/gitgpui-core/src/text_utils.rs`:
+  - Added `matching_blocks_chars_with_sync_points` and `matching_blocks_lines_with_sync_points`.
+  - Added strict sync point validation (`SyncPointError`) for out-of-bounds and non-monotonic inputs.
+  - Preserves default behavior of existing APIs (`matching_blocks_chars`, `matching_blocks_lines`) while enabling deterministic sync-point-constrained alignment.
+- Ported missing Meld sync-point coverage in `crates/gitgpui-core/tests/meld_algorithm_tests.rs`:
+  - `sync_point_none` parity through the new API with empty sync points.
+  - one-sync-point case (`(3, 6)`) and two-sync-point case (`(3, 2)`, `(8, 6)`).
+  - validation tests for invalid sync-point inputs.
+- Verification:
+  - `cargo test -p gitgpui-core --test meld_algorithm_tests` passes (32/32).
+  - `cargo test -p gitgpui-core` runs green for core suites touched by this change; unrelated `merge_git_extraction` tests fail in this environment due GPG signing policy (`commit.gpgsign`) rather than merge logic.
 
 ### Iteration 12 — Phase 1A completion
 
@@ -236,7 +234,7 @@
   - Wired `AppMode::Difftool` in `crates/gitgpui-app/src/main.rs` to this runtime path (removed previous not-implemented hard error for difftool mode).
   - Added 7 unit tests covering unchanged/changed files, label behavior, directory diff mode, and missing-input error handling.
 - ✅ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): implemented in `crates/gitgpui-core/src/text_utils.rs` with tests in `crates/gitgpui-core/tests/meld_algorithm_tests.rs`:
-  - 5A: Myers matching blocks extraction (`matching_blocks_chars`, `matching_blocks_lines`) with 8 tests (4 ported from Meld's `test_matchers.py` inputs + 4 line-level tests). Sync point tests noted as Meld-specific (not applicable to our standard Myers engine).
+  - 5A: Myers matching blocks extraction (`matching_blocks_chars`, `matching_blocks_lines`) plus sync-point-constrained variants (`matching_blocks_chars_with_sync_points`, `matching_blocks_lines_with_sync_points`) with 12 tests (including `sync_point_none`, one-sync-point, and two-sync-point parity cases from Meld).
   - 5B: Interval merging (`merge_intervals`) with 8 tests (6 ported from Meld's `test_misc.py` + 2 edge cases).
   - 5C: Newline-aware text operations (`delete_last_line`) with 12 tests (7 ported from Meld's `test_chunk_actions.py` + 5 edge cases).
 
@@ -257,14 +255,14 @@
 
 - Implemented Phase 5A/5B/5C Meld-derived algorithm tests and utilities:
   - Added `crates/gitgpui-core/src/text_utils.rs` with three utility groups:
-    1. **Matching block extraction** (`matching_blocks_chars`, `matching_blocks_lines`): converts Myers diff edit scripts into `MatchingBlock` tuples `(a_start, b_start, length)` for both character-level and line-level sequences.
+    1. **Matching block extraction** (`matching_blocks_chars`, `matching_blocks_lines`, `matching_blocks_*_with_sync_points`): converts Myers diff edit scripts into `MatchingBlock` tuples `(a_start, b_start, length)` for both character-level and line-level sequences, with optional sync-point constraints.
     2. **Interval merging** (`merge_intervals`): coalesces overlapping/adjacent `(start, end)` intervals into non-overlapping sorted output.
     3. **Newline-aware line deletion** (`delete_last_line`): removes the last line respecting `\n`, `\r\n`, and `\r` line endings.
-  - Added `crates/gitgpui-core/tests/meld_algorithm_tests.rs` with 28 tests:
-    - 5A (8 tests): 4 character-level matching block tests ported from Meld's `test_matchers.py` (basic, postprocess, inline, no-sync-points) with invariant verification (valid content, ordering, non-overlapping) + 4 line-level matching block tests.
+  - Added `crates/gitgpui-core/tests/meld_algorithm_tests.rs` with 32 tests:
+    - 5A (12 tests): 4 character-level matching block tests ported from Meld's `test_matchers.py` (basic, postprocess, inline, no-sync-points), 3 sync-point parity tests (`sync_point_none`, one sync point, two sync points), sync-point validation tests, and line-level matching block tests.
     - 5B (8 tests): 6 interval merging tests ported from Meld's `test_misc.py` (dominated, disjoint, two-groups, unsorted, duplicate, chain) + 2 edge cases.
     - 5C (12 tests): 7 newline-aware deletion tests ported from Meld's `test_chunk_actions.py` (CRLF, LF, CR, trailing, mixed) + 5 edge cases.
-  - Note: Meld's `sync_point_one` and `sync_point_two` tests exercise Meld-specific sync point alignment constraints not present in our standard Myers engine; these are documented but not ported.
+  - Sync-point support now mirrors Meld's constrained-matching concept with explicit validation for out-of-bounds and non-monotonic sync point input.
 
 ### Iteration 4 Component Delivered
 

@@ -5,7 +5,9 @@
 //! engine, interval utilities, and newline-aware text operations.
 
 use gitgpui_core::text_utils::{
-    delete_last_line, matching_blocks_chars, matching_blocks_lines, merge_intervals, MatchingBlock,
+    MatchingBlock, SyncPointError, delete_last_line, matching_blocks_chars,
+    matching_blocks_chars_with_sync_points, matching_blocks_lines,
+    matching_blocks_lines_with_sync_points, merge_intervals,
 };
 
 // ---------------------------------------------------------------------------
@@ -151,9 +153,110 @@ fn myers_matching_blocks_no_sync_points_same_as_basic() {
     let b = "gfabcdefcd";
 
     let blocks_basic = matching_blocks_chars(a, b);
-    let blocks_no_sync = matching_blocks_chars(a, b);
+    let blocks_no_sync =
+        matching_blocks_chars_with_sync_points(a, b, &[]).expect("empty sync points");
 
     assert_eq!(blocks_basic, blocks_no_sync);
+}
+
+/// Meld `sync_point_one` concept: one sync point forces a different
+/// (but deterministic) alignment than plain Myers.
+#[test]
+fn myers_matching_blocks_one_sync_point() {
+    let a = "012a3456c789";
+    let b = "0a3412b5678";
+
+    let blocks = matching_blocks_chars_with_sync_points(a, b, &[(3, 6)]).expect("valid sync point");
+    assert_eq!(
+        blocks,
+        vec![
+            MatchingBlock {
+                a_start: 0,
+                b_start: 0,
+                length: 1
+            },
+            MatchingBlock {
+                a_start: 1,
+                b_start: 4,
+                length: 2
+            },
+            MatchingBlock {
+                a_start: 6,
+                b_start: 7,
+                length: 2
+            },
+            MatchingBlock {
+                a_start: 9,
+                b_start: 9,
+                length: 2
+            },
+        ]
+    );
+}
+
+/// Meld `sync_point_two` concept: two sync points force chunk-local
+/// matching and produce a stable block layout.
+#[test]
+fn myers_matching_blocks_two_sync_points() {
+    let a = "012a3456c789";
+    let b = "02a341b5678";
+
+    let blocks =
+        matching_blocks_chars_with_sync_points(a, b, &[(3, 2), (8, 6)]).expect("valid sync points");
+    assert_eq!(
+        blocks,
+        vec![
+            MatchingBlock {
+                a_start: 0,
+                b_start: 0,
+                length: 1
+            },
+            MatchingBlock {
+                a_start: 2,
+                b_start: 1,
+                length: 1
+            },
+            MatchingBlock {
+                a_start: 3,
+                b_start: 2,
+                length: 3
+            },
+            MatchingBlock {
+                a_start: 9,
+                b_start: 9,
+                length: 2
+            },
+        ]
+    );
+}
+
+#[test]
+fn myers_matching_blocks_sync_point_validation() {
+    let err = matching_blocks_chars_with_sync_points("abc", "abc", &[(4, 1)])
+        .expect_err("sync point should be out of bounds");
+    assert!(matches!(
+        err,
+        SyncPointError::OutOfBounds {
+            index: 0,
+            a_pos: 4,
+            b_pos: 1,
+            a_len: 3,
+            b_len: 3
+        }
+    ));
+
+    let err = matching_blocks_chars_with_sync_points("abcdef", "abcdef", &[(2, 2), (2, 3)])
+        .expect_err("sync points should be strictly increasing");
+    assert!(matches!(
+        err,
+        SyncPointError::NotStrictlyIncreasing {
+            index: 1,
+            prev_a: 2,
+            prev_b: 2,
+            a_pos: 2,
+            b_pos: 3
+        }
+    ));
 }
 
 /// Line-level matching blocks for simple sequences.
@@ -214,6 +317,29 @@ fn matching_blocks_lines_empty() {
     assert!(matching_blocks_lines(empty, empty).is_empty());
     assert!(matching_blocks_lines(empty, a).is_empty());
     assert!(matching_blocks_lines(a, empty).is_empty());
+}
+
+#[test]
+fn matching_blocks_lines_sync_points_respected() {
+    let a = &["a0", "a1", "a2", "a3"][..];
+    let b = &["a0", "b1", "a2", "a3"][..];
+
+    let blocks = matching_blocks_lines_with_sync_points(a, b, &[(1, 1)]).expect("valid sync");
+    assert_eq!(
+        blocks,
+        vec![
+            MatchingBlock {
+                a_start: 0,
+                b_start: 0,
+                length: 1
+            },
+            MatchingBlock {
+                a_start: 2,
+                b_start: 2,
+                length: 2
+            }
+        ]
+    );
 }
 
 // ===========================================================================
