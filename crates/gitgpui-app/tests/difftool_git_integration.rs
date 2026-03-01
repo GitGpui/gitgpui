@@ -146,6 +146,15 @@ fn configure_kdiff3_path_override_to_gitgpui(repo: &Path) {
     run_git(repo, &["config", "difftool.prompt", "false"]);
 }
 
+fn configure_meld_path_override_to_gitgpui(repo: &Path) {
+    let bin = gitgpui_bin();
+    let bin_path = bin.to_string_lossy().to_string();
+    run_git(repo, &["config", "diff.tool", "meld"]);
+    run_git(repo, &["config", "difftool.meld.path", &bin_path]);
+    run_git(repo, &["config", "difftool.trustExitCode", "true"]);
+    run_git(repo, &["config", "difftool.prompt", "false"]);
+}
+
 fn output_text(output: &Output) -> String {
     format!(
         "{}{}",
@@ -196,6 +205,30 @@ fn git_difftool_kdiff3_path_override_invokes_compat_mode() {
     assert!(
         output.status.success(),
         "expected kdiff3 path-override invocation to succeed with gitgpui compatibility parsing\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_meld_path_override_invokes_compat_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_meld_path_override_to_gitgpui(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "a.txt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected meld path-override invocation to succeed with gitgpui compatibility parsing\n{text}"
+    );
+    assert!(
+        text.contains("-before") && text.contains("+after"),
+        "expected meld path-override invocation to emit a diff\n{text}"
     );
 }
 
@@ -376,7 +409,10 @@ fn git_difftool_handles_non_utf8_content_change() {
     write_bytes(repo, "data/non_utf8.dat", b"prefix\n\xFE\n");
     configure_gitgpui_difftool(repo);
 
-    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "data/non_utf8.dat"]);
+    let output = run_git_capture(
+        repo,
+        &["difftool", "--no-prompt", "--", "data/non_utf8.dat"],
+    );
     let text = output_text(&output);
     assert!(
         output.status.success(),

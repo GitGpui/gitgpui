@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 38 closes the remaining external-tool invocation parity gap by adding no-subcommand Meld-style compatibility parsing (`--auto-merge` + `--output` + `LOCAL BASE REMOTE`) and git-invoked path-override regression coverage.
+All components from both design documents are fully implemented. Iteration 39 extends path-override parity coverage by adding a dedicated `git difftool` E2E for Git's built-in `meld` tool path override (`difftool.meld.path`) invoking GitGpui in no-subcommand compatibility mode.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 38)
+### Progress Snapshot (Iteration 39)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -28,7 +28,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
-- ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows (and `kdiff3` difftool flow) to validate direct executable invocation compatibility.
+- ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows plus both `kdiff3` and `meld` difftool flows to validate direct executable invocation compatibility.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A implemented: core 3-way merge algorithm + t6403 portability set (including histogram and binary-reject paths).
@@ -90,7 +90,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Runtime/unit coverage in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff, binary content, and non-UTF8 content).
   - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, pathspec filtering, `--dir-diff`, `guiDefault`/`--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, symlink target diff, binary content, and non-UTF8 content).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
-  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (18 tests, including pathspec filtering parity).
+  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (19 tests, including pathspec filtering parity and both `kdiff3`/`meld` path-override compatibility invocation).
   - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (51 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault=auto` selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
 - ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
   - ✅ `mergetool` clean merge exits `0` and writes merged output
@@ -173,13 +173,21 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool.keepBackup=true` delete/delete E2E assertion: rename/rename conflict with keepBackup produces no stderr errors
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
   - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (51 tests, including pathspec filtering parity, binary file conflict handling, explicit custom-command parity, delete/delete `keepTemporaries` abort parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
-  - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (18 tests, including pathspec filtering parity, `kdiff3` path-override compatibility invocation, plus binary and non-UTF8 content coverage)
+  - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (19 tests, including pathspec filtering parity, `kdiff3` + `meld` path-override compatibility invocation, plus binary and non-UTF8 content coverage)
 - ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
   - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, pathspec filtering, spaced path handling, `--dir-diff`, binary content, and non-UTF8 content.
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 39) — Meld Difftool Path-Override E2E Parity
+
+- Added `git difftool` built-in `meld` path-override integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs`:
+  - `configure_meld_path_override_to_gitgpui` helper configures `diff.tool=meld` + `difftool.meld.path=<gitgpui-app>`
+  - `git_difftool_meld_path_override_invokes_compat_mode` validates direct executable invocation through no-subcommand compatibility parsing and asserts emitted diff output
+- Verification:
+  - `cargo test -p gitgpui-app --test difftool_git_integration git_difftool_meld_path_override_invokes_compat_mode -- --nocapture`
 
 ### Latest Component Delivered (Iteration 38) — Meld Path-Override Compatibility Mode
 
