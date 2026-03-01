@@ -7,7 +7,7 @@
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - ✅ Focused command-mode execution paths fully implemented:
-  - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index`, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
+  - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
   - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path. Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, binary file detection (copies local side), CRLF preservation, and paths with spaces. 19 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
@@ -18,12 +18,12 @@
   - `writeToTemp=true`: absolute temp files under `gitgpui-mergetool-*`
   - `writeToTemp=false`: workdir-prefixed paths (`./...`) with `<base>_{BASE,LOCAL,REMOTE}_<pid><ext>` naming
   - stage file cleanup for workdir mode and unit/integration coverage
-- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, and writeToTemp path semantics. Remaining explicit coverage: symlink, submodule conflict invocation paths, CRLF preservation assertions, dir-diff mode, cancel/close exit semantics.
+- 🔧 Git behavior parity matrix coverage is partial. Implemented/covered: spaced paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, writeToTemp path semantics, and difftool `--dir-diff` invocation. Remaining explicit coverage: symlink, submodule conflict invocation paths, CRLF preservation assertions, and cancel/close exit semantics.
 - 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference, writeToTemp, no-base stage-file contract); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
 - 🔧 Dedicated difftool mode tests are partially implemented:
   - ✅ Runtime/unit coverage added in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
-  - ⬜ Full git-invoked integration tests (`git difftool` end-to-end) are still pending.
-- ⬜ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are not implemented yet.
+  - ✅ Full git-invoked integration tests added in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic `git difftool` execution, spaced path handling, subdirectory invocation, `--dir-diff` mode, and global-like difftool config wiring).
+- 🔧 End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are partially implemented (`git difftool` done; `git mergetool` E2E still pending).
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
 - ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
 
@@ -66,7 +66,20 @@
 - 🔧 Phase 4B (critical `t7800-difftool` E2E): partially implemented.
   - ✅ Foundational difftool runtime added in `gitgpui-app` (`difftool_mode.rs`) with Git-compatible exit semantics and label/display-path handling.
   - ✅ Targeted difftool runtime tests added (unit-level behavior parity for changed/unchanged files, label handling, directory diff, and error path).
-  - ⬜ Remaining: full `git difftool` command E2E parity scenarios (`guiDefault`, subdirectory invocation, trust-exit config interactions, and global-like config wiring).
+  - ✅ Git-invoked E2E coverage added in `crates/gitgpui-app/tests/difftool_git_integration.rs` for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff` mode with repo-local/global-like config.
+  - 🔧 Remaining: explicit `difftool.guiDefault` selection-path parity and dedicated trust-exit interaction matrix assertions.
+
+### Latest Component Delivered (Current Iteration)
+
+- Implemented full Git-invoked difftool integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs`:
+  - `git difftool` basic invocation (`LOCAL`/`REMOTE` wiring)
+  - spaced-path file handling
+  - invocation from repo subdirectories
+  - `--dir-diff` directory-mode execution
+- Fixed an external-tool recursion bug in `crates/gitgpui-app/src/difftool_mode.rs`:
+  - switched command to `git diff --no-index --no-ext-diff`
+  - removed inherited `GIT_EXTERNAL_DIFF` before spawning nested git diff
+  - prevents recursive `git-difftool--helper` loops when Git launches GitGpui as `difftool.<tool>.cmd`
 
 ### Latest Component Delivered (Iteration 8)
 

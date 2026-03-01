@@ -16,7 +16,10 @@ pub struct DifftoolRunResult {
 /// present) to process success for the app-level contract.
 pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String> {
     let mut cmd = Command::new("git");
-    cmd.arg("diff").arg("--no-index");
+    cmd.arg("diff").arg("--no-index").arg("--no-ext-diff");
+    // When launched from `git difftool`, Git sets `GIT_EXTERNAL_DIFF` to its
+    // helper. Remove it so this nested `git diff --no-index` cannot recurse.
+    cmd.env_remove("GIT_EXTERNAL_DIFF");
     let labels = resolve_labels(config);
 
     cmd.arg("--").arg(&config.local).arg(&config.remote);
