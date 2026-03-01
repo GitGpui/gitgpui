@@ -238,6 +238,18 @@ fn configure_stage_path_recording_mergetool(repo: &Path, tool: &str) {
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
+fn configure_stage_metadata_recording_mergetool(repo: &Path, tool: &str) {
+    let cmd = "base_size=MISSING; if [ -n \"$BASE\" ] && [ -f \"$BASE\" ]; then base_size=$(wc -c < \"$BASE\"); fi; printf '%s\\n%s\\n%s\\nBASE_SIZE=%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" \"$base_size\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"";
+    run_git(repo, &["config", "merge.tool", tool]);
+    run_git(repo, &["config", &format!("mergetool.{tool}.cmd"), cmd]);
+    run_git(
+        repo,
+        &["config", &format!("mergetool.{tool}.trustExitCode"), "true"],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
 fn setup_order_file_conflict(repo: &Path) {
     init_repo(repo);
     write_file(repo, "a", "start\n");
@@ -752,6 +764,71 @@ fn git_mergetool_handles_add_add_conflict() {
             || merged.contains("added by remote")
             || merged.contains("<<<<<<<"),
         "expected mergetool to handle add/add conflict\nmerged:\n{merged}\ngit output:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_add_add_provides_empty_base_stage_file() {
+    // Portability parity with git t7610 "no-base file":
+    // for add/add conflicts, the tool should still receive a BASE stage path
+    // and report it as an empty stage file (size 0).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "README", "init\n");
+    commit_all(repo, "initial");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_file(repo, "new_file.txt", "added by remote\n");
+    commit_all(repo, "feature: add new_file");
+
+    run_git(repo, &["checkout", "main"]);
+    write_file(repo, "new_file.txt", "added by local\n");
+    commit_all(repo, "main: add new_file");
+
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(!output.status.success(), "expected add/add merge conflict");
+
+    configure_stage_metadata_recording_mergetool(repo, "recorder");
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected git mergetool to resolve add/add conflict\n{text}"
+    );
+
+    let dump = fs::read_to_string(repo.join("new_file.txt.env"))
+        .expect("read add/add stage metadata dump");
+    let lines: Vec<&str> = dump.lines().collect();
+    assert!(lines.len() >= 4, "expected stage metadata dump\n{text}");
+
+    let base_var = lines[0].to_string();
+    assert!(
+        !base_var.is_empty(),
+        "expected BASE to be a stage file path, got empty value\n{text}"
+    );
+    assert!(
+        base_var.contains("_BASE_"),
+        "expected BASE stage filename marker in path, got: {base_var}\n{text}"
+    );
+
+    let local_var = lines[1];
+    let remote_var = lines[2];
+    assert!(
+        !local_var.is_empty() && !remote_var.is_empty(),
+        "expected LOCAL/REMOTE stage paths to be non-empty\n{text}"
+    );
+
+    let base_size_line = lines
+        .iter()
+        .find(|line| line.starts_with("BASE_SIZE="))
+        .copied()
+        .unwrap_or("BASE_SIZE=MISSING");
+    assert!(
+        base_size_line == "BASE_SIZE=0",
+        "expected add/add BASE stage file size to be 0, got {base_size_line}\n{text}\n{dump}"
     );
 }
 
