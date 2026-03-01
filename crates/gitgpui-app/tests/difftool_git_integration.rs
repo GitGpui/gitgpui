@@ -64,6 +64,14 @@ fn write_file(repo: &Path, rel: &str, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn write_bytes(repo: &Path, rel: &str, contents: &[u8]) {
+    let path = repo.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent directories");
+    }
+    fs::write(path, contents).expect("write bytes");
+}
+
 fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "you@example.com"]);
@@ -293,6 +301,56 @@ fn git_difftool_dir_diff_mode_works() {
     assert!(
         text.contains("tracked.txt"),
         "expected tracked filename in dir-diff output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_handles_binary_content_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_bytes(repo, "blob.bin", &[0x00, 0x01, 0x02, 0x03, 0x04]);
+    commit_all(repo, "base");
+
+    write_bytes(repo, "blob.bin", &[0x00, 0x01, 0xFF, 0x03, 0x04]);
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "blob.bin"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool failed for binary content\n{text}"
+    );
+    assert!(
+        text.contains("Binary files")
+            || text.contains("GIT binary patch")
+            || text.contains("blob.bin"),
+        "expected binary diff signal in output\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_handles_non_utf8_content_change() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_bytes(repo, "data/non_utf8.dat", b"prefix\n\xFF\n");
+    commit_all(repo, "base");
+
+    write_bytes(repo, "data/non_utf8.dat", b"prefix\n\xFE\n");
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "data/non_utf8.dat"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool failed for non-UTF8 content\n{text}"
+    );
+    assert!(
+        !text.trim().is_empty(),
+        "expected diff output for non-UTF8 content"
     );
 }
 

@@ -132,6 +132,10 @@ mod tests {
         std::fs::write(path, content).expect("write fixture file");
     }
 
+    fn write_bytes(path: &std::path::Path, content: &[u8]) {
+        std::fs::write(path, content).expect("write fixture bytes");
+    }
+
     fn config(local: PathBuf, remote: PathBuf) -> DifftoolConfig {
         DifftoolConfig {
             local,
@@ -240,6 +244,41 @@ mod tests {
             result.stdout.contains("a.txt"),
             "expected filename in dir diff output, got: {}",
             result.stdout
+        );
+    }
+
+    #[test]
+    fn run_difftool_binary_content_returns_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left.bin");
+        let right = tmp.path().join("right.bin");
+        write_bytes(&left, &[0x00, 0x01, 0x02, 0x03]);
+        write_bytes(&right, &[0x00, 0x01, 0xFF, 0x03]);
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("Binary files")
+                || result.stdout.contains("GIT binary patch")
+                || result.stdout.contains("differ"),
+            "expected binary diff output, got: {}",
+            result.stdout
+        );
+    }
+
+    #[test]
+    fn run_difftool_non_utf8_text_content_returns_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left.dat");
+        let right = tmp.path().join("right.dat");
+        write_bytes(&left, b"prefix\n\xFF\n");
+        write_bytes(&right, b"prefix\n\xFE\n");
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            !result.stdout.trim().is_empty(),
+            "expected non-empty diff output for non-UTF8 content"
         );
     }
 
