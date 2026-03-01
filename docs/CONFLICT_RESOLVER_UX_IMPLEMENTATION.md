@@ -22,10 +22,15 @@ Scope: `gitgpui` merge/diff/conflict resolver flows
 - ✅ `view/rows/conflict_resolver.rs` — three-way row plus icon wired: dedupe checks via `is_source_line_in_output` for all three columns (Base/A, Ours/B, Theirs/C); plus icon rendered in 16px gutter with group hover reveal (`three_way_base_row`, `three_way_ours_row`, `three_way_theirs_row`); plus icon click uses `on_mouse_down(Left)` with `stop_propagation` to prevent chunk-pick `on_click` from firing, calls `conflict_resolver_append_three_way_line_to_output`.
 
 ### Phase 3: Resolved Output Context Menu + Bar Cleanup
-- ⬜ `view/panels/main.rs` — remove duplicate nav controls from resolved output bar
-- ⬜ `view/panels/mod.rs` — new resolver context actions
-- ⬜ `view/panels/popover/context_menu.rs` — action handling dispatch
-- ⬜ `view/panels/popover/context_menu/` — resolver output menu model
+- ✅ `view/panels/main.rs` — removed duplicate resolved-output navigation chrome (`Queue`, `#...`, `Prev`, `Next`) from the bottom "Resolved output" bar while preserving top conflict navigation controls and `F1`-`F4` keyboard flow. Added right-click handler on resolved output wrapper div that opens the output context menu.
+- ✅ `view/panels/mod.rs` — added `ConflictResolverOutputCut`, `ConflictResolverOutputPaste`, and `ConflictResolverOutputPickLine` variants to `ContextMenuAction` enum.
+- ✅ `view/panels/popover/context_menu.rs` — added `conflict_resolver_output` module; wired `ConflictResolverOutputMenu` model building and action dispatch for Cut (clipboard write + delete selection), Paste (clipboard read + insert), and Pick Line (replace output line with source A/B/C).
+- ✅ `view/panels/popover/context_menu/conflict_resolver_output.rs` — new context menu model builder with Copy, Cut, Paste, separator, Pick Line A/B/C entries; disabled states for empty selection and unavailable source lines; two-way mode omits Pick C; labels use 1-based line numbers and source names (Base/Ours/Theirs). 3 unit tests.
+- ✅ `view/mod.rs` — added `PopoverKind::ConflictResolverOutputMenu` with `cursor_line`, `selected_text`, `has_source_a/b/c`, `is_three_way` fields.
+- ✅ `view/panels/popover.rs` — registered new variant in both `is_context_menu` match blocks and popover rendering dispatch.
+- ✅ `view/panels/popover/fingerprint.rs` — registered new variant in repo resolution, exhaustiveness check, and hash function.
+- ✅ `view/panes/main.rs` — added `open_conflict_resolver_output_context_menu` (computes cursor line, source availability, selected text); `conflict_resolver_output_delete_selection`, `conflict_resolver_output_paste_text`, `conflict_resolver_output_replace_line` helpers; set `suppress_right_click` on resolved output TextInput.
+- ✅ `kit/text_input.rs` — added `suppress_right_click` flag (skips right-click auto-copy and propagation stop); public getters `selected_text()`, `cursor_offset()`, `selected_range()`.
 
 ### Phase 4: Image/Markdown Preview Integration
 - ⬜ Reuse existing preview/image plumbing for resolver-supported preview modes

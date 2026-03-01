@@ -152,6 +152,7 @@ pub struct TextInput {
     last_line_height: Pixels,
     wrap_cache: Option<WrapCache>,
     is_selecting: bool,
+    suppress_right_click: bool,
 
     has_focus: bool,
     cursor_blink_visible: bool,
@@ -182,6 +183,7 @@ impl TextInput {
             last_line_height: px(0.0),
             wrap_cache: None,
             is_selecting: false,
+            suppress_right_click: false,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
@@ -210,6 +212,7 @@ impl TextInput {
             last_line_height: px(0.0),
             wrap_cache: None,
             is_selecting: false,
+            suppress_right_click: false,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
@@ -251,6 +254,22 @@ impl TextInput {
         }
         self.read_only = read_only;
         cx.notify();
+    }
+
+    pub fn set_suppress_right_click(&mut self, suppress: bool) {
+        self.suppress_right_click = suppress;
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        if self.selected_range.is_empty() {
+            None
+        } else {
+            Some(self.content[self.selected_range.clone()].to_string())
+        }
+    }
+
+    pub fn selected_range(&self) -> Range<usize> {
+        self.selected_range.clone()
     }
 
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
@@ -582,7 +601,7 @@ impl TextInput {
         }
     }
 
-    fn cursor_offset(&self) -> usize {
+    pub fn cursor_offset(&self) -> usize {
         if self.selection_reversed {
             self.selected_range.start
         } else {
@@ -1602,6 +1621,9 @@ impl Render for TextInput {
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, _e: &MouseDownEvent, _w, cx| {
+                    if this.suppress_right_click {
+                        return;
+                    }
                     cx.stop_propagation();
                     if !this.selected_range.is_empty() {
                         cx.write_to_clipboard(ClipboardItem::new_string(

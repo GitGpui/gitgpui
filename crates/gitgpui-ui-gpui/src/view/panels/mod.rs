@@ -134,6 +134,14 @@ enum ContextMenuAction {
     ConflictResolverPick {
         target: ResolverPickTarget,
     },
+    ConflictResolverOutputCut {
+        text: String,
+    },
+    ConflictResolverOutputPaste,
+    ConflictResolverOutputPickLine {
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+    },
     CopyText {
         text: String,
     },

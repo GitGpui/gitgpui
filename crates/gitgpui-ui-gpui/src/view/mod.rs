@@ -698,6 +698,14 @@ enum PopoverKind {
         chunk_label: SharedString,
         chunk_target: ResolverPickTarget,
     },
+    ConflictResolverOutputMenu {
+        cursor_line: usize,
+        selected_text: Option<String>,
+        has_source_a: bool,
+        has_source_b: bool,
+        has_source_c: bool,
+        is_three_way: bool,
+    },
     CommitMenu {
         repo_id: RepoId,
         commit_id: CommitId,

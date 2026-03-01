@@ -5,6 +5,7 @@ mod branch_section;
 mod commit;
 mod commit_file;
 mod conflict_resolver_input_row;
+mod conflict_resolver_output;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
@@ -254,6 +255,21 @@ impl PopoverHost {
                 line_target,
                 chunk_label,
                 chunk_target,
+            )),
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
+            } => Some(conflict_resolver_output::model(
+                *cursor_line,
+                selected_text,
+                *has_source_a,
+                *has_source_b,
+                *has_source_c,
+                *is_three_way,
             )),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
@@ -596,6 +612,27 @@ impl PopoverHost {
             ContextMenuAction::ConflictResolverPick { target } => {
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_apply_pick_target(target, cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverOutputCut { text } => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_output_delete_selection(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverOutputPaste => {
+                if let Some(text) = cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text().map(|s| s.to_string()))
+                {
+                    self.main_pane.update(cx, |pane, cx| {
+                        pane.conflict_resolver_output_paste_text(&text, cx);
+                    });
+                }
+            }
+            ContextMenuAction::ConflictResolverOutputPickLine { line_ix, choice } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_output_replace_line(line_ix, choice, cx);
                 });
             }
             ContextMenuAction::CopyText { text } => {

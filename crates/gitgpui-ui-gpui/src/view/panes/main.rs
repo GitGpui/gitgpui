@@ -236,7 +236,7 @@ impl MainPaneView {
         });
 
         let conflict_resolver_input = cx.new(|cx| {
-            zed::TextInput::new(
+            let mut input = zed::TextInput::new(
                 zed::TextInputOptions {
                     placeholder: "Resolve file contents…".into(),
                     multiline: true,
@@ -246,7 +246,9 @@ impl MainPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_suppress_right_click(true);
+            input
         });
 
         let conflict_resolver_subscription =
@@ -693,6 +695,64 @@ impl MainPaneView {
                 line_target,
                 chunk_label,
                 chunk_target,
+            },
+            anchor,
+            window,
+            cx,
+        );
+    }
+
+    pub(in super::super) fn open_conflict_resolver_output_context_menu(
+        &mut self,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (selected_text, cursor_offset, content) =
+            self.conflict_resolver_input.read_with(cx, |i, _| {
+                (i.selected_text(), i.cursor_offset(), i.text().to_string())
+            });
+        let cursor_line = content[..cursor_offset.min(content.len())]
+            .matches('\n')
+            .count();
+
+        let is_three_way = self.conflict_resolver.view_mode
+            == conflict_resolver::ConflictResolverViewMode::ThreeWay;
+
+        let (has_source_a, has_source_b, has_source_c) = if is_three_way {
+            (
+                cursor_line < self.conflict_resolver.three_way_base_lines.len(),
+                cursor_line < self.conflict_resolver.three_way_ours_lines.len(),
+                cursor_line < self.conflict_resolver.three_way_theirs_lines.len(),
+            )
+        } else {
+            (
+                cursor_line < self.conflict_resolver.diff_rows.len()
+                    && self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(cursor_line)
+                        .and_then(|r| r.old.as_ref())
+                        .is_some(),
+                cursor_line < self.conflict_resolver.diff_rows.len()
+                    && self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(cursor_line)
+                        .and_then(|r| r.new.as_ref())
+                        .is_some(),
+                false,
+            )
+        };
+
+        self.open_popover_at(
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
             },
             anchor,
             window,
@@ -2425,6 +2485,129 @@ impl MainPaneView {
         });
     }
 
+    /// Delete the current text selection in the resolved output (used by Cut context action).
+    pub(in super::super) fn conflict_resolver_output_delete_selection(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (content, sel_range) = self.conflict_resolver_input.read_with(cx, |i, _| {
+            (i.text().to_string(), i.selected_range())
+        });
+        if sel_range.is_empty() {
+            return;
+        }
+        let start = sel_range.start.min(content.len());
+        let end = sel_range.end.min(content.len());
+        let mut next = content[..start].to_string();
+        next.push_str(&content[end..]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Paste text into the resolved output at the current cursor position (used by Paste context action).
+    pub(in super::super) fn conflict_resolver_output_paste_text(
+        &mut self,
+        paste_text: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (content, cursor_offset) = self.conflict_resolver_input.read_with(cx, |i, _| {
+            (i.text().to_string(), i.cursor_offset())
+        });
+        let pos = cursor_offset.min(content.len());
+        let mut next = content[..pos].to_string();
+        next.push_str(paste_text);
+        next.push_str(&content[pos..]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Replace a line in the resolved output with the source line at the same index from A/B/C.
+    pub(in super::super) fn conflict_resolver_output_replace_line(
+        &mut self,
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let is_three_way = self.conflict_resolver.view_mode
+            == conflict_resolver::ConflictResolverViewMode::ThreeWay;
+
+        let replacement: Option<String> = if is_three_way {
+            match choice {
+                conflict_resolver::ConflictChoice::Base => self
+                    .conflict_resolver
+                    .three_way_base_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Ours => self
+                    .conflict_resolver
+                    .three_way_ours_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Theirs => self
+                    .conflict_resolver
+                    .three_way_theirs_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Both => return,
+            }
+        } else {
+            match choice {
+                conflict_resolver::ConflictChoice::Ours => self
+                    .conflict_resolver
+                    .diff_rows
+                    .get(line_ix)
+                    .and_then(|r| r.old.clone()),
+                conflict_resolver::ConflictChoice::Theirs => self
+                    .conflict_resolver
+                    .diff_rows
+                    .get(line_ix)
+                    .and_then(|r| r.new.clone()),
+                _ => return,
+            }
+        };
+        let Some(replacement) = replacement else {
+            return;
+        };
+
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let lines: Vec<&str> = current.split('\n').collect();
+
+        if line_ix < lines.len() {
+            let mut next = String::new();
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    next.push('\n');
+                }
+                if i == line_ix {
+                    next.push_str(&replacement);
+                } else {
+                    next.push_str(line);
+                }
+            }
+            let theme = self.theme;
+            self.conflict_resolver_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text(next, cx);
+            });
+        } else {
+            let next =
+                conflict_resolver::append_lines_to_output(&current, &[replacement]);
+            let theme = self.theme;
+            self.conflict_resolver_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text(next, cx);
+            });
+        }
+    }
+
     pub(in super::super) fn conflict_resolver_sync_session_resolutions_from_output(
         &mut self,
         output_text: &str,
@@ -2516,57 +2699,6 @@ impl MainPaneView {
         Some((session.total_regions(), session.solved_count()))
     }
 
-    pub(in super::super) fn conflict_resolver_focus_conflict(
-        &mut self,
-        conflict_ix: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if conflict_ix >= self.conflict_resolver_conflict_count() {
-            return;
-        }
-
-        self.conflict_resolver.active_conflict = conflict_ix;
-
-        let target_visible_ix = match self.conflict_resolver.view_mode {
-            ConflictResolverViewMode::ThreeWay => conflict_resolver::visible_index_for_conflict(
-                &self.conflict_resolver.three_way_visible_map,
-                &self.conflict_resolver.three_way_conflict_ranges,
-                conflict_ix,
-            ),
-            ConflictResolverViewMode::TwoWayDiff => {
-                let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
-                    &self.conflict_resolver.marker_segments,
-                    &self.conflict_resolver.diff_rows,
-                    &self.conflict_resolver.inline_rows,
-                );
-                match self.conflict_resolver.diff_mode {
-                    ConflictDiffMode::Split => {
-                        conflict_resolver::visible_index_for_two_way_conflict(
-                            &split_map,
-                            &self.conflict_resolver.diff_visible_row_indices,
-                            conflict_ix,
-                        )
-                    }
-                    ConflictDiffMode::Inline => {
-                        conflict_resolver::visible_index_for_two_way_conflict(
-                            &inline_map,
-                            &self.conflict_resolver.inline_visible_row_indices,
-                            conflict_ix,
-                        )
-                    }
-                }
-            }
-        };
-
-        if let Some(visible_ix) = target_visible_ix {
-            self.conflict_resolver_diff_scroll
-                .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
-            self.conflict_resolver.nav_anchor = Some(visible_ix);
-        }
-
-        cx.notify();
-    }
-
     fn conflict_resolver_active_block_mut(
         &mut self,
     ) -> Option<&mut conflict_resolver::ConflictBlock> {
@@ -2582,42 +2714,6 @@ impl MainPaneView {
             seen += 1;
         }
         None
-    }
-
-    pub(in super::super) fn conflict_resolver_prev_conflict(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let current = self.conflict_resolver.active_conflict;
-        let Some(target) = conflict_resolver::prev_unresolved_conflict_index(
-            &self.conflict_resolver.marker_segments,
-            current,
-        ) else {
-            return;
-        };
-        if target == current {
-            return;
-        }
-        self.conflict_resolver.active_conflict = target;
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_next_conflict(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let current = self.conflict_resolver.active_conflict;
-        let Some(target) = conflict_resolver::next_unresolved_conflict_index(
-            &self.conflict_resolver.marker_segments,
-            current,
-        ) else {
-            return;
-        };
-        if target == current {
-            return;
-        }
-        self.conflict_resolver.active_conflict = target;
-        cx.notify();
     }
 
     pub(in super::super) fn conflict_resolver_pick_at(

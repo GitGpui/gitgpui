@@ -508,6 +508,7 @@ impl PopoverHost {
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -927,6 +928,7 @@ impl PopoverHost {
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::TagMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
@@ -1484,6 +1486,27 @@ impl PopoverHost {
                 )
                 .min_w(px(180.0))
                 .max_w(px(280.0)),
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverOutputMenu {
+                        cursor_line,
+                        selected_text,
+                        has_source_a,
+                        has_source_b,
+                        has_source_c,
+                        is_three_way,
+                    },
+                    cx,
+                )
+                .min_w(px(200.0))
+                .max_w(px(300.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

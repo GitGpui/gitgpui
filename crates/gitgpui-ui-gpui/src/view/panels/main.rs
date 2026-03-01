@@ -1152,21 +1152,6 @@ impl MainPaneView {
                                 file.base.is_some()
                             };
 
-                            let prev_conflict =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_prev_conflict(cx);
-                                };
-                            let next_conflict =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_next_conflict(cx);
-                                };
-
                             let auto_resolve =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1213,15 +1198,6 @@ impl MainPaneView {
                                     let resolved_label: SharedString =
                                         format!("Resolved {}/{}", resolved_count, conflict_count)
                                             .into();
-                                    let unresolved_indices =
-                                        conflict_resolver::unresolved_conflict_indices(
-                                            &self.conflict_resolver.marker_segments,
-                                        );
-                                    let unresolved_preview_limit = 6usize;
-                                    let unresolved_overflow =
-                                        unresolved_indices.len().saturating_sub(
-                                            unresolved_preview_limit,
-                                        );
 
                                     let mut d = d.child(
                                         div()
@@ -1247,63 +1223,7 @@ impl MainPaneView {
                                                 .child(label.clone()),
                                         );
                                     }
-
-                                    if !unresolved_indices.is_empty() {
-                                        d = d.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.colors.text_muted)
-                                                .child("Queue"),
-                                        );
-                                        for conflict_ix in unresolved_indices
-                                            .iter()
-                                            .copied()
-                                            .take(unresolved_preview_limit)
-                                        {
-                                            let label: SharedString =
-                                                format!("#{}", conflict_ix + 1).into();
-                                            d = d.child(
-                                                zed::Button::new(
-                                                    format!("conflict_queue_{conflict_ix}"),
-                                                    label,
-                                                )
-                                                .style(
-                                                    if conflict_ix == active_conflict {
-                                                        zed::ButtonStyle::Outlined
-                                                    } else {
-                                                        zed::ButtonStyle::Transparent
-                                                    },
-                                                )
-                                                .on_click(theme, cx, move |this, _e, _w, cx| {
-                                                    this.conflict_resolver_focus_conflict(
-                                                        conflict_ix,
-                                                        cx,
-                                                    );
-                                                }),
-                                            );
-                                        }
-                                        if unresolved_overflow > 0 {
-                                            d = d.child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.text_muted)
-                                                    .child(format!("+{}", unresolved_overflow)),
-                                            );
-                                        }
-                                    }
-
-                                    d.child(
-                                        zed::Button::new("conflict_pick_prev", "Prev")
-                                            .style(zed::ButtonStyle::Transparent)
-                                            .disabled(unresolved_count == 0)
-                                            .on_click(theme, cx, prev_conflict),
-                                    )
-                                    .child(
-                                        zed::Button::new("conflict_pick_next", "Next")
-                                            .style(zed::ButtonStyle::Transparent)
-                                            .disabled(unresolved_count == 0)
-                                            .on_click(theme, cx, next_conflict),
-                                    )
+                                    d
                                 })
                                 .child(
                                     zed::Button::new("conflict_use_base", "A (base)")
@@ -1987,9 +1907,29 @@ impl MainPaneView {
                                                     .flex_1()
                                                     .min_h(px(0.0))
                                                     .overflow_y_scroll()
-                                                    .child(div().p_2().child(
-                                                        self.conflict_resolver_input.clone(),
-                                                    )),
+                                                    .child(
+                                                        div()
+                                                            .p_2()
+                                                            .on_mouse_down(
+                                                                MouseButton::Right,
+                                                                cx.listener(
+                                                                    |this,
+                                                                     e: &MouseDownEvent,
+                                                                     window,
+                                                                     cx| {
+                                                                        this.open_conflict_resolver_output_context_menu(
+                                                                            e.position,
+                                                                            window,
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                ),
+                                                            )
+                                                            .child(
+                                                                self.conflict_resolver_input
+                                                                    .clone(),
+                                                            ),
+                                                    ),
                                             );
                                     bottom_section.style().flex_grow = Some(1.0 - vsplit_ratio);
                                     bottom_section.style().flex_shrink = Some(1.0);
