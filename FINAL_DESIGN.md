@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 24 closes the remaining external-tool compatibility gap by adding KDiff3-style `--base` support in no-subcommand compatibility mode, with strict validation for ambiguous combinations.
+All components from both design documents are fully implemented. Iteration 25 adds direct standalone command-mode E2E coverage for the external-tool exit contract (`0/1/2`) so the dedicated `difftool`/`mergetool` invocation path is now regression-protected both through `git *tool` and direct binary execution.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 24 — Final)
+### Progress Snapshot (Iteration 25 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -14,6 +14,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
+- ✅ Standalone binary-level exit contract is now explicitly covered by direct `gitgpui-app` E2E tests (`difftool`/`mergetool` success, unresolved conflict, and invalid-input paths mapped to exit codes `0/1/2`).
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, explicit `mergetool.writeToTemp` path-shape parity, and binary file conflict handling).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
@@ -74,6 +75,12 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
   - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (15 tests).
   - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (46 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault=auto` selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3` path-override compatibility invocation.
+- ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - ✅ `mergetool` clean merge exits `0` and writes merged output
+  - ✅ `mergetool` unresolved conflict exits `1` and writes conflict markers
+  - ✅ `mergetool` invalid input exits `2` with actionable validation error text
+  - ✅ `difftool` changed-file invocation exits `0` and emits unified diff output
+  - ✅ `difftool` invalid input exits `2` with actionable validation error text
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants, and compares against expected results in two formats:
   - merged-output expected files: marker well-formedness, content integrity, context preservation
   - alignment-triple expected files: sequence monotonicity + equality consistency across aligned line indices
@@ -153,6 +160,19 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 25) — Standalone Command-Mode Exit Contract E2E
+
+- Added direct binary-level integration coverage in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs` to validate `external_usage.md` exit-code policy for dedicated command modes (`difftool`/`mergetool`) without going through `git *tool`.
+- Added 5 new tests:
+  - `standalone_mergetool_clean_merge_exits_zero_and_writes_output`
+  - `standalone_mergetool_conflict_exits_one_and_writes_markers`
+  - `standalone_mergetool_invalid_path_exits_two`
+  - `standalone_difftool_changed_files_exits_zero_and_prints_diff`
+  - `standalone_difftool_missing_input_exits_two`
+- Verification:
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration -- --nocapture`
+  - `cargo test -p gitgpui-app`
 
 ### Latest Component Delivered (Iteration 24) — KDiff3 `--base` Compatibility in No-Subcommand Mode
 
