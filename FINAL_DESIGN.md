@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 45 hardens dedicated mergetool binary handling with base-aware 3-way auto-resolution (clean auto-merge when binary sides are identical or only one side changed from base, conflict fallback otherwise) while preserving Git-compatible exit semantics.
+All components from both design documents are fully implemented. Iteration 46 fixes 3 failing tests in vendored GPUI `line_wrapper.rs` — the `"…"` (U+2026) ellipsis character had been incorrectly stripped from test parameters during vendoring while expected values still assumed its presence (run lengths accounting for 3-byte `…`, truncation offsets reserving suffix width).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 45)
+### Progress Snapshot (Iteration 46)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -191,7 +191,16 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 45) — Binary 3-Way Auto-Resolution Hardening
+### Latest Component Delivered (Iteration 46) — Vendored GPUI Line Wrapper Test Fix
+
+- Fixed 3 failing tests in `crates/vendor/gpui/src/text_system/line_wrapper.rs`:
+  - `test_truncate_line`: restored `"…"` ellipsis in second case (was `""` with stale expected output)
+  - `test_truncate_multiple_runs`: restored `"…"` ellipsis in all cases (run length expectations assumed 3-byte suffix)
+  - `test_update_run_after_truncation`: restored `"…"` ellipsis and result strings (expected lengths assumed suffix present)
+- Root cause: tests were adapted from upstream Zed (`TruncateFrom::End` variant) but the `"…"` ellipsis character was stripped without updating expected values, creating impossible expectations (e.g., identical inputs yielding different outputs, run lengths exceeding result length)
+- All 991 workspace tests now pass (0 failures)
+
+### Previous Component Delivered (Iteration 45) — Binary 3-Way Auto-Resolution Hardening
 
 - Implemented dedicated mergetool-mode binary resolution heuristics in `crates/gitgpui-app/src/mergetool_mode.rs`:
   - clean auto-merge when `LOCAL == REMOTE` (binary-identical sides)
