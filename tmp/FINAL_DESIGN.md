@@ -3,6 +3,7 @@
 ## Implementation Progress
 
 - ✅ **Iteration 1 verification audit (2026-03-01):** compared implementation against `tmp/conflict_resolution.md` and confirmed all design components are already implemented in the current codebase. Re-validated with focused conflict test suites and clippy (`gitgpui-core`, `gitgpui-state`, `gitgpui-ui-gpui`, `gitgpui-git-gix`) — all passing.
+- ✅ **Iteration 2 verification audit (2026-03-01):** rechecked design/code parity and reran focused conflict suites (`cargo test -p gitgpui-core conflict_session`, `cargo test -p gitgpui-state conflict_session`, `cargo test -p gitgpui-ui-gpui conflict_resolver`, `cargo test -p gitgpui-git-gix conflict`) — no remaining unimplemented components from `tmp/conflict_resolution.md`; status remains complete.
 
 ### 1) Unified Conflict Session Model
 - ✅ `ConflictPayload` enum (Text, Binary, Absent) with `from_bytes` conversion — `crates/gitgpui-core/src/conflict_session.rs`
