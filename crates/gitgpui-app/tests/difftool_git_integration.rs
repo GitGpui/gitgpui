@@ -443,6 +443,42 @@ fn git_difftool_trust_exit_code_flag_overrides_config() {
     );
 }
 
+// ── Symlink diff ─────────────────────────────────────────────────────
+
+#[test]
+fn git_difftool_shows_symlink_target_change() {
+    // When a symlink target changes, git difftool shows the diff of
+    // the symlink targets (short text strings).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    std::os::unix::fs::symlink("original_target", repo.join("link"))
+        .expect("create symlink");
+    commit_all(repo, "base: add symlink");
+
+    // Change the symlink target.
+    fs::remove_file(repo.join("link")).unwrap();
+    std::os::unix::fs::symlink("new_target", repo.join("link"))
+        .expect("create symlink");
+
+    configure_gitgpui_difftool(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", "link"]);
+    let text = output_text(&output);
+
+    // Git shows symlink targets as file content to the difftool.
+    // Our tool should produce a diff between "original_target" and "new_target".
+    assert!(
+        output.status.success(),
+        "git difftool failed for symlink\n{text}"
+    );
+    assert!(
+        text.contains("original_target") || text.contains("new_target"),
+        "expected symlink target content in difftool output\n{text}"
+    );
+}
+
 #[test]
 fn git_difftool_tool_help_lists_gitgpui_tool() {
     let tmp = tempfile::tempdir().unwrap();
