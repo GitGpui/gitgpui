@@ -69,7 +69,7 @@ use chrome::{
 };
 use conflict_resolver::{
     ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverHoverState,
-    ConflictResolverViewMode, ResolvedLineMeta, ResolvedLineSource, SourceLineKey,
+    ConflictResolverViewMode, ResolvedLineMeta, SourceLineKey,
 };
 #[cfg(test)]
 use date_time::format_datetime_utc;
@@ -516,6 +516,27 @@ impl Default for ConflictResolverUiState {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum ResolverPickTarget {
+    /// Append a specific line from the 3-way resolver pane.
+    ThreeWayLine {
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+    },
+    /// Append a specific line from the 2-way split resolver pane.
+    TwoWaySplitLine {
+        row_ix: usize,
+        side: conflict_resolver::ConflictPickSide,
+    },
+    /// Append a specific line from the 2-way inline resolver pane.
+    TwoWayInlineLine { row_ix: usize },
+    /// Pick a full conflict chunk for the requested side.
+    Chunk {
+        conflict_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+    },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum PopoverKind {
     RepoPicker,
@@ -670,6 +691,12 @@ enum PopoverKind {
         discard_lines_patch: Option<String>,
         lines_count: usize,
         copy_text: Option<String>,
+    },
+    ConflictResolverInputRowMenu {
+        line_label: SharedString,
+        line_target: ResolverPickTarget,
+        chunk_label: SharedString,
+        chunk_target: ResolverPickTarget,
     },
     CommitMenu {
         repo_id: RepoId,

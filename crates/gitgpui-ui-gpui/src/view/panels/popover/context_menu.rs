@@ -4,6 +4,7 @@ mod branch;
 mod branch_section;
 mod commit;
 mod commit_file;
+mod conflict_resolver_input_row;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
@@ -242,6 +243,17 @@ impl PopoverHost {
                 discard_lines_patch,
                 *lines_count,
                 copy_text,
+            )),
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            } => Some(conflict_resolver_input_row::model(
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
             )),
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(*repo_id))
@@ -580,6 +592,11 @@ impl PopoverHost {
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(kind, anchor, window, cx);
                 return;
+            }
+            ContextMenuAction::ConflictResolverPick { target } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_apply_pick_target(target, cx);
+                });
             }
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));

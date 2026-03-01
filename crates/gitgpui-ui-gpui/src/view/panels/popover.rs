@@ -507,6 +507,7 @@ impl PopoverHost {
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -925,6 +926,7 @@ impl PopoverHost {
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::TagMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
@@ -1465,6 +1467,23 @@ impl PopoverHost {
                 )
                 .min_w(px(160.0))
                 .max_w(px(260.0)),
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverInputRowMenu {
+                        line_label,
+                        line_target,
+                        chunk_label,
+                        chunk_target,
+                    },
+                    cx,
+                )
+                .min_w(px(180.0))
+                .max_w(px(280.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

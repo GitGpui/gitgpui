@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictChoice {
     Base,
     Ours,
@@ -1067,6 +1067,17 @@ fn build_two_way_conflict_line_ranges(
     ranges
 }
 
+/// Build marker-conflict line ranges for the two-way resolver panes.
+///
+/// Returns one entry per marker conflict block:
+/// - `.0` is the 1-based `A`/ours line range (`start..end_exclusive`)
+/// - `.1` is the 1-based `B`/theirs line range (`start..end_exclusive`)
+pub fn two_way_conflict_line_ranges(
+    segments: &[ConflictSegment],
+) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+    build_two_way_conflict_line_ranges(segments)
+}
+
 fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,
@@ -1558,8 +1569,7 @@ pub fn build_resolved_output_line_sources_index(
     output_lines: &[String],
     view_mode: ConflictResolverViewMode,
 ) -> rustc_hash::FxHashSet<SourceLineKey> {
-    let mut index =
-        rustc_hash::FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
+    let mut index = rustc_hash::FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
     for m in meta {
         if m.source == ResolvedLineSource::Manual {
             continue;
@@ -2139,10 +2149,7 @@ theirs only line
             c: &c,
         };
 
-        let output = vec![
-            "fn main()".to_string(),
-            "  eprintln!()".to_string(),
-        ];
+        let output = vec!["fn main()".to_string(), "  eprintln!()".to_string()];
         let meta = compute_resolved_line_provenance(&output, &sources);
         let index = build_resolved_output_line_sources_index(
             &meta,

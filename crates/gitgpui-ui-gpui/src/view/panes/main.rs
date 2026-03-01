@@ -675,6 +675,31 @@ impl MainPaneView {
         });
     }
 
+    pub(in super::super) fn open_conflict_resolver_input_row_context_menu(
+        &mut self,
+        invoker: SharedString,
+        line_label: SharedString,
+        line_target: ResolverPickTarget,
+        chunk_label: SharedString,
+        chunk_target: ResolverPickTarget,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.activate_context_menu_invoker(invoker, cx);
+        self.open_popover_at(
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            },
+            anchor,
+            window,
+            cx,
+        );
+    }
+
     pub(in super::super) fn open_popover_at_cursor(
         &mut self,
         kind: PopoverKind,
@@ -2275,7 +2300,30 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
                 self.conflict_resolver.hide_resolved,
             );
+    }
 
+    pub(in super::super) fn conflict_resolver_apply_pick_target(
+        &mut self,
+        target: ResolverPickTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match target {
+            ResolverPickTarget::ThreeWayLine { line_ix, choice } => {
+                self.conflict_resolver_append_three_way_line_to_output(line_ix, choice, cx);
+            }
+            ResolverPickTarget::TwoWaySplitLine { row_ix, side } => {
+                self.conflict_resolver_append_split_line_to_output(row_ix, side, cx);
+            }
+            ResolverPickTarget::TwoWayInlineLine { row_ix } => {
+                self.conflict_resolver_append_inline_line_to_output(row_ix, cx);
+            }
+            ResolverPickTarget::Chunk {
+                conflict_ix,
+                choice,
+            } => {
+                self.conflict_resolver_pick_at(conflict_ix, choice, cx);
+            }
+        }
     }
 
     /// Immediately append a single line from the two-way split view to resolved output.
@@ -2357,8 +2405,7 @@ impl MainPaneView {
         let current = self
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
-        let next =
-            conflict_resolver::append_lines_to_output(&current, &[content.to_string()]);
+        let next = conflict_resolver::append_lines_to_output(&current, &[content.to_string()]);
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
