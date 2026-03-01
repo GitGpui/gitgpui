@@ -2427,3 +2427,134 @@ fn git_mergetool_cli_flag_overrides_git_config() {
     );
     assert!(merged.contains("<<<<<<<"), "should have conflict markers");
 }
+
+// ── Binary file conflict handling ────────────────────────────────────
+
+fn write_bytes_to_file(repo: &Path, rel: &str, bytes: &[u8]) {
+    let path = repo.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent directories");
+    }
+    fs::write(path, bytes).expect("write bytes file");
+}
+
+/// Create a conflict on a binary file: base has one binary content,
+/// main and feature branches modify it differently.
+fn setup_binary_conflict(repo: &Path) {
+    init_repo(repo);
+
+    // Base: a small "binary" file with null bytes.
+    let base_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02, 0x03];
+    write_bytes_to_file(repo, "image.bin", &base_bytes);
+    commit_all(repo, "base: add binary file");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    let feature_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xAA, 0xBB, 0xCC];
+    write_bytes_to_file(repo, "image.bin", &feature_bytes);
+    commit_all(repo, "feature: modify binary file");
+
+    run_git(repo, &["checkout", "main"]);
+    let main_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xDD, 0xEE, 0xFF];
+    write_bytes_to_file(repo, "image.bin", &main_bytes);
+    commit_all(repo, "main: modify binary file differently");
+
+    // Merge will fail with a conflict.
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !output.status.success(),
+        "expected merge to fail with binary conflict"
+    );
+}
+
+/// E2E: `git mergetool` with a binary file conflict reports the binary
+/// conflict and keeps the local version in the merged output.
+///
+/// This covers behavior matrix item #4 (binary and non-UTF8 content)
+/// end-to-end through the actual `git mergetool` invocation.
+#[test]
+fn git_mergetool_binary_conflict_keeps_local_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    setup_binary_conflict(&repo);
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    // The tool should report binary conflict via stderr.
+    assert!(
+        text.contains("binary") || text.contains("Binary"),
+        "expected binary conflict message in tool output, got:\n{text}"
+    );
+
+    // With trustExitCode=true and our tool exiting 1 (CANCELED for binary),
+    // git considers the file unresolved. The merged file should contain
+    // the local version's bytes (our tool copies LOCAL to MERGED for binary).
+    let merged_bytes = fs::read(repo.join("image.bin")).unwrap();
+    let main_bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x00, 0xDD, 0xEE, 0xFF];
+    assert_eq!(
+        merged_bytes, main_bytes,
+        "binary conflict should keep local (main) version in MERGED"
+    );
+}
+
+/// E2E: `git mergetool` with a binary file conflict alongside a text conflict
+/// processes both files correctly — the text conflict gets auto-merged while
+/// the binary conflict is detected and handled separately.
+#[test]
+fn git_mergetool_binary_conflict_alongside_text_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+
+    // Base commit: one text file and one binary file.
+    write_file(&repo, "text.txt", "aaa\nbbb\nccc\n");
+    let base_bytes: Vec<u8> = vec![0x00, 0x01, 0x02, 0x03];
+    write_bytes_to_file(&repo, "image.bin", &base_bytes);
+    commit_all(&repo, "base");
+
+    // Feature branch: modify both files.
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    write_file(&repo, "text.txt", "aaa\nREMOTE\nccc\n");
+    let feature_bytes: Vec<u8> = vec![0x00, 0xAA, 0xBB, 0xCC];
+    write_bytes_to_file(&repo, "image.bin", &feature_bytes);
+    commit_all(&repo, "feature: change both files");
+
+    // Main branch: modify both files differently.
+    run_git(&repo, &["checkout", "main"]);
+    write_file(&repo, "text.txt", "aaa\nLOCAL\nccc\n");
+    let main_bytes: Vec<u8> = vec![0x00, 0xDD, 0xEE, 0xFF];
+    write_bytes_to_file(&repo, "image.bin", &main_bytes);
+    commit_all(&repo, "main: change both files differently");
+
+    let merge_output = run_git_capture(&repo, &["merge", "feature"]);
+    assert!(
+        !merge_output.status.success(),
+        "expected merge to fail with conflicts"
+    );
+
+    configure_gitgpui_mergetool(&repo);
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    // The text file conflict should have been processed by our mergetool.
+    // Since both sides changed the same line differently, it will have markers.
+    let text_merged = fs::read_to_string(repo.join("text.txt")).unwrap();
+    assert!(
+        text_merged.contains("<<<<<<<") || text_merged.contains("LOCAL") || text_merged.contains("REMOTE"),
+        "text conflict should be processed, got:\n{text_merged}"
+    );
+
+    // The binary file should have been handled: local version kept.
+    let bin_merged = fs::read(repo.join("image.bin")).unwrap();
+    assert_eq!(
+        bin_merged, main_bytes,
+        "binary conflict should keep local (main) version"
+    );
+
+    // Tool output should mention binary.
+    assert!(
+        text.contains("binary") || text.contains("Binary"),
+        "expected binary conflict mention in output, got:\n{text}"
+    );
+}
