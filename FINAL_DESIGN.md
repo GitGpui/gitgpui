@@ -23,7 +23,9 @@
 - 🔧 Dedicated difftool mode tests are partially implemented:
   - ✅ Runtime/unit coverage added in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
   - ✅ Full git-invoked integration tests added in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic `git difftool` execution, spaced path handling, subdirectory invocation, `--dir-diff` mode, and global-like difftool config wiring).
-- 🔧 End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are partially implemented (`git difftool` done; `git mergetool` E2E still pending).
+- ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
+  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (4 tests).
+  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (8 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), spaced path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, and CRLF preservation.
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
 - ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
 
@@ -55,21 +57,36 @@
   - Default test runs against gitgpui's own repo; ignored test supports arbitrary external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var.
   - Includes fixture file generation (`write_fixtures`) compatible with the existing Phase 2 fixture harness format.
   - 8 tests (+ 2 ignored): discovery, trivial skip, nontrivial conflict, clean merge, binary skip, fixture writing, multifile merge, self-repo regression.
-- 🔧 Phase 4A (critical `t7610-mergetool` E2E): partially implemented in `gitgpui-git-gix` tests:
+- 🔧 Phase 4A (critical `t7610-mergetool` E2E): substantially implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
   - ✅ trust-exit behavior and content-change semantics
   - ✅ custom command invocation and braced env variables
   - ✅ gui tool preference path via `merge.guitool` + `mergetool.guiDefault=true`
   - ✅ tool path override via `mergetool.<tool>.path`
   - ✅ writeToTemp stage-file path behavior (`true` temp paths, `false` `./`-prefixed workdir paths)
   - ✅ no-base file contract in add/add conflicts (tool receives an empty `BASE` file)
-  - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, orderFile/delete-delete prompt flow/submodule matrix, and full E2E via `git mergetool` command) still pending
+  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (8 tests): overlapping conflict, trust-exit-code for clean/conflict, spaced paths, subdirectory, add/add, multiple files, CRLF
+  - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, orderFile/delete-delete prompt flow/submodule matrix) still pending
 - 🔧 Phase 4B (critical `t7800-difftool` E2E): partially implemented.
   - ✅ Foundational difftool runtime added in `gitgpui-app` (`difftool_mode.rs`) with Git-compatible exit semantics and label/display-path handling.
   - ✅ Targeted difftool runtime tests added (unit-level behavior parity for changed/unchanged files, label handling, directory diff, and error path).
   - ✅ Git-invoked E2E coverage added in `crates/gitgpui-app/tests/difftool_git_integration.rs` for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff` mode with repo-local/global-like config.
   - 🔧 Remaining: explicit `difftool.guiDefault` selection-path parity and dedicated trust-exit interaction matrix assertions.
 
-### Latest Component Delivered (Current Iteration)
+### Latest Component Delivered (Iteration 9 — Current)
+
+- Implemented full Git-invoked mergetool E2E integration tests in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
+  - 8 tests covering the full `git mergetool` → `gitgpui-app mergetool` pipeline:
+    1. `git_mergetool_resolves_overlapping_conflict` — tool processes conflicted file via git mergetool
+    2. `git_mergetool_with_trust_exit_code_marks_clean_merge_resolved` — clean auto-merge accepted by git
+    3. `git_mergetool_trust_exit_code_conflict_preserves_unmerged_state` — unresolved conflict correctly leaves file unmerged
+    4. `git_mergetool_handles_path_with_spaces` — spaced filenames passed correctly through git→tool pipeline
+    5. `git_mergetool_works_from_subdirectory` — invocation from repo subdirectory resolves paths correctly
+    6. `git_mergetool_handles_add_add_conflict` — both-added file (no base) scenario
+    7. `git_mergetool_multiple_conflicted_files` — tool invoked for each conflicted file
+    8. `git_mergetool_crlf_content_preserved` — CRLF line endings preserved through merge pipeline
+  - Tests create real git repos with merge conflicts, configure gitgpui-app as `mergetool.gitgpui.cmd` with `trustExitCode=true`, and invoke `git mergetool --no-prompt` to verify end-to-end behavior.
+
+### Iteration 8 Component Delivered
 
 - Implemented full Git-invoked difftool integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs`:
   - `git difftool` basic invocation (`LOCAL`/`REMOTE` wiring)
@@ -81,7 +98,7 @@
   - removed inherited `GIT_EXTERNAL_DIFF` before spawning nested git diff
   - prevents recursive `git-difftool--helper` loops when Git launches GitGpui as `difftool.<tool>.cmd`
 
-### Latest Component Delivered (Iteration 8)
+### Iteration 8 Component Delivered (Mergetool Runtime)
 
 - Implemented focused `mergetool` runtime path in `gitgpui-app`:
   - Added `crates/gitgpui-app/src/mergetool_mode.rs` with `run_mergetool()` that performs 3-way merge using the built-in `merge_file()` algorithm from `gitgpui-core`.
