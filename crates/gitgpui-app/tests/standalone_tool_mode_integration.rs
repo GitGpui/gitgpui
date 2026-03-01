@@ -701,3 +701,157 @@ fn setup_local_writes_config_to_repo() {
     assert!(diff_cmd.contains("$LOCAL"), "diff cmd missing $LOCAL");
     assert!(diff_cmd.contains("$REMOTE"), "diff cmd missing $REMOTE");
 }
+
+// ── Auto-resolve mode E2E ───────────────────────────────────────────
+
+#[test]
+fn standalone_mergetool_auto_resolves_whitespace_conflict_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "aaa\nbbb\nccc\n");
+    write_file(&local, "aaa\nbbb  \nccc\n");
+    write_file(&remote, "aaa\nbbb\t\nccc\n");
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--auto",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "auto mergetool should exit 0 for whitespace-only conflict\nstderr: {stderr}"
+    );
+    let result = fs::read_to_string(&merged).unwrap();
+    assert!(
+        !result.contains("<<<<<<<"),
+        "output should not contain conflict markers\n{result}"
+    );
+}
+
+#[test]
+fn standalone_mergetool_auto_with_diff3_resolves_subchunk_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    // Ours changes line 2, theirs changes line 1 — non-overlapping within block.
+    write_file(&base, "aaa\nbbb\nccc\n");
+    write_file(&local, "aaa\nBBB\nccc\n");
+    write_file(&remote, "AAA\nbbb\nccc\n");
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--auto",
+        "--conflict-style",
+        "diff3",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+    ]);
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "auto mergetool with diff3 should exit 0 for subchunk-resolvable conflict\nstderr: {stderr}"
+    );
+    let result = fs::read_to_string(&merged).unwrap();
+    assert_eq!(result, "AAA\nBBB\nccc\n");
+}
+
+#[test]
+fn standalone_mergetool_auto_unresolvable_conflict_exits_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "aaa\nbbb\nccc\n");
+    write_file(&local, "aaa\nXXX\nccc\n");
+    write_file(&remote, "aaa\nYYY\nccc\n");
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--auto",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "auto mergetool should still exit 1 for true conflicts"
+    );
+    let result = fs::read_to_string(&merged).unwrap();
+    assert!(
+        result.contains("<<<<<<<"),
+        "output should contain conflict markers for true conflicts"
+    );
+}
+
+#[test]
+fn standalone_mergetool_without_auto_does_not_autosolve() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    // Whitespace-only conflict — auto mode would resolve it.
+    write_file(&base, "aaa\nbbb\nccc\n");
+    write_file(&local, "aaa\nbbb  \nccc\n");
+    write_file(&remote, "aaa\nbbb\t\nccc\n");
+    write_file(&merged, "");
+
+    let output = run_gitgpui([
+        "mergetool",
+        "--base",
+        &base.to_string_lossy(),
+        "--local",
+        &local.to_string_lossy(),
+        "--remote",
+        &remote.to_string_lossy(),
+        "--merged",
+        &merged.to_string_lossy(),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "without --auto, whitespace-only conflict should exit 1"
+    );
+    let result = fs::read_to_string(&merged).unwrap();
+    assert!(
+        result.contains("<<<<<<<"),
+        "without --auto, output should contain conflict markers"
+    );
+}

@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 51 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, Iteration 49 added one difftool E2E case (22 difftool git-invoked E2E tests total), Iteration 50 added standalone behavior-matrix hardening for no-base mergetool and directory difftool direct-invocation paths, and Iteration 51 hardens the CI parity gate command for the bin-only `gitgpui-app` target.
+All components from both design documents are fully implemented. Iteration 52 adds mergetool `--auto` heuristic auto-resolve mode: when enabled, the headless mergetool applies conflict session heuristic passes (whitespace normalization, single-side-change detection, and subchunk splitting) on conflict blocks after the initial 3-way merge, potentially resolving more conflicts automatically. This matches KDiff3's `--auto` semantics. Full suite: 619 tests pass, 0 failures, 0 clippy warnings.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 51)
+### Progress Snapshot (Iteration 52)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -28,6 +28,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, GUI tool aliases, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
+- ✅ Mergetool `--auto` heuristic auto-resolve mode is now implemented: when `--auto` is passed to `gitgpui-app mergetool` (or `--auto`/`--auto-merge` via KDiff3/Meld compatibility mode), the mergetool applies heuristic passes on remaining conflict blocks after the initial 3-way merge: identical-side detection, single-side-change detection (requires diff3/zdiff3 base), whitespace-only normalization, and subchunk splitting (line-level re-merge within blocks). If ALL conflicts are resolved, writes clean output and exits 0. If any remain, writes markers and exits 1. Core function `try_autosolve_merged_text()` is public in `conflict_session.rs` with 8 unit tests. 5 mergetool runtime tests + 4 standalone E2E tests + 4 CLI parser tests cover the full pipeline.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
@@ -201,7 +202,34 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 49) — Difftool Submodule Gitlink E2E Parity
+### Latest Component Delivered (Iteration 52) — Mergetool Auto-Resolve Mode
+
+- Implemented `try_autosolve_merged_text()` in `crates/gitgpui-core/src/conflict_session.rs`:
+  - Parses merged text with conflict markers into alternating context/conflict spans
+  - For each conflict block, tries 5 heuristic passes: identical sides, single-side change (with base), whitespace-only normalization, subchunk splitting (line-level re-merge)
+  - Returns clean text if ALL conflicts resolved, `None` otherwise
+  - 8 unit tests covering: no-conflicts, identical sides, whitespace-only, diff3 single-side, diff3 subchunk, true conflict, partial resolve, multiple conflicts
+- Added `--auto` CLI flag to `gitgpui-app mergetool` subcommand in `crates/gitgpui-app/src/cli.rs`:
+  - Boolean flag that enables heuristic auto-resolve post-processing
+  - Propagated through `MergetoolConfig.auto` field
+  - Wired in KDiff3/Meld compatibility mode: `--auto`/`--auto-merge` → `config.auto = true`
+  - 4 CLI parser tests (clap parsing, config propagation, compat `--auto`, compat `--auto-merge`)
+- Wired autosolve into mergetool runtime in `crates/gitgpui-app/src/mergetool_mode.rs`:
+  - After `merge_file_bytes` produces conflicts and `config.auto` is true, calls `try_autosolve_merged_text`
+  - If autosolve succeeds: overwrites MERGED with clean output, exits 0 with "Auto-resolved" message
+  - If autosolve fails: keeps original markers, exits 1
+  - 5 runtime unit tests covering: whitespace resolve, diff3 subchunk resolve, true conflict, disabled mode, identical sides
+- Added standalone E2E tests in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `standalone_mergetool_auto_resolves_whitespace_conflict_exits_zero`
+  - `standalone_mergetool_auto_with_diff3_resolves_subchunk_exits_zero`
+  - `standalone_mergetool_auto_unresolvable_conflict_exits_one`
+  - `standalone_mergetool_without_auto_does_not_autosolve`
+- Refactored `merged_display_name()` helper to reduce code duplication in mergetool output messages
+- Verification:
+  - `cargo test -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix` — 619 passed, 0 failed
+  - `cargo clippy -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix -- -D warnings` — clean
+
+### Previous Component Delivered (Iteration 49) — Difftool Submodule Gitlink E2E Parity
 
 - Added `git_difftool_shows_submodule_gitlink_change` in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
 - The new test builds a real submodule repo, advances the submodule commit, runs `git difftool -- submod`, and asserts GitGpui surfaces both old and new `Subproject commit <sha>` pointers.

@@ -742,6 +742,209 @@ fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
     regions
 }
 
+// ── Standalone autosolve for merged text ────────────────────────────
+
+/// Span of merged text: either context (non-conflict) or a conflict block.
+enum MergedSpan {
+    Context(String),
+    Conflict {
+        base: Option<String>,
+        ours: String,
+        theirs: String,
+    },
+}
+
+/// Parse merged text into alternating context and conflict spans.
+///
+/// Unlike [`parse_conflict_regions_from_markers`] which discards context,
+/// this preserves all text so the full file can be reconstructed.
+fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
+    let mut spans = Vec::new();
+    let mut context = String::new();
+    let mut it = text.split_inclusive('\n').peekable();
+
+    while let Some(line) = it.next() {
+        if !line.starts_with("<<<<<<<") {
+            context.push_str(line);
+            continue;
+        }
+
+        // Flush context before the conflict block.
+        if !context.is_empty() {
+            spans.push(MergedSpan::Context(std::mem::take(&mut context)));
+        }
+
+        let mut base: Option<String> = None;
+        let mut ours = String::new();
+        let mut found_sep = false;
+
+        while let Some(l) = it.next() {
+            if l.starts_with("=======") {
+                found_sep = true;
+                break;
+            }
+            if l.starts_with("|||||||") {
+                let mut base_buf = String::new();
+                for base_line in it.by_ref() {
+                    if base_line.starts_with("=======") {
+                        found_sep = true;
+                        break;
+                    }
+                    base_buf.push_str(base_line);
+                }
+                base = Some(base_buf);
+                break;
+            }
+            ours.push_str(l);
+        }
+
+        if !found_sep {
+            // Malformed: treat remaining as context.
+            context.push_str(line);
+            break;
+        }
+
+        let mut theirs = String::new();
+        let mut found_end = false;
+        for l in it.by_ref() {
+            if l.starts_with(">>>>>>>") {
+                found_end = true;
+                break;
+            }
+            theirs.push_str(l);
+        }
+
+        if !found_end {
+            // Malformed: treat remaining as context.
+            context.push_str(line);
+            break;
+        }
+
+        spans.push(MergedSpan::Conflict {
+            base,
+            ours,
+            theirs,
+        });
+    }
+
+    // Flush trailing context.
+    if !context.is_empty() {
+        spans.push(MergedSpan::Context(context));
+    }
+
+    spans
+}
+
+/// Try to resolve a single conflict block using safe heuristics.
+///
+/// Applies:
+/// 1. Identical sides (ours == theirs).
+/// 2. Single-side change when base is available.
+/// 3. Whitespace-only difference.
+/// 4. Subchunk splitting (line-level re-merge) when base is available.
+///
+/// Returns `Some(resolved_text)` if the block can be auto-resolved.
+fn try_resolve_single_block(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+) -> Option<String> {
+    // Rule 1: identical sides.
+    if ours == theirs {
+        return Some(ours.to_string());
+    }
+
+    if let Some(base) = base {
+        // Rule 2: only theirs changed.
+        if ours == base && theirs != base {
+            return Some(theirs.to_string());
+        }
+        // Rule 3: only ours changed.
+        if theirs == base && ours != base {
+            return Some(ours.to_string());
+        }
+    }
+
+    // Rule 4: whitespace-only difference.
+    if is_whitespace_only_diff(ours, theirs) {
+        return Some(ours.to_string());
+    }
+
+    // Rule 5: subchunk splitting (requires base).
+    if let Some(base) = base {
+        let region = ConflictRegion {
+            base: Some(base.to_string()),
+            ours: ours.to_string(),
+            theirs: theirs.to_string(),
+            resolution: ConflictRegionResolution::Unresolved,
+        };
+        if let Some(subchunks) = split_conflict_into_subchunks(base, &region.ours, &region.theirs)
+            .filter(|sc| sc.iter().all(|c| matches!(c, Subchunk::Resolved(_))))
+        {
+            let merged: String = subchunks
+                .iter()
+                .map(|c| match c {
+                    Subchunk::Resolved(text) => text.as_str(),
+                    _ => unreachable!(),
+                })
+                .collect();
+            return Some(merged);
+        }
+    }
+
+    None
+}
+
+/// Attempt to auto-resolve all conflict blocks in merged text.
+///
+/// Parses the merged text (with conflict markers) into alternating context and
+/// conflict spans, then applies safe heuristic passes on each conflict block:
+///
+/// 1. **Identical sides** — ours == theirs.
+/// 2. **Single-side change** — one side matches base (requires diff3/zdiff3 markers).
+/// 3. **Whitespace-only** — sides differ only in whitespace.
+/// 4. **Subchunk splitting** — line-level re-merge within the block (requires base).
+///
+/// Returns `Some(clean_text)` if ALL conflicts were resolved, `None` otherwise.
+///
+/// This is designed for use in headless mergetool `--auto` mode, matching
+/// KDiff3's auto-resolve behavior: attempt to resolve all conflicts automatically,
+/// write clean output and exit 0 if successful, otherwise leave markers and exit 1.
+pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
+    let spans = parse_merged_spans(text);
+
+    let has_conflicts = spans
+        .iter()
+        .any(|s| matches!(s, MergedSpan::Conflict { .. }));
+    if !has_conflicts {
+        // No conflicts to resolve — return the text as-is.
+        return Some(text.to_string());
+    }
+
+    let mut output = String::with_capacity(text.len());
+
+    for span in &spans {
+        match span {
+            MergedSpan::Context(text) => output.push_str(text),
+            MergedSpan::Conflict {
+                base,
+                ours,
+                theirs,
+            } => {
+                if let Some(resolved) =
+                    try_resolve_single_block(base.as_deref(), ours, theirs)
+                {
+                    output.push_str(&resolved);
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+
+    Some(output)
+}
+
 /// Normalize a string by collapsing all whitespace runs into a single space.
 fn normalize_whitespace(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -3257,5 +3460,153 @@ unterminated content with no separator
         assert_eq!(session.next_unresolved_after(0), Some(1));
         assert_eq!(session.next_unresolved_after(1), Some(1));
         assert_eq!(session.prev_unresolved_before(2), Some(1));
+    }
+
+    // ── try_autosolve_merged_text tests ──────────────────────────────
+
+    #[test]
+    fn autosolve_no_conflicts_returns_text_as_is() {
+        let text = "clean\nfile\ncontent\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(result, Some(text.to_string()));
+    }
+
+    #[test]
+    fn autosolve_identical_sides_resolves() {
+        let text = "before\n\
+            <<<<<<< ours\n\
+            same change\n\
+            =======\n\
+            same change\n\
+            >>>>>>> theirs\n\
+            after\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(result, Some("before\nsame change\nafter\n".to_string()));
+    }
+
+    #[test]
+    fn autosolve_whitespace_only_diff_resolves() {
+        let text = "before\n\
+            <<<<<<< ours\n\
+            hello  world\n\
+            =======\n\
+            hello world\n\
+            >>>>>>> theirs\n\
+            after\n";
+        let result = try_autosolve_merged_text(text);
+        // Whitespace-only: picks ours.
+        assert_eq!(result, Some("before\nhello  world\nafter\n".to_string()));
+    }
+
+    #[test]
+    fn autosolve_diff3_single_side_change_resolves() {
+        let text = "before\n\
+            <<<<<<< ours\n\
+            unchanged\n\
+            ||||||| base\n\
+            unchanged\n\
+            =======\n\
+            modified\n\
+            >>>>>>> theirs\n\
+            after\n";
+        let result = try_autosolve_merged_text(text);
+        // Ours == base, only theirs changed → pick theirs.
+        assert_eq!(result, Some("before\nmodified\nafter\n".to_string()));
+    }
+
+    #[test]
+    fn autosolve_diff3_subchunk_split_resolves() {
+        // Two non-overlapping changes within a single conflict block.
+        let text = "ctx\n\
+            <<<<<<< ours\n\
+            aaa\n\
+            BBB\n\
+            ccc\n\
+            ||||||| base\n\
+            aaa\n\
+            bbb\n\
+            ccc\n\
+            =======\n\
+            AAA\n\
+            bbb\n\
+            ccc\n\
+            >>>>>>> theirs\n\
+            end\n";
+        let result = try_autosolve_merged_text(text);
+        // Ours changed line 2, theirs changed line 1 → subchunk merge.
+        assert_eq!(
+            result,
+            Some("ctx\nAAA\nBBB\nccc\nend\n".to_string())
+        );
+    }
+
+    #[test]
+    fn autosolve_true_conflict_returns_none() {
+        let text = "before\n\
+            <<<<<<< ours\n\
+            completely different\n\
+            =======\n\
+            totally different\n\
+            >>>>>>> theirs\n\
+            after\n";
+        let result = try_autosolve_merged_text(text);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn autosolve_partial_resolve_returns_none() {
+        // Two conflicts: first resolvable, second not.
+        let text = "start\n\
+            <<<<<<< ours\n\
+            same\n\
+            =======\n\
+            same\n\
+            >>>>>>> theirs\n\
+            middle\n\
+            <<<<<<< ours\n\
+            foo\n\
+            =======\n\
+            bar\n\
+            >>>>>>> theirs\n\
+            end\n";
+        let result = try_autosolve_merged_text(text);
+        // Second conflict is unresolvable → None.
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn autosolve_multiple_resolvable_conflicts() {
+        let text = "a\n\
+            <<<<<<< ours\n\
+            X\n\
+            =======\n\
+            X\n\
+            >>>>>>> theirs\n\
+            b\n\
+            <<<<<<< ours\n\
+            Y Y\n\
+            =======\n\
+            Y  Y\n\
+            >>>>>>> theirs\n\
+            c\n";
+        let result = try_autosolve_merged_text(text);
+        // First: identical sides. Second: whitespace-only (picks ours "Y Y").
+        assert_eq!(result, Some("a\nX\nb\nY Y\nc\n".to_string()));
+    }
+
+    #[test]
+    fn autosolve_preserves_context_between_conflicts() {
+        let text = "line1\nline2\n\
+            <<<<<<< ours\n\
+            same\n\
+            =======\n\
+            same\n\
+            >>>>>>> theirs\n\
+            line3\nline4\nline5\n";
+        let result = try_autosolve_merged_text(text);
+        assert_eq!(
+            result,
+            Some("line1\nline2\nsame\nline3\nline4\nline5\n".to_string())
+        );
     }
 }

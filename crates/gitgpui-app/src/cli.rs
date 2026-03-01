@@ -105,6 +105,18 @@ pub struct MergetoolArgs {
     /// Conflict marker width (must be > 0). Default: 7.
     #[arg(long, value_name = "N")]
     pub marker_size: Option<usize>,
+    /// Auto-resolve mode: attempt to resolve all conflicts automatically.
+    ///
+    /// When enabled, the mergetool applies heuristic passes after the initial
+    /// 3-way merge: identical-side detection, single-side-change detection,
+    /// whitespace-only normalization, and subchunk splitting. If ALL conflicts
+    /// are resolved, exits 0 with clean output. If any remain, writes conflict
+    /// markers and exits 1 as usual.
+    ///
+    /// For best results, combine with `--conflict-style diff3` or `zdiff3`
+    /// to provide base content for heuristic resolution.
+    #[arg(long)]
+    pub auto: bool,
 }
 
 // ── Validated configuration types ────────────────────────────────────
@@ -132,6 +144,7 @@ pub struct MergetoolConfig {
     pub conflict_style: ConflictStyle,
     pub diff_algorithm: DiffAlgorithm,
     pub marker_size: usize,
+    pub auto: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -368,6 +381,7 @@ fn resolve_mergetool_with_env(
         conflict_style,
         diff_algorithm,
         marker_size,
+        auto: args.auto,
     })
 }
 
@@ -712,6 +726,7 @@ fn parse_compat_external_mode_with_config(
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: has_auto || has_auto_merge,
         };
         return resolve_mergetool_with_config(args, env, git_config)
             .map(AppMode::Mergetool)
@@ -1161,6 +1176,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1198,6 +1214,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1226,6 +1243,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1259,6 +1277,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1286,6 +1305,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1309,6 +1329,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1333,6 +1354,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1357,6 +1379,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1381,6 +1404,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1406,6 +1430,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1431,6 +1456,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1456,6 +1482,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1481,6 +1508,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1506,6 +1534,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1532,6 +1561,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1589,6 +1619,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1646,6 +1677,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1677,6 +1709,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2507,6 +2540,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2534,6 +2568,7 @@ mod tests {
             conflict_style: Some("diff3".into()),
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2559,6 +2594,7 @@ mod tests {
             conflict_style: Some("zdiff3".into()),
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2584,6 +2620,7 @@ mod tests {
             conflict_style: Some("bad".into()),
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2609,6 +2646,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: Some("histogram".into()),
             marker_size: None,
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2634,6 +2672,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: Some("patience".into()),
             marker_size: None,
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2659,6 +2698,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: Some(10),
+            auto: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2684,6 +2724,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: Some(0),
+            auto: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2735,6 +2776,7 @@ mod tests {
             conflict_style: None,
             diff_algorithm: None,
             marker_size: None,
+            auto: false,
         }
     }
 
@@ -2846,5 +2888,122 @@ mod tests {
         let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
+    }
+
+    // ── Auto flag ─────────────────────────────────────────────────────
+
+    #[test]
+    fn clap_parses_mergetool_auto_flag() {
+        let cli = Cli::try_parse_from([
+            "gitgpui-app",
+            "mergetool",
+            "--merged",
+            "/tmp/m",
+            "--local",
+            "/tmp/l",
+            "--remote",
+            "/tmp/r",
+            "--auto",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Some(Command::Mergetool(args)) => {
+                assert!(args.auto, "expected --auto to be true");
+            }
+            _ => panic!("expected Mergetool command"),
+        }
+    }
+
+    #[test]
+    fn mergetool_auto_flag_propagates_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = TestEnv::new();
+
+        let args = MergetoolArgs {
+            merged: Some(tmp_file(&dir, "m.txt", "x")),
+            local: Some(tmp_file(&dir, "l.txt", "a")),
+            remote: Some(tmp_file(&dir, "r.txt", "b")),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: true,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert!(config.auto, "auto flag should propagate to config");
+    }
+
+    #[test]
+    fn compat_auto_flag_propagates_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base.txt", "orig");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+        let merged = tmp_file(&dir, "merged.txt", "x");
+
+        let raw_args: Vec<OsString> = vec![
+            OsString::from("--auto"),
+            OsString::from("-o"),
+            merged.as_os_str().to_owned(),
+            base.as_os_str().to_owned(),
+            local.as_os_str().to_owned(),
+            remote.as_os_str().to_owned(),
+        ];
+
+        let env = TestEnv::new();
+        let no_config = |_: &str| None;
+
+        let mode =
+            parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
+                .expect("parse ok")
+                .expect("should parse compat mode");
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert!(config.auto, "compat --auto should propagate to config");
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
+    fn compat_auto_merge_flag_propagates_to_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let base = tmp_file(&dir, "base.txt", "orig");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+        let merged = tmp_file(&dir, "merged.txt", "x");
+
+        let raw_args: Vec<OsString> = vec![
+            OsString::from("--auto-merge"),
+            OsString::from("--output"),
+            merged.as_os_str().to_owned(),
+            local.as_os_str().to_owned(),
+            base.as_os_str().to_owned(),
+            remote.as_os_str().to_owned(),
+        ];
+
+        let env = TestEnv::new();
+        let no_config = |_: &str| None;
+
+        let mode =
+            parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
+                .expect("parse ok")
+                .expect("should parse compat mode");
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert!(
+                    config.auto,
+                    "compat --auto-merge should propagate to config"
+                );
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
     }
 }

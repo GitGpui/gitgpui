@@ -1,6 +1,7 @@
 use crate::cli::{MergetoolConfig, exit_code};
 use gitgpui_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
+    conflict_session::try_autosolve_merged_text,
     merge::{MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes},
 };
 use std::{fs, path::Path};
@@ -72,41 +73,59 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     write_merged_output(config, result.output.as_bytes())?;
 
     if is_clean {
+        let display_name = merged_display_name(config);
         Ok(MergetoolRunResult {
             stdout: String::new(),
-            stderr: format!(
-                "Auto-merged {}\n",
-                config
-                    .merged
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| config.merged.display().to_string())
-            ),
+            stderr: format!("Auto-merged {display_name}\n"),
             exit_code: exit_code::SUCCESS,
             merge_result: Some(result),
         })
+    } else if config.auto {
+        // Auto mode: try heuristic passes on conflict blocks.
+        if let Some(clean_output) = try_autosolve_merged_text(&result.output) {
+            // All conflicts resolved by heuristics — write clean output.
+            write_merged_output(config, clean_output.as_bytes())?;
+            let display_name = merged_display_name(config);
+            Ok(MergetoolRunResult {
+                stdout: String::new(),
+                stderr: format!("Auto-resolved {display_name}\n"),
+                exit_code: exit_code::SUCCESS,
+                merge_result: Some(result),
+            })
+        } else {
+            // Some conflicts remain — write original markers.
+            let display_name = merged_display_name(config);
+            Ok(MergetoolRunResult {
+                stdout: String::new(),
+                stderr: format!(
+                    "Auto-merging {display_name}\nCONFLICT (content): Merge conflict in {display_name}\n\
+                     Automatic merge failed; {conflict_count} conflict(s) remain.\n",
+                ),
+                exit_code: exit_code::CANCELED,
+                merge_result: Some(result),
+            })
+        }
     } else {
+        let display_name = merged_display_name(config);
         Ok(MergetoolRunResult {
             stdout: String::new(),
             stderr: format!(
-                "Auto-merging {}\nCONFLICT (content): Merge conflict in {}\n\
-                 Automatic merge failed; {} conflict(s) remain.\n",
-                config
-                    .merged
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| config.merged.display().to_string()),
-                config
-                    .merged
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| config.merged.display().to_string()),
-                conflict_count,
+                "Auto-merging {display_name}\nCONFLICT (content): Merge conflict in {display_name}\n\
+                 Automatic merge failed; {conflict_count} conflict(s) remain.\n",
             ),
             exit_code: exit_code::CANCELED,
             merge_result: Some(result),
         })
     }
+}
+
+/// Extract a human-readable display name from the MERGED output path.
+fn merged_display_name(config: &MergetoolConfig) -> String {
+    config
+        .merged
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| config.merged.display().to_string())
 }
 
 fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
@@ -265,6 +284,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         }
     }
 
@@ -448,6 +468,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -486,6 +507,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -522,6 +544,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -557,6 +580,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -587,6 +611,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -620,6 +645,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -654,6 +680,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -695,6 +722,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -726,6 +754,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -751,6 +780,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -778,6 +808,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -807,6 +838,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -841,6 +873,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -961,6 +994,7 @@ mod tests {
             conflict_style: gitgpui_core::merge::ConflictStyle::default(),
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -1165,5 +1199,121 @@ mod tests {
         let merged = fs::read_to_string(&config.merged).unwrap();
         assert!(merged.contains("void h()"), "should have ours' h()");
         assert!(merged.contains("y = 2"), "should have theirs' y = 2");
+    }
+
+    // ── Auto-resolve mode ───────────────────────────────────────────
+
+    #[test]
+    fn auto_mode_resolves_whitespace_only_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nbbb  \nccc\n";
+        let theirs = "aaa\nbbb\t\nccc\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.auto = true;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(
+            result.exit_code,
+            exit_code::SUCCESS,
+            "auto mode should resolve whitespace-only conflicts"
+        );
+        assert!(
+            result.stderr.contains("Auto-resolved"),
+            "stderr should report auto-resolution"
+        );
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(
+            !merged.contains("<<<<<<<"),
+            "output should not contain conflict markers"
+        );
+    }
+
+    #[test]
+    fn auto_mode_resolves_diff3_subchunk_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Base has 3 lines; ours changes line 2, theirs changes line 1.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nBBB\nccc\n";
+        let theirs = "AAA\nbbb\nccc\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.conflict_style = gitgpui_core::merge::ConflictStyle::Diff3;
+        config.auto = true;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(
+            result.exit_code,
+            exit_code::SUCCESS,
+            "auto mode should resolve subchunk-splittable conflict with diff3 base"
+        );
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert_eq!(merged, "AAA\nBBB\nccc\n");
+    }
+
+    #[test]
+    fn auto_mode_true_conflict_still_exits_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nXXX\nccc\n";
+        let theirs = "aaa\nYYY\nccc\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.auto = true;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(
+            result.exit_code,
+            exit_code::CANCELED,
+            "auto mode should still exit 1 for true conflicts"
+        );
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("<<<<<<<"), "output should contain markers");
+    }
+
+    #[test]
+    fn auto_mode_disabled_does_not_try_heuristics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nbbb  \nccc\n";
+        let theirs = "aaa\nbbb\t\nccc\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.auto = false;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(
+            result.exit_code,
+            exit_code::CANCELED,
+            "without auto, whitespace-only conflict should exit 1"
+        );
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(
+            merged.contains("<<<<<<<"),
+            "without auto, output should contain markers"
+        );
+    }
+
+    #[test]
+    fn auto_mode_identical_sides_in_conflict_block_resolves() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Artificially create a scenario where both sides make the same
+        // overlapping change from the base. The merge algorithm already
+        // handles this, but auto mode should handle it too if markers
+        // are present.
+        let base = "aaa\nbbb\nccc\n";
+        let ours = "aaa\nXXX\nccc\n";
+        let theirs = "aaa\nXXX\nccc\n";
+
+        let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+        config.auto = true;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        // The basic merge algorithm already resolves identical sides,
+        // so this should exit 0 without even needing autosolve.
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert_eq!(merged, "aaa\nXXX\nccc\n");
     }
 }
