@@ -15,8 +15,12 @@ ui-gpui = ["ui", "dep:gitgpui-ui-gpui"]
 gix = ["dep:gitgpui-git-gix"]
 
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 gitgpui-core = { path = "../gitgpui-core" }
 gitgpui-git = { path = "../gitgpui-git" }
 gitgpui-git-gix = { path = "../gitgpui-git-gix", optional = true }
 gitgpui-ui = { path = "../gitgpui-ui", optional = true }
 gitgpui-ui-gpui = { path = "../gitgpui-ui-gpui", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

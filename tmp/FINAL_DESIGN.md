@@ -1,6 +1,50 @@
-## STATUS: COMPLETE
-
 ## Implementation Progress
+
+### External Tool Usage (external_usage.md)
+
+#### Phase 1 — MVP
+- ✅ **CLI `difftool` and `mergetool` subcommands:** added `clap`-based CLI with `difftool` and `mergetool` subcommands, arg/env parsing (flags take precedence over `LOCAL`/`REMOTE`/`MERGED`/`BASE` env vars), validation (existence checks, actionable error messages), and `AppMode` dispatch in `main.rs`. 26 tests covering flag resolution, env fallback, precedence, missing/nonexistent path errors, spaces, unicode, directories, clap parsing. Exit code policy constants (`SUCCESS=0`, `CANCELED=1`, `ERROR=2`). — `crates/gitgpui-app/src/cli.rs`, `crates/gitgpui-app/src/main.rs`
+- ⬜ Focused difftool GPUI window (UI integration for diff mode)
+- ⬜ Focused mergetool GPUI window (UI integration for merge mode)
+- ⬜ E2E tests for happy-path diff/merge with Git invocation
+
+#### Phase 2 — Compatibility Parity
+- ⬜ Dir-diff support and symlink handling
+- ⬜ No-base/delete/delete/submodule path coverage
+- ⬜ GUI default behavior (`diff.guitool`/`merge.guitool`, `guiDefault auto`)
+- ⬜ `--tool-help` discoverability output
+
+#### Phase 3 — Regression Suite
+- ⬜ KDiff3-style fixture harness and generated corpora
+- ⬜ Parity-focused regression gates in CI
+
+### Reference Test Portability (REFERENCE_TEST_PORTABILITY.md)
+
+#### Phase 1 — Core 3-Way Merge Algorithm (P0)
+- ⬜ 1A: Port git t6403 merge-file core tests (~23 tests)
+- ⬜ 1B: Port git t6427 zdiff3 tests (4 tests)
+- ⬜ 1C: Conflict marker label formatting tests (5 tests)
+
+#### Phase 2 — KDiff3-Style Fixture Harness (P0)
+- ⬜ 2A: Fixture format
+- ⬜ 2B: Test runner
+- ⬜ 2C: Seed test cases
+
+#### Phase 3 — Permutation Corpus (P1)
+- ⬜ 3A: Permutation option table
+- ⬜ 3B: Implementation approach
+- ⬜ 3C: Real-world merge extraction
+
+#### Phase 4 — Mergetool/Difftool E2E (P1)
+- ⬜ 4A: Port critical t7610-mergetool.sh scenarios
+- ⬜ 4B: Port critical t7800-difftool.sh scenarios
+
+#### Phase 5 — Meld-Derived Algorithm Tests (P2)
+- ⬜ 5A: Myers matching blocks
+- ⬜ 5B: Interval merging
+- ⬜ 5C: Newline-aware operations
+
+### Conflict Resolution Design (conflict_resolution.md) — COMPLETE
 
 - ✅ **Iteration 4 follow-up: mergetool bare-boolean trust-exit-code semantics (2026-03-01):** fixed `mergetool.<tool>.trustExitCode` parsing for bare git-config boolean keys (no explicit value), which Git treats as `true`. `git_config_get_bool()` now handles empty `git config --get` output as `Some(true)` instead of falling back to unset/false, preserving Git-compatible trust-exit-code behavior for configs like `[mergetool "fake"] trustExitCode`. Added a dedicated regression test (`test_git_config_get_bool_bare_key_is_true`) and reran mergetool unit/integration suites — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
 - ✅ **Iteration 3 follow-up: mergetool trust-exit-code parsing hardening (2026-03-01):** completed an external-mergetool robustness gap by adding git-style boolean parsing for `mergetool.<tool>.trustExitCode` (`true/false`, `yes/no`, `on/off`, `1/0`) and explicit backend errors for invalid values instead of silently treating them as `false`. Added 5 unit tests covering true/false variants, missing key, parsed config values, and invalid-value errors — `crates/gitgpui-git-gix/src/repo/mergetool.rs`
