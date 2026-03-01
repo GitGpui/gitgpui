@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 23 verification (March 2, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with zero failures and zero lint warnings (1077 passed, 0 failed, 5 ignored). Deep codebase audit confirmed: zero TODO/FIXME in production code, no `unimplemented!()` outside test mocks, no `todo!()` macros, all 5 ignored tests are intentionally gated (2 optional external-repo regression, 1 exhaustive 161k permutation corpus, 2 performance benchmarks), and all behavior matrix items from both design documents are covered by automated tests. Test coverage exceeds design requirements (63 mergetool E2E vs ~20 required, 25 difftool E2E vs ~6 required, 161,294 permutation corpus cases, 32 Meld algorithm parity tests vs ~19 required).
+All components from both design documents are fully implemented. Iteration 23 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with zero failures and zero lint warnings. Deep codebase audit confirmed: zero TODO/FIXME in production code, no `unimplemented!()` outside test mocks, no `todo!()` macros, all ignored tests are intentionally gated (optional external-repo regression, exhaustive 161k permutation corpus, and performance benchmarks), and all behavior matrix items from both design documents are covered by automated tests. Test coverage continues to exceed design requirements (63 mergetool E2E vs ~20 required, 25 difftool E2E vs ~6 required, 161,294 permutation corpus cases, 32 Meld algorithm parity tests vs ~19 required).
 
 ## Implementation Progress
 
@@ -57,6 +57,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A implemented: core 3-way merge algorithm + t6403 portability set (including histogram and binary-reject paths).
+- ✅ Phase 1A delete-vs-modify marker-content parity is now explicit: `t6403_merge_delete_vs_modify_conflict` asserts the full expected contract (single conflict block, empty local section `<<<<<<<` then `=======`, modified remote `TU` line present, and unmodified base line absent).
 - ✅ Phase 1B implemented: all 4 t6427 `zdiff3` portability cases.
 - ✅ Phase 1C implemented: conflict marker label formatting portability cases.
 - ✅ Phase 1C runtime portability hardening: dedicated mergetool mode now applies default marker-label fallbacks (filename defaults + `empty tree` no-base base label) with regression tests.

@@ -192,6 +192,28 @@ fn t6403_merge_delete_vs_modify_conflict() {
         !result.is_clean(),
         "delete vs modify should produce conflict"
     );
+    assert_eq!(
+        result.conflict_count, 1,
+        "expected one delete-vs-modify conflict block:\n{}",
+        result.output
+    );
+    // Local side deletes the appended tail, so the local section is empty.
+    assert!(
+        result.output.contains("<<<<<<<\n=======\n"),
+        "expected empty local section in delete-vs-modify conflict:\n{}",
+        result.output
+    );
+    // Remote section should contain the modified uppercase line, not the base line.
+    assert!(
+        result.output.contains("non timebo mala, quoniam TU mecum es:"),
+        "expected modified remote content in conflict:\n{}",
+        result.output
+    );
+    assert!(
+        !result.output.contains("non timebo mala, quoniam tu mecum es:"),
+        "did not expect unmodified base line in conflict output:\n{}",
+        result.output
+    );
 }
 
 // ── Conflict resolution strategies ──
