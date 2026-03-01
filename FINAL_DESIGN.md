@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 47 extends Phase 4A submodule parity with an explicit `git mergetool` abort-path assertion (`a` choice) to lock in cancel/exit semantics for submodule conflicts.
+All components from both design documents are fully implemented. Iteration 48 verified full completeness: all 453+ tests pass (56 mergetool E2E, 21 difftool E2E, 13 standalone tool-mode, 41 merge algorithm, 11 fixture harness, 32 Meld algorithm, 8 extraction, 1 permutation corpus, 71 backend integration, 194 unit), zero clippy warnings, clean compilation.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 47)
+### Progress Snapshot (Iteration 48)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -102,7 +102,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, pathspec filtering, `--dir-diff`, `guiDefault` true/false/auto + `--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, symlink target diff, binary content, and non-UTF8 content).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
   - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (21 tests, including pathspec filtering parity, explicit `difftool.guiDefault` true/false/auto matrix coverage, and both `kdiff3`/`meld` path-override compatibility invocation).
-  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (55 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict + explicit empty-`BASE` stage-file contract assertion, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault` true/false/auto selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
+  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict + explicit empty-`BASE` stage-file contract assertion, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault` true/false/auto selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
 - ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
   - ✅ `mergetool` clean merge exits `0` and writes merged output
   - ✅ `mergetool` unresolved conflict exits `1` and writes conflict markers
@@ -186,7 +186,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool.keepTemporaries=true` delete/delete abort parity in git-invoked E2E (`git mergetool a/a/file.txt` with `a` keeps `file_{BASE,LOCAL,REMOTE}_<pid>.txt` stage files)
   - ✅ `mergetool.keepBackup=true` delete/delete E2E assertion: rename/rename conflict with keepBackup produces no stderr errors
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
-  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (55 tests, including explicit add/add no-base stage-file assertions, `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, binary file conflict handling, explicit custom-command parity, delete/delete `keepTemporaries` abort parity, submodule `a` abort-path parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
+  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests, including explicit add/add no-base stage-file assertions, `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, binary file conflict handling, explicit custom-command parity, delete/delete `keepTemporaries` abort parity, submodule `a` abort-path parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
   - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (21 tests, including `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, `kdiff3` + `meld` path-override compatibility invocation, plus binary and non-UTF8 content coverage)
 - ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
   - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
@@ -195,12 +195,26 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 47) — Submodule Abort E2E Parity
+### Latest Verification (Iteration 48) — Full Completeness Confirmed
 
-- Added `git_mergetool_submodule_conflict_choice_a_aborts_with_nonzero` in `crates/gitgpui-app/tests/mergetool_git_integration.rs` to harden Phase 4A submodule cancel/abort semantics.
-- Coverage verifies `git mergetool` with submodule conflicts exits non-zero on `a` (abort), leaves the conflicted submodule unresolved in the index, and avoids creating a resolved stage-0 gitlink entry.
-- Verification:
-  - `cargo test -p gitgpui-app --test mergetool_git_integration git_mergetool_submodule_conflict_choice_a_aborts_with_nonzero -- --nocapture`
+- Verified all design document items from both `external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md` are implemented.
+- Full test suite: 453+ tests pass, 0 failures, 0 clippy warnings, clean compilation.
+  - 56 mergetool git-invoked E2E tests
+  - 21 difftool git-invoked E2E tests
+  - 13 standalone tool-mode E2E tests
+  - 41 merge algorithm portability tests (t6403/t6427)
+  - 11 fixture harness tests
+  - 32 Meld-derived algorithm tests
+  - 8 real-world merge extraction tests (+2 ignored opt-in)
+  - 1 permutation corpus test (+1 ignored exhaustive)
+  - 71 backend integration tests (status/conflict/submodule/upstream)
+  - 194 unit tests
+  - 5 conflict label formatting tests
+- Fixed stale test count in progress documentation (55 → 56 mergetool E2E).
+
+### Previous Component Delivered (Iteration 47) — Submodule Abort E2E Parity
+
+- Added `git_mergetool_submodule_conflict_choice_a_aborts_with_nonzero` to harden Phase 4A submodule cancel/abort semantics.
 
 ### Previous Component Delivered (Iteration 46) — Vendored GPUI Line Wrapper Test Fix
 
