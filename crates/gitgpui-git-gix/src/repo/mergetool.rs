@@ -1,7 +1,7 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
+    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
 };
 use std::path::Path;
 use std::process::Command;
@@ -29,8 +29,7 @@ impl GixRepo {
         // 2. Read the tool command template (or fall back to built-in tool name)
         let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
         let trust_exit_code =
-            git_config_get(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
-                .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
                 .unwrap_or(false);
 
         // 3. Materialize temp files for BASE, LOCAL, REMOTE
@@ -232,6 +231,30 @@ fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
     }
 }
 
+/// Read a git config boolean value.
+///
+/// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
+fn git_config_get_bool(workdir: &Path, key: &str) -> Result<Option<bool>> {
+    git_config_get(workdir, key)?
+        .map(|value| {
+            parse_git_bool(&value).ok_or_else(|| {
+                Error::new(ErrorKind::Backend(format!(
+                    "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
+                    value
+                )))
+            })
+        })
+        .transpose()
+}
+
+fn parse_git_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Some(true),
+        "false" | "no" | "off" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 /// Read the content of a conflict stage as raw bytes.
 /// Stage 1 = base, 2 = ours, 3 = theirs.
 /// Returns `Ok(None)` if the stage doesn't exist for this file.
@@ -340,5 +363,99 @@ mod tests {
         // No conflict stages exist
         let result = git_show_stage_bytes(workdir, 1, Path::new("nonexistent.txt")).unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_parse_git_bool_true_variants() {
+        for value in ["true", "TRUE", "yes", "on", "1", "  YeS  "] {
+            assert_eq!(parse_git_bool(value), Some(true), "value={value:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_git_bool_false_variants() {
+        for value in ["false", "FALSE", "no", "off", "0", "  Off  "] {
+            assert_eq!(parse_git_bool(value), Some(false), "value={value:?}");
+        }
+    }
+
+    #[test]
+    fn test_git_config_get_bool_nonexistent_key_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        let result = git_config_get_bool(workdir, "nonexistent.bool.key").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_git_config_get_bool_parses_variants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("config")
+            .arg("mergetool.test.trustExitCode")
+            .arg("yes")
+            .output()
+            .unwrap();
+        assert_eq!(
+            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            Some(true)
+        );
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("config")
+            .arg("mergetool.test.trustExitCode")
+            .arg("off")
+            .output()
+            .unwrap();
+        assert_eq!(
+            git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn test_git_config_get_bool_invalid_value_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("config")
+            .arg("mergetool.test.trustExitCode")
+            .arg("sometimes")
+            .output()
+            .unwrap();
+
+        let err = git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            ErrorKind::Backend(message) if message.contains("Invalid boolean value")
+        ));
     }
 }
