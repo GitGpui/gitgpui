@@ -19,8 +19,8 @@
 
 ### Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
-- 🔧 Phase 1A (git `t6403` algorithm-focused cases): partially covered by existing `conflict_session` tests and conflict parsing tests, but not yet ported as the explicit named `t6403` matrix.
-- ⬜ Phase 1B (git `t6427` `zdiff3` 4-case portability set): not implemented yet.
+- ✅ Phase 1A (git `t6403` algorithm-focused cases): 3-way merge algorithm implemented in `crates/gitgpui-core/src/merge.rs` with 22 unit tests. Integration test suite `crates/gitgpui-core/tests/merge_algorithm.rs` ports 18 t6403-style test cases covering: identity merge, non-overlapping clean merge, overlapping conflict detection, conflict marker format with labels, delete-vs-modify, ours/theirs/union strategies, EOF trailing newline preservation, CRLF marker handling, configurable marker width, diff3 output, Myers C-code merge, binary content, identical-change dedup, and single-side-only changes.
+- ✅ Phase 1B (git `t6427` `zdiff3` 4-case portability set): all 4 zdiff3 test cases ported (`zdiff3_basic`, `zdiff3_middle_common`, `zdiff3_interesting`, `zdiff3_evil`). Tests verify common prefix/suffix extraction outside conflict markers and correct inner conflict content.
 - ⬜ Phase 1C (conflict marker label formatting cases): not implemented yet.
 - ⬜ Phase 2 (KDiff3 fixture harness with `*_base/*_contrib/*_expected_result` discovery + invariants): not implemented yet.
 - ⬜ Phase 3A (permutation corpus generation): not implemented yet.
@@ -33,6 +33,18 @@
   - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, writeToTemp/orderFile/delete-delete prompt flow/submodule matrix/no-base file E2E via `git mergetool` command) still pending
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
 - ⬜ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): not implemented yet.
+
+### Iteration 2 Component Delivered
+
+- Implemented standalone 3-way merge-file algorithm in `crates/gitgpui-core/src/merge.rs`:
+  - Full `merge_file(base, ours, theirs, options) -> MergeResult` public API.
+  - Myers diff-based hunk detection with overlapping-region expansion.
+  - Three conflict styles: `Merge` (2-section), `Diff3` (3-section with base), `Zdiff3` (with common prefix/suffix extraction).
+  - Four merge strategies: `Normal` (markers), `Ours`, `Theirs`, `Union`.
+  - Configurable marker size, per-side labels, CRLF-aware marker emission.
+  - Trailing newline preservation matching git semantics.
+  - 22 unit tests + 30 integration tests (total: 52 new merge tests).
+- Ported t6403 and t6427 test suites in `crates/gitgpui-core/tests/merge_algorithm.rs`.
 
 ### Iteration 1 Component Delivered
 
