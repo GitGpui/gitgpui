@@ -578,6 +578,87 @@ fn git_mergetool_trust_exit_code_conflict_preserves_unmerged_state() {
 }
 
 #[test]
+fn git_mergetool_no_trust_exit_code_unchanged_output_stays_unresolved() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_mergetool_selection(repo, "fake", None, None);
+    configure_mergetool_command(repo, "fake", "exit 0");
+    configure_mergetool_trust_exit_code(repo, "fake", false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let text = output_text(&output);
+
+    assert!(
+        !output.status.success(),
+        "expected git mergetool to fail when trustExitCode=false and output is unchanged\n{text}"
+    );
+    assert!(
+        text.contains("seems unchanged"),
+        "expected unchanged-output warning in git output\n{text}"
+    );
+    assert!(
+        text.contains("Was the merge successful"),
+        "expected no-trust follow-up prompt in git output\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert!(
+        merged.contains("<<<<<<<"),
+        "expected conflict markers to remain when fake tool leaves output unchanged\nmerged:\n{merged}\n{text}"
+    );
+
+    let status = run_git_capture(repo, &["status", "--porcelain"]);
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status_text.contains("UU") || status_text.contains("AA"),
+        "expected unresolved conflict after unchanged fake tool output\nstatus:\n{status_text}\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_no_trust_exit_code_changed_output_resolves_conflict() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_mergetool_selection(repo, "fake", None, None);
+    configure_mergetool_command(
+        repo,
+        "fake",
+        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"; exit 1",
+    );
+    configure_mergetool_trust_exit_code(repo, "fake", false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let text = output_text(&output);
+
+    assert!(
+        output.status.success(),
+        "expected git mergetool to accept changed output when trustExitCode=false\n{text}"
+    );
+    assert!(
+        text.contains("TOOL=fake"),
+        "expected fake tool marker in output\n{text}"
+    );
+    assert!(
+        !text.contains("Was the merge successful"),
+        "did not expect no-trust prompt when fake tool changed MERGED\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+    assert_eq!(merged, "aaa\nREMOTE\nccc\n");
+
+    let status = run_git_capture(repo, &["status", "--porcelain"]);
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        !status_text.contains("UU") && !status_text.contains("AA"),
+        "expected conflict to be cleared after fake tool changed output\nstatus:\n{status_text}\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_multiple_conflicted_files() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
