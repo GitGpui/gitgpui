@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens no-subcommand difftool compatibility parity by adding explicit attached-label regression coverage (`-L<label>` and `--label=<label>`) in both parser-unit and standalone E2E tests.
+All components from both design documents are fully implemented. Latest update adds `gitgpui-state` (134 conflict-session/reducer/effect tests) to CI workflow for clippy, build, and test coverage — closing the last gap where headless-capable tests were not gated in CI.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 60)
+### Progress Snapshot (Iteration 61)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -40,7 +40,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Deleted-vs-modified submodule choice parity is now explicit in git-invoked tests: path-targeted `git mergetool submod` assertions now verify `r` keeps the modified submodule gitlink commit and `l` keeps deletion (no gitlink/path), matching the t7610 contract.
 - ✅ Submodule abort/cancel parity is now explicit in git-invoked tests: path-targeted `git mergetool` submodule conflicts now assert `a` aborts with non-zero exit and leaves the conflict unresolved.
-- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration. Iteration 51 fixes the app runtime-unit gate to run `cargo test -p gitgpui-app --bin gitgpui-app` (the package is bin-only, so `--lib` is invalid). Iteration 59 hardens CI portability: all `gitgpui-app` jobs now build with `--no-default-features --features gix` (headless mode) so they run on ubuntu-latest without GPUI system library dependencies; `crashlog` module and `path_label` helper are gated behind `#[cfg(feature = "ui")]`/`#[cfg(feature = "ui-gpui")]` to eliminate dead-code warnings in headless builds.
+- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration. Iteration 51 fixes the app runtime-unit gate to run `cargo test -p gitgpui-app --bin gitgpui-app` (the package is bin-only, so `--lib` is invalid). Iteration 59 hardens CI portability: all `gitgpui-app` jobs now build with `--no-default-features --features gix` (headless mode) so they run on ubuntu-latest without GPUI system library dependencies; `crashlog` module and `path_label` helper are gated behind `#[cfg(feature = "ui")]`/`#[cfg(feature = "ui-gpui")]` to eliminate dead-code warnings in headless builds. Iteration 61 adds `gitgpui-state` to CI: clippy linting, build step, and 134 conflict-session/reducer/effect tests now run in the merge-algorithm job, closing the gap where this headless-capable crate was not gated in CI.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows plus both `kdiff3` and `meld` difftool flows to validate direct executable invocation compatibility.
@@ -217,7 +217,20 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 60) — Attached-Label Difftool Compatibility Regression Hardening
+### Latest Component Delivered (Iteration 61) — State Crate CI Coverage
+
+- Added `gitgpui-state` to CI workflow in `.github/workflows/rust.yml`:
+  - Clippy step now includes `gitgpui-state` alongside `gitgpui-core` and `gitgpui-git-gix`
+  - Build step now includes `gitgpui-state`
+  - New "State management (conflict session, reducers, effects)" test step in the merge-algorithm job runs all 134 state crate tests
+- This closes the gap where 134 headless-capable tests covering conflict session management, store reducers, effect pipelines, and repo monitoring were not gated in CI.
+- No GPUI system dependencies required — `gitgpui-state` depends only on `gitgpui-core`, `globset`, `notify`, `smol`, `serde`, `serde_json`, and `rustc-hash`.
+- Verification:
+  - `cargo clippy -p gitgpui-core -p gitgpui-state -p gitgpui-git-gix -- -D warnings` — clean
+  - `cargo test -p gitgpui-state --verbose` — 134 passed, 0 failed
+  - `cargo test --workspace` — 1043 passed, 0 failed, 5 ignored
+
+### Previous Component Delivered (Iteration 60) — Attached-Label Difftool Compatibility Regression Hardening
 
 - Added explicit parser coverage for no-subcommand difftool attached label forms in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
   - `compat_parses_meld_style_difftool_attached_labels` validates `-LLEFT_LABEL` and `--label=RIGHT_LABEL` are correctly mapped to left/right pane labels.

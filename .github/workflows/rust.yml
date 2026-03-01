@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Clippy (core + backend)
-      run: cargo clippy -p gitgpui-core -p gitgpui-git-gix -- -D warnings
+    - name: Clippy (core + state + backend)
+      run: cargo clippy -p gitgpui-core -p gitgpui-state -p gitgpui-git-gix -- -D warnings
     - name: Clippy (app — headless)
       run: cargo clippy -p gitgpui-app $APP_FEATURES -- -D warnings
 
@@ -28,8 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Build (core + backend)
-      run: cargo build -p gitgpui-core -p gitgpui-git-gix --verbose
+    - name: Build (core + state + backend)
+      run: cargo build -p gitgpui-core -p gitgpui-state -p gitgpui-git-gix --verbose
     - name: Build (app — headless)
       run: cargo build -p gitgpui-app $APP_FEATURES --verbose
 
@@ -48,6 +48,8 @@ jobs:
       run: cargo test -p gitgpui-core --test meld_algorithm_tests --verbose
     - name: Core library unit tests
       run: cargo test -p gitgpui-core --lib --verbose
+    - name: State management (conflict session, reducers, effects)
+      run: cargo test -p gitgpui-state --verbose
 
   # Fixture harness and corpus — Phase 2/3A regression gates
   merge-regression:
