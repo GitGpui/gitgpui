@@ -75,6 +75,15 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
                 "{quoted_bin_path} difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
             ),
         },
+        // Keep both generic and tool-specific trust keys:
+        // - `difftool.trustExitCode` matches documented setup guidance and
+        //   Git's default trust behavior for the selected difftool.
+        // - `difftool.gitgpui.trustExitCode` preserves explicit per-tool
+        //   behavior even if users override global defaults later.
+        ConfigEntry {
+            key: "difftool.trustExitCode",
+            value: "true".into(),
+        },
         ConfigEntry {
             key: "difftool.gitgpui.trustExitCode",
             value: "true".into(),
@@ -207,6 +216,7 @@ mod tests {
         assert!(keys.contains(&"mergetool.prompt"));
         assert!(keys.contains(&"diff.tool"));
         assert!(keys.contains(&"difftool.gitgpui.cmd"));
+        assert!(keys.contains(&"difftool.trustExitCode"));
         assert!(keys.contains(&"difftool.gitgpui.trustExitCode"));
         assert!(keys.contains(&"difftool.prompt"));
         assert!(keys.contains(&"merge.guitool"));

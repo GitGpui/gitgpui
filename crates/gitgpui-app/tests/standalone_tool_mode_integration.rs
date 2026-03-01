@@ -254,6 +254,10 @@ fn setup_dry_run_prints_commands_without_writing() {
         stdout.contains("mergetool.gitgpui.trustExitCode"),
         "expected trustExitCode\n{text}"
     );
+    assert!(
+        stdout.contains("difftool.trustExitCode"),
+        "expected difftool.trustExitCode\n{text}"
+    );
 }
 
 #[test]
@@ -402,6 +406,11 @@ fn setup_local_writes_config_to_repo() {
         git_config_get(dir.path(), "mergetool.prompt").as_deref(),
         Some("false"),
         "mergetool.prompt not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "difftool.trustExitCode").as_deref(),
+        Some("true"),
+        "difftool.trustExitCode not set"
     );
     assert_eq!(
         git_config_get(dir.path(), "difftool.prompt").as_deref(),
