@@ -6,9 +6,9 @@
 - ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors.
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
-- 🔧 Focused command-mode execution path is partially implemented:
-  - ✅ `difftool` mode now executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index`, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
-  - ⬜ Focused `mergetool` UI/runtime path is still not implemented; `main.rs` still exits with explicit not-yet-implemented messaging for mergetool mode.
+- ✅ Focused command-mode execution paths fully implemented:
+  - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index`, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
+  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path. Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels, no-base (add/add) scenarios, binary file detection (copies local side), CRLF preservation, and paths with spaces. 19 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
@@ -68,7 +68,20 @@
   - ✅ Targeted difftool runtime tests added (unit-level behavior parity for changed/unchanged files, label handling, directory diff, and error path).
   - ⬜ Remaining: full `git difftool` command E2E parity scenarios (`guiDefault`, subdirectory invocation, trust-exit config interactions, and global-like config wiring).
 
-### Latest Component Delivered (Iteration 7)
+### Latest Component Delivered (Iteration 8)
+
+- Implemented focused `mergetool` runtime path in `gitgpui-app`:
+  - Added `crates/gitgpui-app/src/mergetool_mode.rs` with `run_mergetool()` that performs 3-way merge using the built-in `merge_file()` algorithm from `gitgpui-core`.
+  - Reads base/local/remote file contents, runs automatic merge, writes result to MERGED output path.
+  - Exit code semantics: 0 on clean merge (all conflicts auto-resolved), 1 on remaining conflicts (markers written to output), ≥2 on I/O errors.
+  - Supports label forwarding (`--label-local`, `--label-remote`, `--label-base`) to conflict markers.
+  - Handles no-base (add/add) scenarios by treating missing base as empty content.
+  - Detects binary content (non-UTF-8) and falls back to copying local side to MERGED.
+  - Preserves CRLF line endings, trailing newline semantics, and handles paths with spaces.
+  - Wired `AppMode::Mergetool` in `main.rs` to this runtime (replaced previous not-implemented error).
+  - Added 19 unit tests covering: clean merge, identical files, conflicts with markers, labels, no-base, binary detection, file I/O errors, CRLF, empty files, trailing newlines, multi-region conflicts, spaced paths, output overwrite.
+
+### Iteration 7 Component Delivered
 
 - Implemented foundational `difftool` runtime path in `gitgpui-app`:
   - Added `crates/gitgpui-app/src/difftool_mode.rs` with `run_difftool()` that executes `git diff --no-index -- <LOCAL> <REMOTE>`.

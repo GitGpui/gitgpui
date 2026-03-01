@@ -1,6 +1,7 @@
 mod cli;
 mod crashlog;
 mod difftool_mode;
+mod mergetool_mode;
 
 use cli::{AppMode, exit_code};
 use std::io::{self, Write};
@@ -82,32 +83,22 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
         }
-        AppMode::Mergetool(config) => {
-            #[cfg(feature = "ui")]
-            {
-                // TODO: launch focused merge view via GPUI
-                eprintln!(
-                    "mergetool mode: merged={} local={} remote={}",
-                    config.merged.display(),
-                    config.local.display(),
-                    config.remote.display()
-                );
-                if let Some(ref b) = config.base {
-                    eprintln!("  base: {}", b.display());
+        AppMode::Mergetool(config) => match mergetool_mode::run_mergetool(&config) {
+            Ok(result) => {
+                if !result.stdout.is_empty() {
+                    print!("{}", result.stdout);
                 }
-                eprintln!(
-                    "Focused mergetool UI is not yet implemented. \
-                     Use the full browser for now."
-                );
+                if !result.stderr.is_empty() {
+                    eprint!("{}", result.stderr);
+                }
+                let _ = io::stdout().flush();
+                let _ = io::stderr().flush();
+                std::process::exit(result.exit_code);
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
                 std::process::exit(exit_code::ERROR);
             }
-
-            #[cfg(not(feature = "ui"))]
-            {
-                let _ = config;
-                eprintln!("GitGpui UI is disabled. Build with `-p gitgpui-app --features ui`.");
-                std::process::exit(exit_code::ERROR);
-            }
-        }
+        },
     }
 }
