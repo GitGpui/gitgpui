@@ -224,10 +224,10 @@ fn resolve_mergetool_with_env(
 
     // Base is allowed to be missing (add/add conflicts have no base).
     // But if explicitly provided, it should exist.
-    if let Some(ref base_path) = base {
-        if !base_path.exists() {
-            return Err(format!("Base path does not exist: {}", base_path.display()));
-        }
+    if let Some(ref base_path) = base
+        && !base_path.exists()
+    {
+        return Err(format!("Base path does not exist: {}", base_path.display()));
     }
 
     let conflict_style = match args.conflict_style.as_deref() {

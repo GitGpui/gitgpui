@@ -379,8 +379,8 @@ fn coalesce_zealous_conflicts(base_lines: &[&str], hunks: Vec<MergedHunk>) -> Ve
     for hunk in hunks {
         let mut merged_into_previous = false;
 
-        if let Some(last) = out.last_mut() {
-            if let (
+        if let Some(last) = out.last_mut()
+            && let (
                 MergedHunk::Conflict {
                     base_end: last_base_end,
                     ours_lines: last_ours,
@@ -395,23 +395,21 @@ fn coalesce_zealous_conflicts(base_lines: &[&str], hunks: Vec<MergedHunk>) -> Ve
                     ..
                 },
             ) = (last, &hunk)
-            {
-                if blank_only_or_adjacent_separator(base_lines, *last_base_end, *next_base_start) {
-                    let start = (*last_base_end).min(base_lines.len());
-                    let end = (*next_base_start).min(base_lines.len());
-                    let separator_lines: Vec<String> = base_lines[start..end]
-                        .iter()
-                        .map(|line| (*line).to_string())
-                        .collect();
+            && blank_only_or_adjacent_separator(base_lines, *last_base_end, *next_base_start)
+        {
+            let start = (*last_base_end).min(base_lines.len());
+            let end = (*next_base_start).min(base_lines.len());
+            let separator_lines: Vec<String> = base_lines[start..end]
+                .iter()
+                .map(|line| (*line).to_string())
+                .collect();
 
-                    last_ours.extend(separator_lines.iter().cloned());
-                    last_ours.extend(next_ours.iter().cloned());
-                    last_theirs.extend(separator_lines);
-                    last_theirs.extend(next_theirs.iter().cloned());
-                    *last_base_end = *next_base_end;
-                    merged_into_previous = true;
-                }
-            }
+            last_ours.extend(separator_lines.iter().cloned());
+            last_ours.extend(next_ours.iter().cloned());
+            last_theirs.extend(separator_lines);
+            last_theirs.extend(next_theirs.iter().cloned());
+            *last_base_end = *next_base_end;
+            merged_into_previous = true;
         }
 
         if !merged_into_previous {
@@ -574,9 +572,13 @@ fn render_merged(
     let theirs_last_matches = theirs_lines_all.last().is_some_and(|l| *l == output_last);
     let base_last_matches = base_lines.last().is_some_and(|l| *l == output_last);
 
+    // Each branch of the trailing-LF 3-way merge has distinct semantics even
+    // when the result expression happens to be the same (`ours_has_trailing`):
+    //   - agree    → both match, pick either
+    //   - ours-only→ only ours diverged from base, pick ours
+    //   - conflict → both diverged, prefer ours
+    #[allow(clippy::if_same_then_else)]
     let want_trailing = if ours_last_matches && theirs_last_matches {
-        // Both ours and theirs share the output's last line content.
-        // Apply 3-way merge logic to the trailing-LF bit.
         if ours_has_trailing == theirs_has_trailing {
             ours_has_trailing
         } else if base_last_matches && base_has_trailing == theirs_has_trailing {

@@ -551,19 +551,19 @@ fn patience_recurse<'a>(
         // Nothing between prefix and suffix.
     } else if inner_old_start == inner_old_end {
         // Pure insertions.
-        for j in inner_new_start..inner_new_end {
+        for &item in &new[inner_new_start..inner_new_end] {
             edits.push(Edit {
                 kind: EditKind::Insert,
                 old: None,
-                new: Some(new[j]),
+                new: Some(item),
             });
         }
     } else if inner_new_start == inner_new_end {
         // Pure deletions.
-        for i in inner_old_start..inner_old_end {
+        for &item in &old[inner_old_start..inner_old_end] {
             edits.push(Edit {
                 kind: EditKind::Delete,
-                old: Some(old[i]),
+                old: Some(item),
                 new: None,
             });
         }
@@ -642,16 +642,16 @@ fn find_patience_anchors(
 
     // Count occurrences and record position for old lines.
     let mut old_info: HashMap<&str, (usize, usize)> = HashMap::new();
-    for i in old_start..old_end {
-        let entry = old_info.entry(old[i]).or_insert((0, i));
+    for (i, &line) in old.iter().enumerate().take(old_end).skip(old_start) {
+        let entry = old_info.entry(line).or_insert((0, i));
         entry.0 += 1;
         entry.1 = i;
     }
 
     // Count occurrences and record position for new lines.
     let mut new_info: HashMap<&str, (usize, usize)> = HashMap::new();
-    for j in new_start..new_end {
-        let entry = new_info.entry(new[j]).or_insert((0, j));
+    for (j, &line) in new.iter().enumerate().take(new_end).skip(new_start) {
+        let entry = new_info.entry(line).or_insert((0, j));
         entry.0 += 1;
         entry.1 = j;
     }
@@ -662,10 +662,10 @@ fn find_patience_anchors(
         if old_count != 1 {
             continue;
         }
-        if let Some(&(new_count, new_idx)) = new_info.get(line) {
-            if new_count == 1 {
-                unique_pairs.push((old_idx, new_idx));
-            }
+        if let Some(&(new_count, new_idx)) = new_info.get(line)
+            && new_count == 1
+        {
+            unique_pairs.push((old_idx, new_idx));
         }
     }
 

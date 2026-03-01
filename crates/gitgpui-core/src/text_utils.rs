@@ -181,16 +181,16 @@ fn validate_sync_points(
             });
         }
 
-        if let Some((prev_a, prev_b)) = prev {
-            if a_pos <= prev_a || b_pos <= prev_b {
-                return Err(SyncPointError::NotStrictlyIncreasing {
-                    index,
-                    prev_a,
-                    prev_b,
-                    a_pos,
-                    b_pos,
-                });
-            }
+        if let Some((prev_a, prev_b)) = prev
+            && (a_pos <= prev_a || b_pos <= prev_b)
+        {
+            return Err(SyncPointError::NotStrictlyIncreasing {
+                index,
+                prev_a,
+                prev_b,
+                a_pos,
+                b_pos,
+            });
         }
         prev = Some((a_pos, b_pos));
     }
