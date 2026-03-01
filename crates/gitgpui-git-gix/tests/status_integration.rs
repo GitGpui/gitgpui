@@ -2059,10 +2059,10 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
             var_path.exists(),
             "keepTemporaries=true should keep stage file in temp mode: {var}"
         );
-        if let Some(parent) = var_path.parent() {
-            if !temp_dirs.iter().any(|dir| dir == parent) {
-                temp_dirs.push(parent.to_path_buf());
-            }
+        if let Some(parent) = var_path.parent()
+            && !temp_dirs.iter().any(|dir| dir == parent)
+        {
+            temp_dirs.push(parent.to_path_buf());
         }
     }
 

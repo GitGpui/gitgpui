@@ -219,11 +219,7 @@ fn write_fixtures(cases: &[ExtractedMerge], dest_dir: &Path) {
     std::fs::create_dir_all(dest_dir).expect("Failed to create fixture output directory");
 
     for case in cases {
-        let simplified = case
-            .file_path
-            .replace('/', "_")
-            .replace('.', "_")
-            .replace(' ', "_");
+        let simplified = case.file_path.replace(['/', '.', ' '], "_");
         let prefix = format!("{}_{}", case.merge_commit, simplified);
 
         let base_path = dest_dir.join(format!("{}_base.txt", prefix));

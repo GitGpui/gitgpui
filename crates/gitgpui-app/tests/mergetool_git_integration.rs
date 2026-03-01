@@ -1507,20 +1507,16 @@ fn git_mergetool_modify_delete_conflict() {
     let text = output_text(&output);
 
     // Git should report the modify/delete conflict.
-    // The file will either be present (modified side kept) or deleted.
-    // The key is that the mergetool pipeline completed without crashing.
-    let file_exists = repo.join("file.txt").exists();
+    // The mergetool pipeline should complete without crashing.
+    // For modify/delete, git handles the conflict internally (deleted-by prompt)
+    // and the external tool may or may not be invoked depending on git version.
+    // The fact that run_git_capture above returned proves the pipeline didn't hang.
+    // Verify git status still works after the mergetool run.
     let status = run_git_capture(repo, &["status", "--porcelain"]);
-    let status_text = String::from_utf8_lossy(&status.stdout);
-
-    // Either the file was resolved (kept or deleted) or is still in conflict.
     assert!(
-        file_exists || !file_exists,
-        "sanity: file state should be deterministic\nstatus:\n{status_text}\ngit output:\n{text}"
+        status.status.success(),
+        "git status should succeed after mergetool\ngit output:\n{text}"
     );
-    // The mergetool should have attempted to process the conflict.
-    // For modify/delete, git may show a "deleted by" message.
-    // We primarily verify the pipeline didn't crash/hang.
 }
 
 // ── Symlink conflict behavior ────────────────────────────────────────
