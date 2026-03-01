@@ -989,6 +989,49 @@ fn git_mergetool_no_trust_exit_code_changed_output_resolves_conflict() {
 }
 
 #[test]
+fn git_mergetool_trust_exit_code_deleted_output_resolves_conflict() {
+    // External tools can resolve by deleting MERGED (e.g. remove file outcome).
+    // With trustExitCode=true, git should accept exit-code success, clear the
+    // conflict, and stage file deletion.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_mergetool_selection(repo, "fake", None, None);
+    configure_mergetool_command(repo, "fake", "rm -f \"$MERGED\"; exit 0");
+    configure_mergetool_trust_exit_code(repo, "fake", true);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "fake"]);
+    let text = output_text(&output);
+
+    assert!(
+        output.status.success(),
+        "expected git mergetool to accept deleted output when trustExitCode=true\n{text}"
+    );
+    assert!(
+        !text.contains("Was the merge successful"),
+        "did not expect no-trust prompt when trustExitCode=true\n{text}"
+    );
+    assert!(
+        !repo.join("file.txt").exists(),
+        "expected MERGED path to be deleted by fake tool\n{text}"
+    );
+    assert!(
+        !has_unmerged_entries_for_path(repo, "file.txt"),
+        "expected no unmerged entries after delete-output resolution\n{text}"
+    );
+
+    let status = run_git_capture(repo, &["status", "--porcelain"]);
+    let status_text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status_text
+            .lines()
+            .any(|line| line.starts_with("D ") && line.ends_with("file.txt")),
+        "expected staged deletion after delete-output resolution\nstatus:\n{status_text}\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_multiple_conflicted_files() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

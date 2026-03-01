@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 52 adds mergetool `--auto` heuristic auto-resolve mode: when enabled, the headless mergetool applies conflict session heuristic passes (whitespace normalization, single-side-change detection, and subchunk splitting) on conflict blocks after the initial 3-way merge, potentially resolving more conflicts automatically. This matches KDiff3's `--auto` semantics. Full suite: 619 tests pass, 0 failures, 0 clippy warnings.
+All components from both design documents are fully implemented. Latest update adds explicit app-level `git mergetool` deleted-output parity coverage: when an external tool resolves by deleting `$MERGED`, `trustExitCode=true` now has direct E2E assertions that conflict entries clear and staged deletion is recorded.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 52)
+### Progress Snapshot (Iteration 53)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -24,6 +24,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ GUI-default parity matrix is now explicit for both Git entry points: `difftool.guiDefault` and `mergetool.guiDefault` are covered for `auto`, `true`, and `false`, plus `--gui` / `--no-gui` overrides.
 - ✅ Pathspec flow parity is now explicit in git-invoked E2E tests: pathspec-targeted `git difftool` only diffs selected paths, and pathspec-targeted `git mergetool` resolves only selected conflicts while leaving non-selected conflicts unresolved.
 - ✅ Explicit `t7610` custom-command parity is now covered in git-invoked mergetool tests: `cat "$REMOTE" > "$MERGED"` resolves conflicts, writes expected output, and clears unmerged index entries.
+- ✅ Git-invoked deleted-output parity is now explicit in app E2E coverage: external mergetool command `rm -f "$MERGED"` with `trustExitCode=true` resolves the conflict, removes the worktree file, and stages deletion.
 - ✅ Git-invoked add/add no-base parity is now explicit: dedicated mergetool E2E coverage asserts `$BASE` is passed as an existing empty stage file for no-base conflicts.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
@@ -105,7 +106,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, pathspec filtering, `--dir-diff`, `guiDefault` true/false/auto + `--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, symlink target diff, submodule gitlink-pointer diff, binary content, and non-UTF8 content).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
   - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (22 tests, including pathspec filtering parity, explicit `difftool.guiDefault` true/false/auto matrix coverage, submodule gitlink-pointer diff coverage, and both `kdiff3`/`meld` path-override compatibility invocation).
-  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict + explicit empty-`BASE` stage-file contract assertion, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault` true/false/auto selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
+  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (57 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), deleted-output resolution parity (`rm -f "$MERGED"` with trusted exit), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict + explicit empty-`BASE` stage-file contract assertion, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault` true/false/auto selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
 - ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
   - ✅ `mergetool` clean merge exits `0` and writes merged output
   - ✅ `mergetool` unresolved conflict exits `1` and writes conflict markers
@@ -193,7 +194,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool.keepTemporaries=true` delete/delete abort parity in git-invoked E2E (`git mergetool a/a/file.txt` with `a` keeps `file_{BASE,LOCAL,REMOTE}_<pid>.txt` stage files)
   - ✅ `mergetool.keepBackup=true` delete/delete E2E assertion: rename/rename conflict with keepBackup produces no stderr errors
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
-  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests, including explicit add/add no-base stage-file assertions, `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, binary file conflict handling, explicit custom-command parity, delete/delete `keepTemporaries` abort parity, submodule `a` abort-path parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
+  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (57 tests, including explicit add/add no-base stage-file assertions, `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, binary file conflict handling, explicit custom-command parity, deleted-output resolution parity (`rm -f "$MERGED"` with trusted exit), delete/delete `keepTemporaries` abort parity, submodule `a` abort-path parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
   - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (22 tests, including `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, `kdiff3` + `meld` path-override compatibility invocation, submodule gitlink-pointer diff coverage, plus binary and non-UTF8 content coverage)
 - ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
   - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
@@ -202,7 +203,19 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 52) — Mergetool Auto-Resolve Mode
+### Latest Component Delivered (Iteration 53) — Git Mergetool Deleted-Output E2E Parity
+
+- Added `git_mergetool_trust_exit_code_deleted_output_resolves_conflict` in `crates/gitgpui-app/tests/mergetool_git_integration.rs`.
+- The new test verifies Git-invoked external mergetool behavior when the tool resolves by deleting `$MERGED`:
+  - configured command: `rm -f "$MERGED"; exit 0`
+  - `mergetool.fake.trustExitCode=true`
+  - assertions: command succeeds, no unresolved index entries remain, worktree file is removed, and staged deletion is present in porcelain status.
+- This closes explicit app-level E2E coverage for the "deleted output (tool chooses deletion)" behavior-matrix item from `external_usage.md`.
+- Verification:
+  - `cargo test --offline -p gitgpui-app --test mergetool_git_integration -- --nocapture`
+  - `cargo test --offline -p gitgpui-app`
+
+### Previous Component Delivered (Iteration 52) — Mergetool Auto-Resolve Mode
 
 - Implemented `try_autosolve_merged_text()` in `crates/gitgpui-core/src/conflict_session.rs`:
   - Parses merged text with conflict markers into alternating context/conflict spans
