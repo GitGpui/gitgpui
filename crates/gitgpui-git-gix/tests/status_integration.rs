@@ -8,6 +8,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(unix)]
+use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
 fn run_git(repo: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -189,6 +191,11 @@ fn setup_both_added_text_conflict(repo: &Path, path: &str, ours: &str, theirs: &
     );
 
     run_git_expect_failure(repo, &["merge", "feature"]);
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
 }
 
 fn png_1x1_rgba(r: u8, g: u8, b: u8, a: u8) -> Vec<u8> {
@@ -1802,6 +1809,81 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
             .any(|e| e.path == path && e.kind == FileStatusKind::Modified),
         "expected resolved file to be staged after mergetool run: {status:?}"
     );
+}
+
+#[test]
+fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "cli"]);
+    run_git(repo, &["config", "merge.guitool", "gui"]);
+    run_git(repo, &["config", "mergetool.guiDefault", "true"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.cli.cmd",
+            "printf 'cli\\n' > \"$MERGED\"",
+        ],
+    );
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.gui.cmd",
+            "printf 'gui\\n' > \"$MERGED\"",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.cli.trustExitCode", "true"]);
+    run_git(repo, &["config", "mergetool.gui.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "gui");
+    assert_eq!(result.merged_contents.as_deref(), Some("gui\n".as_bytes()));
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "gui\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    let script_path = repo.join("fake-merge-tool.sh");
+    fs::write(
+        &script_path,
+        "#!/bin/sh\n# args: local base remote merged\ncat \"$3\" > \"$4\"\n",
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.path",
+            script_path.to_string_lossy().as_ref(),
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+    assert!(result.success);
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("theirs\n".as_bytes())
+    );
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "theirs\n");
 }
 
 #[test]
@@ -3926,7 +4008,13 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
 
     // AddedByThem: only theirs stage present (no base, no ours)
     let theirs_blob = hash_blob(repo, b"added by them\n");
-    set_unmerged_stages(repo, "their_new.txt", None, None, Some(theirs_blob.as_str()));
+    set_unmerged_stages(
+        repo,
+        "their_new.txt",
+        None,
+        None,
+        Some(theirs_blob.as_str()),
+    );
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -3965,9 +4053,10 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
     );
     let status_after = opened.status().unwrap();
     assert!(
-        !status_after.unstaged.iter().any(
-            |e| e.path == Path::new("their_new.txt") && e.kind == FileStatusKind::Conflicted
-        ),
+        !status_after
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("their_new.txt") && e.kind == FileStatusKind::Conflicted),
         "their_new.txt should no longer be conflicted after keeping theirs"
     );
     assert!(
@@ -4042,7 +4131,10 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         matches!(session.ours, ConflictPayload::Text(ref t) if t == "modified by us\n"),
         "ours (modified side) should have text"
     );
-    assert!(session.theirs.is_absent(), "theirs (delete side) should be absent");
+    assert!(
+        session.theirs.is_absent(),
+        "theirs (delete side) should be absent"
+    );
     assert_eq!(session.unsolved_count(), 1);
     assert_eq!(session.regions[0].ours, "modified by us\n");
     assert_eq!(session.regions[0].theirs, "");

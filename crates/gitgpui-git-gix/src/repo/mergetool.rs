@@ -1,7 +1,7 @@
 use super::GixRepo;
 use gitgpui_core::error::{Error, ErrorKind};
 use gitgpui_core::services::{
-    validate_conflict_resolution_text, CommandOutput, MergetoolResult, Result,
+    CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
 use std::path::Path;
 use std::process::Command;
@@ -17,20 +17,9 @@ impl GixRepo {
     /// 5. Reads back the merged file and stages it on success.
     pub(super) fn launch_mergetool_impl(&self, path: &Path) -> Result<MergetoolResult> {
         let workdir = &self.spec.workdir;
-
-        // 1. Determine which mergetool to use
-        let tool_name = git_config_get(workdir, "merge.tool")?.ok_or_else(|| {
-            Error::new(ErrorKind::Backend(
-                "No merge.tool configured. Set it with: git config merge.tool <toolname>"
-                    .to_string(),
-            ))
-        })?;
-
-        // 2. Read the tool command template (or fall back to built-in tool name)
-        let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
-        let trust_exit_code =
-            git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
-                .unwrap_or(false);
+        let tool = resolve_mergetool_config(workdir, env_has_display())?;
+        let tool_name = tool.tool_name;
+        let trust_exit_code = tool.trust_exit_code;
 
         // 3. Materialize temp files for BASE, LOCAL, REMOTE
         let tmp_dir = tempfile::Builder::new()
@@ -73,7 +62,7 @@ impl GixRepo {
         };
 
         // Build and invoke the mergetool command
-        let output = if let Some(ref custom_cmd) = tool_cmd {
+        let output = if let Some(ref custom_cmd) = tool.tool_cmd {
             // Match git-mergetool behavior by providing variables as shell env.
             // This supports both "$VAR" and "${VAR}" templates in config.
             Command::new("sh")
@@ -89,7 +78,8 @@ impl GixRepo {
         } else {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
-            Command::new(&tool_name)
+            let tool_executable = tool.tool_path.as_deref().unwrap_or(&tool_name);
+            Command::new(tool_executable)
                 .arg(&local_path)
                 .arg(&base_path)
                 .arg(&remote_path)
@@ -98,7 +88,7 @@ impl GixRepo {
                 .output()
                 .map_err(|e| {
                     Error::new(ErrorKind::Backend(format!(
-                        "Failed to launch mergetool '{tool_name}': {e}"
+                        "Failed to launch mergetool '{tool_name}' ({tool_executable}): {e}"
                     )))
                 })?
         };
@@ -196,6 +186,99 @@ impl GixRepo {
             output: cmd_output,
         })
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuiDefault {
+    False,
+    True,
+    Auto,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MergetoolConfig {
+    tool_name: String,
+    tool_cmd: Option<String>,
+    tool_path: Option<String>,
+    trust_exit_code: bool,
+}
+
+fn env_has_display() -> bool {
+    std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+fn parse_gui_default(value: Option<&str>) -> Result<GuiDefault> {
+    let Some(value) = value else {
+        return Ok(GuiDefault::False);
+    };
+
+    if value.eq_ignore_ascii_case("auto") {
+        return Ok(GuiDefault::Auto);
+    }
+
+    match parse_git_bool(value) {
+        Some(true) => Ok(GuiDefault::True),
+        Some(false) => Ok(GuiDefault::False),
+        None => Err(Error::new(ErrorKind::Backend(format!(
+            "Invalid value for mergetool.guiDefault: {:?}. Expected true/false or auto.",
+            value
+        )))),
+    }
+}
+
+fn choose_mergetool_name(
+    merge_tool: Option<String>,
+    merge_guitool: Option<String>,
+    gui_default: GuiDefault,
+    has_display: bool,
+) -> Result<String> {
+    let prefer_gui = match gui_default {
+        GuiDefault::True => true,
+        GuiDefault::False => false,
+        GuiDefault::Auto => has_display,
+    };
+
+    if prefer_gui {
+        if let Some(tool) = merge_guitool {
+            return Ok(tool);
+        }
+        if let Some(tool) = merge_tool {
+            return Ok(tool);
+        }
+    } else if let Some(tool) = merge_tool {
+        return Ok(tool);
+    }
+
+    if let Some(tool) = merge_guitool {
+        return Ok(tool);
+    }
+
+    Err(Error::new(ErrorKind::Backend(
+        "No merge.tool or merge.guitool configured. Set one with: \
+         git config merge.tool <toolname> or git config merge.guitool <toolname>"
+            .to_string(),
+    )))
+}
+
+fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<MergetoolConfig> {
+    let merge_tool = git_config_get(workdir, "merge.tool")?;
+    let merge_guitool = git_config_get(workdir, "merge.guitool")?;
+    let gui_default =
+        parse_gui_default(git_config_get(workdir, "mergetool.guiDefault")?.as_deref())?;
+
+    let tool_name = choose_mergetool_name(merge_tool, merge_guitool, gui_default, has_display)?;
+    let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
+    let tool_path = git_config_get(workdir, &format!("mergetool.{tool_name}.path"))?;
+    let trust_exit_code =
+        git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))?
+            .unwrap_or(false);
+
+    Ok(MergetoolConfig {
+        tool_name,
+        tool_cmd,
+        tool_path,
+        trust_exit_code,
+    })
 }
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
@@ -404,6 +487,76 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_gui_default_variants() {
+        assert_eq!(parse_gui_default(None).unwrap(), GuiDefault::False);
+        assert_eq!(parse_gui_default(Some("auto")).unwrap(), GuiDefault::Auto);
+        assert_eq!(parse_gui_default(Some("TRUE")).unwrap(), GuiDefault::True);
+        assert_eq!(parse_gui_default(Some("off")).unwrap(), GuiDefault::False);
+    }
+
+    #[test]
+    fn test_parse_gui_default_invalid_errors() {
+        let err = parse_gui_default(Some("sometimes")).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            ErrorKind::Backend(message) if message.contains("mergetool.guiDefault")
+        ));
+    }
+
+    #[test]
+    fn test_choose_mergetool_name_prefers_guitool_when_enabled() {
+        let selected = choose_mergetool_name(
+            Some("cli-tool".to_string()),
+            Some("gui-tool".to_string()),
+            GuiDefault::True,
+            false,
+        )
+        .unwrap();
+        assert_eq!(selected, "gui-tool");
+    }
+
+    #[test]
+    fn test_choose_mergetool_name_auto_without_display_prefers_cli_tool() {
+        let selected = choose_mergetool_name(
+            Some("cli-tool".to_string()),
+            Some("gui-tool".to_string()),
+            GuiDefault::Auto,
+            false,
+        )
+        .unwrap();
+        assert_eq!(selected, "cli-tool");
+    }
+
+    #[test]
+    fn test_choose_mergetool_name_auto_with_display_prefers_guitool() {
+        let selected = choose_mergetool_name(
+            Some("cli-tool".to_string()),
+            Some("gui-tool".to_string()),
+            GuiDefault::Auto,
+            true,
+        )
+        .unwrap();
+        assert_eq!(selected, "gui-tool");
+    }
+
+    #[test]
+    fn test_choose_mergetool_name_falls_back_to_guitool_if_only_guitool_set() {
+        let selected =
+            choose_mergetool_name(None, Some("gui-tool".to_string()), GuiDefault::False, false)
+                .unwrap();
+        assert_eq!(selected, "gui-tool");
+    }
+
+    #[test]
+    fn test_choose_mergetool_name_errors_when_no_tool_configured() {
+        let err = choose_mergetool_name(None, None, GuiDefault::False, false).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            ErrorKind::Backend(message) if message.contains("merge.tool or merge.guitool")
+        ));
+    }
+
+    #[test]
     fn test_git_config_get_bool_nonexistent_key_returns_none() {
         let tmp = tempfile::tempdir().unwrap();
         let workdir = tmp.path();
@@ -503,5 +656,95 @@ mod tests {
             git_config_get_bool(workdir, "mergetool.test.trustExitCode").unwrap(),
             Some(true)
         );
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_prefers_guitool_and_reads_path_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.guitool", "gui"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.guiDefault", "true"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.gui.path", "/opt/fake-gui-tool"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.gui.trustExitCode", "yes"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert_eq!(cfg.tool_name, "gui");
+        assert_eq!(cfg.tool_cmd, None);
+        assert_eq!(cfg.tool_path.as_deref(), Some("/opt/fake-gui-tool"));
+        assert!(cfg.trust_exit_code);
+    }
+
+    #[test]
+    fn test_resolve_mergetool_config_auto_without_display_uses_merge_tool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workdir = tmp.path();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .arg("init")
+            .output()
+            .unwrap();
+
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.tool", "cli"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "merge.guitool", "gui"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.guiDefault", "auto"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(["config", "mergetool.cli.cmd", "exit 0"])
+            .output()
+            .unwrap();
+
+        let cfg = resolve_mergetool_config(workdir, false).unwrap();
+        assert_eq!(cfg.tool_name, "cli");
+        assert_eq!(cfg.tool_cmd.as_deref(), Some("exit 0"));
     }
 }
