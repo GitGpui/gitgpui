@@ -87,6 +87,16 @@ fn commit_all(repo: &Path, message: &str) {
     );
 }
 
+fn git_head(repo: &Path) -> String {
+    let output = run_git_capture(repo, &["rev-parse", "HEAD"]);
+    assert!(
+        output.status.success(),
+        "git rev-parse HEAD failed\n{}",
+        output_text(&output)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
 fn gitgpui_difftool_cmd(marker: &str, force_exit: Option<i32>) -> String {
     let bin = gitgpui_bin();
     let bin_q = shell_quote(&bin.to_string_lossy());
@@ -675,6 +685,67 @@ fn git_difftool_trust_exit_code_flag_overrides_config() {
     assert!(
         forced_no_trust.status.success(),
         "expected --no-trust-exit-code to ignore failure\n{forced_no_trust_text}"
+    );
+}
+
+#[test]
+fn git_difftool_shows_submodule_gitlink_change() {
+    // When only a submodule gitlink changes, git difftool passes temporary
+    // files containing "Subproject commit <sha>" lines to the external tool.
+    // Verify that GitGpui surfaces both old and new commit pointers.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let sub_repo = tmp.path().join("subrepo");
+    fs::create_dir_all(&repo).expect("create main repo directory");
+    fs::create_dir_all(&sub_repo).expect("create submodule repo directory");
+
+    init_repo(&repo);
+    init_repo(&sub_repo);
+
+    write_file(&sub_repo, "sub.txt", "submodule v1\n");
+    commit_all(&sub_repo, "submodule: v1");
+    let old_commit = git_head(&sub_repo);
+
+    let sub_url = sub_repo.to_string_lossy().to_string();
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "submod",
+        ],
+    );
+    commit_all(&repo, "add submodule");
+
+    write_file(&sub_repo, "sub.txt", "submodule v2\n");
+    commit_all(&sub_repo, "submodule: v2");
+    let new_commit = git_head(&sub_repo);
+
+    run_git(&repo.join("submod"), &["fetch"]);
+    run_git(&repo.join("submod"), &["checkout", &new_commit]);
+
+    configure_gitgpui_difftool(&repo);
+
+    let output = run_git_capture(&repo, &["difftool", "--no-prompt", "--", "submod"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git difftool failed for submodule gitlink change\n{text}"
+    );
+    assert!(
+        text.contains("Subproject commit"),
+        "expected submodule gitlink content in difftool output\n{text}"
+    );
+    assert!(
+        text.contains(&old_commit),
+        "expected old submodule commit in difftool output\n{text}"
+    );
+    assert!(
+        text.contains(&new_commit),
+        "expected new submodule commit in difftool output\n{text}"
     );
 }
 

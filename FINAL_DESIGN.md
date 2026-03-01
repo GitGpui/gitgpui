@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 48 verified full completeness: all 453+ tests pass (56 mergetool E2E, 21 difftool E2E, 13 standalone tool-mode, 41 merge algorithm, 11 fixture harness, 32 Meld algorithm, 8 extraction, 1 permutation corpus, 71 backend integration, 194 unit), zero clippy warnings, clean compilation.
+All components from both design documents are fully implemented. Iteration 49 maintains completeness; the last full-suite verification (Iteration 48) passed 453+ tests, and Iteration 49 adds one difftool E2E case (22 difftool git-invoked E2E tests total).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 48)
+### Progress Snapshot (Iteration 49)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -26,6 +26,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Explicit `t7610` custom-command parity is now covered in git-invoked mergetool tests: `cat "$REMOTE" > "$MERGED"` resolves conflicts, writes expected output, and clears unmerged index entries.
 - ✅ Git-invoked add/add no-base parity is now explicit: dedicated mergetool E2E coverage asserts `$BASE` is passed as an existing empty stage file for no-base conflicts.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
+- ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, GUI tool aliases, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
@@ -100,9 +101,9 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Git-like scenario porting is complete. All listed t7610/t7800 parity items are covered: `trustExitCode`, custom cmd (`cat "$REMOTE" > "$MERGED"` + braced env variants), gui preference, writeToTemp/keepTemporaries, keepBackup delete/delete, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, pathspec-targeted runs, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files).
 - ✅ Dedicated difftool mode tests are implemented with parity-focused coverage:
   - ✅ Runtime/unit coverage in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff, binary content, and non-UTF8 content).
-  - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, pathspec filtering, `--dir-diff`, `guiDefault` true/false/auto + `--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, symlink target diff, binary content, and non-UTF8 content).
+  - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, pathspec filtering, `--dir-diff`, `guiDefault` true/false/auto + `--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, symlink target diff, submodule gitlink-pointer diff, binary content, and non-UTF8 content).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
-  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (21 tests, including pathspec filtering parity, explicit `difftool.guiDefault` true/false/auto matrix coverage, and both `kdiff3`/`meld` path-override compatibility invocation).
+  - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (22 tests, including pathspec filtering parity, explicit `difftool.guiDefault` true/false/auto matrix coverage, submodule gitlink-pointer diff coverage, and both `kdiff3`/`meld` path-override compatibility invocation).
   - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests): overlapping conflict processing, explicit custom command parity (`cat "$REMOTE" > "$MERGED"`), trust-exit-code semantics (clean merge resolved / conflict preserved), no-trust exit behavior (unchanged output stays unresolved, changed output resolves), spaced and Unicode path handling, subdirectory invocation, pathspec-targeted invocation parity, add/add (no-base) conflict + explicit empty-`BASE` stage-file contract assertion, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault` true/false/auto selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), delete/delete abort with `keepTemporaries=true` stage-file retention parity, modify/delete conflict, explicit `mergetool.writeToTemp` `true`/`false` stage-path-shape assertions, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), submodule conflicts (l/r/a prompt semantics, deleted-vs-modified, file-vs-submodule, directory-vs-submodule, subdirectory submodule, coexistence with normal files), and `kdiff3`/`meld` path-override compatibility invocation.
 - ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
   - ✅ `mergetool` clean merge exits `0` and writes merged output
@@ -188,7 +189,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ `mergetool.keepBackup=true` delete/delete E2E assertion: rename/rename conflict with keepBackup produces no stderr errors
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
   - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (56 tests, including explicit add/add no-base stage-file assertions, `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, binary file conflict handling, explicit custom-command parity, delete/delete `keepTemporaries` abort parity, submodule `a` abort-path parity, `kdiff3`/`meld` path-override compatibility invocation, and compatibility-mode git-config fallback parity)
-  - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (21 tests, including `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, `kdiff3` + `meld` path-override compatibility invocation, plus binary and non-UTF8 content coverage)
+  - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (22 tests, including `guiDefault` true/false/auto matrix coverage, pathspec filtering parity, `kdiff3` + `meld` path-override compatibility invocation, submodule gitlink-pointer diff coverage, plus binary and non-UTF8 content coverage)
 - ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
   - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, pathspec filtering, spaced path handling, `--dir-diff`, binary content, and non-UTF8 content.
@@ -196,7 +197,16 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 48) — Meld Phase 5A Exact Matching-Block Parity
+### Latest Component Delivered (Iteration 49) — Difftool Submodule Gitlink E2E Parity
+
+- Added `git_difftool_shows_submodule_gitlink_change` in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
+- The new test builds a real submodule repo, advances the submodule commit, runs `git difftool -- submod`, and asserts GitGpui surfaces both old and new `Subproject commit <sha>` pointers.
+- This closes explicit difftool-side submodule path coverage in the `external_usage.md` behavior matrix.
+- Verification:
+  - `cargo test --offline -p gitgpui-app --test difftool_git_integration git_difftool_shows_submodule_gitlink_change -- --nocapture`
+  - `cargo test --offline -p gitgpui-app --test difftool_git_integration -- --nocapture`
+
+### Previous Component Delivered (Iteration 48) — Meld Phase 5A Exact Matching-Block Parity
 
 - Implemented Meld-style matching-block preprocessing/postprocessing pipeline in `crates/gitgpui-core/src/text_utils.rs`:
   - common prefix/suffix stripping before diff
@@ -212,7 +222,12 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - `cargo test --offline -p gitgpui-core --test meld_algorithm_tests -- --nocapture`
   - `cargo test --offline -p gitgpui-core`
 
-### Latest Verification (Iteration 48) — Full Completeness Confirmed
+### Latest Verification (Iteration 49) — Difftool Submodule Coverage
+
+- `cargo test --offline -p gitgpui-app --test difftool_git_integration git_difftool_shows_submodule_gitlink_change -- --nocapture` passed.
+- `cargo test --offline -p gitgpui-app --test difftool_git_integration -- --nocapture` passed (22/22).
+
+### Previous Verification (Iteration 48) — Full Completeness Confirmed
 
 - Verified all design document items from both `external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md` are implemented.
 - Full test suite: 453+ tests pass, 0 failures, 0 clippy warnings, clean compilation.
