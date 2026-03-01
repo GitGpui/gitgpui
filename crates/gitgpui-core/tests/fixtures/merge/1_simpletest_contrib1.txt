@@ -1,0 +1,4 @@
+same in b and c
+only in b
+again same in b and c
+same everywhere

@@ -16,7 +16,7 @@
 - 🔧 Git-like scenario porting is partial. Existing and new tests cover a subset of t7610-style behavior (`trustExitCode`, custom cmd with braced env, gui preference); `--tool-help`, full gui-default parity flow, order-file, delete/delete interaction prompts, and submodule-specific flows remain.
 - ⬜ Dedicated difftool mode integration tests are not implemented yet.
 - ⬜ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are not implemented yet.
-- ⬜ KDiff3-style fixture harness and generated corpus integration are not implemented yet.
+- ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests. Generated corpus integration (Phase 3) still pending.
 
 ### Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
@@ -28,7 +28,10 @@
   - `label_unique_base_rename` -> `<short-sha>:<original-path>`
   - `label_merged_ancestors` -> `merged common ancestors:<path>`
   - `label_rebase_parent` -> `parent of <desc>`
-- ⬜ Phase 2 (KDiff3 fixture harness with `*_base/*_contrib/*_expected_result` discovery + invariants): not implemented yet.
+- ✅ Phase 2 (KDiff3 fixture harness with `*_base/*_contrib/*_expected_result` discovery + invariants):
+  - 2A: Fixture format adopted — `tests/fixtures/merge/{prefix}_{base,contrib1,contrib2,expected_result}.txt`
+  - 2B: Test runner in `tests/merge_fixture_harness.rs` — auto-discovers `*_base.*`, loads triplets, runs `merge_file`, validates 3 algorithm-independent invariants (marker well-formedness, content integrity, context preservation), compares against expected output, writes `*_actual_result.*` on mismatch
+  - 2C: 7 seed test cases ported: simpletest (KDiff3), prefer-identical (KDiff3), nonoverlapping changes, overlapping conflict, identical changes, delete-vs-modify, add/add conflict
 - ⬜ Phase 3A (permutation corpus generation): not implemented yet.
 - ⬜ Phase 3C (real-world merge extraction harness): not implemented yet.
 - 🔧 Phase 4A (critical `t7610-mergetool` E2E): partially implemented in `gitgpui-git-gix` tests:
@@ -40,14 +43,26 @@
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
 - ⬜ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): not implemented yet.
 
-### Latest Component Delivered
+### Latest Component Delivered (Iteration 3)
+
+- Implemented Phase 2 KDiff3-style fixture harness for merge algorithm regression testing:
+  - Created `crates/gitgpui-core/tests/fixtures/merge/` directory with KDiff3 naming convention (`{prefix}_base.txt`, `{prefix}_contrib1.txt`, `{prefix}_contrib2.txt`, `{prefix}_expected_result.txt`).
+  - Built auto-discovery test runner in `crates/gitgpui-core/tests/merge_fixture_harness.rs` that scans for `*_base.*` files, loads all triplets, runs `merge_file`, and validates three algorithm-independent invariants:
+    1. Conflict marker well-formedness (balanced `<<<<<<<`/`=======`/`>>>>>>>`, proper ordering, no nesting)
+    2. Content integrity (every non-marker output line traceable to base, contrib1, or contrib2)
+    3. Context preservation (lines common to all three inputs appear in output)
+  - On mismatch, writes `*_actual_result.*` for manual comparison.
+  - Ported 7 seed fixtures: 2 from KDiff3 (`1_simpletest`, `2_prefer_identical`) + 5 additional merge scenarios (`3_nonoverlapping_changes`, `4_overlapping_conflict`, `5_identical_changes`, `6_delete_vs_modify`, `7_add_add_conflict`).
+  - Total: 8 new tests (7 individual fixtures + 1 harness discovery test).
+
+### Iteration 2 Component Delivered
 
 - Implemented Phase 1C conflict marker label formatting support in `gitgpui-core`:
   - Added `BaseLabelScenario` model + formatter API (`format_base_label`) in `crates/gitgpui-core/src/conflict_labels.rs`.
   - Added deterministic short-SHA formatting (`7` chars by default) and git-path normalization.
   - Added 5 portability tests in `crates/gitgpui-core/tests/conflict_label_formatting.rs`.
 
-### Iteration 2 Component Delivered
+### Iteration 1 Component Delivered
 
 - Implemented standalone 3-way merge-file algorithm in `crates/gitgpui-core/src/merge.rs`:
   - Full `merge_file(base, ours, theirs, options) -> MergeResult` public API.
@@ -59,7 +74,7 @@
   - 22 unit tests + 30 integration tests (total: 52 new merge tests).
 - Ported t6403 and t6427 test suites in `crates/gitgpui-core/tests/merge_algorithm.rs`.
 
-### Iteration 1 Component Delivered
+### Earlier Components Delivered
 
 - Implemented foundational mergetool selection and executable resolution parity improvements in `crates/gitgpui-git-gix/src/repo/mergetool.rs`:
   - Added `mergetool.guiDefault` parsing (`true`/`false`/`auto`) with deterministic tool selection.

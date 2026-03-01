@@ -1,0 +1,7 @@
+first
+<<<<<<<
+OURS
+=======
+THEIRS
+>>>>>>>
+third

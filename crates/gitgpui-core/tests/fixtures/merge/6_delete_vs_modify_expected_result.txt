@@ -1,0 +1,6 @@
+header
+<<<<<<<
+=======
+MODIFIED content
+>>>>>>>
+footer
