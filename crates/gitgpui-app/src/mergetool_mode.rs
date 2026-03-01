@@ -55,7 +55,15 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     // Run the 3-way merge algorithm with byte-level binary detection.
     let result = match merge_file_bytes(&base_bytes, &local_bytes, &remote_bytes, &options) {
         Ok(result) => result,
-        Err(MergeError::BinaryContent) => return handle_binary_conflict(config, &local_bytes),
+        Err(MergeError::BinaryContent) => {
+            return handle_binary_merge(
+                config,
+                config.base.is_some(),
+                &base_bytes,
+                &local_bytes,
+                &remote_bytes,
+            );
+        }
     };
     let is_clean = result.is_clean();
     let conflict_count = result.conflict_count;
@@ -129,19 +137,60 @@ fn default_path_label(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// Handle binary files by copying LOCAL to MERGED and returning a conflict.
-fn handle_binary_conflict(
-    config: &MergetoolConfig,
-    local_bytes: &[u8],
-) -> Result<MergetoolRunResult, String> {
-    // Write LOCAL side to MERGED (user can pick sides manually).
-    write_merged_output(config, local_bytes)?;
-
-    let filename = config
+fn merged_filename(config: &MergetoolConfig) -> String {
+    config
         .merged
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| config.merged.display().to_string());
+        .unwrap_or_else(|| config.merged.display().to_string())
+}
+
+/// Handle binary files with conservative 3-way heuristics:
+/// - clean when both sides are identical
+/// - clean when exactly one side changed from BASE (if BASE exists)
+/// - conflict fallback when both sides changed differently
+fn handle_binary_merge(
+    config: &MergetoolConfig,
+    has_base: bool,
+    base_bytes: &[u8],
+    local_bytes: &[u8],
+    remote_bytes: &[u8],
+) -> Result<MergetoolRunResult, String> {
+    let filename = merged_filename(config);
+
+    if local_bytes == remote_bytes {
+        write_merged_output(config, local_bytes)?;
+        return Ok(MergetoolRunResult {
+            stdout: String::new(),
+            stderr: format!("Auto-merged {filename} (binary identical on both sides)\n"),
+            exit_code: exit_code::SUCCESS,
+            merge_result: None,
+        });
+    }
+
+    if has_base && local_bytes == base_bytes && remote_bytes != base_bytes {
+        write_merged_output(config, remote_bytes)?;
+        return Ok(MergetoolRunResult {
+            stdout: String::new(),
+            stderr: format!("Auto-merged {filename} (binary remote changed from base)\n"),
+            exit_code: exit_code::SUCCESS,
+            merge_result: None,
+        });
+    }
+
+    if has_base && remote_bytes == base_bytes && local_bytes != base_bytes {
+        write_merged_output(config, local_bytes)?;
+        return Ok(MergetoolRunResult {
+            stdout: String::new(),
+            stderr: format!("Auto-merged {filename} (binary local changed from base)\n"),
+            exit_code: exit_code::SUCCESS,
+            merge_result: None,
+        });
+    }
+
+    // Conflict fallback: keep local bytes in output so users can resolve by
+    // explicitly choosing a side in follow-up tooling.
+    write_merged_output(config, local_bytes)?;
 
     Ok(MergetoolRunResult {
         stdout: String::new(),
@@ -415,6 +464,139 @@ mod tests {
     }
 
     #[test]
+    fn binary_identical_sides_auto_merge_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+
+        let shared = vec![0x00, 0x10, 0x20, 0x30, 0x40];
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &shared);
+        write_bytes(&remote_path, &shared);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(result.stderr.contains("Auto-merged"));
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, shared);
+    }
+
+    #[test]
+    fn binary_with_base_local_matches_base_chooses_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+        let base_path = tmp.path().join("base.bin");
+
+        let base = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let remote = vec![0xAA, 0xBB, 0x99, 0xDD];
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &base);
+        write_bytes(&remote_path, &remote);
+        write_bytes(&base_path, &base);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, remote);
+    }
+
+    #[test]
+    fn binary_with_base_remote_matches_base_chooses_local() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+        let base_path = tmp.path().join("base.bin");
+
+        let base = vec![0xAA, 0xBB, 0xCC, 0xDD];
+        let local = vec![0xAA, 0xBB, 0x77, 0xDD];
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &local);
+        write_bytes(&remote_path, &base);
+        write_bytes(&base_path, &base);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, local);
+    }
+
+    #[test]
+    fn binary_without_base_does_not_treat_empty_side_as_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, b"");
+        write_bytes(&remote_path, &[0x00, 0x02, 0x03]);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert!(result.stderr.contains("CONFLICT (binary)"));
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, b"");
+    }
+
+    #[test]
     fn binary_base_with_text_sides_is_binary_conflict() {
         let tmp = tempfile::tempdir().unwrap();
         let merged_path = tmp.path().join("merged.txt");
@@ -446,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn null_byte_content_is_treated_as_binary_conflict() {
+    fn null_byte_content_with_single_side_change_auto_merges() {
         let tmp = tempfile::tempdir().unwrap();
         let merged_path = tmp.path().join("merged.bin");
         let local_path = tmp.path().join("local.bin");
@@ -475,12 +657,49 @@ mod tests {
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
-        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
         assert!(
             result.merge_result.is_none(),
             "binary files skip text merge"
         );
-        assert!(result.stderr.contains("binary"));
+        assert!(result.stderr.contains("Auto-merged"));
+
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, local_bytes);
+    }
+
+    #[test]
+    fn null_byte_content_conflicting_changes_still_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.bin");
+        let local_path = tmp.path().join("local.bin");
+        let remote_path = tmp.path().join("remote.bin");
+        let base_path = tmp.path().join("base.txt");
+
+        let local_bytes = b"hello\0local\n".to_vec();
+        let remote_bytes = b"hello\0remote\n".to_vec();
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &local_bytes);
+        write_bytes(&remote_path, &remote_bytes);
+        write_file(&base_path, "hello world\n");
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: Some(base_path),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert!(result.stderr.contains("CONFLICT (binary)"));
 
         let output = fs::read(&merged_path).unwrap();
         assert_eq!(output, local_bytes);

@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 44 hardens mergetool input validation by rejecting directory-valued file paths (`LOCAL`/`REMOTE`/`BASE`) and existing directory output targets (`MERGED`) with actionable parse-time errors and exit-code parity coverage.
+All components from both design documents are fully implemented. Iteration 45 hardens dedicated mergetool binary handling with base-aware 3-way auto-resolution (clean auto-merge when binary sides are identical or only one side changed from base, conflict fallback otherwise) while preserving Git-compatible exit semantics.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 44)
+### Progress Snapshot (Iteration 45)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -71,7 +71,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
-  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection; copies local side), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), diff algorithm selection (`--diff-algorithm myers|histogram`), and marker width control (`--marker-size <N>`). 30 unit tests.
+  - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection) with base-aware auto-resolution heuristics (clean when sides are identical or one side matches base; conflict fallback keeps local bytes), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), diff algorithm selection (`--diff-algorithm myers|histogram`), and marker width control (`--marker-size <N>`). 35 unit tests.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
   - `merge.guitool` + `mergetool.guiDefault` precedence logic
@@ -189,7 +189,24 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, pathspec filtering, spaced path handling, `--dir-diff`, binary content, and non-UTF8 content.
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`true`/`false`/`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
-  - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+- ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 45) — Binary 3-Way Auto-Resolution Hardening
+
+- Implemented dedicated mergetool-mode binary resolution heuristics in `crates/gitgpui-app/src/mergetool_mode.rs`:
+  - clean auto-merge when `LOCAL == REMOTE` (binary-identical sides)
+  - clean auto-merge when a real `BASE` exists and exactly one side changed (`LOCAL == BASE` -> choose `REMOTE`, `REMOTE == BASE` -> choose `LOCAL`)
+  - conservative conflict fallback when both binary sides changed differently (keeps local bytes in `MERGED`, exits `1`)
+  - preserves existing no-base behavior by not treating synthetic empty-base as a real ancestor for binary resolution
+- Expanded dedicated runtime coverage in `crates/gitgpui-app/src/mergetool_mode.rs`:
+  - `binary_identical_sides_auto_merge_success`
+  - `binary_with_base_local_matches_base_chooses_remote`
+  - `binary_with_base_remote_matches_base_chooses_local`
+  - `binary_without_base_does_not_treat_empty_side_as_unchanged`
+  - `null_byte_content_with_single_side_change_auto_merges`
+  - `null_byte_content_conflicting_changes_still_conflicts`
+- Verification:
+  - `cargo test -p gitgpui-app --tests -- --nocapture`
 
 ### Latest Component Delivered (Iteration 44) — Mergetool Directory-Path Validation Hardening
 
