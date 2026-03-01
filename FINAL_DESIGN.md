@@ -1,15 +1,16 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 18 extends Phase 4A delete/delete parity with explicit git-invoked `d` / `m` / `a` choice coverage from `t7610`.
+All components from both design documents are fully implemented. Iteration 19 adds automatic git config fallback for `merge.conflictstyle` and `diff.algorithm`, so users' git preferences are respected without modifying the mergetool command string.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 18 — Final)
+### Progress Snapshot (Iteration 19 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, and explicit `mergetool.writeToTemp` path-shape parity).
+- ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
@@ -138,7 +139,36 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 18) — Delete/Delete `d` / `m` / `a` Mergetool Parity
+### Latest Component Delivered (Iteration 19) — Git Config Fallback for Merge Preferences
+
+- Added automatic git config fallback to `resolve_mergetool()` in `crates/gitgpui-app/src/cli.rs`:
+  - When `--conflict-style` is not provided via CLI, reads `merge.conflictstyle` from git config (`merge`, `diff3`, `zdiff3`).
+  - When `--diff-algorithm` is not provided via CLI, reads `diff.algorithm` from git config (`myers`, `histogram`, `patience`, `default`, `minimal`).
+  - CLI flags always take priority over git config values. Unknown config values are silently ignored, preserving defaults.
+  - Uses `git config --get` to read config from the current working directory's repo, which is the correct context when invoked by `git mergetool`.
+- Added testable internal architecture:
+  - `read_git_config(key) -> Option<String>`: lightweight git config reader via subprocess.
+  - `apply_git_config_fallback()`: applies config values only when CLI flags are absent.
+  - `resolve_mergetool_with_config()`: internal function accepting a mock config reader for unit tests.
+- Added 8 unit tests in `crates/gitgpui-app/src/cli.rs`:
+  - `git_config_fallback_reads_merge_conflictstyle_zdiff3`
+  - `git_config_fallback_reads_merge_conflictstyle_diff3`
+  - `git_config_fallback_reads_diff_algorithm_histogram`
+  - `git_config_fallback_reads_diff_algorithm_patience_as_histogram`
+  - `git_config_fallback_explicit_cli_overrides_git_config`
+  - `git_config_fallback_no_git_config_uses_defaults`
+  - `git_config_fallback_unknown_values_ignored`
+  - `git_config_fallback_combined_style_and_algorithm`
+- Added 4 E2E integration tests in `crates/gitgpui-app/tests/mergetool_git_integration.rs`:
+  - `git_mergetool_respects_merge_conflictstyle_zdiff3_from_git_config`
+  - `git_mergetool_respects_merge_conflictstyle_diff3_from_git_config`
+  - `git_mergetool_respects_diff_algorithm_histogram_from_git_config`
+  - `git_mergetool_cli_flag_overrides_git_config`
+- Verification:
+  - `cargo test -p gitgpui-app` (42 integration + 71 binary tests, all passing)
+  - `cargo clippy -p gitgpui-app -- -D warnings` (clean)
+
+### Previous: Iteration 18 — Delete/Delete `d` / `m` / `a` Mergetool Parity
 
 - Added a dedicated rename/rename conflict setup helper in `crates/gitgpui-app/tests/mergetool_git_integration.rs` that reproduces t7610's delete/delete-at-original-path scenario (`a/a/file.txt` while branches rename to `b/b/file.txt` and `c/c/file.txt`).
 - Added 3 new git-invoked mergetool E2E tests:

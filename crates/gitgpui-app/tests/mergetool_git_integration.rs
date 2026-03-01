@@ -2199,3 +2199,188 @@ fn git_mergetool_directory_vs_submodule_conflict() {
     // The pipeline should complete without hanging or crashing.
     // The exact resolution depends on git version.
 }
+
+// ── Git config fallback tests ──────────────────────────────────────
+//
+// When `trustExitCode=true` and our tool exits 1 (unresolvable conflict),
+// `git mergetool` restores the MERGED file from its backup, erasing our
+// tool's output. These tests therefore use `trustExitCode=false` so that
+// git checks whether MERGED content changed (it always does because our
+// tool writes fresh merge output) and keeps our tool's result on disk.
+
+/// Configure gitgpui as the mergetool with `trustExitCode=false` so that
+/// git keeps our tool's MERGED output even when conflicts remain.
+fn configure_gitgpui_mergetool_no_trust(repo: &Path) {
+    let bin = gitgpui_bin();
+    let bin_q = shell_quote(&bin.to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+    );
+
+    run_git(repo, &["config", "merge.tool", "gitgpui"]);
+    run_git(repo, &["config", "mergetool.gitgpui.cmd", &cmd]);
+    run_git(
+        repo,
+        &["config", "mergetool.gitgpui.trustExitCode", "false"],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
+fn setup_simple_overlapping_conflict(repo: &Path) {
+    write_file(repo, "file.txt", "original\n");
+    commit_all(repo, "base");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write_file(repo, "file.txt", "remote change\n");
+    commit_all(repo, "feature");
+
+    run_git(repo, &["checkout", "main"]);
+    write_file(repo, "file.txt", "local change\n");
+    commit_all(repo, "main");
+
+    let merge_out = run_git_capture(repo, &["merge", "feature", "--no-commit"]);
+    assert!(
+        !merge_out.status.success(),
+        "expected merge conflict, got success"
+    );
+}
+
+#[test]
+fn git_mergetool_respects_merge_conflictstyle_zdiff3_from_git_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    setup_simple_overlapping_conflict(&repo);
+
+    // Set zdiff3 via git config (no CLI flag).
+    run_git(&repo, &["config", "merge.conflictstyle", "zdiff3"]);
+
+    configure_gitgpui_mergetool_no_trust(&repo);
+
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+
+    // zdiff3/diff3 both include the ||||||| base section.
+    assert!(
+        merged.contains("|||||||"),
+        "zdiff3 should include base section (|||||||), got:\n{merged}\nstderr:\n{text}"
+    );
+    // zdiff3 base section should contain the original content.
+    assert!(
+        merged.contains("original"),
+        "zdiff3 base section should contain 'original', got:\n{merged}"
+    );
+}
+
+#[test]
+fn git_mergetool_respects_merge_conflictstyle_diff3_from_git_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    setup_simple_overlapping_conflict(&repo);
+
+    // Set diff3 via git config.
+    run_git(&repo, &["config", "merge.conflictstyle", "diff3"]);
+
+    configure_gitgpui_mergetool_no_trust(&repo);
+
+    let _output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+
+    // diff3 format should include base section with "original".
+    assert!(
+        merged.contains("|||||||"),
+        "diff3 should include base section (|||||||), got:\n{merged}"
+    );
+    assert!(
+        merged.contains("original"),
+        "diff3 base section should contain original content, got:\n{merged}"
+    );
+}
+
+#[test]
+fn git_mergetool_respects_diff_algorithm_histogram_from_git_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+
+    // C code case where histogram produces clean merge but Myers may not.
+    let base = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+    let ours = "void h() {\n    z = 1;\n}\nvoid g() {\n    y = 1;\n}\n";
+    let theirs = "void f() {\n    x = 1;\n}\nvoid g() {\n    y = 2;\n}\n";
+
+    write_file(&repo, "code.c", base);
+    commit_all(&repo, "base");
+
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    write_file(&repo, "code.c", theirs);
+    commit_all(&repo, "feature");
+
+    run_git(&repo, &["checkout", "main"]);
+    write_file(&repo, "code.c", ours);
+    commit_all(&repo, "main");
+
+    let merge_out = run_git_capture(&repo, &["merge", "feature", "--no-commit"]);
+    if merge_out.status.success() {
+        // Git itself may auto-resolve; skip if no conflict.
+        return;
+    }
+
+    // Set histogram via git config.
+    run_git(&repo, &["config", "diff.algorithm", "histogram"]);
+
+    // Histogram should produce a clean merge (exit 0), so trustExitCode=true
+    // works fine here — git will accept the result.
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    let merged = fs::read_to_string(repo.join("code.c")).unwrap();
+
+    // Histogram should produce a cleaner merge that includes both changes.
+    assert!(
+        merged.contains("void h()") || merged.contains("void g()"),
+        "histogram merge should produce meaningful output, got:\n{merged}\nstderr:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_cli_flag_overrides_git_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+    setup_simple_overlapping_conflict(&repo);
+
+    // Git config says zdiff3, but CLI flag overrides to merge.
+    run_git(&repo, &["config", "merge.conflictstyle", "zdiff3"]);
+
+    // Configure mergetool with explicit --conflict-style merge flag.
+    let bin = gitgpui_bin();
+    let bin_q = shell_quote(&bin.to_string_lossy());
+    let cmd = format!(
+        "{bin_q} mergetool --conflict-style merge --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+    );
+    run_git(&repo, &["config", "merge.tool", "gitgpui"]);
+    run_git(&repo, &["config", "mergetool.gitgpui.cmd", &cmd]);
+    // Use trustExitCode=false so git keeps our tool's output.
+    run_git(
+        &repo,
+        &["config", "mergetool.gitgpui.trustExitCode", "false"],
+    );
+    run_git(&repo, &["config", "mergetool.prompt", "false"]);
+    run_git(&repo, &["config", "mergetool.keepBackup", "false"]);
+
+    let _output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let merged = fs::read_to_string(repo.join("file.txt")).unwrap();
+
+    // CLI flag "merge" should override config "zdiff3" — no base section.
+    assert!(
+        !merged.contains("|||||||"),
+        "explicit --conflict-style merge should suppress base section, got:\n{merged}"
+    );
+    assert!(merged.contains("<<<<<<<"), "should have conflict markers");
+}

@@ -21,7 +21,7 @@
 //! 5. Compares actual output/alignment against expected result.
 //! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
-use gitgpui_core::merge::{merge_file, MergeOptions};
+use gitgpui_core::merge::{MergeOptions, merge_file};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -179,11 +179,7 @@ fn parse_alignment_rows(raw: &str) -> Option<Vec<AlignmentRow>> {
         saw_row = true;
     }
 
-    if saw_row {
-        Some(rows)
-    } else {
-        None
-    }
+    if saw_row { Some(rows) } else { None }
 }
 
 fn serialize_alignment_rows(rows: &[AlignmentRow]) -> String {

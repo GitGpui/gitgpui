@@ -680,8 +680,14 @@ mod tests {
 
         let merged = fs::read_to_string(&config.merged).unwrap();
         assert!(merged.contains("<<<<<<<"), "output: {merged}");
-        assert!(merged.contains("|||||||"), "diff3 should include base section: {merged}");
-        assert!(merged.contains("original"), "base content should appear: {merged}");
+        assert!(
+            merged.contains("|||||||"),
+            "diff3 should include base section: {merged}"
+        );
+        assert!(
+            merged.contains("original"),
+            "base content should appear: {merged}"
+        );
         assert!(merged.contains("======="), "output: {merged}");
         assert!(merged.contains(">>>>>>>"), "output: {merged}");
     }
@@ -701,8 +707,14 @@ mod tests {
 
         let merged = fs::read_to_string(&config.merged).unwrap();
         // zdiff3 should extract common prefix "A" and suffix "E" outside markers.
-        assert!(merged.contains("A\n<<<<<<<"), "common prefix A should be outside markers: {merged}");
-        assert!(merged.contains(">>>>>>>\nE\n"), "common suffix E should be outside markers: {merged}");
+        assert!(
+            merged.contains("A\n<<<<<<<"),
+            "common prefix A should be outside markers: {merged}"
+        );
+        assert!(
+            merged.contains(">>>>>>>\nE\n"),
+            "common suffix E should be outside markers: {merged}"
+        );
     }
 
     // ── Diff algorithm selection ──────────────────────────────────────

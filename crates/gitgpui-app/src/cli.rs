@@ -237,7 +237,7 @@ fn resolve_mergetool_with_env(
         Some(other) => {
             return Err(format!(
                 "Unknown conflict style '{other}': expected merge, diff3, or zdiff3"
-            ))
+            ));
         }
     };
 
@@ -247,7 +247,7 @@ fn resolve_mergetool_with_env(
         Some(other) => {
             return Err(format!(
                 "Unknown diff algorithm '{other}': expected myers or histogram"
-            ))
+            ));
         }
     };
 
@@ -264,13 +264,80 @@ fn resolve_mergetool_with_env(
     })
 }
 
+// ── Git config fallback ──────────────────────────────────────────────
+
+/// Read a single git config value via `git config --get`.
+/// Returns `None` if the key is not set or git is not available.
+fn read_git_config(key: &str) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["config", "--get", key])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Apply git config fallback for `merge.conflictstyle` and `diff.algorithm`
+/// when the user did not provide explicit CLI flags.
+///
+/// This mirrors `git merge-file` behavior: the tool respects the user's
+/// configured preferences without requiring them to modify the mergetool
+/// command string.
+fn apply_git_config_fallback(
+    config: &mut MergetoolConfig,
+    had_explicit_style: bool,
+    had_explicit_algorithm: bool,
+    git_config: &dyn Fn(&str) -> Option<String>,
+) {
+    if !had_explicit_style
+        && let Some(style) = git_config("merge.conflictstyle")
+    {
+        match style.as_str() {
+            "merge" => config.conflict_style = ConflictStyle::Merge,
+            "diff3" => config.conflict_style = ConflictStyle::Diff3,
+            "zdiff3" => config.conflict_style = ConflictStyle::Zdiff3,
+            _ => {} // ignore unrecognized values, keep default
+        }
+    }
+
+    if !had_explicit_algorithm
+        && let Some(algo) = git_config("diff.algorithm")
+    {
+        match algo.as_str() {
+            "histogram" | "patience" => config.diff_algorithm = DiffAlgorithm::Histogram,
+            "myers" | "default" | "minimal" => config.diff_algorithm = DiffAlgorithm::Myers,
+            _ => {} // ignore unrecognized values, keep default
+        }
+    }
+}
+
+/// Internal: resolve mergetool args with both env and git config fallback.
+fn resolve_mergetool_with_config(
+    args: MergetoolArgs,
+    env: &dyn EnvLookup,
+    git_config: &dyn Fn(&str) -> Option<String>,
+) -> Result<MergetoolConfig, String> {
+    let had_explicit_style = args.conflict_style.is_some();
+    let had_explicit_algorithm = args.diff_algorithm.is_some();
+
+    let mut config = resolve_mergetool_with_env(args, env)?;
+    apply_git_config_fallback(
+        &mut config,
+        had_explicit_style,
+        had_explicit_algorithm,
+        git_config,
+    );
+    Ok(config)
+}
+
 /// Public resolve wrappers that use the real process environment.
 pub fn resolve_difftool(args: DifftoolArgs) -> Result<DifftoolConfig, String> {
     resolve_difftool_with_env(args, &ProcessEnv)
 }
 
 pub fn resolve_mergetool(args: MergetoolArgs) -> Result<MergetoolConfig, String> {
-    resolve_mergetool_with_env(args, &ProcessEnv)
+    resolve_mergetool_with_config(args, &ProcessEnv, &read_git_config)
 }
 
 /// Parse CLI arguments and resolve into a validated `AppMode`.
@@ -1099,5 +1166,140 @@ mod tests {
             }
             _ => panic!("expected Mergetool command"),
         }
+    }
+
+    // ── Git config fallback ─────────────────────────────────────────
+
+    /// Helper to build mergetool args with no explicit style/algorithm flags.
+    fn mergetool_args_no_style(dir: &tempfile::TempDir) -> MergetoolArgs {
+        MergetoolArgs {
+            merged: Some(tmp_file(dir, "m.txt", "x")),
+            local: Some(tmp_file(dir, "l.txt", "a")),
+            remote: Some(tmp_file(dir, "r.txt", "b")),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+        }
+    }
+
+    fn mock_git_config(map: &HashMap<String, String>) -> impl Fn(&str) -> Option<String> + '_ {
+        move |key: &str| map.get(key).cloned()
+    }
+
+    #[test]
+    fn git_config_fallback_reads_merge_conflictstyle_zdiff3() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
+    }
+
+    #[test]
+    fn git_config_fallback_reads_merge_conflictstyle_diff3() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("merge.conflictstyle".into(), "diff3".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Diff3);
+    }
+
+    #[test]
+    fn git_config_fallback_reads_diff_algorithm_histogram() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("diff.algorithm".into(), "histogram".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
+    }
+
+    #[test]
+    fn git_config_fallback_reads_diff_algorithm_patience_as_histogram() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("diff.algorithm".into(), "patience".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
+    }
+
+    #[test]
+    fn git_config_fallback_explicit_cli_overrides_git_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut args = mergetool_args_no_style(&dir);
+        args.conflict_style = Some("merge".into()); // explicit CLI flag
+        args.diff_algorithm = Some("myers".into()); // explicit CLI flag
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
+        git_cfg.insert("diff.algorithm".into(), "histogram".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        // CLI flags should win over git config.
+        assert_eq!(config.conflict_style, ConflictStyle::Merge);
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+    }
+
+    #[test]
+    fn git_config_fallback_no_git_config_uses_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let git_cfg: HashMap<String, String> = HashMap::new();
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Merge);
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+    }
+
+    #[test]
+    fn git_config_fallback_unknown_values_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("merge.conflictstyle".into(), "some_future_style".into());
+        git_cfg.insert("diff.algorithm".into(), "some_future_algo".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        // Unknown values should be ignored, keeping defaults.
+        assert_eq!(config.conflict_style, ConflictStyle::Merge);
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
+    }
+
+    #[test]
+    fn git_config_fallback_combined_style_and_algorithm() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = mergetool_args_no_style(&dir);
+        let env = TestEnv::new();
+        let mut git_cfg = HashMap::new();
+        git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
+        git_cfg.insert("diff.algorithm".into(), "histogram".into());
+
+        let config =
+            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
+        assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
     }
 }
