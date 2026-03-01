@@ -285,6 +285,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         }
     }
 
@@ -469,6 +470,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -508,6 +510,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -545,6 +548,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -581,6 +585,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -612,6 +617,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -646,6 +652,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -681,6 +688,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -723,6 +731,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -755,6 +764,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -781,6 +791,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -809,6 +820,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let err = run_mergetool(&config).expect_err("expected error");
@@ -839,6 +851,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -874,6 +887,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");
@@ -995,6 +1009,7 @@ mod tests {
             diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
             marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
             auto: false,
+            gui: false,
         };
 
         let result = run_mergetool(&config).expect("mergetool run");

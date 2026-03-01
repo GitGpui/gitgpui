@@ -60,6 +60,9 @@ pub struct DifftoolArgs {
     /// Label for the right pane.
     #[arg(long)]
     pub label_right: Option<String>,
+    /// Open an interactive GPUI diff window instead of printing to stdout.
+    #[arg(long)]
+    pub gui: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -117,6 +120,9 @@ pub struct MergetoolArgs {
     /// to provide base content for heuristic resolution.
     #[arg(long)]
     pub auto: bool,
+    /// Open an interactive GPUI merge window for conflict resolution.
+    #[arg(long)]
+    pub gui: bool,
 }
 
 // ── Validated configuration types ────────────────────────────────────
@@ -129,6 +135,7 @@ pub struct DifftoolConfig {
     pub display_path: Option<String>,
     pub label_left: Option<String>,
     pub label_right: Option<String>,
+    pub gui: bool,
 }
 
 /// Validated mergetool configuration ready for the UI layer.
@@ -145,6 +152,7 @@ pub struct MergetoolConfig {
     pub diff_algorithm: DiffAlgorithm,
     pub marker_size: usize,
     pub auto: bool,
+    pub gui: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -254,6 +262,7 @@ fn resolve_difftool_with_env(
         display_path,
         label_left: args.label_left,
         label_right: args.label_right,
+        gui: args.gui,
     })
 }
 
@@ -382,6 +391,7 @@ fn resolve_mergetool_with_env(
         diff_algorithm,
         marker_size,
         auto: args.auto,
+        gui: args.gui,
     })
 }
 
@@ -727,6 +737,7 @@ fn parse_compat_external_mode_with_config(
             diff_algorithm: None,
             marker_size: None,
             auto: has_auto || has_auto_merge,
+            gui: false,
         };
         return resolve_mergetool_with_config(args, env, git_config)
             .map(AppMode::Mergetool)
@@ -761,6 +772,7 @@ fn parse_compat_external_mode_with_config(
             path: None,
             label_left: label_l1,
             label_right: label_l2,
+            gui: false,
         };
         return resolve_difftool_with_env(args, env)
             .map(AppMode::Difftool)
@@ -882,6 +894,7 @@ mod tests {
             path: Some("display.txt".into()),
             label_left: Some("Ours".into()),
             label_right: Some("Theirs".into()),
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -909,6 +922,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -934,6 +948,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -958,6 +973,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -982,6 +998,7 @@ mod tests {
             path: Some("explicit-name.txt".into()),
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1006,6 +1023,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1025,6 +1043,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -1043,6 +1062,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -1061,6 +1081,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -1082,6 +1103,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let err = resolve_difftool_with_env(args, &env).unwrap_err();
@@ -1102,6 +1124,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1126,6 +1149,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1147,6 +1171,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1177,6 +1202,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1215,6 +1241,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1244,6 +1271,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1278,6 +1306,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1306,6 +1335,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1330,6 +1360,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1355,6 +1386,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1380,6 +1412,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1405,6 +1438,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1431,6 +1465,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1457,6 +1492,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -1483,6 +1519,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1509,6 +1546,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1535,6 +1573,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1562,6 +1601,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
@@ -1592,6 +1632,7 @@ mod tests {
             path: Some("path with spaces.txt".into()),
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1620,6 +1661,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1643,6 +1685,7 @@ mod tests {
             path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         };
 
         let config = resolve_difftool_with_env(args, &env).unwrap();
@@ -1678,6 +1721,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -1710,6 +1754,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2541,6 +2586,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2569,6 +2615,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2595,6 +2642,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2621,6 +2669,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2647,6 +2696,7 @@ mod tests {
             diff_algorithm: Some("histogram".into()),
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2673,6 +2723,7 @@ mod tests {
             diff_algorithm: Some("patience".into()),
             marker_size: None,
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2699,6 +2750,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: Some(10),
             auto: false,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();
@@ -2725,6 +2777,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: Some(0),
             auto: false,
+            gui: false,
         };
 
         let err = resolve_mergetool_with_env(args, &env).unwrap_err();
@@ -2777,6 +2830,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: false,
+            gui: false,
         }
     }
 
@@ -2932,6 +2986,7 @@ mod tests {
             diff_algorithm: None,
             marker_size: None,
             auto: true,
+            gui: false,
         };
 
         let config = resolve_mergetool_with_env(args, &env).unwrap();

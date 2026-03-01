@@ -6,6 +6,7 @@ mod setup_mode;
 
 use cli::{AppMode, exit_code};
 use std::io::{self, Write};
+use std::path::Path;
 
 fn main() {
     let mode = match cli::parse_app_mode() {
@@ -22,6 +23,29 @@ fn main() {
     match mode {
         AppMode::Difftool(config) => match difftool_mode::run_difftool(&config) {
             Ok(result) => {
+                // When UI is available and --gui was requested, open a focused
+                // GPUI diff window instead of printing raw text to stdout.
+                #[cfg(feature = "ui-gpui")]
+                if config.gui && result.exit_code == exit_code::SUCCESS && !result.stdout.is_empty() {
+                    let label_left = config
+                        .label_left
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.local));
+                    let label_right = config
+                        .label_right
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.remote));
+
+                    let gui_config = gitgpui_ui_gpui::FocusedDiffConfig {
+                        label_left,
+                        label_right,
+                        display_path: config.display_path.clone(),
+                        diff_text: result.stdout.clone(),
+                    };
+                    let code = gitgpui_ui_gpui::run_focused_diff(gui_config);
+                    std::process::exit(code);
+                }
+
                 if !result.stdout.is_empty() {
                     print!("{}", result.stdout);
                 }
@@ -84,23 +108,67 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
         }
-        AppMode::Mergetool(config) => match mergetool_mode::run_mergetool(&config) {
-            Ok(result) => {
-                if !result.stdout.is_empty() {
-                    print!("{}", result.stdout);
+        AppMode::Mergetool(config) => {
+            match mergetool_mode::run_mergetool(&config) {
+                Ok(result) => {
+                    // When UI is available, --gui was requested, the merge
+                    // produced conflicts, and auto mode is off, open the focused
+                    // GPUI merge window for interactive resolution.
+                    #[cfg(feature = "ui-gpui")]
+                    if config.gui
+                        && result.exit_code == exit_code::CANCELED
+                        && !config.auto
+                        && let Some(ref merge_result) = result.merge_result
+                    {
+                        // Determine labels for display.
+                        let label_local = config
+                            .label_local
+                            .clone()
+                            .unwrap_or_else(|| path_label(&config.local));
+                        let label_remote = config
+                            .label_remote
+                            .clone()
+                            .unwrap_or_else(|| path_label(&config.remote));
+                        let label_base = config
+                            .label_base
+                            .clone()
+                            .unwrap_or_else(|| {
+                                config
+                                    .base
+                                    .as_ref()
+                                    .map(|p| path_label(p))
+                                    .unwrap_or_else(|| "empty tree".to_string())
+                            });
+
+                        let gui_config = gitgpui_ui_gpui::FocusedMergeConfig {
+                            merged_path: config.merged.clone(),
+                            label_local,
+                            label_remote,
+                            label_base,
+                            merged_text: merge_result.output.clone(),
+                            is_clean: merge_result.is_clean(),
+                            conflict_count: merge_result.conflict_count,
+                        };
+                        let code = gitgpui_ui_gpui::run_focused_merge(gui_config);
+                        std::process::exit(code);
+                    }
+
+                    if !result.stdout.is_empty() {
+                        print!("{}", result.stdout);
+                    }
+                    if !result.stderr.is_empty() {
+                        eprint!("{}", result.stderr);
+                    }
+                    let _ = io::stdout().flush();
+                    let _ = io::stderr().flush();
+                    std::process::exit(result.exit_code);
                 }
-                if !result.stderr.is_empty() {
-                    eprint!("{}", result.stderr);
+                Err(msg) => {
+                    eprintln!("{msg}");
+                    std::process::exit(exit_code::ERROR);
                 }
-                let _ = io::stdout().flush();
-                let _ = io::stderr().flush();
-                std::process::exit(result.exit_code);
             }
-            Err(msg) => {
-                eprintln!("{msg}");
-                std::process::exit(exit_code::ERROR);
-            }
-        },
+        }
         AppMode::Setup { dry_run, local } => match setup_mode::run_setup(dry_run, local) {
             Ok(result) => {
                 if !result.stdout.is_empty() {
@@ -115,4 +183,11 @@ fn main() {
             }
         },
     }
+}
+
+/// Extract a filename label from a path.
+fn path_label(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }

@@ -143,6 +143,7 @@ mod tests {
             display_path: None,
             label_left: None,
             label_right: None,
+            gui: false,
         }
     }
 

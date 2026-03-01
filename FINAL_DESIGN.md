@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update adds explicit app-level `git mergetool` deleted-output parity coverage: when an external tool resolves by deleting `$MERGED`, `trustExitCode=true` now has direct E2E assertions that conflict entries clear and staged deletion is recorded.
+All components from both design documents are fully implemented. Latest update adds focused GPUI tool windows for interactive diff viewing and merge conflict resolution, launched via `--gui` flag from difftool/mergetool modes.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 53)
+### Progress Snapshot (Iteration 54)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -77,6 +77,12 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - coverage: CLI parser tests (including Meld `-L/--label` diff+merge cases and over-arity rejection) + git-invoked `kdiff3`/`meld` path-override integration tests
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
+- ✅ Focused GPUI tool windows for interactive diff/merge (`--gui` flag):
+  - ✅ `focused_diff.rs` in `gitgpui-ui-gpui`: color-coded unified diff viewer with keyboard navigation (Esc/q/Ctrl+W to close), line classification (Header, HunkHeader, Add, Remove, Context), and 3 unit tests.
+  - ✅ `focused_merge.rs` in `gitgpui-ui-gpui`: interactive merge conflict resolution window with conflict-marker parsing, per-segment pick buttons (Ours/Theirs/Base/Both via a/b/c/d keys), conflict navigation (F2/F3), auto-resolve action, save/cancel (Ctrl+S/Esc), live output preview, and 8 unit tests.
+  - ✅ `--gui` CLI flag added to both `difftool` and `mergetool` subcommands (opt-in, defaults to false for test compatibility).
+  - ✅ Wired in `main.rs`: difftool `--gui` opens focused diff window after successful diff; mergetool `--gui` opens focused merge window when conflicts remain (non-auto mode).
+  - ✅ Exit code contract preserved: focused merge returns 0 on save (resolved), 1 on cancel; focused diff always returns 0.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
   - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection) with base-aware auto-resolution heuristics (clean when sides are identical or one side matches base; conflict fallback keeps local bytes), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), diff algorithm selection (`--diff-algorithm myers|histogram`), and marker width control (`--marker-size <N>`). 35 unit tests.
@@ -203,7 +209,39 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 53) — Git Mergetool Deleted-Output E2E Parity
+### Latest Component Delivered (Iteration 54) — Focused GPUI Tool Windows
+
+- Implemented `focused_diff.rs` in `crates/gitgpui-ui-gpui/src/`:
+  - `FocusedDiffView` GPUI view with color-coded unified diff rendering
+  - Line classification: Header (dim), HunkHeader (cyan), Add (green), Remove (red), Context (default)
+  - Close actions: Esc, q, Ctrl+W — all exit with code 0
+  - `run_focused_diff(FocusedDiffConfig) -> i32` entry point using `Application::run()` blocking event loop
+  - 3 unit tests for diff line parsing
+- Implemented `focused_merge.rs` in `crates/gitgpui-ui-gpui/src/`:
+  - `FocusedMergeView` GPUI view for interactive 3-way merge conflict resolution
+  - Parses conflict markers from merged text into context/conflict segments
+  - Per-conflict pick buttons: Ours (a), Theirs (b), Base (c), Both (d)
+  - Conflict navigation: F2 (prev), F3 (next) with wrap-around
+  - Auto-resolve action attempts heuristic resolution of all remaining conflicts
+  - Save (Ctrl+S) writes resolved output to MERGED path and exits 0
+  - Cancel (Esc) exits 1 without writing
+  - Live output preview panel shows current resolution state
+  - `run_focused_merge(FocusedMergeConfig) -> i32` entry point with `Arc<AtomicI32>` exit code passing
+  - 8 unit tests for output building, segment parsing, and helper functions
+- Added `--gui` CLI flag to `DifftoolArgs` and `MergetoolArgs` in `crates/gitgpui-app/src/cli.rs`:
+  - Opt-in flag (defaults to false) to preserve headless test compatibility
+  - Propagated through `DifftoolConfig.gui` and `MergetoolConfig.gui` fields
+- Wired focused windows in `crates/gitgpui-app/src/main.rs`:
+  - Difftool: when `--gui` and diff output is non-empty, opens `FocusedDiffView` window
+  - Mergetool: when `--gui`, conflicts remain, and not in `--auto` mode, opens `FocusedMergeView` window
+  - Both gated behind `#[cfg(feature = "ui-gpui")]`
+- Re-exported public API from `crates/gitgpui-ui-gpui/src/lib.rs`
+- Changed `conflict_resolver` module visibility to `pub(crate)` in `view/mod.rs`
+- Verification:
+  - `cargo test --workspace` — 1,031 passed, 0 failed, 5 ignored
+  - `cargo clippy --workspace` — clean
+
+### Previous Component Delivered (Iteration 53) — Git Mergetool Deleted-Output E2E Parity
 
 - Added `git_mergetool_trust_exit_code_deleted_output_resolves_conflict` in `crates/gitgpui-app/tests/mergetool_git_integration.rs`.
 - The new test verifies Git-invoked external mergetool behavior when the tool resolves by deleting `$MERGED`:

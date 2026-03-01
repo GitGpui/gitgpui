@@ -34,7 +34,7 @@ mod branch_sidebar;
 mod caches;
 mod chrome;
 mod color;
-mod conflict_resolver;
+pub(crate) mod conflict_resolver;
 mod date_time;
 mod diff_navigation;
 mod diff_preview;
