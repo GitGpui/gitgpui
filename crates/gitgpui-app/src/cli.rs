@@ -8,7 +8,7 @@
 use clap::{Parser, Subcommand};
 use gitgpui_core::merge::{ConflictStyle, DiffAlgorithm};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Exit codes aligned with Git expectations (see external_usage.md).
 pub mod exit_code {
@@ -182,7 +182,7 @@ fn resolve_path(flag: Option<PathBuf>, env_key: &str, env: &dyn EnvLookup) -> Op
     flag.or_else(|| env.var_os(env_key).map(PathBuf::from))
 }
 
-fn is_empty_path(path: &PathBuf) -> bool {
+fn is_empty_path(path: &Path) -> bool {
     path.as_os_str().is_empty()
 }
 
