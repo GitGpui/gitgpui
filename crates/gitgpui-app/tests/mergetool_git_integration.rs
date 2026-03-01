@@ -174,6 +174,18 @@ fn configure_recording_mergetool(repo: &Path, tool: &str, log_path: &Path) {
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
 
+fn configure_stage_path_recording_mergetool(repo: &Path, tool: &str) {
+    let cmd = "printf '%s\\n%s\\n%s\\n' \"$BASE\" \"$LOCAL\" \"$REMOTE\" > \"$MERGED.env\"; cat \"$REMOTE\" > \"$MERGED\"";
+    run_git(repo, &["config", "merge.tool", tool]);
+    run_git(repo, &["config", &format!("mergetool.{tool}.cmd"), cmd]);
+    run_git(
+        repo,
+        &["config", &format!("mergetool.{tool}.trustExitCode"), "true"],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
 fn setup_order_file_conflict(repo: &Path) {
     init_repo(repo);
     write_file(repo, "a", "start\n");
@@ -214,6 +226,17 @@ fn output_text(output: &Output) -> String {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     )
+}
+
+fn read_recorded_stage_paths(repo: &Path, merged_path: &str) -> Vec<String> {
+    let dump_path = repo.join(format!("{merged_path}.env"));
+    let raw = fs::read_to_string(&dump_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read stage-path dump {}: {e}",
+            dump_path.display()
+        )
+    });
+    raw.lines().map(ToOwned::to_owned).collect()
 }
 
 /// Create a repo with a genuine merge conflict (overlapping changes).
@@ -739,6 +762,72 @@ fn git_mergetool_crlf_content_preserved() {
         merged.contains("\r\n"),
         "expected CRLF to be preserved in merged output\nmerged:\n{merged}\ngit output:\n{text}"
     );
+}
+
+// ── writeToTemp path semantics parity ───────────────────────────────
+
+#[test]
+fn git_mergetool_write_to_temp_true_uses_absolute_stage_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_stage_path_recording_mergetool(repo, "stagepaths");
+    run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "stagepaths"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git mergetool failed for writeToTemp=true\n{text}"
+    );
+
+    let vars = read_recorded_stage_paths(repo, "file.txt");
+    assert_eq!(
+        vars.len(),
+        3,
+        "expected BASE/LOCAL/REMOTE stage paths\n{text}"
+    );
+    for var in vars {
+        assert!(
+            Path::new(&var).is_absolute(),
+            "writeToTemp=true should provide absolute stage paths, got: {var}\n{text}"
+        );
+        assert!(
+            !var.starts_with("./"),
+            "writeToTemp=true should not use ./-prefixed stage paths, got: {var}\n{text}"
+        );
+    }
+}
+
+#[test]
+fn git_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+    configure_stage_path_recording_mergetool(repo, "stagepaths");
+    run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--tool", "stagepaths"]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git mergetool failed for writeToTemp=false\n{text}"
+    );
+
+    let vars = read_recorded_stage_paths(repo, "file.txt");
+    assert_eq!(
+        vars.len(),
+        3,
+        "expected BASE/LOCAL/REMOTE stage paths\n{text}"
+    );
+    for var in vars {
+        assert!(
+            var.starts_with("./"),
+            "writeToTemp=false should provide ./-prefixed stage paths, got: {var}\n{text}"
+        );
+    }
 }
 
 // ── diff.orderFile ordering parity ───────────────────────────────────
