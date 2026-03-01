@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens dedicated `mergetool` CLI compatibility by accepting Meld-style `--auto-merge` as an alias of `--auto` in subcommand mode, with parser and standalone E2E regression coverage.
+All components from both design documents are fully implemented. Latest update hardens no-subcommand KDiff3 compatibility by adding explicit regression coverage for attached `--base=<BASE>` and `--out=<MERGED>` forms, including parser and standalone E2E validation.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 63)
+### Progress Snapshot (Iteration 64)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -18,6 +18,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Difftool path-kind validation is hardened: mixed file-vs-directory `LOCAL`/`REMOTE` inputs now fail fast with actionable parse-time errors (must be two files or two directories), with CLI unit + standalone E2E regression tests.
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
+- ✅ Attached-form KDiff3 merge-path compatibility now has explicit regression coverage: no-subcommand parser + standalone E2E validate `--base=<BASE>` and `--out=<MERGED>` handling end-to-end.
 - ✅ Dedicated mergetool marker-width control is now exposed end-to-end via `--marker-size <N>` with strict validation (`N > 0`), runtime propagation into merge options, and standalone/CLI regression coverage.
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
@@ -79,7 +80,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
   - `--auto-merge` as an alias for `--auto` in dedicated `mergetool` subcommand mode (Meld-style parity for direct invocation)
-  - coverage: parser unit tests + git-invoked integration test (`git_mergetool_accepts_kdiff3_alias_flags_in_cmd`)
+  - coverage: parser unit tests + git-invoked integration test (`git_mergetool_accepts_kdiff3_alias_flags_in_cmd`) + attached-form compatibility regression coverage for `--base=<...>` and `--out=<...>` in parser and standalone E2E tests (`compat_parses_kdiff3_style_mergetool_with_attached_output_and_base_flags`, `standalone_compat_mergetool_accepts_attached_output_and_base_flags`)
 - ✅ KDiff3/Meld-style no-subcommand compatibility parser implemented in `crates/gitgpui-app/src/cli.rs`:
   - accepts direct external-tool invocation with positional paths and compatibility flags (`--auto`, `--auto-merge`, `--L1/--L2/--L3`, Meld-style `-L/--label`, `--base`, `-o/--output/--out`)
   - maps to validated `difftool`/`mergetool` app modes
@@ -221,7 +222,19 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 63) — Mergetool `--auto-merge` Subcommand Alias Parity
+### Latest Component Delivered (Iteration 64) — Attached-Form KDiff3 Output/Base Compatibility Regression Coverage
+
+- Hardened no-subcommand KDiff3 compatibility regression coverage in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
+  - added `compat_parses_kdiff3_style_mergetool_with_attached_output_and_base_flags`, which validates attached `--base=<BASE>` and `--out=<MERGED>` parsing in merge compatibility mode with label aliases.
+- Added standalone command-mode E2E regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_compat_mergetool_accepts_attached_output_and_base_flags` verifies attached-form flags resolve to a clean 3-way merge (`exit 0`) and write expected output bytes.
+- Verification:
+  - `cargo test -p gitgpui-app --no-default-features --features gix compat_parses_kdiff3_style_mergetool_with_attached_output_and_base_flags -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix standalone_compat_mergetool_accepts_attached_output_and_base_flags -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --bin gitgpui-app -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration -- --nocapture`
+
+### Previous Component Delivered (Iteration 63) — Mergetool `--auto-merge` Subcommand Alias Parity
 
 - Hardened dedicated `mergetool` CLI parsing in [`crates/gitgpui-app/src/cli.rs`](crates/gitgpui-app/src/cli.rs):
   - `--auto-merge` is now accepted as a direct alias for `--auto` on the `mergetool` subcommand (Meld-style compatibility for explicit subcommand invocation).

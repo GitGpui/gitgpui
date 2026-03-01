@@ -2133,6 +2133,45 @@ mod tests {
     }
 
     #[test]
+    fn compat_parses_kdiff3_style_mergetool_with_attached_output_and_base_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = tmp_file(&dir, "base file.txt", "base\n");
+        let local = tmp_file(&dir, "local file.txt", "local\n");
+        let remote = tmp_file(&dir, "remote file.txt", "remote\n");
+        let merged = dir.path().join("merged output.txt");
+        let env = TestEnv::new();
+
+        let mode = parse_mode_for_test(
+            vec![
+                OsString::from("gitgpui-app"),
+                OsString::from("--auto"),
+                OsString::from("--L1=BASE_LABEL"),
+                OsString::from("--L2=LOCAL_LABEL"),
+                OsString::from("--L3=REMOTE_LABEL"),
+                OsString::from(format!("--base={}", base.display())),
+                OsString::from(format!("--out={}", merged.display())),
+                local.clone().into_os_string(),
+                remote.clone().into_os_string(),
+            ],
+            &env,
+        )
+        .unwrap();
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert_eq!(config.merged, merged);
+                assert_eq!(config.base.as_ref(), Some(&base));
+                assert_eq!(config.local, local);
+                assert_eq!(config.remote, remote);
+                assert_eq!(config.label_base.as_deref(), Some("BASE_LABEL"));
+                assert_eq!(config.label_local.as_deref(), Some("LOCAL_LABEL"));
+                assert_eq!(config.label_remote.as_deref(), Some("REMOTE_LABEL"));
+            }
+            _ => panic!("expected Mergetool mode"),
+        }
+    }
+
+    #[test]
     fn compat_parses_kdiff3_style_mergetool_without_base() {
         let dir = tempfile::tempdir().unwrap();
         let local = tmp_file(&dir, "local.txt", "local\n");

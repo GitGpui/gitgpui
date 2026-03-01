@@ -541,6 +541,41 @@ fn standalone_compat_mergetool_meld_label_order_maps_to_local_base_remote() {
 }
 
 #[test]
+fn standalone_compat_mergetool_accepts_attached_output_and_base_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("local file.txt");
+    let base = dir.path().join("base file.txt");
+    let remote = dir.path().join("remote file.txt");
+    let merged = dir.path().join("merged output.txt");
+
+    // This relies on BASE being parsed correctly:
+    // - with BASE parsed: clean merge (LOCAL == BASE, REMOTE changed) => exit 0
+    // - without BASE: two-way add/add style conflict => exit 1
+    write_file(&base, "line\n");
+    write_file(&local, "line\n");
+    write_file(&remote, "remote change\n");
+
+    let output = run_gitgpui([
+        OsString::from(format!("--base={}", base.display())),
+        OsString::from(format!("--out={}", merged.display())),
+        OsString::from("--L1=BASE_LABEL"),
+        OsString::from("--L2=LOCAL_LABEL"),
+        OsString::from("--L3=REMOTE_LABEL"),
+        local.as_os_str().to_owned(),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let merged_text = fs::read_to_string(&merged).expect("merged output to exist");
+    assert_eq!(
+        merged_text, "remote change\n",
+        "expected clean merge result from attached --base/--out forms\n{text}"
+    );
+}
+
+#[test]
 fn standalone_difftool_file_directory_mismatch_exits_two() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("left.txt");
