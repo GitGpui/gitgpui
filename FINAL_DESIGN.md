@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 46 fixes 3 failing tests in vendored GPUI `line_wrapper.rs` — the `"…"` (U+2026) ellipsis character had been incorrectly stripped from test parameters during vendoring while expected values still assumed its presence (run lengths accounting for 3-byte `…`, truncation offsets reserving suffix width).
+All components from both design documents are fully implemented. Iteration 46 hardens Phase 4A submodule parity by replacing weak deleted-vs-modified coverage with explicit `git mergetool` choice-matrix assertions (`l`/`r`) for `submod` resolution outcomes.
 
 ## Implementation Progress
 
@@ -30,6 +30,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
+- ✅ Deleted-vs-modified submodule choice parity is now explicit in git-invoked tests: path-targeted `git mergetool submod` assertions now verify `r` keeps the modified submodule gitlink commit and `l` keeps deletion (no gitlink/path), matching the t7610 contract.
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
@@ -46,6 +47,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 3C implemented: real-world merge extraction harness from Git history.
 - ✅ Phase 3C portability hardening implemented: extraction fixture tests now run with `commit.gpgsign=false` in helper git invocations, so the suite is stable on hosts with global commit-signing enabled.
 - ✅ Phase 4A implemented: critical `t7610` mergetool E2E scenarios, including `trustExitCode=false` unchanged-output and changed-output behavior, plus explicit no-base add/add stage-file assertions in git-invoked coverage.
+- ✅ Phase 4A deleted-vs-modified submodule hardening: explicit `l`/`r` resolution assertions for path-targeted `git mergetool submod` flows now validate kept-module vs kept-deletion outcomes.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
 - ✅ Phase 1A marker-size portability is now wired through dedicated mergetool command mode (`--marker-size`), not only the core merge API tests.
