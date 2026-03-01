@@ -487,6 +487,50 @@ mod tests {
     }
 
     #[test]
+    fn non_utf8_content_without_nul_is_treated_as_binary_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let merged_path = tmp.path().join("merged.dat");
+        let local_path = tmp.path().join("local.dat");
+        let remote_path = tmp.path().join("remote.dat");
+
+        // These payloads are intentionally invalid UTF-8 but contain no NUL
+        // bytes to ensure we specifically exercise non-UTF-8 detection.
+        let local_bytes: Vec<u8> = b"prefix\n\xFF\n".to_vec();
+        let remote_bytes: Vec<u8> = b"prefix\n\xFE\n".to_vec();
+
+        write_bytes(&merged_path, b"placeholder");
+        write_bytes(&local_path, &local_bytes);
+        write_bytes(&remote_path, &remote_bytes);
+
+        let config = MergetoolConfig {
+            merged: merged_path.clone(),
+            local: local_path,
+            remote: remote_path,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: gitgpui_core::merge::ConflictStyle::default(),
+            diff_algorithm: gitgpui_core::merge::DiffAlgorithm::default(),
+            marker_size: gitgpui_core::merge::DEFAULT_MARKER_SIZE,
+            auto: false,
+            gui: false,
+        };
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+        assert!(
+            result.merge_result.is_none(),
+            "non-UTF-8 inputs should route to binary handling"
+        );
+        assert!(result.stderr.contains("binary"));
+
+        // Conflict fallback keeps local bytes in MERGED.
+        let output = fs::read(&merged_path).unwrap();
+        assert_eq!(output, local_bytes);
+    }
+
+    #[test]
     fn binary_identical_sides_auto_merge_success() {
         let tmp = tempfile::tempdir().unwrap();
         let merged_path = tmp.path().join("merged.bin");

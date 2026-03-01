@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 20 verification (March 2, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with all 1,072 tests passing (5 ignored), zero failures, and zero lint warnings. Full audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage.
+All components from both design documents are fully implemented. Iteration 20 verification (March 2, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and clippy (`cargo clippy --workspace --no-default-features --features gix -- -D warnings`) with zero failures and zero lint warnings. Full audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage.
 
 ## Implementation Progress
 
@@ -33,6 +33,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Git-invoked deleted-output parity is now explicit in app E2E coverage: external mergetool command `rm -f "$MERGED"` with `trustExitCode=true` resolves the conflict, removes the worktree file, and stages deletion.
 - ✅ Git-invoked add/add no-base parity is now explicit: dedicated mergetool E2E coverage asserts `$BASE` is passed as an existing empty stage file for no-base conflicts.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
+- ✅ Mergetool non-UTF8 behavior-matrix coverage is now explicit across dedicated runtime tests, standalone command-mode E2E, and git-invoked E2E conflict flows (invalid UTF-8 without NUL bytes).
 - ✅ Standalone command-mode behavior-matrix parity is now explicit for byte/line-ending edge cases: direct `gitgpui-app` E2E tests cover `mergetool` CRLF conflict-marker preservation plus `difftool` binary and non-UTF8 content changes.
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
@@ -67,6 +68,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 4A deleted-vs-modified submodule hardening: explicit `l`/`r` resolution assertions for path-targeted `git mergetool submod` flows now validate kept-module vs kept-deletion outcomes.
 - ✅ Phase 4A submodule abort hardening: explicit `a` abort-path assertion for submodule conflicts now validates non-zero exit and unresolved-index preservation.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
+- ✅ Phase 4A behavior-matrix hardening: git-invoked non-UTF8 mergetool conflict coverage added (invalid UTF-8 byte payloads without NUL bytes), with assertions that raw invalid bytes are preserved in unresolved output.
 - ✅ Phase 4A/4B invocation-context hardening: path-override compatibility coverage now explicitly includes spaced+Unicode target paths for both `kdiff3` and `meld` invocation forms.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
 - ✅ Phase 5A exact portability parity is now implemented for Meld matching blocks: `myers_basic`, `myers_postprocess`, and `myers_inline_trigram` now assert exact tuple outputs via a Meld-style matcher pipeline in `crates/gitgpui-core/src/text_utils.rs` (prefix/suffix trimming, optional discard preprocessing, postprocess cleanup, and inline trigram mode).

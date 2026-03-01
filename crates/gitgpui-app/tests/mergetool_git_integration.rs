@@ -3179,6 +3179,31 @@ fn setup_binary_conflict(repo: &Path) {
     );
 }
 
+/// Create a conflict on a non-UTF-8 file (without NUL bytes): base is text,
+/// then both branches write different invalid UTF-8 payloads.
+fn setup_non_utf8_conflict(repo: &Path) {
+    init_repo(repo);
+
+    write_bytes_to_file(repo, "payload.dat", b"prefix\nbase\n");
+    commit_all(repo, "base: add payload file");
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    let feature_bytes: Vec<u8> = b"prefix\n\xFF\n".to_vec();
+    write_bytes_to_file(repo, "payload.dat", &feature_bytes);
+    commit_all(repo, "feature: write non-utf8 bytes");
+
+    run_git(repo, &["checkout", "main"]);
+    let main_bytes: Vec<u8> = b"prefix\n\xFE\n".to_vec();
+    write_bytes_to_file(repo, "payload.dat", &main_bytes);
+    commit_all(repo, "main: write different non-utf8 bytes");
+
+    let output = run_git_capture(repo, &["merge", "feature"]);
+    assert!(
+        !output.status.success(),
+        "expected merge to fail with non-UTF-8 conflict"
+    );
+}
+
 /// E2E: `git mergetool` with a binary file conflict reports the binary
 /// conflict and keeps the local version in the merged output.
 ///
@@ -3209,6 +3234,49 @@ fn git_mergetool_binary_conflict_keeps_local_version() {
         merged_bytes, main_bytes,
         "binary conflict should keep local (main) version in MERGED"
     );
+}
+
+/// E2E: `git mergetool` with non-UTF-8 bytes (no NULs) still routes through
+/// conflict handling without crashing and preserves raw invalid bytes.
+#[test]
+fn git_mergetool_non_utf8_conflict_keeps_local_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().to_path_buf();
+    setup_non_utf8_conflict(&repo);
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_capture(&repo, &["mergetool", "--no-prompt"]);
+    let text = output_text(&output);
+
+    assert!(
+        text.contains("binary")
+            || text.contains("Binary")
+            || text.contains("CONFLICT")
+            || text.contains("conflict"),
+        "expected conflict-related message in tool output, got:\n{text}"
+    );
+
+    let merged_bytes = fs::read(repo.join("payload.dat")).unwrap();
+    let main_bytes: Vec<u8> = b"prefix\n\xFE\n".to_vec();
+    let has_conflict_markers = merged_bytes
+        .windows("<<<<<<<".len())
+        .any(|window| window == b"<<<<<<<");
+
+    if has_conflict_markers {
+        assert!(
+            merged_bytes.contains(&0xFE),
+            "expected local invalid byte to be preserved"
+        );
+        assert!(
+            merged_bytes.contains(&0xFF),
+            "expected remote invalid byte to be preserved when markers remain"
+        );
+    } else {
+        assert_eq!(
+            merged_bytes, main_bytes,
+            "non-UTF-8 conflict without markers should keep local (main) version in MERGED"
+        );
+    }
 }
 
 /// E2E: `git mergetool` with a binary file conflict alongside a text conflict

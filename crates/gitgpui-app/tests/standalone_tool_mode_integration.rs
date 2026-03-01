@@ -161,6 +161,42 @@ fn standalone_mergetool_conflict_exits_one_and_writes_markers() {
 }
 
 #[test]
+fn standalone_mergetool_non_utf8_conflict_exits_one_and_keeps_local_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("local.dat");
+    let remote = dir.path().join("remote.dat");
+    let merged = dir.path().join("merged.dat");
+
+    // Invalid UTF-8 without NUL bytes: exercises non-UTF-8 binary detection.
+    let local_bytes = b"prefix\n\xFF\n";
+    let remote_bytes = b"prefix\n\xFE\n";
+    write_bytes(&local, local_bytes);
+    write_bytes(&remote, remote_bytes);
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("binary"),
+        "expected binary conflict message\n{text}"
+    );
+    assert_eq!(
+        fs::read(&merged).expect("merged output to exist"),
+        local_bytes,
+        "non-UTF-8 conflict should keep local bytes"
+    );
+}
+
+#[test]
 fn standalone_mergetool_no_base_identical_additions_exits_zero() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("local.txt");
