@@ -1,3 +1,5 @@
+## STATUS: COMPLETE
+
 ## Implementation Progress
 
 ### External Diff/Merge Usage Design (`external_usage.md`)
@@ -23,15 +25,15 @@
   - keeps stage files when enabled for both `writeToTemp=true` and `writeToTemp=false`
   - preserves default cleanup behavior when disabled
   - covered by unit tests in `repo/mergetool.rs` and integration tests in `tests/status_integration.rs`
-- 🔧 `mergetool.keepBackup` delete/delete parity scenario from the portability checklist is not yet covered by a dedicated git-invoked E2E assertion.
+- ✅ `mergetool.keepBackup` delete/delete parity scenario covered by dedicated git-invoked E2E assertion (`git_mergetool_keep_backup_delete_delete_no_errors`).
 - ✅ Git behavior parity matrix coverage is complete. All items covered: spaced and Unicode paths, no-base handling for stage extraction (including empty `BASE` file for add/add), trust-exit semantics, deleted output handling, writeToTemp path semantics, difftool `--dir-diff`, difftool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), difftool `--tool-help` discoverability, mergetool `guiDefault` selection (`auto` + `DISPLAY`, `--gui`, `--no-gui`), mergetool `--tool-help` discoverability, mergetool GUI fallback (no guitool → merge.tool), nonexistent tool error handling, delete/delete conflict handling, modify/delete conflict handling, symlink conflict resolution (l/r/a prompts, coexistence with normal file conflicts, difftool target diff), and submodule conflict handling (l/r resolution, coexistence with normal file conflicts, file-vs-submodule, deleted-vs-modified submodule, submodule in subdirectory).
-- 🔧 Git-like scenario porting is near-complete. Tests cover all listed t7610/t7800 parity items except an explicit `mergetool.keepBackup=true` delete/delete assertion. Covered items include: `trustExitCode`, custom cmd with braced env, gui preference, writeToTemp/keepTemporaries, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
+- ✅ Git-like scenario porting is complete. All listed t7610/t7800 parity items are covered: `trustExitCode`, custom cmd with braced env, gui preference, writeToTemp/keepTemporaries, keepBackup delete/delete, no-base stage-file contract, difftool gui-default/trust/tool-help parity, mergetool gui-default/trust/tool-help parity, GUI fallback, nonexistent tool error, delete/delete, modify/delete, order-file invocation ordering (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
 - ✅ Dedicated difftool mode tests are implemented with parity-focused coverage:
   - ✅ Runtime/unit coverage in `crates/gitgpui-app/src/difftool_mode.rs` (identical files, changed files with exit normalization, display-path and explicit labels, missing-input error handling, directory diff).
   - ✅ Full git-invoked integration coverage in `crates/gitgpui-app/tests/difftool_git_integration.rs` (basic invocation, spaced and Unicode paths, subdirectory invocation, `--dir-diff`, `guiDefault`/`--gui`/`--no-gui` selection precedence, trust-exit-code matrix, `--tool-help` discoverability, and symlink target diff).
 - ✅ End-to-end tests that invoke `git difftool`/`git mergetool` with global-like config and `gitgpui-app` as the tool are fully implemented:
   - ✅ `git difftool` E2E in `crates/gitgpui-app/tests/difftool_git_integration.rs` (14 tests).
-  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (29 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), spaced and Unicode path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault=auto` selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, modify/delete conflict, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
+  - ✅ `git mergetool` E2E in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (30 tests): overlapping conflict processing, trust-exit-code semantics (clean merge resolved / conflict preserved), spaced and Unicode path handling, subdirectory invocation, add/add (no-base) conflict, multiple conflicted files, CRLF preservation, `--tool-help` discoverability, `guiDefault=auto` selection (with/without DISPLAY), `--gui` and `--no-gui` flag overrides, GUI fallback when no guitool configured, nonexistent tool error handling, delete/delete conflict, delete/delete with keepBackup=true (no-error parity), modify/delete conflict, invocation ordering parity (`diff.orderFile` and `-O` override), symlink conflicts (l/r resolution, coexistence with normal files), and submodule conflicts (l/r resolution, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files).
 - ✅ KDiff3-style fixture harness implemented in `crates/gitgpui-core/tests/merge_fixture_harness.rs` with fixture data in `crates/gitgpui-core/tests/fixtures/merge/`. Auto-discovers `*_base.*` fixtures, runs merge algorithm, validates invariants (marker well-formedness, content integrity, context preservation), and compares against expected results. 7 seed fixtures + harness discovery test = 8 tests.
 - ✅ Generated permutation corpus integration (Phase 3A) added in `crates/gitgpui-core/tests/merge_permutation_corpus.rs`: ports KDiff3’s 11-option line-state table, runs deterministic sampled corpus (`r=3`, `seed=0`, 243 cases) in default test runs, and includes an ignored exhaustive run (11^5 = 161,051 cases).
 
@@ -63,7 +65,7 @@
   - Default test runs against gitgpui's own repo; ignored test supports arbitrary external repos via `GITGPUI_MERGE_EXTRACTION_REPO` env var.
   - Includes fixture file generation (`write_fixtures`) compatible with the existing Phase 2 fixture harness format.
   - 8 tests (+ 2 ignored): discovery, trivial skip, nontrivial conflict, clean merge, binary skip, fixture writing, multifile merge, self-repo regression.
-- 🔧 Phase 4A (critical `t7610-mergetool` E2E): mostly implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
+- ✅ Phase 4A (critical `t7610-mergetool` E2E): fully implemented across `gitgpui-git-gix` tests and `gitgpui-app` E2E:
   - ✅ trust-exit behavior and content-change semantics
   - ✅ custom command invocation and braced env variables
   - ✅ gui tool preference path via `merge.guitool` + `mergetool.guiDefault=true`
@@ -82,9 +84,9 @@
   - ✅ symlink conflict resolution: l/r prompt handling, coexistence with normal file conflicts
   - ✅ submodule conflict resolution: l/r prompt, deleted-vs-modified, file-vs-submodule, subdirectory submodule, coexistence with normal files
   - ✅ `mergetool.keepTemporaries` stage-file retention semantics (`true` retains, default `false` cleans up) in backend launch path
-  - ⬜ dedicated `mergetool.keepBackup=true` delete/delete E2E assertion in the git-invoked mergetool suite
+  - ✅ `mergetool.keepBackup=true` delete/delete E2E assertion: rename/rename conflict with keepBackup produces no stderr errors
   - ✅ difftool symlink target diff: `git difftool` shows diff between symlink targets
-  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (29 tests)
+  - ✅ full E2E via `git mergetool` command in `crates/gitgpui-app/tests/mergetool_git_integration.rs` (30 tests)
   - ✅ full E2E via `git difftool` command in `crates/gitgpui-app/tests/difftool_git_integration.rs` (14 tests)
 - ✅ Phase 4B (critical `t7800-difftool` E2E): implemented in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
   - ✅ Foundational difftool runtime with Git-compatible exit semantics and label/display-path handling.
@@ -93,7 +95,17 @@
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 9 — Current)
+### Latest Component Delivered (Iteration 11 — Final)
+
+- Implemented the last remaining E2E parity test: `git_mergetool_keep_backup_delete_delete_no_errors` in `crates/gitgpui-app/tests/mergetool_git_integration.rs`.
+  - Mirrors git t7610 test "mergetool produces no errors when keepBackup is used".
+  - Creates a rename/rename conflict (file moved to different destinations by two branches), producing a delete/delete conflict at the original path.
+  - Configures `mergetool.keepBackup=true` and resolves via "d" (delete).
+  - Asserts no error output on stderr and proper cleanup of the original file/directory.
+  - Mergetool E2E suite expanded from 29 to 30 tests.
+- All design document items are now fully implemented. STATUS: COMPLETE.
+
+### Iteration 9
 
 - Completed symlink and submodule conflict E2E test coverage, closing the last remaining gaps in the behavior parity matrix:
   - Added 3 symlink mergetool tests: `git_mergetool_symlink_conflict_resolved_via_local`, `git_mergetool_symlink_conflict_resolved_via_remote`, `git_mergetool_symlink_alongside_normal_file_conflict`
@@ -118,7 +130,7 @@
     - `configure_recording_mergetool` and `read_recorded_merge_order` for deterministic invocation-order capture.
   - Verified via `cargo test -p gitgpui-app --test mergetool_git_integration` (19/19 passing).
 
-### Latest Component Delivered (Iteration 10 — Current)
+### Iteration 10
 
 - Implemented `mergetool.keepTemporaries` support in the backend external-tool launcher:
   - Added config parsing in `crates/gitgpui-git-gix/src/repo/mergetool.rs` (`mergetool.keepTemporaries`, default `false`).

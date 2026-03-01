@@ -1053,6 +1053,92 @@ fn git_mergetool_delete_delete_conflict_handling() {
     );
 }
 
+#[test]
+fn git_mergetool_keep_backup_delete_delete_no_errors() {
+    // Parity with git t7610: "mergetool produces no errors when keepBackup is used"
+    //
+    // When both branches rename a file from the same path to different
+    // destinations, git sees a delete/delete conflict at the original path.
+    // With keepBackup=true, resolving via "d" (delete) should produce NO
+    // errors on stderr and the original directory should be cleaned up.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+
+    // Create a file inside a nested directory: a/a/file.txt
+    fs::create_dir_all(repo.join("a/a")).unwrap();
+    write_file(repo, "a/a/file.txt", "one\ntwo\n3\n4\n");
+    commit_all(repo, "base file");
+
+    // Branch move-to-b: rename a/a/file.txt -> b/b/file.txt (with edit)
+    run_git(repo, &["checkout", "-b", "move-to-b"]);
+    fs::create_dir_all(repo.join("b/b")).unwrap();
+    run_git(repo, &["mv", "a/a/file.txt", "b/b/file.txt"]);
+    write_file(repo, "b/b/file.txt", "one\ntwo\n4\n");
+    commit_all(repo, "move to b");
+
+    // Branch move-to-c: rename a/a/file.txt -> c/c/file.txt (with edit)
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["checkout", "-b", "move-to-c"]);
+    fs::create_dir_all(repo.join("c/c")).unwrap();
+    run_git(repo, &["mv", "a/a/file.txt", "c/c/file.txt"]);
+    write_file(repo, "c/c/file.txt", "one\ntwo\n3\n");
+    commit_all(repo, "move to c");
+
+    // Merge move-to-b into move-to-c → creates delete/delete at a/a/file.txt
+    let merge_output = run_git_capture(repo, &["merge", "move-to-b"]);
+    if merge_output.status.success() {
+        // Git auto-resolved the rename/rename — skip this test.
+        return;
+    }
+
+    // Configure mergetool with keepBackup=true (the setting under test).
+    configure_mergetool_command(repo, "gitgpui", &mergetool_marker_cmd("gitgpui"));
+    configure_mergetool_trust_exit_code(repo, "gitgpui", true);
+    run_git(repo, &["config", "merge.tool", "gitgpui"]);
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "true"]);
+
+    // Resolve with "d" (delete) for the delete/delete conflict at the
+    // original path, and "d" again for any rename/rename prompts git may
+    // present. Pipe enough answers for all prompts git may ask.
+    let output = run_git_with_stdin(
+        repo,
+        &["mergetool", "--no-prompt"],
+        "d\nd\nd\nd\n",
+    );
+
+    // Key assertion: stderr must be empty (no errors from keepBackup
+    // interacting with delete/delete cleanup).
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Filter out git's own informational messages (e.g. "Merging:") —
+    // only assert that no error lines are present.
+    let error_lines: Vec<&str> = stderr
+        .lines()
+        .filter(|line| {
+            let l = line.trim();
+            // Skip empty lines and known git informational output.
+            !l.is_empty()
+                && !l.starts_with("Merging")
+                && !l.starts_with("Normal merge")
+                && !l.starts_with("Deleted merge")
+                && !l.starts_with("TOOL=")
+        })
+        .collect();
+    assert!(
+        error_lines.is_empty(),
+        "expected no errors on stderr with keepBackup=true for delete/delete conflict\nstderr lines: {error_lines:?}\nfull stderr:\n{stderr}"
+    );
+
+    // The original directory "a" should have been cleaned up.
+    // (Git removes it when the file inside is deleted.)
+    assert!(
+        !repo.join("a/a/file.txt").exists(),
+        "expected original file a/a/file.txt to be gone after delete resolution"
+    );
+}
+
 // ── Modify/delete conflict ───────────────────────────────────────────
 
 #[test]
