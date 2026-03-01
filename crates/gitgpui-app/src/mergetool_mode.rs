@@ -1,6 +1,9 @@
 use crate::cli::{MergetoolConfig, exit_code};
-use gitgpui_core::merge::{MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes};
-use std::fs;
+use gitgpui_core::{
+    conflict_labels::{BaseLabelScenario, format_base_label},
+    merge::{MergeError, MergeLabels, MergeOptions, MergeResult, merge_file_bytes},
+};
+use std::{fs, path::Path};
 
 /// Result of running the dedicated mergetool mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,11 +47,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     let options = MergeOptions {
         style: config.conflict_style,
         diff_algorithm: config.diff_algorithm,
-        labels: MergeLabels {
-            ours: config.label_local.clone(),
-            base: config.label_base.clone(),
-            theirs: config.label_remote.clone(),
-        },
+        labels: derive_effective_labels(config),
         ..MergeOptions::default()
     };
 
@@ -99,6 +98,34 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
             merge_result: Some(result),
         })
     }
+}
+
+fn derive_effective_labels(config: &MergetoolConfig) -> MergeLabels {
+    let ours = Some(
+        config
+            .label_local
+            .clone()
+            .unwrap_or_else(|| default_path_label(&config.local)),
+    );
+    let theirs = Some(
+        config
+            .label_remote
+            .clone()
+            .unwrap_or_else(|| default_path_label(&config.remote)),
+    );
+    let base = Some(match (&config.label_base, &config.base) {
+        (Some(label), _) => label.clone(),
+        (None, Some(base_path)) => default_path_label(base_path),
+        (None, None) => format_base_label(&BaseLabelScenario::NoBase),
+    });
+
+    MergeLabels { ours, base, theirs }
+}
+
+fn default_path_label(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Handle binary files by copying LOCAL to MERGED and returning a conflict.
@@ -271,6 +298,35 @@ mod tests {
             merged.contains(">>>>>>> feature-branch"),
             "output: {merged}"
         );
+    }
+
+    #[test]
+    fn conflict_without_explicit_labels_defaults_to_filenames() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("<<<<<<< local.txt"), "output: {merged}");
+        assert!(merged.contains(">>>>>>> remote.txt"), "output: {merged}");
+    }
+
+    #[test]
+    fn conflict_with_partial_labels_defaults_missing_side_to_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(tmp.path(), Some("original\n"), "ours\n", "theirs\n", "");
+        config.label_local = Some("LOCAL_LABEL".to_string());
+        // Intentionally omit remote label: should fall back to remote filename.
+        config.label_remote = None;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("<<<<<<< LOCAL_LABEL"), "output: {merged}");
+        assert!(merged.contains(">>>>>>> remote.txt"), "output: {merged}");
     }
 
     // ── No base (add/add conflict) ───────────────────────────────────
@@ -765,6 +821,44 @@ mod tests {
     }
 
     #[test]
+    fn diff3_style_defaults_base_label_to_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(
+            tmp.path(),
+            Some("original\n"),
+            "local change\n",
+            "remote change\n",
+            "",
+        );
+        config.conflict_style = gitgpui_core::merge::ConflictStyle::Diff3;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("||||||| base.txt"), "output: {merged}");
+    }
+
+    #[test]
+    fn diff3_style_no_base_uses_empty_tree_label() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = make_config(
+            tmp.path(),
+            None,
+            "local change\n",
+            "remote change\n",
+            "",
+        );
+        config.conflict_style = gitgpui_core::merge::ConflictStyle::Diff3;
+
+        let result = run_mergetool(&config).expect("mergetool run");
+        assert_eq!(result.exit_code, exit_code::CANCELED);
+
+        let merged = fs::read_to_string(&config.merged).unwrap();
+        assert!(merged.contains("||||||| empty tree"), "output: {merged}");
+    }
+
+    #[test]
     fn zdiff3_style_extracts_common_prefix_suffix() {
         let tmp = tempfile::tempdir().unwrap();
         // base=1..9, local=1..4+ABCDE+7..9, remote=1..4+AXCYE+7..9
@@ -783,8 +877,10 @@ mod tests {
             merged.contains("A\n<<<<<<<"),
             "common prefix A should be outside markers: {merged}"
         );
+        let close_idx = merged.find(">>>>>>>").expect("missing conflict close marker");
+        let suffix_after_close = merged[close_idx..].contains("\nE\n");
         assert!(
-            merged.contains(">>>>>>>\nE\n"),
+            suffix_after_close,
             "common suffix E should be outside markers: {merged}"
         );
     }
