@@ -52,6 +52,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 4A submodule abort hardening: explicit `a` abort-path assertion for submodule conflicts now validates non-zero exit and unresolved-index preservation.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
+- ✅ Phase 5A exact portability parity is now implemented for Meld matching blocks: `myers_basic`, `myers_postprocess`, and `myers_inline_trigram` now assert exact tuple outputs via a Meld-style matcher pipeline in `crates/gitgpui-core/src/text_utils.rs` (prefix/suffix trimming, optional discard preprocessing, postprocess cleanup, and inline trigram mode).
 - ✅ Phase 1A marker-size portability is now wired through dedicated mergetool command mode (`--marker-size`), not only the core merge API tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
@@ -194,6 +195,22 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`true`/`false`/`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 48) — Meld Phase 5A Exact Matching-Block Parity
+
+- Implemented Meld-style matching-block preprocessing/postprocessing pipeline in `crates/gitgpui-core/src/text_utils.rs`:
+  - common prefix/suffix stripping before diff
+  - discard preprocessing parity (`index_matching`) plus inline trigram mode parity (`index_matching_kmers`)
+  - discarded-index remapping back to original coordinates
+  - backward cleanup pass (`postprocess_blocks`) to reduce alignment chaff
+- Added `matching_blocks_chars_inline(...)` for explicit inline trigram parity coverage.
+- Hardened Meld portability tests in `crates/gitgpui-core/tests/meld_algorithm_tests.rs`:
+  - `myers_matching_blocks_basic` now asserts exact tuples `[(0,2,3),(4,5,3),(10,8,2)]`
+  - `myers_matching_blocks_postprocess` now asserts exact tuples `[(0,2,3),(4,6,3),(7,12,2)]`
+  - `myers_matching_blocks_inline` now uses inline trigram matcher and asserts exact tuple `[(17,16,7)]`
+- Verification:
+  - `cargo test --offline -p gitgpui-core --test meld_algorithm_tests -- --nocapture`
+  - `cargo test --offline -p gitgpui-core`
 
 ### Latest Verification (Iteration 48) — Full Completeness Confirmed
 

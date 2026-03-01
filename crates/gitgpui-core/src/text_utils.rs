@@ -6,6 +6,7 @@
 //! - Newline-aware text manipulation
 
 use crate::file_diff::{Edit, EditKind, myers_edits};
+use std::collections::HashSet;
 use std::fmt;
 
 /// A contiguous matching block between two sequences.
@@ -69,14 +70,40 @@ impl fmt::Display for SyncPointError {
 
 impl std::error::Error for SyncPointError {}
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MatcherMode {
+    Standard,
+    InlineTrigram,
+}
+
+#[derive(Debug)]
+struct PreprocessedSequences {
+    a: Vec<String>,
+    b: Vec<String>,
+    aindex: Vec<usize>,
+    bindex: Vec<usize>,
+    lines_discarded: bool,
+    common_prefix: usize,
+    common_suffix: usize,
+}
+
 /// Extract matching blocks between two strings at the character level.
 ///
 /// Uses Myers diff to find an optimal alignment, then returns contiguous
 /// runs of matching characters as blocks. Blocks are returned in order
 /// and do not overlap.
 pub fn matching_blocks_chars(a: &str, b: &str) -> Vec<MatchingBlock> {
-    matching_blocks_chars_with_sync_points(a, b, &[])
-        .expect("empty sync point list is always valid")
+    let a_tokens = chars_to_tokens(a);
+    let b_tokens = chars_to_tokens(b);
+    matching_blocks_for_tokens(&a_tokens, &b_tokens, MatcherMode::Standard)
+}
+
+/// Extract matching blocks between two strings using Meld-style inline
+/// trigram filtering before Myers matching.
+pub fn matching_blocks_chars_inline(a: &str, b: &str) -> Vec<MatchingBlock> {
+    let a_tokens = chars_to_tokens(a);
+    let b_tokens = chars_to_tokens(b);
+    matching_blocks_for_tokens(&a_tokens, &b_tokens, MatcherMode::InlineTrigram)
 }
 
 /// Extract matching blocks between two strings at the character level, while
@@ -91,12 +118,9 @@ pub fn matching_blocks_chars_with_sync_points(
     b: &str,
     sync_points: &[(usize, usize)],
 ) -> Result<Vec<MatchingBlock>, SyncPointError> {
-    let a_strs: Vec<String> = a.chars().map(|c| c.to_string()).collect();
-    let b_strs: Vec<String> = b.chars().map(|c| c.to_string()).collect();
-    let a_refs: Vec<&str> = a_strs.iter().map(String::as_str).collect();
-    let b_refs: Vec<&str> = b_strs.iter().map(String::as_str).collect();
-
-    matching_blocks_with_sync_points(&a_refs, &b_refs, sync_points)
+    let a_tokens = chars_to_tokens(a);
+    let b_tokens = chars_to_tokens(b);
+    matching_blocks_with_sync_points(&a_tokens, &b_tokens, sync_points, MatcherMode::Standard)
 }
 
 /// Extract matching blocks between two line sequences.
@@ -104,7 +128,9 @@ pub fn matching_blocks_chars_with_sync_points(
 /// Uses Myers diff on the line arrays and returns contiguous runs
 /// of matching lines as blocks.
 pub fn matching_blocks_lines<'a>(a: &[&'a str], b: &[&'a str]) -> Vec<MatchingBlock> {
-    matching_blocks_lines_with_sync_points(a, b, &[]).expect("empty sync point list is valid")
+    let a_tokens = lines_to_tokens(a);
+    let b_tokens = lines_to_tokens(b);
+    matching_blocks_for_tokens(&a_tokens, &b_tokens, MatcherMode::Standard)
 }
 
 /// Extract matching blocks between two line sequences with sync-point
@@ -114,19 +140,21 @@ pub fn matching_blocks_lines_with_sync_points<'a>(
     b: &[&'a str],
     sync_points: &[(usize, usize)],
 ) -> Result<Vec<MatchingBlock>, SyncPointError> {
-    matching_blocks_with_sync_points(a, b, sync_points)
+    let a_tokens = lines_to_tokens(a);
+    let b_tokens = lines_to_tokens(b);
+    matching_blocks_with_sync_points(&a_tokens, &b_tokens, sync_points, MatcherMode::Standard)
 }
 
 fn matching_blocks_with_sync_points(
-    a: &[&str],
-    b: &[&str],
+    a: &[String],
+    b: &[String],
     sync_points: &[(usize, usize)],
+    mode: MatcherMode,
 ) -> Result<Vec<MatchingBlock>, SyncPointError> {
     validate_sync_points(sync_points, a.len(), b.len())?;
 
     if sync_points.is_empty() {
-        let edits = myers_edits(a, b);
-        return Ok(edits_to_matching_blocks(&edits));
+        return Ok(matching_blocks_for_tokens(a, b, mode));
     }
 
     let mut blocks = Vec::new();
@@ -134,27 +162,27 @@ fn matching_blocks_with_sync_points(
     let mut b_start = 0usize;
 
     for &(a_end, b_end) in sync_points {
-        append_segment_blocks(a, b, a_start, a_end, b_start, b_end, &mut blocks);
+        append_segment_blocks(a, b, a_start, a_end, b_start, b_end, mode, &mut blocks);
         a_start = a_end;
         b_start = b_end;
     }
 
-    append_segment_blocks(a, b, a_start, a.len(), b_start, b.len(), &mut blocks);
+    append_segment_blocks(a, b, a_start, a.len(), b_start, b.len(), mode, &mut blocks);
 
     Ok(blocks)
 }
 
 fn append_segment_blocks(
-    a: &[&str],
-    b: &[&str],
+    a: &[String],
+    b: &[String],
     a_start: usize,
     a_end: usize,
     b_start: usize,
     b_end: usize,
+    mode: MatcherMode,
     out: &mut Vec<MatchingBlock>,
 ) {
-    let segment_edits = myers_edits(&a[a_start..a_end], &b[b_start..b_end]);
-    let segment_blocks = edits_to_matching_blocks(&segment_edits);
+    let segment_blocks = matching_blocks_for_tokens(&a[a_start..a_end], &b[b_start..b_end], mode);
     for block in segment_blocks {
         out.push(MatchingBlock {
             a_start: a_start + block.a_start,
@@ -162,6 +190,272 @@ fn append_segment_blocks(
             length: block.length,
         });
     }
+}
+
+fn chars_to_tokens(input: &str) -> Vec<String> {
+    input.chars().map(|c| c.to_string()).collect()
+}
+
+fn lines_to_tokens(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| (*line).to_string()).collect()
+}
+
+fn matching_blocks_for_tokens(a: &[String], b: &[String], mode: MatcherMode) -> Vec<MatchingBlock> {
+    let preprocessed = preprocess_tokens(a, b, mode);
+    let mut blocks = matching_blocks_from_preprocessed(a, b, &preprocessed);
+    postprocess_blocks(&mut blocks, a, b);
+    blocks
+}
+
+fn preprocess_tokens(a: &[String], b: &[String], mode: MatcherMode) -> PreprocessedSequences {
+    let common_prefix = find_common_prefix_tokens(a, b);
+    let mut a_trimmed = a[common_prefix..].to_vec();
+    let mut b_trimmed = b[common_prefix..].to_vec();
+
+    let common_suffix = if !a_trimmed.is_empty() && !b_trimmed.is_empty() {
+        let suffix = find_common_suffix_tokens(&a_trimmed, &b_trimmed);
+        if suffix > 0 {
+            a_trimmed.truncate(a_trimmed.len() - suffix);
+            b_trimmed.truncate(b_trimmed.len() - suffix);
+        }
+        suffix
+    } else {
+        0
+    };
+
+    let (processed_a, processed_b, aindex, bindex, lines_discarded) =
+        preprocess_discard_nonmatching(a_trimmed, b_trimmed, mode);
+
+    PreprocessedSequences {
+        a: processed_a,
+        b: processed_b,
+        aindex,
+        bindex,
+        lines_discarded,
+        common_prefix,
+        common_suffix,
+    }
+}
+
+fn preprocess_discard_nonmatching(
+    a: Vec<String>,
+    b: Vec<String>,
+    mode: MatcherMode,
+) -> (Vec<String>, Vec<String>, Vec<usize>, Vec<usize>, bool) {
+    if a.is_empty() || b.is_empty() {
+        return (a, b, Vec::new(), Vec::new(), false);
+    }
+
+    if mode == MatcherMode::InlineTrigram && a.len() <= 2 && b.len() <= 2 {
+        return (a, b, Vec::new(), Vec::new(), false);
+    }
+
+    let (indexed_b, bindex) = match mode {
+        MatcherMode::Standard => index_matching(&a, &b),
+        MatcherMode::InlineTrigram => index_matching_kmers(&a, &b),
+    };
+    let (indexed_a, aindex) = match mode {
+        MatcherMode::Standard => index_matching(&b, &a),
+        MatcherMode::InlineTrigram => index_matching_kmers(&b, &a),
+    };
+
+    let lines_discarded = (b.len() - indexed_b.len() > 10) || (a.len() - indexed_a.len() > 10);
+    if lines_discarded {
+        (indexed_a, indexed_b, aindex, bindex, true)
+    } else {
+        (a, b, aindex, bindex, false)
+    }
+}
+
+fn index_matching(a: &[String], b: &[String]) -> (Vec<String>, Vec<usize>) {
+    let aset: HashSet<&str> = a.iter().map(String::as_str).collect();
+    let mut matches = Vec::new();
+    let mut index = Vec::new();
+    for (i, token) in b.iter().enumerate() {
+        if aset.contains(token.as_str()) {
+            matches.push(token.clone());
+            index.push(i);
+        }
+    }
+    (matches, index)
+}
+
+fn index_matching_kmers(a: &[String], b: &[String]) -> (Vec<String>, Vec<usize>) {
+    let mut aset: HashSet<(String, String, String)> = HashSet::new();
+    for i in 0..a.len().saturating_sub(2) {
+        aset.insert((a[i].clone(), a[i + 1].clone(), a[i + 2].clone()));
+    }
+
+    let mut matches = Vec::new();
+    let mut index = Vec::new();
+    let mut next_poss_match = 0usize;
+
+    for i in 2..b.len() {
+        let kmer = (b[i - 2].clone(), b[i - 1].clone(), b[i].clone());
+        if !aset.contains(&kmer) {
+            continue;
+        }
+
+        for j in next_poss_match.max(i - 2)..=i {
+            matches.push(b[j].clone());
+            index.push(j);
+        }
+        next_poss_match = i + 1;
+    }
+
+    (matches, index)
+}
+
+fn find_common_prefix_tokens(a: &[String], b: &[String]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+fn find_common_suffix_tokens(a: &[String], b: &[String]) -> usize {
+    let mut suffix = 0usize;
+    while suffix < a.len() && suffix < b.len() && a[a.len() - 1 - suffix] == b[b.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    suffix
+}
+
+fn matching_blocks_from_preprocessed(
+    original_a: &[String],
+    original_b: &[String],
+    preprocessed: &PreprocessedSequences,
+) -> Vec<MatchingBlock> {
+    let a_refs: Vec<&str> = preprocessed.a.iter().map(String::as_str).collect();
+    let b_refs: Vec<&str> = preprocessed.b.iter().map(String::as_str).collect();
+    let edits = myers_edits(&a_refs, &b_refs);
+    let raw_blocks = edits_to_matching_blocks(&edits);
+
+    let mut blocks = if preprocessed.lines_discarded {
+        remap_discarded_blocks(
+            &raw_blocks,
+            &preprocessed.aindex,
+            &preprocessed.bindex,
+            preprocessed.common_prefix,
+        )
+    } else {
+        raw_blocks
+            .into_iter()
+            .map(|block| MatchingBlock {
+                a_start: block.a_start + preprocessed.common_prefix,
+                b_start: block.b_start + preprocessed.common_prefix,
+                length: block.length,
+            })
+            .collect()
+    };
+
+    if preprocessed.common_prefix > 0 {
+        blocks.insert(
+            0,
+            MatchingBlock {
+                a_start: 0,
+                b_start: 0,
+                length: preprocessed.common_prefix,
+            },
+        );
+    }
+
+    if preprocessed.common_suffix > 0 {
+        blocks.push(MatchingBlock {
+            a_start: original_a.len() - preprocessed.common_suffix,
+            b_start: original_b.len() - preprocessed.common_suffix,
+            length: preprocessed.common_suffix,
+        });
+    }
+
+    blocks
+}
+
+fn remap_discarded_blocks(
+    blocks: &[MatchingBlock],
+    aindex: &[usize],
+    bindex: &[usize],
+    common_prefix: usize,
+) -> Vec<MatchingBlock> {
+    let mut remapped = Vec::new();
+
+    for block in blocks {
+        if block.length == 0 {
+            continue;
+        }
+
+        let first_a = aindex[block.a_start] + common_prefix;
+        let first_b = bindex[block.b_start] + common_prefix;
+        let mut run_start_a = first_a;
+        let mut run_start_b = first_b;
+        let mut run_length = 1usize;
+
+        for offset in 1..block.length {
+            let current_a = aindex[block.a_start + offset] + common_prefix;
+            let current_b = bindex[block.b_start + offset] + common_prefix;
+            let prev_a = aindex[block.a_start + offset - 1] + common_prefix;
+            let prev_b = bindex[block.b_start + offset - 1] + common_prefix;
+
+            if current_a == prev_a + 1 && current_b == prev_b + 1 {
+                run_length += 1;
+                continue;
+            }
+
+            remapped.push(MatchingBlock {
+                a_start: run_start_a,
+                b_start: run_start_b,
+                length: run_length,
+            });
+            run_start_a = current_a;
+            run_start_b = current_b;
+            run_length = 1;
+        }
+
+        remapped.push(MatchingBlock {
+            a_start: run_start_a,
+            b_start: run_start_b,
+            length: run_length,
+        });
+    }
+
+    remapped
+}
+
+fn postprocess_blocks(blocks: &mut Vec<MatchingBlock>, a: &[String], b: &[String]) {
+    if blocks.is_empty() {
+        return;
+    }
+
+    let mut merged = vec![*blocks.last().expect("non-empty checked above")];
+    let mut i = blocks.len() as isize - 2;
+
+    while i >= 0 {
+        let mut current = blocks[i as usize];
+        i -= 1;
+
+        while i >= 0 {
+            let prev = blocks[i as usize];
+            if prev.b_start + prev.length == current.b_start
+                || prev.a_start + prev.length == current.a_start
+            {
+                if current.a_start >= prev.length && current.b_start >= prev.length {
+                    let prev_slice_a = &a[current.a_start - prev.length..current.a_start];
+                    let prev_slice_b = &b[current.b_start - prev.length..current.b_start];
+                    if prev_slice_a == prev_slice_b {
+                        current.a_start -= prev.length;
+                        current.b_start -= prev.length;
+                        current.length += prev.length;
+                        i -= 1;
+                        continue;
+                    }
+                }
+            }
+            break;
+        }
+
+        merged.push(current);
+    }
+
+    merged.reverse();
+    *blocks = merged;
 }
 
 fn validate_sync_points(

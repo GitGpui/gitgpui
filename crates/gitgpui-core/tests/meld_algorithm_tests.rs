@@ -6,7 +6,7 @@
 
 use gitgpui_core::text_utils::{
     MatchingBlock, SyncPointError, delete_last_line, matching_blocks_chars,
-    matching_blocks_chars_with_sync_points, matching_blocks_lines,
+    matching_blocks_chars_inline, matching_blocks_chars_with_sync_points, matching_blocks_lines,
     matching_blocks_lines_with_sync_points, merge_intervals,
 };
 
@@ -64,84 +64,85 @@ fn total_matched(blocks: &[MatchingBlock]) -> usize {
 // Phase 5A — Myers matching blocks
 // ===========================================================================
 
-/// Meld `myers_basic` test concept.
-/// Input: a = "abcbdefgabcdefg", b = "gfabcdefcd"
-/// Meld expects blocks: [(0,2,3), (4,5,3), (10,8,2)] (total matched = 8).
-///
-/// Our Myers implementation may produce a different (but equally valid)
-/// shortest-edit-script alignment. We verify invariants and that the total
-/// matched length equals the LCS length.
+/// Meld `myers_basic` exact parity case.
 #[test]
 fn myers_matching_blocks_basic() {
     let a = "abcbdefgabcdefg";
     let b = "gfabcdefcd";
 
     let blocks = matching_blocks_chars(a, b);
-    verify_matching_blocks_chars(a, b, &blocks);
-
-    // LCS length for these inputs is 8.
     assert_eq!(
-        total_matched(&blocks),
-        8,
-        "total matched length should equal LCS length; blocks: {blocks:?}"
+        blocks,
+        vec![
+            MatchingBlock {
+                a_start: 0,
+                b_start: 2,
+                length: 3,
+            },
+            MatchingBlock {
+                a_start: 4,
+                b_start: 5,
+                length: 3,
+            },
+            MatchingBlock {
+                a_start: 10,
+                b_start: 8,
+                length: 2,
+            },
+        ]
     );
+    verify_matching_blocks_chars(a, b, &blocks);
+    assert_eq!(total_matched(&blocks), 8);
 }
 
-/// Meld `myers_postprocess` test concept.
-/// Input: a = "abcfabgcd", b = "afabcgabgcabcd"
-/// Meld expects blocks: [(0,2,3), (4,6,3), (7,12,2)] (total matched = 8).
+/// Meld `myers_postprocess` exact parity case.
 #[test]
 fn myers_matching_blocks_postprocess() {
     let a = "abcfabgcd";
     let b = "afabcgabgcabcd";
 
     let blocks = matching_blocks_chars(a, b);
-    verify_matching_blocks_chars(a, b, &blocks);
-
-    // LCS length for these inputs is 8.
     assert_eq!(
-        total_matched(&blocks),
-        8,
-        "total matched length should equal LCS length; blocks: {blocks:?}"
+        blocks,
+        vec![
+            MatchingBlock {
+                a_start: 0,
+                b_start: 2,
+                length: 3,
+            },
+            MatchingBlock {
+                a_start: 4,
+                b_start: 6,
+                length: 3,
+            },
+            MatchingBlock {
+                a_start: 7,
+                b_start: 12,
+                length: 2,
+            },
+        ]
     );
+    verify_matching_blocks_chars(a, b, &blocks);
+    assert_eq!(total_matched(&blocks), 8);
 }
 
-/// Meld `myers_inline_trigram` test concept.
-/// Input: a = "red, blue, yellow, white", b = "black green, hue, white"
-/// Meld expects only [(17,16,7)] due to trigram filtering.
-///
-/// Our standard Myers diff finds ALL common characters (no trigram filter),
-/// producing more matching blocks across the strings. We verify invariants,
-/// total matched length exceeds the trigram-filtered 7, and that the
-/// "hite" suffix is matched (the tail of ", white").
+/// Meld `myers_inline_trigram` exact parity case.
 #[test]
 fn myers_matching_blocks_inline() {
     let a = "red, blue, yellow, white";
     let b = "black green, hue, white";
 
-    let blocks = matching_blocks_chars(a, b);
+    let blocks = matching_blocks_chars_inline(a, b);
+    assert_eq!(
+        blocks,
+        vec![MatchingBlock {
+            a_start: 17,
+            b_start: 16,
+            length: 7
+        }]
+    );
     verify_matching_blocks_chars(a, b, &blocks);
-
-    // Our unfiltered Myers finds more matches than Meld's
-    // trigram-filtered result of 7 characters.
-    assert!(
-        total_matched(&blocks) >= 7,
-        "should match at least 7 characters; blocks: {blocks:?}"
-    );
-
-    // Verify that the tail of both strings ("hite") is matched.
-    // Our Myers aligns "w" separately due to earlier comma/space matches
-    // consuming those characters, but "hite" at the end should form a
-    // contiguous block.
-    let matches_tail = blocks.iter().any(|bl| {
-        let a_end = bl.a_start + bl.length;
-        let b_end = bl.b_start + bl.length;
-        a_end == a.len() && b_end == b.len() && bl.length >= 4
-    });
-    assert!(
-        matches_tail,
-        "should match the tail 'hite' as a block ending both strings; blocks: {blocks:?}"
-    );
+    assert_eq!(total_matched(&blocks), 7);
 }
 
 /// Meld `sync_point_none` test concept — same inputs as `basic` with no
