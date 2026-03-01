@@ -21,7 +21,16 @@ fn main() {
     crashlog::install();
 
     match mode {
-        AppMode::Difftool(config) => match difftool_mode::run_difftool(&config) {
+        AppMode::Difftool(config) => {
+            #[cfg(not(feature = "ui-gpui"))]
+            if config.gui {
+                eprintln!(
+                    "GUI difftool mode is unavailable in this build. Rebuild with `-p gitgpui-app --features ui-gpui`."
+                );
+                std::process::exit(exit_code::ERROR);
+            }
+
+            match difftool_mode::run_difftool(&config) {
             Ok(result) => {
                 // When UI is available and --gui was requested, open a focused
                 // GPUI diff window instead of printing raw text to stdout.
@@ -60,7 +69,8 @@ fn main() {
                 eprintln!("{msg}");
                 std::process::exit(exit_code::ERROR);
             }
-        },
+            }
+        }
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
@@ -109,6 +119,14 @@ fn main() {
             }
         }
         AppMode::Mergetool(config) => {
+            #[cfg(not(feature = "ui-gpui"))]
+            if config.gui {
+                eprintln!(
+                    "GUI mergetool mode is unavailable in this build. Rebuild with `-p gitgpui-app --features ui-gpui`."
+                );
+                std::process::exit(exit_code::ERROR);
+            }
+
             match mergetool_mode::run_mergetool(&config) {
                 Ok(result) => {
                     // When UI is available, --gui was requested, the merge

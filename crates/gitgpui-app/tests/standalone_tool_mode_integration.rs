@@ -379,6 +379,40 @@ fn standalone_mergetool_invalid_path_exits_two() {
     );
 }
 
+#[cfg(not(feature = "ui-gpui"))]
+#[test]
+fn standalone_mergetool_gui_flag_without_ui_feature_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_file(&base, "line\n");
+    write_file(&local, "ours\n");
+    write_file(&remote, "theirs\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--gui"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("GUI mergetool mode is unavailable"),
+        "expected actionable GUI-unavailable error\n{text}"
+    );
+}
+
 #[test]
 fn standalone_mergetool_rejects_directory_merged_target_with_exit_two() {
     let dir = tempfile::tempdir().unwrap();
@@ -741,6 +775,32 @@ fn standalone_difftool_missing_input_exits_two() {
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("Remote path does not exist"),
         "expected validation error\n{text}"
+    );
+}
+
+#[cfg(not(feature = "ui-gpui"))]
+#[test]
+fn standalone_difftool_gui_flag_without_ui_feature_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.txt");
+    let remote = dir.path().join("right.txt");
+    write_file(&local, "left\n");
+    write_file(&remote, "right\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--gui"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("GUI difftool mode is unavailable"),
+        "expected actionable GUI-unavailable error\n{text}"
     );
 }
 
