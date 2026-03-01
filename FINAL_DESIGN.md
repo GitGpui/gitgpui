@@ -47,9 +47,25 @@
   - ✅ tool path override via `mergetool.<tool>.path`
   - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, writeToTemp/orderFile/delete-delete prompt flow/submodule matrix/no-base file E2E via `git mergetool` command) still pending
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
-- ⬜ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): not implemented yet.
+- ✅ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): implemented in `crates/gitgpui-core/src/text_utils.rs` with tests in `crates/gitgpui-core/tests/meld_algorithm_tests.rs`:
+  - 5A: Myers matching blocks extraction (`matching_blocks_chars`, `matching_blocks_lines`) with 8 tests (4 ported from Meld's `test_matchers.py` inputs + 4 line-level tests). Sync point tests noted as Meld-specific (not applicable to our standard Myers engine).
+  - 5B: Interval merging (`merge_intervals`) with 8 tests (6 ported from Meld's `test_misc.py` + 2 edge cases).
+  - 5C: Newline-aware text operations (`delete_last_line`) with 12 tests (7 ported from Meld's `test_chunk_actions.py` + 5 edge cases).
 
-### Latest Component Delivered (Iteration 4)
+### Latest Component Delivered (Iteration 5)
+
+- Implemented Phase 5A/5B/5C Meld-derived algorithm tests and utilities:
+  - Added `crates/gitgpui-core/src/text_utils.rs` with three utility groups:
+    1. **Matching block extraction** (`matching_blocks_chars`, `matching_blocks_lines`): converts Myers diff edit scripts into `MatchingBlock` tuples `(a_start, b_start, length)` for both character-level and line-level sequences.
+    2. **Interval merging** (`merge_intervals`): coalesces overlapping/adjacent `(start, end)` intervals into non-overlapping sorted output.
+    3. **Newline-aware line deletion** (`delete_last_line`): removes the last line respecting `\n`, `\r\n`, and `\r` line endings.
+  - Added `crates/gitgpui-core/tests/meld_algorithm_tests.rs` with 28 tests:
+    - 5A (8 tests): 4 character-level matching block tests ported from Meld's `test_matchers.py` (basic, postprocess, inline, no-sync-points) with invariant verification (valid content, ordering, non-overlapping) + 4 line-level matching block tests.
+    - 5B (8 tests): 6 interval merging tests ported from Meld's `test_misc.py` (dominated, disjoint, two-groups, unsorted, duplicate, chain) + 2 edge cases.
+    - 5C (12 tests): 7 newline-aware deletion tests ported from Meld's `test_chunk_actions.py` (CRLF, LF, CR, trailing, mixed) + 5 edge cases.
+  - Note: Meld's `sync_point_one` and `sync_point_two` tests exercise Meld-specific sync point alignment constraints not present in our standard Myers engine; these are documented but not ported.
+
+### Iteration 4 Component Delivered
 
 - Implemented Phase 3A generated permutation corpus regression coverage:
   - Added `crates/gitgpui-core/tests/merge_permutation_corpus.rs`.

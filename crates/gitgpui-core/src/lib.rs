@@ -6,3 +6,4 @@ pub mod error;
 pub mod file_diff;
 pub mod merge;
 pub mod services;
+pub mod text_utils;
