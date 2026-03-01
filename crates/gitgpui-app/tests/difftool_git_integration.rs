@@ -243,6 +243,64 @@ fn git_difftool_meld_path_override_invokes_compat_mode() {
 }
 
 #[test]
+fn git_difftool_kdiff3_path_override_handles_spaced_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
+    write_file(repo, compat_path, "before compat\n");
+    commit_all(repo, "base");
+    write_file(repo, compat_path, "after compat\n");
+
+    configure_kdiff3_path_override_to_gitgpui(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", compat_path]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected kdiff3 path-override to handle spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("Invalid external"),
+        "compat parser rejected spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("No such file or directory") && !text.contains("does not exist"),
+        "expected kdiff3 path-override invocation to resolve spaced/unicode paths without file-resolution errors\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_meld_path_override_handles_spaced_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
+    write_file(repo, compat_path, "before compat\n");
+    commit_all(repo, "base");
+    write_file(repo, compat_path, "after compat\n");
+
+    configure_meld_path_override_to_gitgpui(repo);
+
+    let output = run_git_capture(repo, &["difftool", "--no-prompt", "--", compat_path]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected meld path-override to handle spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("Invalid external"),
+        "compat parser rejected spaced/unicode path\n{text}"
+    );
+    assert!(
+        text.contains("-before compat") && text.contains("+after compat"),
+        "expected diff output for spaced/unicode path\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_handles_path_with_spaces() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

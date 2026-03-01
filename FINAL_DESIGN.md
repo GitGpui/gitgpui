@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 15 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`): 1065 passed, 0 failed, 5 ignored, clippy clean. Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage.
+All components from both design documents are fully implemented. Iteration 15 verification (March 1, 2026) re-ran the full headless suite (`cargo test --workspace --no-default-features --features gix`) and all tests passed with zero failures. Comprehensive audit of both design documents (`external_usage.md` and `docs/REFERENCE_TEST_PORTABILITY.md`) against the codebase confirms no remaining `⬜`/`🔧` items — all phases, rollout plan items, acceptance criteria, and behavior matrix entries are implemented with test coverage.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 68)
+### Progress Snapshot (Iteration 15)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -50,6 +50,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows plus both `kdiff3` and `meld` difftool flows to validate direct executable invocation compatibility.
+- ✅ Path-override compatibility now has explicit spaced+Unicode path coverage for both invocation shapes (`kdiff3` and `meld`) in both entry points (`git difftool` and `git mergetool`), ensuring quoting/parsing safety in direct executable mode.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 1A implemented: core 3-way merge algorithm + t6403 portability set (including histogram and binary-reject paths).
@@ -65,6 +66,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 4A deleted-vs-modified submodule hardening: explicit `l`/`r` resolution assertions for path-targeted `git mergetool submod` flows now validate kept-module vs kept-deletion outcomes.
 - ✅ Phase 4A submodule abort hardening: explicit `a` abort-path assertion for submodule conflicts now validates non-zero exit and unresolved-index preservation.
 - ✅ Phase 4B implemented: critical `t7800` difftool E2E scenarios.
+- ✅ Phase 4A/4B invocation-context hardening: path-override compatibility coverage now explicitly includes spaced+Unicode target paths for both `kdiff3` and `meld` invocation forms.
 - ✅ Phase 5 implemented: Meld-derived matcher/interval/newline portability suites.
 - ✅ Phase 5A exact portability parity is now implemented for Meld matching blocks: `myers_basic`, `myers_postprocess`, and `myers_inline_trigram` now assert exact tuple outputs via a Meld-style matcher pipeline in `crates/gitgpui-core/src/text_utils.rs` (prefix/suffix trimming, optional discard preprocessing, postprocess cleanup, and inline trigram mode).
 - ✅ Phase 1A marker-size portability is now wired through dedicated mergetool command mode (`--marker-size`), not only the core merge API tests.

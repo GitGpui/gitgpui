@@ -366,16 +366,22 @@ fn stage_zero_gitlink_oid(repo: &Path, path: &str) -> Option<String> {
 
 /// Create a repo with a genuine merge conflict (overlapping changes).
 fn setup_overlapping_conflict(repo: &Path) {
+    setup_overlapping_conflict_at_path(repo, "file.txt");
+}
+
+/// Create a repo with a genuine merge conflict (overlapping changes) at a
+/// caller-provided path.
+fn setup_overlapping_conflict_at_path(repo: &Path, path: &str) {
     init_repo(repo);
-    write_file(repo, "file.txt", "aaa\nbbb\nccc\n");
+    write_file(repo, path, "aaa\nbbb\nccc\n");
     commit_all(repo, "base");
 
     run_git(repo, &["checkout", "-b", "feature"]);
-    write_file(repo, "file.txt", "aaa\nREMOTE\nccc\n");
+    write_file(repo, path, "aaa\nREMOTE\nccc\n");
     commit_all(repo, "feature: change line 2");
 
     run_git(repo, &["checkout", "main"]);
-    write_file(repo, "file.txt", "aaa\nLOCAL\nccc\n");
+    write_file(repo, path, "aaa\nLOCAL\nccc\n");
     commit_all(repo, "main: change line 2");
 
     // Merge will fail with a conflict.
@@ -607,6 +613,66 @@ fn git_mergetool_meld_path_override_invokes_compat_mode() {
     assert!(
         merged.contains("<<<<<<<"),
         "expected merged output to be processed by gitgpui mergetool mode\nmerged:\n{merged}\noutput:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_kdiff3_path_override_handles_spaced_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
+    setup_overlapping_conflict_at_path(repo, compat_path);
+    configure_kdiff3_path_override_to_gitgpui(repo, false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--", compat_path]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected kdiff3 path-override mergetool to handle spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("Invalid external"),
+        "compat parser rejected spaced/unicode path\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join(compat_path)).unwrap();
+    assert!(
+        merged.contains("(Local)")
+            || merged.contains("(Remote)")
+            || merged.contains("<<<<<<<"),
+        "expected merged output to be processed for spaced/unicode path\nmerged:\n{merged}\noutput:\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_meld_path_override_handles_spaced_unicode_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    let compat_path = "docs/spaced \u{65e5}\u{672c}\u{8a9e} file.txt";
+    setup_overlapping_conflict_at_path(repo, compat_path);
+    configure_meld_path_override_to_gitgpui(repo, false);
+
+    let output = run_git_capture(repo, &["mergetool", "--no-prompt", "--", compat_path]);
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "expected meld path-override mergetool to handle spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("unexpected argument '--auto-merge'"),
+        "expected meld compatibility flags to be accepted for spaced/unicode path\n{text}"
+    );
+    assert!(
+        !text.contains("Invalid external"),
+        "compat parser rejected spaced/unicode path\n{text}"
+    );
+
+    let merged = fs::read_to_string(repo.join(compat_path)).unwrap();
+    assert!(
+        merged.contains("<<<<<<<"),
+        "expected merged output to contain conflict markers for spaced/unicode path\nmerged:\n{merged}\noutput:\n{text}"
     );
 }
 
