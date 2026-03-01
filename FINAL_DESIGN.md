@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens focused merge exit-code semantics so unresolved saves return `1` and save I/O failures return `2`, matching the external tool contract.
+All components from both design documents are fully implemented. Latest update hardens CI workflow portability so all gates run on ubuntu-latest without GPUI system dependencies.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 58)
+### Progress Snapshot (Iteration 59)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -39,7 +39,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Deleted-vs-modified submodule choice parity is now explicit in git-invoked tests: path-targeted `git mergetool submod` assertions now verify `r` keeps the modified submodule gitlink commit and `l` keeps deletion (no gitlink/path), matching the t7610 contract.
 - ✅ Submodule abort/cancel parity is now explicit in git-invoked tests: path-targeted `git mergetool` submodule conflicts now assert `a` aborts with non-zero exit and leaves the conflict unresolved.
-- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration. Iteration 51 fixes the app runtime-unit gate to run `cargo test -p gitgpui-app --bin gitgpui-app` (the package is bin-only, so `--lib` is invalid).
+- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration. Iteration 51 fixes the app runtime-unit gate to run `cargo test -p gitgpui-app --bin gitgpui-app` (the package is bin-only, so `--lib` is invalid). Iteration 59 hardens CI portability: all `gitgpui-app` jobs now build with `--no-default-features --features gix` (headless mode) so they run on ubuntu-latest without GPUI system library dependencies; `crashlog` module and `path_label` helper are gated behind `#[cfg(feature = "ui")]`/`#[cfg(feature = "ui-gpui")]` to eliminate dead-code warnings in headless builds.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in path-override E2E coverage added for `kdiff3` and `meld` mergetool flows plus both `kdiff3` and `meld` difftool flows to validate direct executable invocation compatibility.
@@ -216,7 +216,23 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 58) — Focused Merge Exit-Code Policy Hardening
+### Latest Component Delivered (Iteration 59) — CI Workflow Portability Hardening
+
+- Fixed CI workflow (`.github/workflows/rust.yml`) to work on ubuntu-latest without GPUI system dependencies:
+  - All `gitgpui-app` jobs now build/test with `--no-default-features --features gix` (headless mode)
+  - Extracted `APP_FEATURES` env var to avoid repetition across CI steps
+  - Split clippy into separate core+backend and app steps for clear feature isolation
+- Added `#[cfg]` feature gates in `crates/gitgpui-app/src/main.rs`:
+  - `crashlog` module gated behind `#[cfg(feature = "ui")]` (only needed for interactive app)
+  - `path_label` helper gated behind `#[cfg(feature = "ui-gpui")]` (only used by focused windows)
+  - `std::path::Path` import removed (inlined in `path_label` signature)
+- Verification:
+  - `cargo clippy -p gitgpui-app --no-default-features --features gix -- -D warnings` — clean
+  - `cargo clippy -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix -- -D warnings` — clean
+  - `cargo test -p gitgpui-app --no-default-features --features gix` — 246 passed, 0 failed
+  - `cargo test --workspace` — 1041 passed, 0 failed, 5 ignored
+
+### Previous Component Delivered (Iteration 58) — Focused Merge Exit-Code Policy Hardening
 
 - Hardened focused merge save semantics in `crates/gitgpui-ui-gpui/src/focused_merge.rs`:
   - save now returns exit `0` only when all conflicts are resolved

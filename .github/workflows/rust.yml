@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Build gitgpui-app in headless mode (no GPUI system deps required).
+  # The UI-only code paths are behind #[cfg(feature = "ui-gpui")] guards.
+  APP_FEATURES: "--no-default-features --features gix"
 
 jobs:
   clippy:
@@ -15,16 +18,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Clippy (core crates)
-      run: cargo clippy -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix -- -D warnings
+    - name: Clippy (core + backend)
+      run: cargo clippy -p gitgpui-core -p gitgpui-git-gix -- -D warnings
+    - name: Clippy (app — headless)
+      run: cargo clippy -p gitgpui-app $APP_FEATURES -- -D warnings
 
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build -p gitgpui-core -p gitgpui-app -p gitgpui-git-gix --verbose
+    - name: Build (core + backend)
+      run: cargo build -p gitgpui-core -p gitgpui-git-gix --verbose
+    - name: Build (app — headless)
+      run: cargo build -p gitgpui-app $APP_FEATURES --verbose
 
   # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
   merge-algorithm:
@@ -63,16 +70,16 @@ jobs:
     needs: build
     steps:
     - uses: actions/checkout@v4
-    - name: Build gitgpui-app binary
-      run: cargo build -p gitgpui-app
+    - name: Build gitgpui-app binary (headless)
+      run: cargo build -p gitgpui-app $APP_FEATURES
     - name: Git mergetool E2E (Phase 4A — t7610 parity)
-      run: cargo test -p gitgpui-app --test mergetool_git_integration --verbose
+      run: cargo test -p gitgpui-app $APP_FEATURES --test mergetool_git_integration --verbose
     - name: Git difftool E2E (Phase 4B — t7800 parity)
-      run: cargo test -p gitgpui-app --test difftool_git_integration --verbose
+      run: cargo test -p gitgpui-app $APP_FEATURES --test difftool_git_integration --verbose
     - name: Standalone tool-mode E2E (exit codes + validation)
-      run: cargo test -p gitgpui-app --test standalone_tool_mode_integration --verbose
+      run: cargo test -p gitgpui-app $APP_FEATURES --test standalone_tool_mode_integration --verbose
     - name: Mergetool/difftool runtime unit tests (bin target)
-      run: cargo test -p gitgpui-app --bin gitgpui-app --verbose
+      run: cargo test -p gitgpui-app $APP_FEATURES --bin gitgpui-app --verbose
 
   # Backend integration — mergetool launcher, status, conflict checkout
   backend-integration:

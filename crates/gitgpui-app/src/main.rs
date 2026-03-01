@@ -1,4 +1,5 @@
 mod cli;
+#[cfg(feature = "ui")]
 mod crashlog;
 mod difftool_mode;
 mod mergetool_mode;
@@ -6,7 +7,6 @@ mod setup_mode;
 
 use cli::{AppMode, exit_code};
 use std::io::{self, Write};
-use std::path::Path;
 
 fn main() {
     let mode = match cli::parse_app_mode() {
@@ -186,7 +186,8 @@ fn main() {
 }
 
 /// Extract a filename label from a path.
-fn path_label(path: &Path) -> String {
+#[cfg(feature = "ui-gpui")]
+fn path_label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
