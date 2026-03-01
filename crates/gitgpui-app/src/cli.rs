@@ -182,6 +182,19 @@ fn resolve_path(flag: Option<PathBuf>, env_key: &str, env: &dyn EnvLookup) -> Op
     flag.or_else(|| env.var_os(env_key).map(PathBuf::from))
 }
 
+fn is_empty_path(path: &PathBuf) -> bool {
+    path.as_os_str().is_empty()
+}
+
+fn require_non_empty_path(path: PathBuf, label: &str) -> Result<PathBuf, String> {
+    if is_empty_path(&path) {
+        return Err(format!(
+            "Invalid {label} path: value is empty. Use a non-empty path."
+        ));
+    }
+    Ok(path)
+}
+
 /// Resolve and validate difftool arguments.
 ///
 /// Priority: explicit `--local`/`--remote` flags, then `LOCAL`/`REMOTE` env vars.
@@ -190,11 +203,17 @@ fn resolve_difftool_with_env(
     args: DifftoolArgs,
     env: &dyn EnvLookup,
 ) -> Result<DifftoolConfig, String> {
-    let local = resolve_path(args.local, "LOCAL", env)
-        .ok_or("Missing required input: --local flag or LOCAL environment variable")?;
+    let local = require_non_empty_path(
+        resolve_path(args.local, "LOCAL", env)
+            .ok_or("Missing required input: --local flag or LOCAL environment variable")?,
+        "local",
+    )?;
 
-    let remote = resolve_path(args.remote, "REMOTE", env)
-        .ok_or("Missing required input: --remote flag or REMOTE environment variable")?;
+    let remote = require_non_empty_path(
+        resolve_path(args.remote, "REMOTE", env)
+            .ok_or("Missing required input: --remote flag or REMOTE environment variable")?,
+        "remote",
+    )?;
 
     if !local.exists() {
         return Err(format!("Local path does not exist: {}", local.display()));
@@ -206,9 +225,11 @@ fn resolve_difftool_with_env(
     // Display path: flag > MERGED env > BASE env (git difftool compat) > None.
     // Git custom difftool contracts historically pass MERGED and/or BASE as
     // optional compatibility variables; prefer MERGED when both are present.
-    let display_path = args
-        .path
-        .or_else(|| env.var("MERGED").or_else(|| env.var("BASE")));
+    let display_path = args.path.filter(|value| !value.is_empty()).or_else(|| {
+        env.var("MERGED")
+            .filter(|value| !value.is_empty())
+            .or_else(|| env.var("BASE").filter(|value| !value.is_empty()))
+    });
 
     Ok(DifftoolConfig {
         local,
@@ -227,16 +248,35 @@ fn resolve_mergetool_with_env(
     args: MergetoolArgs,
     env: &dyn EnvLookup,
 ) -> Result<MergetoolConfig, String> {
-    let merged = resolve_path(args.merged, "MERGED", env)
-        .ok_or("Missing required input: --merged flag or MERGED environment variable")?;
+    let base_from_flag = args.base.is_some();
 
-    let local = resolve_path(args.local, "LOCAL", env)
-        .ok_or("Missing required input: --local flag or LOCAL environment variable")?;
+    let merged = require_non_empty_path(
+        resolve_path(args.merged, "MERGED", env)
+            .ok_or("Missing required input: --merged flag or MERGED environment variable")?,
+        "merged",
+    )?;
 
-    let remote = resolve_path(args.remote, "REMOTE", env)
-        .ok_or("Missing required input: --remote flag or REMOTE environment variable")?;
+    let local = require_non_empty_path(
+        resolve_path(args.local, "LOCAL", env)
+            .ok_or("Missing required input: --local flag or LOCAL environment variable")?,
+        "local",
+    )?;
 
-    let base = resolve_path(args.base, "BASE", env);
+    let remote = require_non_empty_path(
+        resolve_path(args.remote, "REMOTE", env)
+            .ok_or("Missing required input: --remote flag or REMOTE environment variable")?,
+        "remote",
+    )?;
+
+    let base = match resolve_path(args.base, "BASE", env) {
+        Some(path) if is_empty_path(&path) => {
+            if base_from_flag {
+                return Err("Invalid base path: value is empty. Use --base with a non-empty path, or omit it for no-base conflicts.".to_string());
+            }
+            None
+        }
+        other => other,
+    };
 
     // MERGED is an output target and may not exist yet (e.g. standalone
     // --output/--out usage). Runtime creates parent directories as needed.
@@ -879,6 +919,47 @@ mod tests {
     }
 
     #[test]
+    fn difftool_empty_local_path_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let args = DifftoolArgs {
+            local: Some(PathBuf::new()),
+            remote: Some(remote),
+            path: None,
+            label_left: None,
+            label_right: None,
+        };
+
+        let err = resolve_difftool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Invalid local path"), "error: {err}");
+    }
+
+    #[test]
+    fn difftool_empty_merged_env_is_ignored_for_display_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mut env = TestEnv::new();
+        env.set("LOCAL", &local);
+        env.set("REMOTE", &remote);
+        env.set("MERGED", "");
+        env.set("BASE", "fallback-name.txt");
+
+        let args = DifftoolArgs {
+            local: None,
+            remote: None,
+            path: None,
+            label_left: None,
+            label_right: None,
+        };
+
+        let config = resolve_difftool_with_env(args, &env).unwrap();
+        assert_eq!(config.display_path.as_deref(), Some("fallback-name.txt"));
+    }
+
+    #[test]
     fn difftool_accepts_directories() {
         let dir = tempfile::tempdir().unwrap();
         let left_dir = dir.path().join("left");
@@ -991,6 +1072,83 @@ mod tests {
         assert_eq!(config.local, local);
         assert_eq!(config.remote, remote);
         assert!(config.base.is_none());
+    }
+
+    #[test]
+    fn mergetool_empty_base_env_treated_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "merged.txt", "conflict");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mut env = TestEnv::new();
+        env.set("MERGED", &merged);
+        env.set("LOCAL", &local);
+        env.set("REMOTE", &remote);
+        env.set("BASE", "");
+
+        let args = MergetoolArgs {
+            merged: None,
+            local: None,
+            remote: None,
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+        };
+
+        let config = resolve_mergetool_with_env(args, &env).unwrap();
+        assert!(
+            config.base.is_none(),
+            "empty BASE should be treated as no-base"
+        );
+    }
+
+    #[test]
+    fn mergetool_empty_base_flag_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "merged.txt", "conflict");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local),
+            remote: Some(remote),
+            base: Some(PathBuf::new()),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Invalid base path"), "error: {err}");
+    }
+
+    #[test]
+    fn mergetool_empty_merged_path_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let args = MergetoolArgs {
+            merged: Some(PathBuf::new()),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(err.contains("Invalid merged path"), "error: {err}");
     }
 
     #[test]

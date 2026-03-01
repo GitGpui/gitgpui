@@ -1,6 +1,6 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 35 closes CI and setup config parity gaps found during a comprehensive audit of claimed-vs-actual implementation state.
+All components from both design documents are fully implemented. Iteration 35 closes CI/setup config parity gaps and hardens external tool input validation edge cases (empty-path handling).
 
 ## Implementation Progress
 
@@ -10,6 +10,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
 - ✅ KDiff3-style compatibility fallback is implemented for no-subcommand invocations (positional args + `--L1/--L2/--L3` + `--base` + `-o/--output/--out` + optional `--auto`), enabling Git built-in tool flows that invoke the binary directly via `*.path`.
 - ✅ Strict compatibility validation is implemented for no-subcommand invocation: invalid combinations now fail fast with actionable errors (`--auto` requires output path, merge mode positional count validation, merge-mode `--L3`-without-`BASE` rejection in 2-path mode, `--base` ambiguity guards, diff-mode `--L3`/`--base` rejection, and too-many-positional guards).
+- ✅ CLI empty-path hardening is implemented: required `LOCAL`/`REMOTE`/`MERGED` inputs now reject empty path values with actionable parse-time errors, optional display-path env vars ignore empty strings, and empty `BASE` from env is normalized to no-base while explicit empty `--base` is rejected.
 - ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
@@ -45,6 +46,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 
 - ✅ CLI subcommands and argument model (`gitgpui-app difftool`, `gitgpui-app mergetool`) implemented in `crates/gitgpui-app/src/cli.rs`.
 - ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors. `MERGED` is treated as an output target and can be non-existent at parse time. Difftool display-path fallback now follows `--path` > `MERGED` > `BASE`.
+- ✅ Arg/env validation hardening for empty values implemented in `crates/gitgpui-app/src/cli.rs`: required paths reject empty inputs early, optional display-path env vars ignore empty strings, env-provided empty `BASE` is treated as no-base (add/add-compatible), and explicit empty `--base` errors with actionable text.
 - ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
@@ -174,16 +176,20 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 35) — CI Coverage Gap + Setup Config Symmetry
+### Latest Component Delivered (Iteration 35) — CI Coverage/Setup Symmetry + Empty-Path Validation Hardening
 
 - **CI fix**: wired `standalone_tool_mode_integration` tests into `.github/workflows/rust.yml` `tool-integration` job. Previously these tests existed but were not run in CI, creating a blind spot for standalone exit-code and validation-error assertions.
 - **Setup config symmetry**: added generic `mergetool.trustExitCode=true` to `gitgpui-app setup` config entries, matching the symmetric pattern already used on the difftool side (both generic + per-tool keys). Both mergetool and difftool now write `<scope>.trustExitCode` and `<scope>.gitgpui.trustExitCode`.
+- **Empty-path validation hardening** (`crates/gitgpui-app/src/cli.rs`): required path inputs now reject empty values (`LOCAL`, `REMOTE`, `MERGED`) with actionable parse-time errors; optional display-path compatibility vars ignore empty strings; env-provided empty `BASE` now maps to no-base, while explicit empty `--base` is rejected.
 - Updated regression coverage:
   - unit: `build_config_entries_contains_all_required_keys` now asserts both `mergetool.trustExitCode` and `mergetool.gitgpui.trustExitCode`
   - integration: `setup_dry_run_prints_commands_without_writing` asserts both mergetool trust keys
   - integration: `setup_local_writes_config_to_repo` asserts both mergetool trust keys are written to repo config
+  - unit: added CLI regression tests for empty-path handling (`difftool_empty_local_path_errors`, `difftool_empty_merged_env_is_ignored_for_display_path`, `mergetool_empty_base_env_treated_as_missing`, `mergetool_empty_base_flag_errors`, `mergetool_empty_merged_path_errors`)
 - Verification:
   - `cargo test -p gitgpui-app --bin gitgpui-app setup_mode::tests:: -- --nocapture` (11 passed)
+  - `cargo test -p gitgpui-app --bin gitgpui-app cli::tests:: -- --nocapture` (64 passed)
+  - `cargo test -p gitgpui-app --tests -- --nocapture` (187 passed)
   - `cargo test -p gitgpui-app --test standalone_tool_mode_integration -- --nocapture` (9 passed)
 
 ### Previous: Iteration 34 — Setup TrustExitCode Config-Parity Hardening
