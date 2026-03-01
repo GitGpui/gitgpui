@@ -11,6 +11,28 @@ struct ConfigEntry {
     value: String,
 }
 
+/// Quote a string as a POSIX-shell single-quoted literal.
+///
+/// This preserves spaces and shell metacharacters, including embedded
+/// single quotes.
+fn shell_single_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\"'\"'");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 /// Resolve the absolute path to the current executable.
 fn current_exe_path() -> Result<PathBuf, String> {
     std::env::current_exe()
@@ -20,6 +42,8 @@ fn current_exe_path() -> Result<PathBuf, String> {
 
 /// Build the list of git config entries for difftool/mergetool setup.
 fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
+    let quoted_bin_path = shell_single_quote(bin_path);
+
     vec![
         // Mergetool
         ConfigEntry {
@@ -29,7 +53,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "mergetool.gitgpui.cmd",
             value: format!(
-                "'{bin_path}' mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
+                "{quoted_bin_path} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
             ),
         },
         ConfigEntry {
@@ -48,7 +72,7 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
         ConfigEntry {
             key: "difftool.gitgpui.cmd",
             value: format!(
-                "'{bin_path}' difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
+                "{quoted_bin_path} difftool --local \"$LOCAL\" --remote \"$REMOTE\" --path \"$MERGED\""
             ),
         },
         ConfigEntry {
@@ -83,9 +107,10 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
 fn format_commands(entries: &[ConfigEntry], scope: &str) -> String {
     let mut out = String::new();
     for entry in entries {
+        let quoted_value = shell_single_quote(&entry.value);
         out.push_str(&format!(
-            "git config {scope} {} '{}'\n",
-            entry.key, entry.value
+            "git config {scope} {} {quoted_value}\n",
+            entry.key
         ));
     }
     out
@@ -134,9 +159,8 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
 
     if dry_run {
         let commands = format_commands(&entries, scope);
-        let stdout = format!(
-            "# Dry run: the following git config commands would be executed:\n{commands}"
-        );
+        let stdout =
+            format!("# Dry run: the following git config commands would be executed:\n{commands}");
         return Ok(SetupResult {
             stdout,
             exit_code: 0,
@@ -160,6 +184,17 @@ pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_single_quote_wraps_plain_text() {
+        assert_eq!(shell_single_quote("abc"), "'abc'");
+        assert_eq!(shell_single_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_embedded_single_quote() {
+        assert_eq!(shell_single_quote("it's"), "'it'\"'\"'s'");
+    }
 
     #[test]
     fn build_config_entries_contains_all_required_keys() {
@@ -196,6 +231,21 @@ mod tests {
     }
 
     #[test]
+    fn mergetool_cmd_escapes_single_quote_in_binary_path() {
+        let entries = build_config_entries("/tmp/it's/gitgpui-app");
+        let cmd = entries
+            .iter()
+            .find(|e| e.key == "mergetool.gitgpui.cmd")
+            .unwrap();
+
+        assert!(
+            cmd.value.starts_with("'/tmp/it'\"'\"'s/gitgpui-app'"),
+            "unexpected cmd quoting: {}",
+            cmd.value
+        );
+    }
+
+    #[test]
     fn difftool_cmd_includes_local_remote_merged() {
         let entries = build_config_entries("/path/to/bin");
         let cmd = entries
@@ -216,6 +266,10 @@ mod tests {
         assert!(output.contains("git config --global merge.tool"));
         assert!(output.contains("git config --global diff.tool"));
         assert!(output.contains("git config --global mergetool.gitgpui.trustExitCode"));
+        assert!(
+            !output.contains("''/bin/gitgpui-app'"),
+            "dry-run output should not contain broken nested quoting:\n{output}"
+        );
     }
 
     #[test]

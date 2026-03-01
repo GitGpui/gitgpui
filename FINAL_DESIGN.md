@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 29 hardens mergetool portability with explicit abort-path `keepTemporaries=true` coverage for both `writeToTemp=false` and `writeToTemp=true` stage-file modes.
+All components from both design documents are fully implemented. Iteration 30 hardens setup-mode portability by making `gitgpui-app setup --dry-run` output shell-runnable `git config` commands with robust quoting.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 29)
+### Progress Snapshot (Iteration 30)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -17,7 +17,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Standalone binary-level exit contract is now explicitly covered by direct `gitgpui-app` E2E tests (`difftool`/`mergetool` success, unresolved conflict, and invalid-input paths mapped to exit codes `0/1/2`).
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, explicit `mergetool.writeToTemp` path-shape parity, and binary file conflict handling).
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
-- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, trustExitCode, prompt suppression, GUI tool aliases, guiDefault=auto). Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Covered by 8 unit tests and 3 E2E integration tests.
+- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, trustExitCode, prompt suppression, GUI tool aliases, guiDefault=auto). Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is now shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by 11 unit tests and 4 E2E integration tests.
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
 - ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
@@ -168,6 +168,18 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 30) — Setup Dry-Run Shell-Quoting Parity
+
+- Hardened setup command serialization in `crates/gitgpui-app/src/setup_mode.rs`:
+  - added shell-safe single-quote escaping helper used for binary path embedding in `*.cmd` config values
+  - fixed `--dry-run` rendering to shell-quote full config values, avoiding broken nested quoting in printed commands
+- Added targeted regression coverage:
+  - unit tests: `shell_single_quote_wraps_plain_text`, `shell_single_quote_escapes_embedded_single_quote`, `mergetool_cmd_escapes_single_quote_in_binary_path`
+  - integration test: `setup_dry_run_commands_execute_verbatim_in_shell` in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs` executes dry-run lines via `sh -c` and verifies literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders are preserved in git config values
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app setup_mode::tests:: -- --nocapture`
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration setup_ -- --nocapture`
 
 ### Latest Component Delivered (Iteration 28) — Difftool Binary/Non-UTF8 Behavior-Matrix Coverage
 
