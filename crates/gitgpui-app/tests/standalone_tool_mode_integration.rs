@@ -54,6 +54,13 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write file");
 }
 
+fn write_bytes(path: &Path, contents: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent directories");
+    }
+    fs::write(path, contents).expect("write file");
+}
+
 fn output_text(output: &Output) -> String {
     format!(
         "stdout:\n{}\nstderr:\n{}",
@@ -249,6 +256,49 @@ fn standalone_mergetool_marker_size_flag_controls_marker_width() {
 }
 
 #[test]
+fn standalone_mergetool_conflict_markers_preserve_crlf_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("base.txt");
+    let local = dir.path().join("local.txt");
+    let remote = dir.path().join("remote.txt");
+    let merged = dir.path().join("merged.txt");
+
+    write_bytes(&base, b"1\r\n2\r\n3\r\n");
+    write_bytes(&local, b"1\r\n2\r\n4\r\n");
+    write_bytes(&remote, b"1\r\n2\r\n5\r\n");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--base"),
+        base.as_os_str().to_owned(),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(1), "expected exit 1\n{text}");
+
+    let merged_bytes = fs::read(&merged).expect("merged output to exist");
+    let merged_text = String::from_utf8_lossy(&merged_bytes);
+    assert!(
+        merged_text.contains("<<<<<<<"),
+        "expected opening marker\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains("\r\n=======\r\n"),
+        "expected CRLF separator marker\n{text}\nmerged:\n{merged_text}"
+    );
+    assert!(
+        merged_text.contains(">>>>>>>"),
+        "expected closing marker\n{text}\nmerged:\n{merged_text}"
+    );
+}
+
+#[test]
 fn standalone_mergetool_handles_unicode_paths() {
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().join("ベース.txt");
@@ -372,6 +422,58 @@ fn standalone_difftool_changed_files_exits_zero_and_prints_diff() {
     assert!(
         stdout.contains("+++ b/src/file.txt"),
         "expected right label\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_binary_content_change_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.bin");
+    let remote = dir.path().join("right.bin");
+
+    write_bytes(&local, &[0x00, 0x01, 0x02, 0x03]);
+    write_bytes(&remote, &[0x00, 0x01, 0xFF, 0x03]);
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    assert!(
+        text.contains("Binary files")
+            || text.contains("GIT binary patch")
+            || text.contains("differ"),
+        "expected binary diff output\n{text}"
+    );
+}
+
+#[test]
+fn standalone_difftool_non_utf8_content_change_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left.dat");
+    let remote = dir.path().join("right.dat");
+
+    write_bytes(&local, b"prefix\n\xFF\n");
+    write_bytes(&remote, b"prefix\n\xFE\n");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    assert!(
+        !output.stdout.is_empty() || !output.stderr.is_empty(),
+        "expected non-empty diff output\n{text}"
     );
 }
 

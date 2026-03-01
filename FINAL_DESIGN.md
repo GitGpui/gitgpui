@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens Git-invoked missing-tool parity by adding explicit `--tool absent` regression coverage for both `git mergetool` and `git difftool`, including assertion of Git's actionable `cmd not set for tool` error text.
+All components from both design documents are fully implemented. Latest update hardens standalone command-mode behavior-matrix parity by adding explicit E2E coverage for CRLF conflict-marker preservation in `mergetool` and binary/non-UTF8 byte-content diffs in `difftool`.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 65)
+### Progress Snapshot (Iteration 66)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -32,6 +32,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Git-invoked deleted-output parity is now explicit in app E2E coverage: external mergetool command `rm -f "$MERGED"` with `trustExitCode=true` resolves the conflict, removes the worktree file, and stages deletion.
 - ✅ Git-invoked add/add no-base parity is now explicit: dedicated mergetool E2E coverage asserts `$BASE` is passed as an existing empty stage file for no-base conflicts.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
+- ✅ Standalone command-mode behavior-matrix parity is now explicit for byte/line-ending edge cases: direct `gitgpui-app` E2E tests cover `mergetool` CRLF conflict-marker preservation plus `difftool` binary and non-UTF8 content changes.
 - ✅ Difftool submodule behavior-matrix coverage is now explicit in git-invoked E2E tests: submodule gitlink-only changes are diffed via temporary `Subproject commit <sha>` files, and output includes both old/new commit pointers.
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
 - ✅ GUI tool variant in setup: `merge.guitool` and `diff.guitool` now reference a separate `gitgpui-gui` tool name whose commands include `--gui`, so `guiDefault=auto` correctly selects the interactive GPUI window when DISPLAY is available and the headless algorithm-only backend when it is not. Config entries: `mergetool.gitgpui-gui.cmd` (with `--gui`), `mergetool.gitgpui-gui.trustExitCode`, `difftool.gitgpui-gui.cmd` (with `--gui`), `difftool.gitgpui-gui.trustExitCode`. Covered by 4 new unit tests (`gui_tool_uses_separate_tool_name`, `gui_tool_cmd_includes_gui_flag`, `headless_tool_cmd_omits_gui_flag`) and updated standalone E2E assertions.
@@ -128,10 +129,13 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Direct standalone command-mode E2E coverage for `gitgpui-app` subcommands is implemented in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
   - ✅ `mergetool` clean merge exits `0` and writes merged output
   - ✅ `mergetool` unresolved conflict exits `1` and writes conflict markers
+  - ✅ `mergetool` CRLF conflict markers preserve `\r\n` endings in standalone conflict output
   - ✅ `mergetool` invalid input exits `2` with actionable validation error text
   - ✅ `mergetool` rejects existing directory `MERGED` targets with exit `2` and actionable error text
   - ✅ `mergetool` direct invocation handles Unicode file paths end-to-end
   - ✅ `difftool` changed-file invocation exits `0` and emits unified diff output
+  - ✅ `difftool` binary content changes exit `0` and emit binary-diff output
+  - ✅ `difftool` non-UTF8 content changes exit `0` and emit non-empty diff output
   - ✅ `difftool` direct invocation handles Unicode file names and display paths
   - ✅ `difftool` invalid input exits `2` with actionable validation error text
   - ✅ no-subcommand compatibility E2E for Meld-style `-L/--label` diff and merge invocations
@@ -223,7 +227,17 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 65) — Explicit Missing-Tool `--tool` Error Parity
+### Latest Component Delivered (Iteration 66) — Standalone Behavior-Matrix Parity (CRLF/Binary/Non-UTF8)
+
+- Added standalone mergetool CRLF regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_mergetool_conflict_markers_preserve_crlf_line_endings` verifies direct `gitgpui-app mergetool` conflict output preserves `\r\n` line endings in conflict markers.
+- Added standalone difftool byte-content regression coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - `standalone_difftool_binary_content_change_exits_zero` verifies binary-content diffs return exit `0` with binary-diff output.
+  - `standalone_difftool_non_utf8_content_change_exits_zero` verifies non-UTF8 byte-content diffs return exit `0` with emitted output.
+- Verification:
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration`
+
+### Previous Component Delivered (Iteration 65) — Explicit Missing-Tool `--tool` Error Parity
 
 - Added git-invoked mergetool regression coverage in [`crates/gitgpui-app/tests/mergetool_git_integration.rs`](crates/gitgpui-app/tests/mergetool_git_integration.rs):
   - `git_mergetool_absent_tool_reports_cmd_not_set_error` verifies `git mergetool --tool absent` fails with actionable `cmd not set for tool 'absent'` output when `mergetool.absent.cmd` is unset.
