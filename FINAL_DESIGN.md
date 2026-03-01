@@ -159,7 +159,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Git-invoked E2E coverage for basic invocation, subdirectory execution, spaced path handling, and `--dir-diff`.
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
-- ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+  - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
 ### Latest Component Delivered (Iteration 26) — Strict Merge `--L3` Arity Validation in Compat Mode
 
