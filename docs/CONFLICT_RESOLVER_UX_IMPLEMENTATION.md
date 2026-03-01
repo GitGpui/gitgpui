@@ -8,9 +8,10 @@ Scope: `gitgpui` merge/diff/conflict resolver flows
 
 ### Phase 1: Syntax + Output Structure
 - ✅ `view/rows/conflict_resolver.rs` — switched all 7 `DiffSyntaxMode::HeuristicOnly` call sites to `DiffSyntaxMode::Auto` with tree-sitter language resolution from file path. All render functions (three-way, two-way split, two-way inline, compare split, compare inline) now pass the resolved `DiffSyntaxLanguage` and use Auto mode. Cache population is now triggered by syntax language availability (not just word highlights/search).
-- ⬜ `view/panes/main.rs` — resolved-output outline data lifecycle, debounce recompute scheduling
-- ⬜ `view/mod.rs` — new resolver state fields (`ResolvedLineMeta`, `ResolvedLineSource`, `SourceLineKey`, etc.)
-- ⬜ `view/conflict_resolver.rs` — provenance mapping utilities, dedupe key builders
+- ✅ `view/panes/main.rs` — added resolved-output outline lifecycle with hash/path tracking and debounced recompute scheduling (140ms idle window via `resolver_pending_recompute_seq` cancellation token); outline line splitting now preserves trailing newline rows; resolver output editor soft-wrap disabled to keep one logical row per newline.
+- ✅ `view/mod.rs` — all new resolver state types and fields added: `ResolvedLineSource` enum (A/B/C/Manual with badge_char), `ResolvedLineMeta` struct (output_line, source, input_line), `SourceLineKey` struct (view_mode, side, line_no, content_hash) with FxHasher, `ConflictResolverHoverState` (hovered_chunk, hovered_line). New fields in `ConflictResolverUiState`: `resolved_line_meta`, `resolved_output_line_sources_index`, `resolver_hover`. Types defined in `conflict_resolver.rs` and imported.
+- ✅ `view/conflict_resolver.rs` — complete: output-outline line splitter (`split_output_lines_for_outline`), provenance mapping (`compute_resolved_line_provenance` with A>B>C priority matching via exact text equality), dedupe key builder (`build_resolved_output_line_sources_index`), plus-icon visibility checker (`is_source_line_in_output`), `SourceLines` source data struct. 10 new unit tests covering provenance classification, priority ordering, empty cases, dedupe index, badge chars.
+- ✅ `view/panes/main.rs` — provenance recompute wired into debounced outline lifecycle; two-way source lines extracted from `diff_rows` via `collect_two_way_source_lines`; three-way uses existing `three_way_{base,ours,theirs}_lines`; invalidation path clears `resolved_line_meta` and `resolved_output_line_sources_index`.
 
 ### Phase 2: Input Picking UX
 - ⬜ `view/rows/conflict_resolver.rs` — hover chunk outline, row hover plus icon, right-click menu, immediate pick actions

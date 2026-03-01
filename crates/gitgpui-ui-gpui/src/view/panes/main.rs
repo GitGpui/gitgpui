@@ -7,6 +7,27 @@ mod diff_search;
 mod diff_text;
 mod preview;
 
+const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
+
+/// Extract unique source lines from two-way diff rows for provenance matching.
+///
+/// Returns (old_lines, new_lines) as `Vec<SharedString>` suitable for `SourceLines`.
+fn collect_two_way_source_lines(
+    diff_rows: &[FileDiffRow],
+) -> (Vec<SharedString>, Vec<SharedString>) {
+    let mut old_lines = Vec::with_capacity(diff_rows.len());
+    let mut new_lines = Vec::with_capacity(diff_rows.len());
+    for row in diff_rows {
+        if let Some(ref text) = row.old {
+            old_lines.push(SharedString::from(text.clone()));
+        }
+        if let Some(ref text) = row.new {
+            new_lines.push(SharedString::from(text.clone()));
+        }
+    }
+    (old_lines, new_lines)
+}
+
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -221,7 +242,7 @@ impl MainPaneView {
                     multiline: true,
                     read_only: false,
                     chromeless: true,
-                    soft_wrap: true,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
@@ -230,13 +251,13 @@ impl MainPaneView {
 
         let conflict_resolver_subscription =
             cx.observe(&conflict_resolver_input, |this, input, cx| {
-                let output_text = input.read(cx).text();
+                let output_text = input.read(cx).text().to_string();
                 let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
                 output_text.hash(&mut output_hasher);
                 let output_hash = output_hasher.finish();
 
                 let path = this.conflict_resolver.path.clone();
-                let needs_update = this.conflict_resolved_preview_path != path
+                let needs_update = this.conflict_resolved_preview_path.as_ref() != path.as_ref()
                     || this.conflict_resolved_preview_source_hash != Some(output_hash);
                 if !needs_update {
                     return;
@@ -244,16 +265,7 @@ impl MainPaneView {
 
                 this.conflict_resolved_preview_path = path.clone();
                 this.conflict_resolved_preview_source_hash = Some(output_hash);
-                this.conflict_resolved_preview_syntax_language = path.as_ref().and_then(|p| {
-                    rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
-                });
-                this.conflict_resolved_preview_lines =
-                    output_text.split('\n').map(|s| s.to_string()).collect();
-                if this.conflict_resolved_preview_lines.is_empty() {
-                    this.conflict_resolved_preview_lines.push(String::new());
-                }
-                this.conflict_resolved_preview_segments_cache.clear();
-                cx.notify();
+                this.schedule_conflict_resolved_outline_recompute(path, output_hash, cx);
             });
 
         let diff_search_input = cx.new(|cx| {
@@ -446,6 +458,96 @@ impl MainPaneView {
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
         cx.notify();
+    }
+
+    fn conflict_resolver_invalidate_resolved_outline(&mut self) {
+        self.conflict_resolver.resolver_pending_recompute_seq = self
+            .conflict_resolver
+            .resolver_pending_recompute_seq
+            .wrapping_add(1);
+        self.conflict_resolved_preview_path = None;
+        self.conflict_resolved_preview_source_hash = None;
+        self.conflict_resolved_preview_syntax_language = None;
+        self.conflict_resolved_preview_lines.clear();
+        self.conflict_resolved_preview_segments_cache.clear();
+        self.conflict_resolver.resolved_line_meta.clear();
+        self.conflict_resolver
+            .resolved_output_line_sources_index
+            .clear();
+    }
+
+    fn schedule_conflict_resolved_outline_recompute(
+        &mut self,
+        path: Option<std::path::PathBuf>,
+        output_hash: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.resolver_pending_recompute_seq = self
+            .conflict_resolver
+            .resolver_pending_recompute_seq
+            .wrapping_add(1);
+        let seq = self.conflict_resolver.resolver_pending_recompute_seq;
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                        return;
+                    }
+                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                    {
+                        return;
+                    }
+
+                    this.conflict_resolved_preview_syntax_language = path.as_ref().and_then(|p| {
+                        rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
+                    });
+                    let output_text = this
+                        .conflict_resolver_input
+                        .read_with(cx, |input, _| input.text().to_string());
+                    this.conflict_resolved_preview_lines =
+                        conflict_resolver::split_output_lines_for_outline(&output_text);
+                    this.conflict_resolved_preview_segments_cache.clear();
+
+                    // Provenance: classify each output line as A/B/C/Manual.
+                    let view_mode = this.conflict_resolver.view_mode;
+                    let (two_way_old, two_way_new) =
+                        if view_mode == ConflictResolverViewMode::TwoWayDiff {
+                            collect_two_way_source_lines(&this.conflict_resolver.diff_rows)
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
+                    let sources = match view_mode {
+                        ConflictResolverViewMode::ThreeWay => conflict_resolver::SourceLines {
+                            a: &this.conflict_resolver.three_way_base_lines,
+                            b: &this.conflict_resolver.three_way_ours_lines,
+                            c: &this.conflict_resolver.three_way_theirs_lines,
+                        },
+                        ConflictResolverViewMode::TwoWayDiff => conflict_resolver::SourceLines {
+                            a: &two_way_old,
+                            b: &two_way_new,
+                            c: &[],
+                        },
+                    };
+                    let meta = conflict_resolver::compute_resolved_line_provenance(
+                        &this.conflict_resolved_preview_lines,
+                        &sources,
+                    );
+                    this.conflict_resolver.resolved_output_line_sources_index =
+                        conflict_resolver::build_resolved_output_line_sources_index(
+                            &meta,
+                            &this.conflict_resolved_preview_lines,
+                            view_mode,
+                        );
+                    this.conflict_resolver.resolved_line_meta = meta;
+
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(
@@ -1572,20 +1674,24 @@ impl MainPaneView {
     fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(repo_id) = self.active_repo_id() else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
 
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
 
         let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
         if *area != DiffArea::Unstaged {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         }
 
@@ -1597,6 +1703,7 @@ impl MainPaneView {
         };
         let Some(conflict_entry) = conflict_entry else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
         let conflict_kind = conflict_entry.conflict;
@@ -1607,6 +1714,7 @@ impl MainPaneView {
             && !matches!(repo.conflict_file, Loadable::Loading);
         if should_load {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             let theme = self.theme;
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
@@ -1686,6 +1794,7 @@ impl MainPaneView {
                 conflict_rev: repo.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         }
 
@@ -1896,15 +2005,26 @@ impl MainPaneView {
             conflict_kind,
             last_autosolve_summary: None,
             conflict_rev: repo.conflict_rev,
+            resolver_pending_recompute_seq: 0,
+            resolved_line_meta: Vec::new(),
+            resolved_output_line_sources_index: HashSet::default(),
+            resolver_hover: ConflictResolverHoverState::default(),
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
+        let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+        resolved.hash(&mut output_hasher);
+        let output_hash = output_hasher.finish();
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved, cx);
         });
+        let output_path = self.conflict_resolver.path.clone();
+        self.conflict_resolved_preview_path = output_path.clone();
+        self.conflict_resolved_preview_source_hash = Some(output_hash);
+        self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, cx);
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
@@ -2051,11 +2171,18 @@ impl MainPaneView {
         // Update the resolved text input.
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
+        let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+        resolved.hash(&mut output_hasher);
+        let output_hash = output_hasher.finish();
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved, cx);
         });
+        let output_path = self.conflict_resolver.path.clone();
+        self.conflict_resolved_preview_path = output_path.clone();
+        self.conflict_resolved_preview_source_hash = Some(output_hash);
+        self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, cx);
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();

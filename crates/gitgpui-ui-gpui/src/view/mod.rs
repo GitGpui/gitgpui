@@ -68,7 +68,8 @@ use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
 use conflict_resolver::{
-    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
+    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverHoverState,
+    ConflictResolverViewMode, ResolvedLineMeta, ResolvedLineSource, SourceLineKey,
 };
 #[cfg(test)]
 use date_time::format_datetime_utc;
@@ -465,6 +466,14 @@ struct ConflictResolverUiState {
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
     /// that don't change the underlying file content.
     conflict_rev: u64,
+    /// Sequence token for debounced resolved-output outline recompute tasks.
+    resolver_pending_recompute_seq: u64,
+    /// Per-line provenance metadata for the resolved output outline.
+    resolved_line_meta: Vec<ResolvedLineMeta>,
+    /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
+    resolved_output_line_sources_index: HashSet<SourceLineKey>,
+    /// Hover state for chunk outlines and row plus-icons.
+    resolver_hover: ConflictResolverHoverState,
 }
 
 impl Default for ConflictResolverUiState {
@@ -503,6 +512,10 @@ impl Default for ConflictResolverUiState {
             conflict_kind: None,
             last_autosolve_summary: None,
             conflict_rev: 0,
+            resolver_pending_recompute_seq: 0,
+            resolved_line_meta: Vec::new(),
+            resolved_output_line_sources_index: HashSet::default(),
+            resolver_hover: ConflictResolverHoverState::default(),
         }
     }
 }
