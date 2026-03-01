@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 34 closes the remaining setup/config parity gap by aligning `gitgpui-app setup` with the documented `difftool.trustExitCode` recommendation while preserving explicit per-tool trust behavior.
+All components from both design documents are fully implemented. Iteration 35 closes CI and setup config parity gaps found during a comprehensive audit of claimed-vs-actual implementation state.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 34)
+### Progress Snapshot (Iteration 35)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -18,11 +18,11 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Git-invoked E2E coverage exists for `git difftool` and `git mergetool` parity scenarios (GUI selection, trust-exit handling, spaced/unicode paths, subdir invocation, `--tool-help`, symlink/submodule/delete-modify edge cases, order-file behavior, explicit `mergetool.writeToTemp` path-shape parity, and binary file conflict handling).
 - ✅ Explicit `t7610` custom-command parity is now covered in git-invoked mergetool tests: `cat "$REMOTE" > "$MERGED"` resolves conflicts, writes expected output, and clears unmerged index entries.
 - ✅ Difftool binary/non-UTF8 behavior-matrix coverage is now explicit in both dedicated runtime tests and `git difftool` E2E tests.
-- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, prompt suppression, GUI tool aliases, guiDefault=auto), and keeps `difftool.gitgpui.trustExitCode` for explicit per-tool compatibility. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
+- ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, GUI tool aliases, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored.
 - ✅ Delete/delete conflict choice matrix parity is now explicit in git-invoked tests (`d` delete, `m` modified destination, `a` abort non-zero) for path-targeted mergetool flows.
-- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E, and backend integration.
+- ✅ Parity-focused CI regression gates implemented in `.github/workflows/rust.yml` (Phase 3, rollout item #2): separate CI jobs for clippy, merge algorithm parity, fixture/corpus regression, git mergetool/difftool E2E (including standalone tool-mode exit-code tests), and backend integration.
 - ✅ Mergetool backend parity features are implemented (`mergetool.<tool>.path`, `writeToTemp`, `keepTemporaries`, unresolved-marker rejection, deleted-output staging).
 - ✅ `keepTemporaries=true` abort-path parity is now explicit in backend integration coverage (external tool exit non-zero keeps stage files in both workdir and temp modes).
 - ✅ Git built-in `kdiff3` path-override E2E coverage added for both `git difftool` and `git mergetool` to validate direct executable invocation compatibility.
@@ -174,16 +174,19 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 34) — Setup TrustExitCode Config-Parity Hardening
+### Latest Component Delivered (Iteration 35) — CI Coverage Gap + Setup Config Symmetry
 
-- Aligned `gitgpui-app setup` with documented setup guidance in `external_usage.md` by adding `difftool.trustExitCode=true` to generated config entries in `crates/gitgpui-app/src/setup_mode.rs`.
-- Preserved backward-compatible explicit tool-scoped trust config (`difftool.gitgpui.trustExitCode=true`) so existing per-tool behavior remains stable.
-- Added/updated regression coverage:
-  - unit: `build_config_entries_contains_all_required_keys` now asserts `difftool.trustExitCode`
-  - integration: standalone setup tests now assert dry-run output includes `difftool.trustExitCode` and `setup --local` writes it to repo config
+- **CI fix**: wired `standalone_tool_mode_integration` tests into `.github/workflows/rust.yml` `tool-integration` job. Previously these tests existed but were not run in CI, creating a blind spot for standalone exit-code and validation-error assertions.
+- **Setup config symmetry**: added generic `mergetool.trustExitCode=true` to `gitgpui-app setup` config entries, matching the symmetric pattern already used on the difftool side (both generic + per-tool keys). Both mergetool and difftool now write `<scope>.trustExitCode` and `<scope>.gitgpui.trustExitCode`.
+- Updated regression coverage:
+  - unit: `build_config_entries_contains_all_required_keys` now asserts both `mergetool.trustExitCode` and `mergetool.gitgpui.trustExitCode`
+  - integration: `setup_dry_run_prints_commands_without_writing` asserts both mergetool trust keys
+  - integration: `setup_local_writes_config_to_repo` asserts both mergetool trust keys are written to repo config
 - Verification:
-  - `cargo test -p gitgpui-app --bin gitgpui-app setup_mode::tests:: -- --nocapture`
-  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration setup_ -- --nocapture`
+  - `cargo test -p gitgpui-app --bin gitgpui-app setup_mode::tests:: -- --nocapture` (11 passed)
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration -- --nocapture` (9 passed)
+
+### Previous: Iteration 34 — Setup TrustExitCode Config-Parity Hardening
 
 ### Latest Component Delivered (Iteration 33) — `t7610` KeepTemporaries Delete/Delete Abort E2E Parity
 

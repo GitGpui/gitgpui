@@ -56,6 +56,15 @@ fn build_config_entries(bin_path: &str) -> Vec<ConfigEntry> {
                 "{quoted_bin_path} mergetool --base \"$BASE\" --local \"$LOCAL\" --remote \"$REMOTE\" --merged \"$MERGED\""
             ),
         },
+        // Keep both generic and tool-specific trust keys:
+        // - `mergetool.trustExitCode` matches documented setup guidance and
+        //   Git's default trust behavior for the selected mergetool.
+        // - `mergetool.gitgpui.trustExitCode` preserves explicit per-tool
+        //   behavior even if users override global defaults later.
+        ConfigEntry {
+            key: "mergetool.trustExitCode",
+            value: "true".into(),
+        },
         ConfigEntry {
             key: "mergetool.gitgpui.trustExitCode",
             value: "true".into(),
@@ -212,6 +221,7 @@ mod tests {
 
         assert!(keys.contains(&"merge.tool"));
         assert!(keys.contains(&"mergetool.gitgpui.cmd"));
+        assert!(keys.contains(&"mergetool.trustExitCode"));
         assert!(keys.contains(&"mergetool.gitgpui.trustExitCode"));
         assert!(keys.contains(&"mergetool.prompt"));
         assert!(keys.contains(&"diff.tool"));
@@ -275,6 +285,7 @@ mod tests {
 
         assert!(output.contains("git config --global merge.tool"));
         assert!(output.contains("git config --global diff.tool"));
+        assert!(output.contains("git config --global mergetool.trustExitCode"));
         assert!(output.contains("git config --global mergetool.gitgpui.trustExitCode"));
         assert!(
             !output.contains("''/bin/gitgpui-app'"),
