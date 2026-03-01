@@ -2304,6 +2304,89 @@ fn git_mergetool_submodule_conflict_resolved_via_remote() {
 }
 
 #[test]
+fn git_mergetool_submodule_conflict_choice_a_aborts_with_nonzero() {
+    // Parity with git submodule conflict prompt behavior: answering "a"
+    // should abort the mergetool run and leave the submodule conflict unresolved.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("main_repo");
+    let sub_repo = tmp.path().join("sub_repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&sub_repo).unwrap();
+
+    create_submodule_repo(&sub_repo);
+    init_repo(&repo);
+    let sub_url = format!("file://{}", sub_repo.display());
+    run_git(&repo, &["submodule", "add", &sub_url, "submod"]);
+    commit_all(&repo, "add submodule");
+
+    advance_submodule(&sub_repo, "commit A\n", "advance A");
+    let commit_a_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
+    let commit_a = String::from_utf8_lossy(&commit_a_out.stdout)
+        .trim()
+        .to_string();
+
+    advance_submodule(&sub_repo, "commit B\n", "advance B");
+    let commit_b_out = run_git_capture(&sub_repo, &["rev-parse", "HEAD"]);
+    let commit_b = String::from_utf8_lossy(&commit_b_out.stdout)
+        .trim()
+        .to_string();
+
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    run_git(&repo.join("submod"), &["fetch"]);
+    run_git(&repo.join("submod"), &["checkout", &commit_a]);
+    run_git(&repo, &["add", "submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
+
+    run_git(&repo, &["checkout", "main"]);
+    run_git(&repo, &["submodule", "update", "--init"]);
+    run_git(&repo.join("submod"), &["fetch"]);
+    run_git(&repo.join("submod"), &["checkout", &commit_b]);
+    run_git(&repo, &["add", "submod"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: update submod",
+        ],
+    );
+
+    let merge_out = run_git_capture(&repo, &["merge", "feature"]);
+    if merge_out.status.success() {
+        // Git auto-resolved the submodule conflict — skip.
+        return;
+    }
+
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt"], "a\n");
+    let text = output_text(&output);
+    assert!(
+        !output.status.success(),
+        "expected mergetool to abort on submodule choice 'a'\n{text}"
+    );
+    assert!(
+        has_unmerged_entries_for_path(&repo, "submod"),
+        "expected submodule conflict to remain unresolved after abort\n{text}"
+    );
+    assert!(
+        stage_zero_gitlink_oid(&repo, "submod").is_none(),
+        "expected no stage-0 gitlink after abort\n{text}"
+    );
+}
+
+#[test]
 fn git_mergetool_submodule_alongside_normal_file_conflict() {
     // When a repo has both a submodule conflict and a normal file conflict,
     // git handles the submodule internally and invokes our external tool
