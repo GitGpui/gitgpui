@@ -5,6 +5,7 @@
 - ✅ CLI subcommands and argument model (`gitgpui-app difftool`, `gitgpui-app mergetool`) implemented in `crates/gitgpui-app/src/cli.rs`.
 - ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors.
 - ✅ Exit code constants aligned to design (`0`, `1`, `>=2`) defined in app CLI module.
+- ✅ Foundational conflict-marker label formatter implemented in `crates/gitgpui-core/src/conflict_labels.rs` (`empty tree`, `<short-sha>:<path>`, merged-ancestors, rebase-parent shapes), ready for focused merge-mode integration.
 - 🔧 Focused difftool/mergetool UI execution path is still not implemented; `main.rs` currently exits with an explicit not-yet-implemented error for those modes.
 - ✅ External mergetool backend launch exists (`launch_mergetool`) with stage materialization (`BASE/LOCAL/REMOTE`), trust-exit behavior, unresolved-marker rejection, and staging semantics.
 - ✅ Mergetool GUI selection and path override support implemented:
@@ -21,7 +22,12 @@
 
 - ✅ Phase 1A (git `t6403` algorithm-focused cases): 3-way merge algorithm implemented in `crates/gitgpui-core/src/merge.rs` with 22 unit tests. Integration test suite `crates/gitgpui-core/tests/merge_algorithm.rs` ports 18 t6403-style test cases covering: identity merge, non-overlapping clean merge, overlapping conflict detection, conflict marker format with labels, delete-vs-modify, ours/theirs/union strategies, EOF trailing newline preservation, CRLF marker handling, configurable marker width, diff3 output, Myers C-code merge, binary content, identical-change dedup, and single-side-only changes.
 - ✅ Phase 1B (git `t6427` `zdiff3` 4-case portability set): all 4 zdiff3 test cases ported (`zdiff3_basic`, `zdiff3_middle_common`, `zdiff3_interesting`, `zdiff3_evil`). Tests verify common prefix/suffix extraction outside conflict markers and correct inner conflict content.
-- ⬜ Phase 1C (conflict marker label formatting cases): not implemented yet.
+- ✅ Phase 1C (conflict marker label formatting cases): implemented in `crates/gitgpui-core/src/conflict_labels.rs` with portability tests in `crates/gitgpui-core/tests/conflict_label_formatting.rs`:
+  - `label_no_base` -> `empty tree`
+  - `label_unique_base` -> `<short-sha>:<path>`
+  - `label_unique_base_rename` -> `<short-sha>:<original-path>`
+  - `label_merged_ancestors` -> `merged common ancestors:<path>`
+  - `label_rebase_parent` -> `parent of <desc>`
 - ⬜ Phase 2 (KDiff3 fixture harness with `*_base/*_contrib/*_expected_result` discovery + invariants): not implemented yet.
 - ⬜ Phase 3A (permutation corpus generation): not implemented yet.
 - ⬜ Phase 3C (real-world merge extraction harness): not implemented yet.
@@ -33,6 +39,13 @@
   - ⬜ remaining cases (tool-help, nonexistent tool messaging parity, writeToTemp/orderFile/delete-delete prompt flow/submodule matrix/no-base file E2E via `git mergetool` command) still pending
 - ⬜ Phase 4B (critical `t7800-difftool` E2E): not implemented yet.
 - ⬜ Phase 5A/5B/5C (Meld-derived matcher/interval/newline test ports): not implemented yet.
+
+### Latest Component Delivered
+
+- Implemented Phase 1C conflict marker label formatting support in `gitgpui-core`:
+  - Added `BaseLabelScenario` model + formatter API (`format_base_label`) in `crates/gitgpui-core/src/conflict_labels.rs`.
+  - Added deterministic short-SHA formatting (`7` chars by default) and git-path normalization.
+  - Added 5 portability tests in `crates/gitgpui-core/tests/conflict_label_formatting.rs`.
 
 ### Iteration 2 Component Delivered
 
