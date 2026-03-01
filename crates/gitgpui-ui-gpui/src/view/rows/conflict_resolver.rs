@@ -47,7 +47,14 @@ impl MainPaneView {
 
         let word_hl_color = Some(theme.colors.warning);
 
-        // Pre-build styled text cache entries for lines with word highlights.
+        // Resolve syntax language from the conflict file path for tree-sitter highlighting.
+        let syntax_lang = this
+            .conflict_resolver
+            .path
+            .as_ref()
+            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+
+        // Pre-build styled text cache entries for all visible lines.
         for &ix in &real_line_indices {
             for (col, highlights_vec) in [
                 (
@@ -74,9 +81,6 @@ impl MainPaneView {
                     .and_then(|o| o.as_ref())
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
-                if word_ranges.is_empty() {
-                    continue;
-                }
                 let text = match col {
                     ThreeWayColumn::Base => this
                         .conflict_resolver
@@ -100,13 +104,16 @@ impl MainPaneView {
                 if text.is_empty() {
                     continue;
                 }
+                if word_ranges.is_empty() && syntax_lang.is_none() {
+                    continue;
+                }
                 let styled = build_cached_diff_styled_text(
                     theme,
                     text,
                     word_ranges,
                     "",
-                    None,
-                    DiffSyntaxMode::HeuristicOnly,
+                    syntax_lang,
+                    DiffSyntaxMode::Auto,
                     word_hl_color,
                 );
                 this.conflict_three_way_segments_cache
@@ -493,14 +500,22 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
 
+        let syntax_lang = self
+            .conflict_resolver
+            .path
+            .as_ref()
+            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style =
-            !query.is_empty() || !old_word_ranges.is_empty() || !new_word_ranges.is_empty();
+        let should_style = !query.is_empty()
+            || !old_word_ranges.is_empty()
+            || !new_word_ranges.is_empty()
+            || syntax_lang.is_some();
         if should_style {
             if let Some(text) = row.old.as_deref() {
                 self.conflict_diff_segments_cache_split
@@ -511,8 +526,8 @@ impl MainPaneView {
                             text,
                             old_word_ranges,
                             query,
-                            None,
-                            DiffSyntaxMode::HeuristicOnly,
+                            syntax_lang,
+                            DiffSyntaxMode::Auto,
                             None,
                         )
                     });
@@ -526,8 +541,8 @@ impl MainPaneView {
                             text,
                             new_word_ranges,
                             query,
-                            None,
-                            DiffSyntaxMode::HeuristicOnly,
+                            syntax_lang,
+                            DiffSyntaxMode::Auto,
                             None,
                         )
                     });
@@ -647,13 +662,19 @@ impl MainPaneView {
                 .into_any_element();
         };
 
+        let syntax_lang = self
+            .conflict_resolver
+            .path
+            .as_ref()
+            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style = !query.is_empty();
+        let should_style = !query.is_empty() || syntax_lang.is_some();
         if should_style && !row.content.is_empty() {
             self.conflict_diff_segments_cache_inline
                 .entry(ix)
@@ -663,8 +684,8 @@ impl MainPaneView {
                         row.content.as_str(),
                         &[],
                         query,
-                        None,
-                        DiffSyntaxMode::HeuristicOnly,
+                        syntax_lang,
+                        DiffSyntaxMode::Auto,
                         None,
                     )
                 });
@@ -749,14 +770,22 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
 
+        let syntax_lang = self
+            .conflict_resolver
+            .path
+            .as_ref()
+            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style =
-            !query.is_empty() || !old_word_ranges.is_empty() || !new_word_ranges.is_empty();
+        let should_style = !query.is_empty()
+            || !old_word_ranges.is_empty()
+            || !new_word_ranges.is_empty()
+            || syntax_lang.is_some();
         if should_style {
             if let Some(text) = row.old.as_deref() {
                 self.conflict_diff_segments_cache_split
@@ -767,8 +796,8 @@ impl MainPaneView {
                             text,
                             old_word_ranges,
                             query,
-                            None,
-                            DiffSyntaxMode::HeuristicOnly,
+                            syntax_lang,
+                            DiffSyntaxMode::Auto,
                             None,
                         )
                     });
@@ -782,8 +811,8 @@ impl MainPaneView {
                             text,
                             new_word_ranges,
                             query,
-                            None,
-                            DiffSyntaxMode::HeuristicOnly,
+                            syntax_lang,
+                            DiffSyntaxMode::Auto,
                             None,
                         )
                     });
@@ -940,13 +969,19 @@ impl MainPaneView {
                 .into_any_element();
         };
 
+        let syntax_lang = self
+            .conflict_resolver
+            .path
+            .as_ref()
+            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
             SharedString::default()
         };
         let query = query.as_ref().trim();
-        let should_style = !query.is_empty();
+        let should_style = !query.is_empty() || syntax_lang.is_some();
         if should_style && !row.content.is_empty() {
             self.conflict_diff_segments_cache_inline
                 .entry(ix)
@@ -956,8 +991,8 @@ impl MainPaneView {
                         row.content.as_str(),
                         &[],
                         query,
-                        None,
-                        DiffSyntaxMode::HeuristicOnly,
+                        syntax_lang,
+                        DiffSyntaxMode::Auto,
                         None,
                     )
                 });

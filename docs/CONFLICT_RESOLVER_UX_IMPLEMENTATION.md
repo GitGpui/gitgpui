@@ -4,6 +4,28 @@ Status: Approved for implementation
 Owner: UI + State teams
 Scope: `gitgpui` merge/diff/conflict resolver flows
 
+## Implementation Progress
+
+### Phase 1: Syntax + Output Structure
+- ✅ `view/rows/conflict_resolver.rs` — switched all 7 `DiffSyntaxMode::HeuristicOnly` call sites to `DiffSyntaxMode::Auto` with tree-sitter language resolution from file path. All render functions (three-way, two-way split, two-way inline, compare split, compare inline) now pass the resolved `DiffSyntaxLanguage` and use Auto mode. Cache population is now triggered by syntax language availability (not just word highlights/search).
+- ⬜ `view/panes/main.rs` — resolved-output outline data lifecycle, debounce recompute scheduling
+- ⬜ `view/mod.rs` — new resolver state fields (`ResolvedLineMeta`, `ResolvedLineSource`, `SourceLineKey`, etc.)
+- ⬜ `view/conflict_resolver.rs` — provenance mapping utilities, dedupe key builders
+
+### Phase 2: Input Picking UX
+- ⬜ `view/rows/conflict_resolver.rs` — hover chunk outline, row hover plus icon, right-click menu, immediate pick actions
+- ⬜ `view/panes/main.rs` — remove append/clear selection controls, remove old selection state
+
+### Phase 3: Resolved Output Context Menu + Bar Cleanup
+- ⬜ `view/panels/main.rs` — remove duplicate nav controls from resolved output bar
+- ⬜ `view/panels/mod.rs` — new resolver context actions
+- ⬜ `view/panels/popover/context_menu.rs` — action handling dispatch
+- ⬜ `view/panels/popover/context_menu/` — resolver output menu model
+
+### Phase 4: Image/Markdown Preview Integration
+- ⬜ Reuse existing preview/image plumbing for resolver-supported preview modes
+- ⬜ Add resolver-mode preview toggles and conditional rendering
+
 ## 1. Goals
 
 This document defines the implementation for the conflict resolver redesign with these user-approved constraints:
