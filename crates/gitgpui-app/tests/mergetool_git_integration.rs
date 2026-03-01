@@ -2282,6 +2282,86 @@ fn setup_deleted_vs_modified_submodule_conflict(repo: &Path, sub_repo: &Path) ->
     }
 }
 
+/// Set up a modified-vs-deleted submodule conflict (reverse orientation):
+/// - `feature` updates `submod` to a newer gitlink
+/// - `main` deletes `submod`
+/// - merge `main` into `feature` so local=modified and remote=deleted.
+///
+/// Returns the updated submodule commit SHA when a conflict is present.
+/// Some git versions may auto-resolve; callers should skip when `None`.
+fn setup_modified_vs_deleted_submodule_conflict(repo: &Path, sub_repo: &Path) -> Option<String> {
+    create_submodule_repo(sub_repo);
+    init_repo(repo);
+
+    let sub_url = format!("file://{}", sub_repo.display());
+    run_git(
+        repo,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            &sub_url,
+            "submod",
+        ],
+    );
+    commit_all(repo, "add submodule");
+
+    advance_submodule(sub_repo, "advanced\n", "advance");
+    let advanced_out = run_git_capture(sub_repo, &["rev-parse", "HEAD"]);
+    let advanced_commit = String::from_utf8_lossy(&advanced_out.stdout)
+        .trim()
+        .to_string();
+
+    // Feature updates the submodule to the advanced commit.
+    run_git(repo, &["checkout", "-b", "feature"]);
+    run_git(&repo.join("submod"), &["fetch"]);
+    run_git(&repo.join("submod"), &["checkout", &advanced_commit]);
+    run_git(repo, &["add", "submod"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "feature: update submod",
+        ],
+    );
+
+    // Main deletes the submodule.
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["submodule", "deinit", "-f", "submod"]);
+    run_git(repo, &["rm", "-f", "submod"]);
+    let gitmodules = repo.join(".gitmodules");
+    if gitmodules.exists() {
+        let content = fs::read_to_string(&gitmodules).unwrap_or_default();
+        if content.trim().is_empty() || !content.contains("[submodule") {
+            let _ = run_git_capture(repo, &["rm", "-f", ".gitmodules"]);
+        }
+    }
+    run_git(repo, &["add", "-A"]);
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "main: remove submod",
+        ],
+    );
+
+    // Merge deletion into modified branch: local=feature(modified), remote=main(deleted).
+    run_git(repo, &["checkout", "feature"]);
+    let merge_out = run_git_capture(repo, &["merge", "main"]);
+    if merge_out.status.success() {
+        None
+    } else {
+        Some(advanced_commit)
+    }
+}
+
 #[test]
 fn git_mergetool_submodule_conflict_resolved_via_local() {
     // When both branches update a submodule to different commits,
@@ -2837,6 +2917,75 @@ fn git_mergetool_deleted_submodule_choice_l_keeps_deletion() {
     assert!(
         !repo.join("submod").exists(),
         "expected deleted submodule path to remain absent after choosing 'l'\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_deleted_submodule_remote_deleted_choice_r_keeps_deletion() {
+    // Reverse deleted-vs-modified orientation parity:
+    // local side has modified submodule, remote side deleted it.
+    // Choosing "r" should keep deletion (remote side).
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("main_repo");
+    let sub_repo = tmp.path().join("sub_repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&sub_repo).unwrap();
+
+    let Some(_advanced_commit) = setup_modified_vs_deleted_submodule_conflict(&repo, &sub_repo)
+    else {
+        return;
+    };
+
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt", "submod"], "r\n");
+    let text = output_text(&output);
+
+    assert!(
+        !has_unmerged_entries_for_path(&repo, "submod"),
+        "expected submodule conflict to be resolved after choosing 'r'\n{text}"
+    );
+    assert!(
+        stage_zero_gitlink_oid(&repo, "submod").is_none(),
+        "expected submodule gitlink to be absent after choosing 'r'\n{text}"
+    );
+    assert!(
+        !repo.join("submod").exists(),
+        "expected deleted submodule path to remain absent after choosing 'r'\n{text}"
+    );
+}
+
+#[test]
+fn git_mergetool_deleted_submodule_remote_deleted_choice_l_keeps_modified_module() {
+    // Reverse deleted-vs-modified orientation parity:
+    // local side has modified submodule, remote side deleted it.
+    // Choosing "l" should keep the modified submodule gitlink.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("main_repo");
+    let sub_repo = tmp.path().join("sub_repo");
+    fs::create_dir_all(&repo).unwrap();
+    fs::create_dir_all(&sub_repo).unwrap();
+
+    let Some(advanced_commit) = setup_modified_vs_deleted_submodule_conflict(&repo, &sub_repo)
+    else {
+        return;
+    };
+
+    configure_gitgpui_mergetool(&repo);
+
+    let output = run_git_with_stdin(&repo, &["mergetool", "--no-prompt", "submod"], "l\n");
+    let text = output_text(&output);
+
+    assert!(
+        !has_unmerged_entries_for_path(&repo, "submod"),
+        "expected submodule conflict to be resolved after choosing 'l'\n{text}"
+    );
+
+    let resolved_oid = stage_zero_gitlink_oid(&repo, "submod");
+    assert_eq!(
+        resolved_oid.as_deref(),
+        Some(advanced_commit.as_str()),
+        "expected submodule gitlink to resolve to modified commit after choosing 'l'\n{text}"
     );
 }
 
