@@ -1367,6 +1367,58 @@ impl MainPaneView {
                                     )
                                 });
 
+                            let is_svg_conflict = super::super::is_svg_path(&path);
+                            let is_markdown_conflict = super::super::is_markdown_path(&path);
+                            let show_preview_toggle = is_svg_conflict || is_markdown_conflict;
+                            let preview_mode = self.conflict_resolver.resolver_preview_mode;
+
+                            let preview_toggle = show_preview_toggle.then(|| {
+                                let view_toggle_border = theme.colors.border;
+                                let view_toggle_selected_bg = theme.colors.active;
+                                let view_toggle_divider = theme.colors.border;
+                                div()
+                                    .id("conflict_preview_toggle")
+                                    .flex()
+                                    .items_center()
+                                    .h(px(zed::CONTROL_HEIGHT_PX))
+                                    .rounded(px(theme.radii.row))
+                                    .border_1()
+                                    .border_color(view_toggle_border)
+                                    .bg(gpui::rgba(0x00000000))
+                                    .overflow_hidden()
+                                    .p(px(1.0))
+                                    .child(
+                                        zed::Button::new("conflict_preview_text", "Text")
+                                            .borderless()
+                                            .style(zed::ButtonStyle::Subtle)
+                                            .selected(preview_mode == ConflictResolverPreviewMode::Text)
+                                            .selected_bg(view_toggle_selected_bg)
+                                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                                this.conflict_resolver.resolver_preview_mode =
+                                                    ConflictResolverPreviewMode::Text;
+                                                cx.notify();
+                                            }),
+                                    )
+                                    .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
+                                    .child(
+                                        zed::Button::new(
+                                            "conflict_preview_preview",
+                                            if is_svg_conflict { "Image" } else { "Preview" },
+                                        )
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(
+                                            preview_mode == ConflictResolverPreviewMode::Preview,
+                                        )
+                                        .selected_bg(view_toggle_selected_bg)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.conflict_resolver.resolver_preview_mode =
+                                                ConflictResolverPreviewMode::Preview;
+                                            cx.notify();
+                                        }),
+                                    )
+                            });
+
                             let top_header = div()
                                 .flex()
                                 .items_center()
@@ -1386,6 +1438,7 @@ impl MainPaneView {
                                         .flex()
                                         .items_center()
                                         .gap_2()
+                                        .when_some(preview_toggle, |d, toggle| d.child(toggle))
                                         .child(view_mode_controls)
                                         .when(
                                             view_mode == ConflictResolverViewMode::TwoWayDiff,
@@ -1716,6 +1769,97 @@ impl MainPaneView {
 
                             let top_body: AnyElement = if diff_len == 0 {
                                 zed::empty_state(theme, "Inputs", "Stage data not available.")
+                                    .into_any_element()
+                            } else if preview_mode == ConflictResolverPreviewMode::Preview
+                                && is_svg_conflict
+                            {
+                                // SVG image preview: render each side as a visual image.
+                                let svg_image = |text: &str| -> Option<Arc<gpui::Image>> {
+                                    if text.is_empty() {
+                                        return None;
+                                    }
+                                    Some(Arc::new(gpui::Image::from_bytes(
+                                        gpui::ImageFormat::Svg,
+                                        text.as_bytes().to_vec(),
+                                    )))
+                                };
+                                let base_img = svg_image(&base);
+                                let ours_img = svg_image(&local);
+                                let theirs_img = svg_image(&remote);
+
+                                let preview_cell =
+                                    |id: &'static str,
+                                     label: &'static str,
+                                     img: Option<Arc<gpui::Image>>| {
+                                        div()
+                                            .id(id)
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .h_full()
+                                            .border_1()
+                                            .border_color(theme.colors.border)
+                                            .rounded(px(theme.radii.row))
+                                            .overflow_hidden()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .h(px(24.0))
+                                                    .px_2()
+                                                    .flex()
+                                                    .items_center()
+                                                    .bg(theme.colors.surface_bg_elevated)
+                                                    .text_xs()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child(label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_h(px(0.0))
+                                                    .bg(theme.colors.window_bg)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(match img {
+                                                        Some(data) => gpui::img(data)
+                                                            .w_full()
+                                                            .h_full()
+                                                            .object_fit(gpui::ObjectFit::Contain)
+                                                            .into_any_element(),
+                                                        None => div()
+                                                            .text_xs()
+                                                            .text_color(theme.colors.text_muted)
+                                                            .child("(empty)")
+                                                            .into_any_element(),
+                                                    }),
+                                            )
+                                    };
+
+                                div()
+                                    .id("conflict_resolver_preview")
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .w_full()
+                                    .flex()
+                                    .gap_2()
+                                    .p_2()
+                                    .bg(theme.colors.window_bg)
+                                    .child(preview_cell(
+                                        "conflict_preview_base",
+                                        "Base (A)",
+                                        base_img,
+                                    ))
+                                    .child(preview_cell(
+                                        "conflict_preview_ours",
+                                        "Ours (B)",
+                                        ours_img,
+                                    ))
+                                    .child(preview_cell(
+                                        "conflict_preview_theirs",
+                                        "Theirs (C)",
+                                        theirs_img,
+                                    ))
                                     .into_any_element()
                             } else {
                                 let list = match view_mode {

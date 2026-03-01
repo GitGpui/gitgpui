@@ -2023,6 +2023,13 @@ impl MainPaneView {
         } else {
             0
         };
+        let resolver_preview_mode = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.resolver_preview_mode
+        } else {
+            ConflictResolverPreviewMode::default()
+        };
 
         let (
             three_way_word_highlights_base,
@@ -2092,6 +2099,7 @@ impl MainPaneView {
             resolved_line_meta: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
             resolver_hover: ConflictResolverHoverState::default(),
+            resolver_preview_mode,
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);

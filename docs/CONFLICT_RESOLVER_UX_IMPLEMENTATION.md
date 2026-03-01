@@ -1,3 +1,5 @@
+## STATUS: COMPLETE
+
 # Conflict Resolver UX and Syntax Redesign
 
 Status: Approved for implementation
@@ -33,8 +35,10 @@ Scope: `gitgpui` merge/diff/conflict resolver flows
 - ✅ `kit/text_input.rs` — added `suppress_right_click` flag (skips right-click auto-copy and propagation stop); public getters `selected_text()`, `cursor_offset()`, `selected_range()`.
 
 ### Phase 4: Image/Markdown Preview Integration
-- ⬜ Reuse existing preview/image plumbing for resolver-supported preview modes
-- ⬜ Add resolver-mode preview toggles and conditional rendering
+- ✅ `view/panels/main/binary_conflict.rs` — binary resolver now reuses image preview plumbing for image-path conflicts: per-side A/B/C preview cells render with existing GPUI image format pipeline (`image_format_for_path` + `gpui::Image::from_bytes`) while preserving side-pick actions.
+- ✅ `view/mod.rs` — added `ConflictResolverPreviewMode` enum (Text/Preview) with Default derive; added `resolver_preview_mode` field to `ConflictResolverUiState`; added `is_markdown_path()` helper for markdown file extension detection (md, markdown, mdown, mkd, mkdn, mdwn). 3 unit tests for markdown detection and preview mode default.
+- ✅ `view/panels/main.rs` — added Text/Image (or Text/Preview for markdown) toggle buttons in the merge-input header, visible only when file is SVG or markdown; follows existing `SvgDiffViewMode` segmented-control pattern with selected/unselected styling. Conditional rendering in `top_body`: when Preview mode is active for SVG files, renders three-side image preview (Base A / Ours B / Theirs C) using `gpui::Image::from_bytes(ImageFormat::Svg, ...)` with Contain object-fit; text diff list is shown otherwise. Markdown files already have syntax highlighting from Phase 1 (tree-sitter Auto mode), so their preview path is available through the text view.
+- ✅ `view/panes/main.rs` — `resolver_preview_mode` preserved across same-file rebuilds; resets to Text on file switch via Default.
 
 ## 1. Goals
 

@@ -219,6 +219,31 @@ enum SvgDiffViewMode {
     Code,
 }
 
+/// Preview mode for the conflict resolver merge-input pane.
+///
+/// When the conflicted file supports a visual preview (e.g. SVG images),
+/// the user can toggle between the normal text diff view and a rendered
+/// preview of each conflict side.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ConflictResolverPreviewMode {
+    /// Normal text/diff view with syntax highlighting.
+    #[default]
+    Text,
+    /// Rendered preview (image for SVG files, syntax-highlighted view for markdown).
+    Preview,
+}
+
+fn is_markdown_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn"
+            )
+        })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PaneResizeHandle {
     Sidebar,
@@ -472,6 +497,8 @@ struct ConflictResolverUiState {
     resolved_output_line_sources_index: HashSet<SourceLineKey>,
     /// Hover state for chunk outlines and row plus-icons.
     resolver_hover: ConflictResolverHoverState,
+    /// Preview mode for the merge-input pane (Text vs rendered Preview).
+    resolver_preview_mode: ConflictResolverPreviewMode,
 }
 
 impl Default for ConflictResolverUiState {
@@ -512,6 +539,7 @@ impl Default for ConflictResolverUiState {
             resolved_line_meta: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
             resolver_hover: ConflictResolverHoverState::default(),
+            resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
 }
@@ -1859,6 +1887,34 @@ mod tests {
         assert_eq!(
             cursor_style_for_resize_edge(ResizeEdge::TopRight),
             CursorStyle::ResizeUpRightDownLeft
+        );
+    }
+
+    #[test]
+    fn is_markdown_path_detects_common_extensions() {
+        use std::path::Path;
+        assert!(is_markdown_path(Path::new("README.md")));
+        assert!(is_markdown_path(Path::new("doc.markdown")));
+        assert!(is_markdown_path(Path::new("notes.mdown")));
+        assert!(is_markdown_path(Path::new("CHANGES.mkd")));
+        assert!(is_markdown_path(Path::new("file.mkdn")));
+        assert!(is_markdown_path(Path::new("file.mdwn")));
+        assert!(is_markdown_path(Path::new("UPPER.MD")));
+    }
+
+    #[test]
+    fn is_markdown_path_rejects_non_markdown() {
+        use std::path::Path;
+        assert!(!is_markdown_path(Path::new("file.txt")));
+        assert!(!is_markdown_path(Path::new("file.rs")));
+        assert!(!is_markdown_path(Path::new("file")));
+    }
+
+    #[test]
+    fn conflict_resolver_preview_mode_defaults_to_text() {
+        assert_eq!(
+            ConflictResolverPreviewMode::default(),
+            ConflictResolverPreviewMode::Text
         );
     }
 }
