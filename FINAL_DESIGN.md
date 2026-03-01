@@ -1,10 +1,10 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Latest update hardens focused merge malformed-marker parsing to preserve exact source text and CRLF line endings in interactive conflict flows.
+All components from both design documents are fully implemented. Latest update hardens focused merge exit-code semantics so unresolved saves return `1` and save I/O failures return `2`, matching the external tool contract.
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 57)
+### Progress Snapshot (Iteration 58)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
@@ -32,6 +32,7 @@ External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Automated git config setup: `gitgpui-app setup` subcommand writes all recommended git config entries (merge.tool, diff.tool, mergetool.gitgpui.cmd, difftool.gitgpui.cmd, `mergetool.trustExitCode`, `mergetool.gitgpui.trustExitCode`, `difftool.trustExitCode`, `difftool.gitgpui.trustExitCode`, prompt suppression, guiDefault=auto). Both mergetool and difftool sides now have symmetric generic + per-tool trust keys. Supports `--dry-run` (print commands without executing) and `--local` (repo-scoped instead of global). Dry-run output is shell-runnable with robust quoting for nested command values and literal `$BASE/$LOCAL/$REMOTE/$MERGED` placeholders. Covered by unit tests and standalone setup integration tests.
 - ✅ GUI tool variant in setup: `merge.guitool` and `diff.guitool` now reference a separate `gitgpui-gui` tool name whose commands include `--gui`, so `guiDefault=auto` correctly selects the interactive GPUI window when DISPLAY is available and the headless algorithm-only backend when it is not. Config entries: `mergetool.gitgpui-gui.cmd` (with `--gui`), `mergetool.gitgpui-gui.trustExitCode`, `difftool.gitgpui-gui.cmd` (with `--gui`), `difftool.gitgpui-gui.trustExitCode`. Covered by 4 new unit tests (`gui_tool_uses_separate_tool_name`, `gui_tool_cmd_includes_gui_flag`, `headless_tool_cmd_omits_gui_flag`) and updated standalone E2E assertions.
 - ✅ Focused merge malformed-marker preservation is hardened in `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`: parser fallback now preserves consumed base/separator marker text exactly (including CRLF endings) instead of synthesizing `=======\n`, preventing line-ending drift and content loss in malformed-block round trips. Covered by new regression tests `malformed_missing_end_marker_crlf_preserved_as_text` and `malformed_diff3_missing_end_marker_preserved_as_text`.
+- ✅ Focused merge exit-policy parity is hardened in `crates/gitgpui-ui-gpui/src/focused_merge.rs`: Save now returns `0` only when all conflicts are resolved, returns `1` when unresolved conflicts are saved, and returns `2` on merged-output write failures. Added 3 unit tests for saved-exit mapping (`saved_exit_code_*`).
 - ✅ Mergetool `--auto` heuristic auto-resolve mode is now implemented: when `--auto` is passed to `gitgpui-app mergetool` (or `--auto`/`--auto-merge` via KDiff3/Meld compatibility mode), the mergetool applies heuristic passes on remaining conflict blocks after the initial 3-way merge: identical-side detection, single-side-change detection (requires diff3/zdiff3 base), whitespace-only normalization, and subchunk splitting (line-level re-merge within blocks). If ALL conflicts are resolved, writes clean output and exits 0. If any remain, writes markers and exits 1. Core function `try_autosolve_merged_text()` is public in `conflict_session.rs` with 8 unit tests. 5 mergetool runtime tests + 4 standalone E2E tests + 4 CLI parser tests cover the full pipeline.
 - ✅ Dedicated mergetool conflict-marker labels now have Git-style runtime fallback semantics: missing labels default to input filenames, and no-base diff3/zdiff3 base labels default to `empty tree` (with focused unit coverage).
 - ✅ Automatic git config fallback: mergetool reads `merge.conflictstyle` and `diff.algorithm` from git config when no CLI flag is provided, mirroring `git merge-file` behavior. CLI flags take priority over git config, and git config takes priority over defaults. Unknown config values are gracefully ignored. Iteration 37 extends this parity to no-subcommand compatibility invocations (`kdiff3`-style `--auto/-o/--L*`), which previously bypassed fallback.
@@ -83,10 +84,10 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Conflict-marker label formatter and runtime integration implemented: `crates/gitgpui-core/src/conflict_labels.rs` provides `empty tree`/`<short-sha>:<path>`/merged-ancestors/rebase-parent formatting, and `crates/gitgpui-app/src/mergetool_mode.rs` now applies filename/`empty tree` fallback labels in dedicated mergetool flows.
 - ✅ Focused GPUI tool windows for interactive diff/merge (`--gui` flag):
   - ✅ `focused_diff.rs` in `gitgpui-ui-gpui`: color-coded unified diff viewer with keyboard navigation (Esc/q/Ctrl+W to close), line classification (Header, HunkHeader, Add, Remove, Context), and 3 unit tests.
-  - ✅ `focused_merge.rs` in `gitgpui-ui-gpui`: interactive merge conflict resolution window with conflict-marker parsing, per-segment pick buttons (Ours/Theirs/Base/Both via a/b/c/d keys), conflict navigation (F2/F3), auto-resolve action, save/cancel (Ctrl+S/Esc), live output preview, and 8 unit tests.
+  - ✅ `focused_merge.rs` in `gitgpui-ui-gpui`: interactive merge conflict resolution window with conflict-marker parsing, per-segment pick buttons (Ours/Theirs/Base/Both via a/b/c/d keys), conflict navigation (F2/F3), auto-resolve action, save/cancel (Ctrl+S/Esc), live output preview, and 11 unit tests.
   - ✅ `--gui` CLI flag added to both `difftool` and `mergetool` subcommands (opt-in, defaults to false for test compatibility).
   - ✅ Wired in `main.rs`: difftool `--gui` opens focused diff window after successful diff; mergetool `--gui` opens focused merge window when conflicts remain (non-auto mode).
-  - ✅ Exit code contract preserved: focused merge returns 0 on save (resolved), 1 on cancel; focused diff always returns 0.
+  - ✅ Exit code contract preserved: focused merge returns 0 only for resolved saves, 1 for cancel/unresolved saves, and 2 on save I/O error; focused diff always returns 0.
 - ✅ Focused command-mode execution paths fully implemented:
   - ✅ `difftool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/difftool_mode.rs` (delegates to `git diff --no-index --no-ext-diff`, strips recursive `GIT_EXTERNAL_DIFF` env, supports labels/display-path headers, and maps git exit `1`/diff-present to app success exit `0`).
   - ✅ `mergetool` mode executes a dedicated runtime path in `crates/gitgpui-app/src/mergetool_mode.rs` using the built-in 3-way merge algorithm (`merge_file_bytes`). Reads base/local/remote files, performs automatic merge, writes result to MERGED path (creating parent directories as needed). Exits 0 on clean merge, 1 on unresolved conflicts. Supports labels (including default filename fallbacks and `empty tree` no-base diff3/zdiff3 base label fallback), no-base (add/add) scenarios, byte-level binary file detection (null-byte and non-UTF-8 detection) with base-aware auto-resolution heuristics (clean when sides are identical or one side matches base; conflict fallback keeps local bytes), CRLF preservation, paths with spaces, configurable conflict style (`--conflict-style merge|diff3|zdiff3`), diff algorithm selection (`--diff-algorithm myers|histogram`), and marker width control (`--marker-size <N>`). 35 unit tests.
@@ -215,7 +216,21 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
 - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
 
-### Latest Component Delivered (Iteration 57) — Focused Merge Malformed-Marker CRLF Preservation
+### Latest Component Delivered (Iteration 58) — Focused Merge Exit-Code Policy Hardening
+
+- Hardened focused merge save semantics in `crates/gitgpui-ui-gpui/src/focused_merge.rs`:
+  - save now returns exit `0` only when all conflicts are resolved
+  - save with unresolved conflicts now returns exit `1` (cancel/unresolved parity)
+  - merged-output write failures now return exit `2` (I/O error parity)
+- Added pure save-exit mapping helper and regression tests:
+  - `saved_exit_code_clean_merge_is_success`
+  - `saved_exit_code_all_conflicts_resolved_is_success`
+  - `saved_exit_code_unresolved_conflicts_are_canceled`
+- Verification:
+  - `cargo test -p gitgpui-ui-gpui focused_merge` — 11 passed, 0 failed
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration` — 22 passed, 0 failed
+
+### Previous Component Delivered (Iteration 57) — Focused Merge Malformed-Marker CRLF Preservation
 
 - Hardened malformed-marker fallback in `crates/gitgpui-ui-gpui/src/view/conflict_resolver.rs`:
   - parser now preserves consumed marker text exactly in no-end-marker scenarios, including `|||||||` base sections and the original `=======` separator line text

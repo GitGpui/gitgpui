@@ -7,26 +7,39 @@
 use crate::assets::GitGpuiAssets;
 use crate::theme::AppTheme;
 use crate::view::conflict_resolver::{
-    ConflictBlock, ConflictChoice, ConflictSegment, auto_resolve_segments_with_options,
-    conflict_count, next_unresolved_conflict_index, parse_conflict_markers,
-    prev_unresolved_conflict_index, resolved_conflict_count,
+    auto_resolve_segments_with_options, conflict_count, next_unresolved_conflict_index,
+    parse_conflict_markers, prev_unresolved_conflict_index, resolved_conflict_count, ConflictBlock,
+    ConflictChoice, ConflictSegment,
 };
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClickEvent, Focusable, FocusHandle, FontWeight, KeyBinding,
-    Render, ScrollHandle, SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations,
-    WindowOptions, actions, div, point, px, size,
+    actions, div, point, px, size, App, Application, Bounds, ClickEvent, FocusHandle, Focusable,
+    FontWeight, KeyBinding, Render, ScrollHandle, SharedString, TitlebarOptions, Window,
+    WindowBounds, WindowDecorations, WindowOptions,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
+const EXIT_SUCCESS: i32 = 0;
+const EXIT_CANCELED: i32 = 1;
+const EXIT_ERROR: i32 = 2;
+
 // ── Actions ──────────────────────────────────────────────────────────
 
 actions!(
     focused_merge,
-    [Save, Cancel, AutoResolve, NextConflict, PrevConflict,
-     PickOurs, PickTheirs, PickBase, PickBoth]
+    [
+        Save,
+        Cancel,
+        AutoResolve,
+        NextConflict,
+        PrevConflict,
+        PickOurs,
+        PickTheirs,
+        PickBase,
+        PickBoth
+    ]
 );
 
 // ── Public config ────────────────────────────────────────────────────
@@ -127,9 +140,7 @@ impl FocusedMergeView {
             conflict_ix += 1;
         }
         // Advance to next unresolved.
-        if let Some(next) =
-            next_unresolved_conflict_index(&self.segments, self.active_conflict)
-        {
+        if let Some(next) = next_unresolved_conflict_index(&self.segments, self.active_conflict) {
             self.active_conflict = next;
         }
         cx.notify();
@@ -142,30 +153,30 @@ impl FocusedMergeView {
                 "Failed to write merged output to {}: {e}",
                 self.output_path.display()
             );
+            self.exit_code.store(EXIT_ERROR, Ordering::SeqCst);
+            cx.quit();
             return;
         }
         self.saved = true;
-        self.exit_code.store(0, Ordering::SeqCst);
+        self.exit_code
+            .store(saved_exit_code(&self.segments), Ordering::SeqCst);
         cx.quit();
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        self.exit_code.store(1, Ordering::SeqCst);
+        self.exit_code.store(EXIT_CANCELED, Ordering::SeqCst);
         cx.quit();
     }
 
     fn auto_resolve(&mut self, cx: &mut Context<Self>) {
         auto_resolve_segments_with_options(&mut self.segments, true);
         // Reset active conflict to first unresolved.
-        self.active_conflict =
-            next_unresolved_conflict_index(&self.segments, 0).unwrap_or(0);
+        self.active_conflict = next_unresolved_conflict_index(&self.segments, 0).unwrap_or(0);
         cx.notify();
     }
 
     fn navigate_next(&mut self, cx: &mut Context<Self>) {
-        if let Some(next) =
-            next_unresolved_conflict_index(&self.segments, self.active_conflict)
-        {
+        if let Some(next) = next_unresolved_conflict_index(&self.segments, self.active_conflict) {
             self.active_conflict = next;
         } else {
             // Wrap through all conflicts.
@@ -178,9 +189,7 @@ impl FocusedMergeView {
     }
 
     fn navigate_prev(&mut self, cx: &mut Context<Self>) {
-        if let Some(prev) =
-            prev_unresolved_conflict_index(&self.segments, self.active_conflict)
-        {
+        if let Some(prev) = prev_unresolved_conflict_index(&self.segments, self.active_conflict) {
             self.active_conflict = prev;
         } else {
             let total = self.total_conflicts();
@@ -243,6 +252,16 @@ fn chosen_block_text(block: &ConflictBlock) -> String {
     }
 }
 
+fn saved_exit_code(segments: &[ConflictSegment]) -> i32 {
+    let total = conflict_count(segments);
+    let resolved = resolved_conflict_count(segments);
+    if total == 0 || total == resolved {
+        EXIT_SUCCESS
+    } else {
+        EXIT_CANCELED
+    }
+}
+
 /// Truncate text to N lines for display, appending "..." if truncated.
 fn truncate_lines(text: &str, max_lines: usize) -> String {
     let lines: Vec<&str> = text.lines().collect();
@@ -270,7 +289,10 @@ impl Render for FocusedMergeView {
         } else if all_done {
             format!("All {total} conflict(s) resolved")
         } else {
-            format!("{resolved}/{total} resolved — conflict {}/{total}", active + 1)
+            format!(
+                "{resolved}/{total} resolved — conflict {}/{total}",
+                active + 1
+            )
         };
 
         div()
@@ -282,10 +304,18 @@ impl Render for FocusedMergeView {
             .on_action(cx.listener(|this, _: &AutoResolve, _window, cx| this.auto_resolve(cx)))
             .on_action(cx.listener(|this, _: &NextConflict, _window, cx| this.navigate_next(cx)))
             .on_action(cx.listener(|this, _: &PrevConflict, _window, cx| this.navigate_prev(cx)))
-            .on_action(cx.listener(|this, _: &PickOurs, _window, cx| this.pick_choice(ConflictChoice::Ours, cx)))
-            .on_action(cx.listener(|this, _: &PickTheirs, _window, cx| this.pick_choice(ConflictChoice::Theirs, cx)))
-            .on_action(cx.listener(|this, _: &PickBase, _window, cx| this.pick_choice(ConflictChoice::Base, cx)))
-            .on_action(cx.listener(|this, _: &PickBoth, _window, cx| this.pick_choice(ConflictChoice::Both, cx)))
+            .on_action(cx.listener(|this, _: &PickOurs, _window, cx| {
+                this.pick_choice(ConflictChoice::Ours, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PickTheirs, _window, cx| {
+                this.pick_choice(ConflictChoice::Theirs, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PickBase, _window, cx| {
+                this.pick_choice(ConflictChoice::Base, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PickBoth, _window, cx| {
+                this.pick_choice(ConflictChoice::Both, cx)
+            }))
             .size_full()
             .bg(theme.colors.window_bg)
             .text_color(theme.colors.text)
@@ -387,7 +417,11 @@ impl FocusedMergeView {
                     .on_click(|_event: &ClickEvent, _window, cx| {
                         cx.dispatch_action(&Save);
                     })
-                    .child(if all_done { "Save" } else { "Save (unresolved)" }),
+                    .child(if all_done {
+                        "Save"
+                    } else {
+                        "Save (unresolved)"
+                    }),
             )
     }
 
@@ -406,9 +440,7 @@ impl FocusedMergeView {
             match seg {
                 ConflictSegment::Text(text) => {
                     if !text.is_empty() {
-                        children.push(
-                            self.render_text_segment(text, theme).into_any_element(),
-                        );
+                        children.push(self.render_text_segment(text, theme).into_any_element());
                     }
                 }
                 ConflictSegment::Block(block) => {
@@ -513,10 +545,7 @@ impl FocusedMergeView {
                         div()
                             .font_weight(FontWeight::BOLD)
                             .text_size(px(12.0))
-                            .child(SharedString::from(format!(
-                                "Conflict {}",
-                                conflict_ix + 1
-                            ))),
+                            .child(SharedString::from(format!("Conflict {}", conflict_ix + 1))),
                     )
                     .child(
                         div()
@@ -559,16 +588,13 @@ impl FocusedMergeView {
                                         self.label_local
                                     ))),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .whitespace_nowrap()
-                                    .child(SharedString::from(if ours_display.is_empty() {
-                                        "(empty)".to_string()
-                                    } else {
-                                        ours_display
-                                    })),
-                            ),
+                            .child(div().text_size(px(12.0)).whitespace_nowrap().child(
+                                SharedString::from(if ours_display.is_empty() {
+                                    "(empty)".to_string()
+                                } else {
+                                    ours_display
+                                }),
+                            )),
                     )
                     // Theirs column
                     .child(
@@ -589,16 +615,13 @@ impl FocusedMergeView {
                                         self.label_remote
                                     ))),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .whitespace_nowrap()
-                                    .child(SharedString::from(if theirs_display.is_empty() {
-                                        "(empty)".to_string()
-                                    } else {
-                                        theirs_display
-                                    })),
-                            ),
+                            .child(div().text_size(px(12.0)).whitespace_nowrap().child(
+                                SharedString::from(if theirs_display.is_empty() {
+                                    "(empty)".to_string()
+                                } else {
+                                    theirs_display
+                                }),
+                            )),
                     ),
             );
 
@@ -613,10 +636,12 @@ impl FocusedMergeView {
                 .child(self.pick_button("Theirs (c)", ConflictChoice::Theirs, block, theme));
 
             if show_base_button {
-                buttons = buttons.child(self.pick_button("Base (a)", ConflictChoice::Base, block, theme));
+                buttons =
+                    buttons.child(self.pick_button("Base (a)", ConflictChoice::Base, block, theme));
             }
 
-            buttons = buttons.child(self.pick_button("Both (d)", ConflictChoice::Both, block, theme));
+            buttons =
+                buttons.child(self.pick_button("Both (d)", ConflictChoice::Both, block, theme));
 
             block_el = block_el.child(buttons);
         }
@@ -683,9 +708,10 @@ fn with_alpha(color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
 ///
 /// Returns the process exit code:
 /// - 0: user saved the resolved output
-/// - 1: user canceled or closed without saving
+/// - 1: user canceled/closed, or saved with unresolved conflicts
+/// - 2: save failed due to I/O error
 pub fn run_focused_merge(config: FocusedMergeConfig) -> i32 {
-    let exit_code = Arc::new(AtomicI32::new(1)); // Default: cancel/unresolved
+    let exit_code = Arc::new(AtomicI32::new(EXIT_CANCELED)); // Default: cancel/unresolved
     let exit_code_for_app = exit_code.clone();
 
     Application::new()
@@ -835,6 +861,36 @@ mod tests {
             resolved: false,
         };
         assert_eq!(chosen_block_text(&block), "");
+    }
+
+    #[test]
+    fn saved_exit_code_clean_merge_is_success() {
+        let segments = vec![ConflictSegment::Text("clean\n".to_string())];
+        assert_eq!(saved_exit_code(&segments), EXIT_SUCCESS);
+    }
+
+    #[test]
+    fn saved_exit_code_all_conflicts_resolved_is_success() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base\n".to_string()),
+            ours: "ours\n".to_string(),
+            theirs: "theirs\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        })];
+        assert_eq!(saved_exit_code(&segments), EXIT_SUCCESS);
+    }
+
+    #[test]
+    fn saved_exit_code_unresolved_conflicts_are_canceled() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base\n".to_string()),
+            ours: "ours\n".to_string(),
+            theirs: "theirs\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        assert_eq!(saved_exit_code(&segments), EXIT_CANCELED);
     }
 
     /// Helper to build output without needing a full view.
