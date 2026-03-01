@@ -45,6 +45,18 @@ fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
         .expect("git command to run")
 }
 
+fn run_git_expect_failure(repo: &Path, args: &[&str]) -> Output {
+    let output = run_git_capture(repo, args);
+    assert!(
+        !output.status.success(),
+        "git {:?} unexpectedly succeeded\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(repo).args(args);
@@ -132,6 +144,60 @@ fn configure_mergetool_selection(
     }
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
+fn configure_recording_mergetool(repo: &Path, tool: &str, log_path: &Path) {
+    let log_q = shell_quote(&log_path.to_string_lossy());
+    let cmd = format!("printf '%s\\n' \"$MERGED\" >> {log_q}; cat \"$REMOTE\" > \"$MERGED\"");
+    run_git(repo, &["config", "merge.tool", tool]);
+    run_git(
+        repo,
+        &["config", &format!("mergetool.{tool}.cmd"), &cmd],
+    );
+    run_git(
+        repo,
+        &[
+            "config",
+            &format!("mergetool.{tool}.trustExitCode"),
+            "true",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.prompt", "false"]);
+    run_git(repo, &["config", "mergetool.keepBackup", "false"]);
+}
+
+fn setup_order_file_conflict(repo: &Path) {
+    init_repo(repo);
+    write_file(repo, "a", "start\n");
+    write_file(repo, "b", "start\n");
+    commit_all(repo, "start");
+
+    run_git(repo, &["checkout", "-b", "side1"]);
+    write_file(repo, "a", "side1\n");
+    write_file(repo, "b", "side1\n");
+    commit_all(repo, "side1 changes");
+
+    run_git(repo, &["checkout", "main"]);
+    run_git(repo, &["checkout", "-b", "side2"]);
+    write_file(repo, "a", "side2\n");
+    write_file(repo, "b", "side2\n");
+    commit_all(repo, "side2 changes");
+
+    run_git_expect_failure(repo, &["merge", "side1"]);
+}
+
+fn read_recorded_merge_order(log_path: &Path) -> Vec<String> {
+    let raw = fs::read_to_string(log_path).expect("read merge-order log");
+    raw.lines()
+        .map(|line| {
+            let normalized = line.strip_prefix("./").unwrap_or(line);
+            Path::new(normalized)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(normalized)
+                .to_string()
+        })
+        .collect()
 }
 
 fn output_text(output: &Output) -> String {
@@ -541,6 +607,67 @@ fn git_mergetool_crlf_content_preserved() {
         merged.contains("\r\n"),
         "expected CRLF to be preserved in merged output\nmerged:\n{merged}\ngit output:\n{text}"
     );
+}
+
+// ── diff.orderFile ordering parity ───────────────────────────────────
+
+#[test]
+fn git_mergetool_honors_diff_order_file_configuration() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_order_file_conflict(repo);
+    write_file(repo, "order-file", "b\na\n");
+    run_git(repo, &["config", "diff.orderFile", "order-file"]);
+
+    let order_log = repo.join(".mergetool-order.log");
+    configure_recording_mergetool(repo, "ordercheck", &order_log);
+
+    let output = run_git_capture(
+        repo,
+        &["mergetool", "--no-prompt", "--tool", "ordercheck"],
+    );
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git mergetool failed\n{text}"
+    );
+
+    let order = read_recorded_merge_order(&order_log);
+    assert_eq!(order, vec!["b", "a"], "unexpected merge order\n{text}");
+}
+
+#[test]
+fn git_mergetool_o_flag_overrides_diff_order_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_order_file_conflict(repo);
+    write_file(repo, "order-file", "b\na\n");
+    write_file(repo, "cli-order-file", "a\nb\n");
+    run_git(repo, &["config", "diff.orderFile", "order-file"]);
+
+    let order_log = repo.join(".mergetool-order.log");
+    configure_recording_mergetool(repo, "ordercheck", &order_log);
+
+    let output = run_git_capture(
+        repo,
+        &[
+            "mergetool",
+            "-Ocli-order-file",
+            "--no-prompt",
+            "--tool",
+            "ordercheck",
+        ],
+    );
+    let text = output_text(&output);
+    assert!(
+        output.status.success(),
+        "git mergetool with -O override failed\n{text}"
+    );
+
+    let order = read_recorded_merge_order(&order_log);
+    assert_eq!(order, vec!["a", "b"], "unexpected merge order\n{text}");
 }
 
 // ── Tool-help discoverability ────────────────────────────────────────
