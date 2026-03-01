@@ -1,13 +1,14 @@
 ## STATUS: COMPLETE
 
-All components from both design documents are fully implemented. Iteration 20 now includes standalone mergetool output-target parity (`--output`/`--out` to a non-existent `MERGED` path) plus E2E binary conflict coverage through `git mergetool`.
+All components from both design documents are fully implemented. Iteration 21 closes the remaining difftool env-compatibility gap by adding `BASE` fallback for display-path resolution (with explicit precedence `--path` > `MERGED` > `BASE`).
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 20 — Final)
+### Progress Snapshot (Iteration 21 — Final)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes (`difftool`, `mergetool`) and arg/env validation are implemented.
+- ✅ Difftool env compatibility is complete: display-path resolution now honors optional `MERGED` and `BASE` compatibility vars with explicit precedence (`--path` > `MERGED` > `BASE`).
 - ✅ Mergetool CLI compatibility aliases are implemented: `-o`/`--output`/`--out` for output path and `--L1`/`--L2`/`--L3` for labels (KDiff3/Meld-style command compatibility).
 - ✅ Standalone mergetool output-target behavior is implemented: `MERGED` may be a new path, and runtime creates parent directories before writing.
 - ✅ Focused difftool/mergetool runtimes are implemented with Git-compatible exit semantics.
@@ -32,7 +33,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 ### External Diff/Merge Usage Design (`external_usage.md`)
 
 - ✅ CLI subcommands and argument model (`gitgpui-app difftool`, `gitgpui-app mergetool`) implemented in `crates/gitgpui-app/src/cli.rs`.
-- ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors. `MERGED` is treated as an output target and can be non-existent at parse time.
+- ✅ Arg/env resolution + validation implemented for `LOCAL`, `REMOTE`, `MERGED`, `BASE`, labels, missing-input and missing-path errors. `MERGED` is treated as an output target and can be non-existent at parse time. Difftool display-path fallback now follows `--path` > `MERGED` > `BASE`.
 - ✅ Mergetool compatibility aliases implemented in `crates/gitgpui-app/src/cli.rs`:
   - `-o`/`--output`/`--out` as aliases for `--merged`
   - `--L1`/`--L2`/`--L3` as aliases for `--label-base`/`--label-local`/`--label-remote`
@@ -144,6 +145,18 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
   - ✅ Explicit `difftool.guiDefault` selection-path parity (`auto` with/without `DISPLAY`, `--gui`, `--no-gui`).
   - ✅ Dedicated trust-exit interaction matrix assertions (`difftool.trustExitCode`, `--trust-exit-code`, `--no-trust-exit-code`).
   - ✅ `git difftool --tool-help` discoverability assertion for configured `gitgpui` tool.
+
+### Latest Component Delivered (Iteration 21) — Difftool `BASE` Env Compatibility Fallback
+
+- Closed the remaining difftool contract gap in `crates/gitgpui-app/src/cli.rs`:
+  - display-path resolution now honors optional `BASE` when `MERGED` is not set.
+  - explicit precedence is now locked: `--path` > `MERGED` > `BASE`.
+- Added regression coverage in CLI resolver tests:
+  - `difftool_uses_base_env_as_display_path_fallback`
+  - `difftool_prefers_merged_over_base_for_display_path`
+  - `difftool_path_flag_overrides_merged_and_base_display_env`
+- Verification:
+  - `cargo test -p gitgpui-app --bin gitgpui-app difftool_ -- --nocapture`
 
 ### Latest Component Delivered (Iteration 20) — Standalone `MERGED` Output-Target Support
 

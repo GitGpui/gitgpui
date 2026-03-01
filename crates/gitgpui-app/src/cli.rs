@@ -189,8 +189,12 @@ fn resolve_difftool_with_env(
         return Err(format!("Remote path does not exist: {}", remote.display()));
     }
 
-    // Display path: flag > MERGED env (git difftool compat) > None
-    let display_path = args.path.or_else(|| env.var("MERGED"));
+    // Display path: flag > MERGED env > BASE env (git difftool compat) > None.
+    // Git custom difftool contracts historically pass MERGED and/or BASE as
+    // optional compatibility variables; prefer MERGED when both are present.
+    let display_path = args
+        .path
+        .or_else(|| env.var("MERGED").or_else(|| env.var("BASE")));
 
     Ok(DifftoolConfig {
         local,
@@ -297,9 +301,7 @@ fn apply_git_config_fallback(
     had_explicit_algorithm: bool,
     git_config: &dyn Fn(&str) -> Option<String>,
 ) {
-    if !had_explicit_style
-        && let Some(style) = git_config("merge.conflictstyle")
-    {
+    if !had_explicit_style && let Some(style) = git_config("merge.conflictstyle") {
         match style.as_str() {
             "merge" => config.conflict_style = ConflictStyle::Merge,
             "diff3" => config.conflict_style = ConflictStyle::Diff3,
@@ -308,9 +310,7 @@ fn apply_git_config_fallback(
         }
     }
 
-    if !had_explicit_algorithm
-        && let Some(algo) = git_config("diff.algorithm")
-    {
+    if !had_explicit_algorithm && let Some(algo) = git_config("diff.algorithm") {
         match algo.as_str() {
             "histogram" | "patience" => config.diff_algorithm = DiffAlgorithm::Histogram,
             "myers" | "default" | "minimal" => config.diff_algorithm = DiffAlgorithm::Myers,
@@ -444,6 +444,77 @@ mod tests {
         assert_eq!(config.local, local);
         assert_eq!(config.remote, remote);
         assert_eq!(config.display_path.as_deref(), Some("file.txt"));
+    }
+
+    #[test]
+    fn difftool_uses_base_env_as_display_path_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mut env = TestEnv::new();
+        env.set("LOCAL", &local);
+        env.set("REMOTE", &remote);
+        env.set("BASE", "base-name.txt");
+
+        let args = DifftoolArgs {
+            local: None,
+            remote: None,
+            path: None,
+            label_left: None,
+            label_right: None,
+        };
+
+        let config = resolve_difftool_with_env(args, &env).unwrap();
+        assert_eq!(config.display_path.as_deref(), Some("base-name.txt"));
+    }
+
+    #[test]
+    fn difftool_prefers_merged_over_base_for_display_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mut env = TestEnv::new();
+        env.set("LOCAL", &local);
+        env.set("REMOTE", &remote);
+        env.set("MERGED", "merged-name.txt");
+        env.set("BASE", "base-name.txt");
+
+        let args = DifftoolArgs {
+            local: None,
+            remote: None,
+            path: None,
+            label_left: None,
+            label_right: None,
+        };
+
+        let config = resolve_difftool_with_env(args, &env).unwrap();
+        assert_eq!(config.display_path.as_deref(), Some("merged-name.txt"));
+    }
+
+    #[test]
+    fn difftool_path_flag_overrides_merged_and_base_display_env() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mut env = TestEnv::new();
+        env.set("LOCAL", &local);
+        env.set("REMOTE", &remote);
+        env.set("MERGED", "merged-name.txt");
+        env.set("BASE", "base-name.txt");
+
+        let args = DifftoolArgs {
+            local: None,
+            remote: None,
+            path: Some("explicit-name.txt".into()),
+            label_left: None,
+            label_right: None,
+        };
+
+        let config = resolve_difftool_with_env(args, &env).unwrap();
+        assert_eq!(config.display_path.as_deref(), Some("explicit-name.txt"));
     }
 
     #[test]
@@ -1261,8 +1332,7 @@ mod tests {
         let mut git_cfg = HashMap::new();
         git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
     }
 
@@ -1274,8 +1344,7 @@ mod tests {
         let mut git_cfg = HashMap::new();
         git_cfg.insert("merge.conflictstyle".into(), "diff3".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Diff3);
     }
 
@@ -1287,8 +1356,7 @@ mod tests {
         let mut git_cfg = HashMap::new();
         git_cfg.insert("diff.algorithm".into(), "histogram".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
     }
 
@@ -1300,8 +1368,7 @@ mod tests {
         let mut git_cfg = HashMap::new();
         git_cfg.insert("diff.algorithm".into(), "patience".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
     }
 
@@ -1316,8 +1383,7 @@ mod tests {
         git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
         git_cfg.insert("diff.algorithm".into(), "histogram".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         // CLI flags should win over git config.
         assert_eq!(config.conflict_style, ConflictStyle::Merge);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
@@ -1330,8 +1396,7 @@ mod tests {
         let env = TestEnv::new();
         let git_cfg: HashMap<String, String> = HashMap::new();
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Merge);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
     }
@@ -1345,8 +1410,7 @@ mod tests {
         git_cfg.insert("merge.conflictstyle".into(), "some_future_style".into());
         git_cfg.insert("diff.algorithm".into(), "some_future_algo".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         // Unknown values should be ignored, keeping defaults.
         assert_eq!(config.conflict_style, ConflictStyle::Merge);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Myers);
@@ -1361,8 +1425,7 @@ mod tests {
         git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
         git_cfg.insert("diff.algorithm".into(), "histogram".into());
 
-        let config =
-            resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
+        let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
         assert_eq!(config.conflict_style, ConflictStyle::Zdiff3);
         assert_eq!(config.diff_algorithm, DiffAlgorithm::Histogram);
     }
