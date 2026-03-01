@@ -2,6 +2,7 @@ mod cli;
 mod crashlog;
 mod difftool_mode;
 mod mergetool_mode;
+mod setup_mode;
 
 use cli::{AppMode, exit_code};
 use std::io::{self, Write};
@@ -93,6 +94,19 @@ fn main() {
                 }
                 let _ = io::stdout().flush();
                 let _ = io::stderr().flush();
+                std::process::exit(result.exit_code);
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(exit_code::ERROR);
+            }
+        },
+        AppMode::Setup { dry_run, local } => match setup_mode::run_setup(dry_run, local) {
+            Ok(result) => {
+                if !result.stdout.is_empty() {
+                    print!("{}", result.stdout);
+                }
+                let _ = io::stdout().flush();
                 std::process::exit(result.exit_code);
             }
             Err(msg) => {

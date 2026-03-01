@@ -39,6 +39,8 @@ pub enum Command {
     Difftool(DifftoolArgs),
     /// Open a focused merge view (for use as git mergetool).
     Mergetool(MergetoolArgs),
+    /// Configure git to use gitgpui as the global diff/merge tool.
+    Setup(SetupArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -128,6 +130,16 @@ pub struct MergetoolConfig {
     pub diff_algorithm: DiffAlgorithm,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct SetupArgs {
+    /// Only print the git config commands without running them.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Apply config to the local repository instead of global.
+    #[arg(long)]
+    pub local: bool,
+}
+
 /// Which mode the application was launched in.
 #[derive(Clone, Debug)]
 pub enum AppMode {
@@ -137,6 +149,8 @@ pub enum AppMode {
     Difftool(DifftoolConfig),
     /// Focused merge view.
     Mergetool(MergetoolConfig),
+    /// Write git config for difftool/mergetool integration.
+    Setup { dry_run: bool, local: bool },
 }
 
 // ── Environment lookup trait for testability ─────────────────────────
@@ -578,6 +592,10 @@ fn parse_app_mode_from_args_and_env(
             Some(Command::Mergetool(args)) => {
                 resolve_mergetool_with_config(args, env, &read_git_config).map(AppMode::Mergetool)
             }
+            Some(Command::Setup(args)) => Ok(AppMode::Setup {
+                dry_run: args.dry_run,
+                local: args.local,
+            }),
         },
         Err(clap_err) => {
             let compat_args = if args.len() > 1 { &args[1..] } else { &[][..] };

@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
+#[allow(unused_imports)]
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -18,6 +19,32 @@ where
         .args(args)
         .output()
         .expect("gitgpui-app command to run")
+}
+
+fn run_gitgpui_in_dir<I, S>(dir: &Path, args: I) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Command::new(gitgpui_bin())
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("gitgpui-app command to run")
+}
+
+fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C"])
+        .arg(repo_dir)
+        .args(["config", "--get", key])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
 }
 
 fn write_file(path: &Path, contents: &str) {
@@ -188,4 +215,123 @@ fn standalone_difftool_missing_input_exits_two() {
         String::from_utf8_lossy(&output.stderr).contains("Remote path does not exist"),
         "expected validation error\n{text}"
     );
+}
+
+// ── Setup subcommand tests ───────────────────────────────────────────
+
+#[test]
+fn setup_dry_run_prints_commands_without_writing() {
+    let output = run_gitgpui([
+        OsString::from("setup"),
+        OsString::from("--dry-run"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Dry run"), "expected dry-run header\n{text}");
+    assert!(stdout.contains("git config --global merge.tool"), "expected merge.tool\n{text}");
+    assert!(stdout.contains("git config --global diff.tool"), "expected diff.tool\n{text}");
+    assert!(
+        stdout.contains("mergetool.gitgpui.cmd"),
+        "expected mergetool cmd\n{text}"
+    );
+    assert!(
+        stdout.contains("difftool.gitgpui.cmd"),
+        "expected difftool cmd\n{text}"
+    );
+    assert!(
+        stdout.contains("mergetool.gitgpui.trustExitCode"),
+        "expected trustExitCode\n{text}"
+    );
+}
+
+#[test]
+fn setup_dry_run_local_uses_local_scope() {
+    let output = run_gitgpui([
+        OsString::from("setup"),
+        OsString::from("--dry-run"),
+        OsString::from("--local"),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("git config --local"), "expected --local scope\n{text}");
+    assert!(!stdout.contains("--global"), "should not use --global\n{text}");
+}
+
+#[test]
+fn setup_local_writes_config_to_repo() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Initialize a git repo.
+    let init = Command::new("git")
+        .args(["init", dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(init.status.success(), "git init failed");
+
+    let output = run_gitgpui_in_dir(
+        dir.path(),
+        [OsString::from("setup"), OsString::from("--local")],
+    );
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Configured gitgpui as local diff/merge tool"), "{text}");
+
+    // Verify key config entries were written.
+    assert_eq!(
+        git_config_get(dir.path(), "merge.tool").as_deref(),
+        Some("gitgpui"),
+        "merge.tool not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "diff.tool").as_deref(),
+        Some("gitgpui"),
+        "diff.tool not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "mergetool.gitgpui.trustExitCode").as_deref(),
+        Some("true"),
+        "trustExitCode not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "mergetool.prompt").as_deref(),
+        Some("false"),
+        "mergetool.prompt not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "difftool.prompt").as_deref(),
+        Some("false"),
+        "difftool.prompt not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "merge.guitool").as_deref(),
+        Some("gitgpui"),
+        "merge.guitool not set"
+    );
+    assert_eq!(
+        git_config_get(dir.path(), "mergetool.guiDefault").as_deref(),
+        Some("auto"),
+        "mergetool.guiDefault not set"
+    );
+
+    // Verify the cmd contains the binary path and proper variable quoting.
+    let merge_cmd = git_config_get(dir.path(), "mergetool.gitgpui.cmd")
+        .expect("mergetool cmd should be set");
+    assert!(merge_cmd.contains("$BASE"), "merge cmd missing $BASE");
+    assert!(merge_cmd.contains("$LOCAL"), "merge cmd missing $LOCAL");
+    assert!(merge_cmd.contains("$REMOTE"), "merge cmd missing $REMOTE");
+    assert!(merge_cmd.contains("$MERGED"), "merge cmd missing $MERGED");
+
+    let diff_cmd = git_config_get(dir.path(), "difftool.gitgpui.cmd")
+        .expect("difftool cmd should be set");
+    assert!(diff_cmd.contains("$LOCAL"), "diff cmd missing $LOCAL");
+    assert!(diff_cmd.contains("$REMOTE"), "diff cmd missing $REMOTE");
 }
