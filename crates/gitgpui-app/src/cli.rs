@@ -292,7 +292,6 @@ fn resolve_mergetool_with_env(
     env: &dyn EnvLookup,
 ) -> Result<MergetoolConfig, String> {
     let marker_size = parse_marker_size(args.marker_size)?;
-    let base_from_flag = args.base.is_some();
 
     let merged = require_non_empty_path(
         resolve_path(args.merged, "MERGED", env)
@@ -312,13 +311,10 @@ fn resolve_mergetool_with_env(
         "remote",
     )?;
 
+    // Treat an empty BASE value as "no base" for compatibility with
+    // shell-expanded custom tool commands like `--base "$BASE"`.
     let base = match resolve_path(args.base, "BASE", env) {
-        Some(path) if is_empty_path(&path) => {
-            if base_from_flag {
-                return Err("Invalid base path: value is empty. Use --base with a non-empty path, or omit it for no-base conflicts.".to_string());
-            }
-            None
-        }
+        Some(path) if is_empty_path(&path) => None,
         other => other,
     };
 
@@ -795,12 +791,53 @@ fn parse_compat_external_mode_with_config(
     Ok(None)
 }
 
+fn normalize_empty_mergetool_base_arg(args: &[OsString]) -> Vec<OsString> {
+    let mut normalized = Vec::with_capacity(args.len());
+    let mut in_mergetool_subcommand = false;
+    let mut idx = 0usize;
+
+    while idx < args.len() {
+        let token = args[idx].to_string_lossy();
+
+        if !in_mergetool_subcommand && token == "mergetool" {
+            in_mergetool_subcommand = true;
+            normalized.push(args[idx].clone());
+            idx += 1;
+            continue;
+        }
+
+        if in_mergetool_subcommand && token == "--base" {
+            if let Some(next) = args.get(idx + 1)
+                && next.is_empty()
+            {
+                // Accept shell-expanded empty `--base "$BASE"` as "no base"
+                // for add/add and other no-base conflict scenarios.
+                idx += 2;
+                continue;
+            }
+        }
+
+        if in_mergetool_subcommand && token == "--base=" {
+            // Treat explicit empty attached form (`--base=`) as omitted.
+            idx += 1;
+            continue;
+        }
+
+        normalized.push(args[idx].clone());
+        idx += 1;
+    }
+
+    normalized
+}
+
 fn parse_app_mode_from_args_env_and_config(
     args: Vec<OsString>,
     env: &dyn EnvLookup,
     git_config: &dyn Fn(&str) -> Option<String>,
 ) -> Result<AppMode, String> {
-    match Cli::try_parse_from(args.clone()) {
+    let normalized_args = normalize_empty_mergetool_base_arg(&args);
+
+    match Cli::try_parse_from(normalized_args.clone()) {
         Ok(cli) => match cli.command {
             None => Ok(AppMode::Browser { path: cli.path }),
             Some(Command::Difftool(args)) => {
@@ -815,7 +852,11 @@ fn parse_app_mode_from_args_env_and_config(
             }),
         },
         Err(clap_err) => {
-            let compat_args = if args.len() > 1 { &args[1..] } else { &[][..] };
+            let compat_args = if normalized_args.len() > 1 {
+                &normalized_args[1..]
+            } else {
+                &[][..]
+            };
             if let Some(mode) =
                 parse_compat_external_mode_with_config(compat_args, env, git_config)?
             {
@@ -886,6 +927,69 @@ mod tests {
 
     fn parse_mode_for_test(args: Vec<OsString>, env: &dyn EnvLookup) -> Result<AppMode, String> {
         parse_mode_for_test_with_config(args, env, &|_| None)
+    }
+
+    #[test]
+    fn parse_mode_mergetool_drops_empty_base_value_before_clap() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "merged.txt", "conflict");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mode = parse_mode_for_test(
+            vec![
+                "gitgpui-app".into(),
+                "mergetool".into(),
+                "--base".into(),
+                "".into(),
+                "--local".into(),
+                local.into(),
+                "--remote".into(),
+                remote.into(),
+                "--merged".into(),
+                merged.into(),
+            ],
+            &TestEnv::new(),
+        )
+        .expect("mergetool parse with empty --base");
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert!(config.base.is_none(), "empty --base should be omitted");
+            }
+            other => panic!("expected mergetool mode, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_mode_mergetool_drops_empty_attached_base_value_before_clap() {
+        let dir = tempfile::tempdir().unwrap();
+        let merged = tmp_file(&dir, "merged.txt", "conflict");
+        let local = tmp_file(&dir, "local.txt", "a");
+        let remote = tmp_file(&dir, "remote.txt", "b");
+
+        let mode = parse_mode_for_test(
+            vec![
+                "gitgpui-app".into(),
+                "mergetool".into(),
+                "--base=".into(),
+                "--local".into(),
+                local.into(),
+                "--remote".into(),
+                remote.into(),
+                "--merged".into(),
+                merged.into(),
+            ],
+            &TestEnv::new(),
+        )
+        .expect("mergetool parse with empty --base=");
+
+        match mode {
+            AppMode::Mergetool(config) => {
+                assert!(config.base.is_none(), "empty --base= should be omitted");
+            }
+            other => panic!("expected mergetool mode, got: {other:?}"),
+        }
     }
 
     // ── DifftoolArgs resolution ──────────────────────────────────────
@@ -1353,7 +1457,7 @@ mod tests {
     }
 
     #[test]
-    fn mergetool_empty_base_flag_errors() {
+    fn mergetool_empty_base_flag_treated_as_missing() {
         let dir = tempfile::tempdir().unwrap();
         let merged = tmp_file(&dir, "merged.txt", "conflict");
         let local = tmp_file(&dir, "local.txt", "a");
@@ -1374,8 +1478,11 @@ mod tests {
             gui: false,
         };
 
-        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
-        assert!(err.contains("Invalid base path"), "error: {err}");
+        let config = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap();
+        assert!(
+            config.base.is_none(),
+            "empty explicit --base should be treated as no-base"
+        );
     }
 
     #[test]

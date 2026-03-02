@@ -4,20 +4,21 @@
 
 ### Progress Snapshot (Iteration 7 — March 2, 2026)
 
-Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.
+Implemented this iteration:
+- ✅ External tool compatibility hardening for no-base merge invocations that pass an explicit empty base argument (`--base ""` / `--base=`):
+  - `crates/gitgpui-app/src/cli.rs`: `resolve_mergetool_with_env` now treats empty explicit base as `None` (no-base) instead of failing validation.
+  - `crates/gitgpui-app/src/cli.rs`: added pre-parse normalization so `mergetool --base ""` no longer fails in clap before resolver logic runs.
+  - Added regression tests:
+    - `cli::tests::mergetool_empty_base_flag_treated_as_missing`
+    - `cli::tests::parse_mode_mergetool_drops_empty_base_value_before_clap`
+    - `cli::tests::parse_mode_mergetool_drops_empty_attached_base_value_before_clap`
+    - `standalone_mergetool_empty_base_flag_treated_as_no_base`
 
 Verification scope (this iteration):
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1100 passed, 0 failed, 5 ignored** (up from 1097 in iteration 5; delta is 3 regression tests added in iteration 6).
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
-- ✅ Conducted parallel deep audit of all major subsystems via four independent exploration agents:
-  - **CLI & setup modes audit**: Verified all CLI subcommands (`difftool`, `mergetool`, `setup`) with full flag sets, env fallbacks, KDiff3/Meld compatibility parsing, exit code policy (0/1/≥2), and setup mode config generation. All FULLY IMPLEMENTED.
-  - **E2E test coverage audit**: Cross-referenced every test scenario from both design documents against actual test names. All 10 behavior matrix items from `external_usage.md` and all phases (1A–5C) from `REFERENCE_TEST_PORTABILITY.md` have corresponding test coverage. 126 E2E integration tests + 108 core algorithm tests confirmed.
-  - **Core merge & UI audit**: Verified merge algorithm (3-way, conflict styles, strategies, zealous coalescing, CRLF, binary detection), state management (conflict session, auto-resolve rules, reducers/effects), and UI-GPUI (focused merge/diff windows, word diff). All FULLY IMPLEMENTED with zero production TODO/FIXME/HACK/unimplemented!()/todo!() markers.
-  - **CI & code quality audit**: Verified CI workflow (`.github/workflows/rust.yml`) properly gates all phases: clippy, build, merge-algorithm (Phase 1A/1B/1C/5), merge-regression (Phase 2/3A/3C), tool-integration (Phase 4A/4B), and backend-integration. No `unwrap()` in production code. `expect()` calls limited to RwLock poisoning guards (correct usage).
-- ✅ Ignored tests (intentional, unchanged): exhaustive 161K permutation corpus, external repo extraction, fixture generation utility, 2 perf benchmarks in ui-gpui.
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix` (all unit + integration suites passing).
 
 External Diff/Merge Usage Design (`external_usage.md`)
-- ✅ All components implemented and verified. No remaining gaps.
+- ✅ All components implemented and verified, including robust handling of empty-base external invocations from shell-expanded git tool commands.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
