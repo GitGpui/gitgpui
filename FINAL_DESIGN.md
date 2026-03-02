@@ -2,24 +2,22 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 32, Comprehensive Verification Audit — March 2, 2026)
+### Progress Snapshot (Iteration 32, Mergetool Special-File Validation Hardening — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Full workspace test suite: **1,157 passed, 0 failed, 5 ignored**.
-- ✅ Clippy clean: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — 0 warnings.
-- ✅ Deep code audit of all production modules (`main.rs`, `cli.rs`, `mergetool_mode.rs`, `difftool_mode.rs`):
-  - No TODO/FIXME/HACK comments in production code.
-  - No unsafe `.unwrap()` calls in production paths — all use `unwrap_or_else()` with safe fallbacks.
-  - No panic paths reachable from production code.
-  - Error handling is comprehensive with proper `Result` propagation throughout.
-- ✅ Verified all 10 behavior matrix items covered by automated tests.
-- ✅ Verified all 5 acceptance criteria met.
-- ✅ No new implementation needed — all components from both design documents are fully implemented.
+- ✅ Implemented strict mergetool path validation hardening in `crates/gitgpui-app/src/cli.rs`:
+  - `local`, `remote`, and explicit `base` must resolve to regular files (rejects FIFOs and other special files).
+  - Existing `merged` targets must resolve to regular files (rejects existing FIFOs/special files).
+  - Added clear actionable errors for unsupported special-path inputs.
+- ✅ Added regression tests:
+  - Unit: `mergetool_local_fifo_errors`, `mergetool_local_symlink_to_fifo_errors`, `mergetool_existing_merged_fifo_errors`.
+  - Standalone integration: `standalone_mergetool_rejects_fifo_local_input_exits_two`.
+- ✅ Validation command: `cargo test -p gitgpui-app --no-default-features --features gix` (**177 unit + 32 difftool integration + 65 mergetool integration + 61 standalone integration passed; 0 failed**).
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
-- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract; `--help`/`--version` exit 0.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract; unsupported mergetool special-path inputs now fail fast with exit `>=2`.
 - ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
 - ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
 - ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
@@ -35,13 +33,13 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
-- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4A: Mergetool E2E — 65 tests (plus special-file validation hardening in standalone + CLI regression coverage this iteration).
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents remain fully implemented. Deep code audit confirms production-quality error handling, no unsafe patterns, and comprehensive test coverage across all 1,157 tests.
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened mergetool fail-fast validation semantics for unsupported special-file paths and added dedicated regression coverage.
 
 ### Progress Snapshot (Iteration 31, Mergetool GUI Launch Contract Hardening — March 2, 2026)
 

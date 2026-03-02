@@ -251,7 +251,10 @@ pub(crate) fn classify_difftool_input(
         if e.kind() == std::io::ErrorKind::NotFound {
             format!("{role_name} path does not exist: {}", path.display())
         } else {
-            format!("Failed to read metadata for {role_name} path {}: {e}", path.display())
+            format!(
+                "Failed to read metadata for {role_name} path {}: {e}",
+                path.display()
+            )
         }
     })?;
 
@@ -289,6 +292,83 @@ pub(crate) fn classify_difftool_input(
         "{role_name} path must be a regular file or directory: {}",
         path.display()
     ))
+}
+
+fn resolve_regular_file_metadata(
+    path: &Path,
+    role_name: &str,
+) -> Result<std::fs::Metadata, String> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("{role_name} path does not exist: {}", path.display())
+        } else {
+            format!(
+                "Failed to read metadata for {role_name} path {}: {e}",
+                path.display()
+            )
+        }
+    })?;
+
+    if metadata.is_file() {
+        Ok(metadata)
+    } else if metadata.is_dir() {
+        Err(format!(
+            "{role_name} path must be a file, not a directory: {}",
+            path.display()
+        ))
+    } else {
+        Err(format!(
+            "{role_name} path must be a regular file: {}",
+            path.display()
+        ))
+    }
+}
+
+fn validate_existing_merged_output_path(path: &Path) -> Result<(), String> {
+    let symlink_meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => {
+            return Err(format!(
+                "Failed to read metadata for merged path {}: {e}",
+                path.display()
+            ));
+        }
+    };
+
+    if symlink_meta.is_dir() {
+        return Err(format!(
+            "Merged path must be a file path, not a directory: {}",
+            path.display()
+        ));
+    }
+
+    let followed = std::fs::metadata(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "Merged path must resolve to an existing file target: {}",
+                path.display()
+            )
+        } else {
+            format!("Failed to resolve merged path {}: {e}", path.display())
+        }
+    })?;
+
+    if followed.is_dir() {
+        return Err(format!(
+            "Merged path must be a file path, not a directory: {}",
+            path.display()
+        ));
+    }
+
+    if !followed.is_file() {
+        return Err(format!(
+            "Merged path must be a regular file path: {}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 /// Resolve and validate difftool arguments.
@@ -384,48 +464,17 @@ fn resolve_mergetool_with_env(
     };
 
     // MERGED is an output target and may not exist yet (e.g. standalone
-    // --output/--out usage). Runtime creates parent directories as needed.
-    if merged.exists() && merged.is_dir() {
-        return Err(format!(
-            "Merged path must be a file path, not a directory: {}",
-            merged.display()
-        ));
-    }
+    // --output/--out usage). If it already exists, it must resolve to a
+    // regular file target.
+    validate_existing_merged_output_path(&merged)?;
 
-    if !local.exists() {
-        return Err(format!("Local path does not exist: {}", local.display()));
-    }
-    if local.is_dir() {
-        return Err(format!(
-            "Local path must be a file, not a directory: {}",
-            local.display()
-        ));
-    }
-
-    if !remote.exists() {
-        return Err(format!("Remote path does not exist: {}", remote.display()));
-    }
-    if remote.is_dir() {
-        return Err(format!(
-            "Remote path must be a file, not a directory: {}",
-            remote.display()
-        ));
-    }
+    resolve_regular_file_metadata(&local, "Local")?;
+    resolve_regular_file_metadata(&remote, "Remote")?;
 
     // Base is allowed to be missing (add/add conflicts have no base).
-    // But if explicitly provided, it should exist.
-    if let Some(ref base_path) = base
-        && !base_path.exists()
-    {
-        return Err(format!("Base path does not exist: {}", base_path.display()));
-    }
-    if let Some(ref base_path) = base
-        && base_path.is_dir()
-    {
-        return Err(format!(
-            "Base path must be a file, not a directory: {}",
-            base_path.display()
-        ));
+    // But if explicitly provided, it must resolve to a regular file.
+    if let Some(ref base_path) = base {
+        resolve_regular_file_metadata(base_path, "Base")?;
     }
 
     let conflict_style = match args.conflict_style.as_deref() {
@@ -1869,7 +1918,10 @@ mod tests {
         };
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
-        assert!(err.contains("Merged path must be a file path"), "error: {err}");
+        assert!(
+            err.contains("Merged path must be a file path"),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -1952,6 +2004,135 @@ mod tests {
 
         let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
         assert!(err.contains("Base path must be a file"), "error: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mergetool_local_fifo_errors() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let merged = dir.path().join("merged.txt");
+        let local_fifo = dir.path().join("local.fifo");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+
+        let fifo_status = Command::new("mkfifo")
+            .arg(&local_fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local_fifo.clone()),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: false,
+            gui: false,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("Local path must be a regular file"),
+            "error should explain regular-file requirement: {err}"
+        );
+        assert!(
+            err.contains(&local_fifo.display().to_string()),
+            "error should include offending local path: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mergetool_local_symlink_to_fifo_errors() {
+        use std::os::unix::fs as unix_fs;
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let merged = dir.path().join("merged.txt");
+        let fifo_target = dir.path().join("local-target.fifo");
+        let local_link = dir.path().join("local-link");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+
+        let fifo_status = Command::new("mkfifo")
+            .arg(&fifo_target)
+            .status()
+            .expect("run mkfifo");
+        assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+        unix_fs::symlink(&fifo_target, &local_link).expect("create symlink to fifo");
+
+        let args = MergetoolArgs {
+            merged: Some(merged),
+            local: Some(local_link.clone()),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: false,
+            gui: false,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("Local path must be a regular file"),
+            "error should explain unsupported symlink target: {err}"
+        );
+        assert!(
+            err.contains(&local_link.display().to_string()),
+            "error should include offending symlink path: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mergetool_existing_merged_fifo_errors() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let merged_fifo = dir.path().join("merged.fifo");
+        let local = tmp_file(&dir, "local.txt", "local\n");
+        let remote = tmp_file(&dir, "remote.txt", "remote\n");
+
+        let fifo_status = Command::new("mkfifo")
+            .arg(&merged_fifo)
+            .status()
+            .expect("run mkfifo");
+        assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+
+        let args = MergetoolArgs {
+            merged: Some(merged_fifo.clone()),
+            local: Some(local),
+            remote: Some(remote),
+            base: None,
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: None,
+            diff_algorithm: None,
+            marker_size: None,
+            auto: false,
+            gui: false,
+        };
+
+        let err = resolve_mergetool_with_env(args, &TestEnv::new()).unwrap_err();
+        assert!(
+            err.contains("Merged path must be a regular file path"),
+            "error should explain merged-path regular-file requirement: {err}"
+        );
+        assert!(
+            err.contains(&merged_fifo.display().to_string()),
+            "error should include offending merged path: {err}"
+        );
     }
 
     // ── Exit code constants ──────────────────────────────────────────
@@ -3449,10 +3630,9 @@ mod tests {
         let env = TestEnv::new();
         let no_config = |_: &str| None;
 
-        let mode =
-            parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
-                .expect("parse ok")
-                .expect("should parse compat mode");
+        let mode = parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
+            .expect("parse ok")
+            .expect("should parse compat mode");
 
         match mode {
             AppMode::Mergetool(config) => {
@@ -3482,10 +3662,9 @@ mod tests {
         let env = TestEnv::new();
         let no_config = |_: &str| None;
 
-        let mode =
-            parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
-                .expect("parse ok")
-                .expect("should parse compat mode");
+        let mode = parse_compat_external_mode_with_config(&raw_args, &env, &no_config)
+            .expect("parse ok")
+            .expect("should parse compat mode");
 
         match mode {
             AppMode::Mergetool(config) => {

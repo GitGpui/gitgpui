@@ -558,6 +558,40 @@ fn standalone_mergetool_rejects_directory_merged_target_with_exit_two() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn standalone_mergetool_rejects_fifo_local_input_exits_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let merged = dir.path().join("merged.txt");
+    let local_fifo = dir.path().join("local.fifo");
+    let remote = dir.path().join("remote.txt");
+
+    write_file(&remote, "remote\n");
+
+    let fifo_status = Command::new("mkfifo")
+        .arg(&local_fifo)
+        .status()
+        .expect("run mkfifo");
+    assert!(fifo_status.success(), "mkfifo failed: {fifo_status}");
+
+    let output = run_gitgpui([
+        OsString::from("mergetool"),
+        OsString::from("--local"),
+        local_fifo.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+        OsString::from("--merged"),
+        merged.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(2), "expected exit 2\n{text}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Local path must be a regular file"),
+        "expected local-path regular-file validation error\n{text}"
+    );
+}
+
 #[test]
 fn standalone_difftool_changed_files_exits_zero_and_prints_diff() {
     let dir = tempfile::tempdir().unwrap();
@@ -2445,20 +2479,12 @@ fn version_flag_exits_zero() {
 fn subcommand_help_exits_zero() {
     for subcmd in ["difftool", "mergetool", "setup"] {
         let out = run_gitgpui([subcmd, "--help"]);
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "{subcmd} --help should exit 0"
-        );
+        assert_eq!(out.status.code(), Some(0), "{subcmd} --help should exit 0");
     }
 }
 
 #[test]
 fn help_subcommand_exits_zero() {
     let out = run_gitgpui(["help"]);
-    assert_eq!(
-        out.status.code(),
-        Some(0),
-        "help subcommand should exit 0"
-    );
+    assert_eq!(out.status.code(), Some(0), "help subcommand should exit 0");
 }
