@@ -7,7 +7,7 @@ mod theme;
 mod view;
 mod zed_port;
 
-pub use app::run;
+pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool};
 pub use focused_diff::{FocusedDiffConfig, run_focused_diff};
 pub use focused_merge::{FocusedMergeConfig, run_focused_merge};
 
