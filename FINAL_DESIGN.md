@@ -2,6 +2,32 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 19, Setup Quoted-Path E2E Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Added setup-generated config E2E coverage for spaced/unicode paths in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - `setup_local_mergetool_handles_spaced_unicode_path_end_to_end`
+  - `setup_local_difftool_handles_spaced_unicode_path_end_to_end`
+- ✅ These tests verify the design-doc quoting contract (`"$LOCAL"`, `"$REMOTE"`, `"$BASE"`, `"$MERGED"`) in real `git mergetool`/`git difftool` execution, not just command-string unit checks.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration setup_local_mergetool_handles_spaced_unicode_path_end_to_end -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration setup_local_difftool_handles_spaced_unicode_path_end_to_end -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration` (**45 passed, 0 failed**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ Quoting requirement is now explicitly validated end-to-end for both setup-generated mergetool and difftool commands on spaced/unicode paths.
+- ✅ CLI modes, compatibility surface, behavior matrix, and setup flows remain fully implemented.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 4A (`git mergetool` E2E parity) strengthened with setup-config spaced/unicode path invocation coverage.
+- ✅ Phase 4B (`git difftool` E2E parity) strengthened with setup-config spaced/unicode path invocation coverage.
+- ✅ Phases 1A–1C, 2A–2C, 3A–3C, and 5A–5C remain complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 19, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:

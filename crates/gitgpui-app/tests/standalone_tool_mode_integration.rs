@@ -1794,3 +1794,107 @@ fn setup_local_enables_git_difftool_end_to_end() {
         "expected added line in diff\n{dt_text}"
     );
 }
+
+/// After `gitgpui-app setup --local`, quoted stage variables in the generated
+/// mergetool command must preserve paths containing spaces/unicode.
+#[test]
+fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let conflict_path = "docs/spaced 日本語 file.txt";
+
+    setup_e2e_init(repo);
+    let setup = run_gitgpui_in_dir(
+        repo,
+        [OsString::from("setup"), OsString::from("--local")],
+    );
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+
+    write_file(&repo.join(conflict_path), "line1\nline2\nline3\n");
+    setup_e2e_commit(repo, "base");
+
+    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
+    write_file(&repo.join(conflict_path), "line1\nOURS_CHANGE\nline3\n");
+    setup_e2e_commit(repo, "ours");
+
+    setup_e2e_git(repo, &["checkout", "main"]);
+    write_file(&repo.join(conflict_path), "line1\nTHEIRS_CHANGE\nline3\n");
+    setup_e2e_commit(repo, "theirs");
+
+    let merge = setup_e2e_git_capture(repo, &["merge", "ours"]);
+    assert!(
+        !merge.status.success(),
+        "expected merge conflict but git merge succeeded"
+    );
+
+    let mt = setup_e2e_git_capture(repo, &["mergetool", "--", conflict_path]);
+    let mt_text = output_text(&mt);
+    let mt_stderr = String::from_utf8_lossy(&mt.stderr);
+
+    assert_eq!(
+        mt.status.code(),
+        Some(1),
+        "expected unresolved conflict exit status\n{mt_text}"
+    );
+    assert!(
+        mt_stderr.contains("CONFLICT (content)"),
+        "expected gitgpui conflict output\n{mt_text}"
+    );
+    assert!(
+        mt_stderr.contains(conflict_path),
+        "expected conflicted spaced/unicode path in stderr\n{mt_text}"
+    );
+    assert!(
+        !mt_stderr.contains("No such file or directory"),
+        "quoted path handling failed\n{mt_text}"
+    );
+}
+
+/// After `gitgpui-app setup --local`, quoted stage variables in the generated
+/// difftool command must preserve paths containing spaces/unicode.
+#[test]
+fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let diff_path = "docs/spaced 日本語 file.txt";
+
+    setup_e2e_init(repo);
+    let setup = run_gitgpui_in_dir(
+        repo,
+        [OsString::from("setup"), OsString::from("--local")],
+    );
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+
+    write_file(&repo.join(diff_path), "line1\nline2\nline3\n");
+    setup_e2e_commit(repo, "initial");
+    write_file(&repo.join(diff_path), "line1\nMODIFIED\nline3\n");
+
+    let dt = setup_e2e_git_capture(repo, &["difftool", "--", diff_path]);
+    let dt_text = output_text(&dt);
+    let dt_stdout = String::from_utf8_lossy(&dt.stdout);
+    let dt_stderr = String::from_utf8_lossy(&dt.stderr);
+
+    assert_eq!(
+        dt.status.code(),
+        Some(0),
+        "git difftool should exit 0\n{dt_text}"
+    );
+    assert!(
+        dt_stdout.contains("@@"),
+        "expected diff hunk header in output\n{dt_text}"
+    );
+    assert!(
+        dt_stdout.contains("-line2"),
+        "expected removed line in diff\n{dt_text}"
+    );
+    assert!(
+        dt_stdout.contains("+MODIFIED"),
+        "expected added line in diff\n{dt_text}"
+    );
+    assert!(
+        !dt_stderr.contains("No such file or directory"),
+        "quoted path handling failed\n{dt_text}"
+    );
+}
