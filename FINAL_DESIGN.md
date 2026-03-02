@@ -2,20 +2,17 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 26, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 26, Phase 1A EOF Parity Hardening — March 2, 2026)
 
-Verification performed this iteration:
+Implementation performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1132 passed, 0 failed, 5 ignored**.
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
-- ✅ Deep agent-driven audit verified all design document components against implementation:
-  - CLI modes (difftool, mergetool, setup) all present with documented flags and env fallback.
-  - Exit code policy (0/1/≥2) confirmed and tested across all modes.
-  - All 10 behavior matrix items verified with specific test functions.
-  - KDiff3/Meld compatibility (--L1/--L2/--L3, -o/--output/--out, --base, positional forms) confirmed.
-  - Setup config emits all entries (headless+GUI tools, guiDefault=auto, trustExitCode, prompt).
-  - Focused GPUI diff and merge windows implemented and wired to CLI `--gui` flag.
-  - No TODO/FIXME/HACK comments found in codebase.
+- ✅ Hardened Phase 1A EOF strategy parity coverage in `crates/gitgpui-core/tests/merge_algorithm.rs`:
+  - `merge_ours_strategy_at_eof` now asserts exact no-LF output (`line1\nline2\nline3x`).
+  - `merge_theirs_strategy_at_eof` now asserts exact no-LF output (`line1\nline2\nline3y`).
+  - `merge_union_strategy_at_eof` now asserts exact `--union` output shape (`line1\nline2\nline3x\nline3y`) with no trailing LF.
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-core --test merge_algorithm strategy_at_eof -- --nocapture` (**3 passed, 0 failed**)
+  - `cargo test -p gitgpui-core --test merge_algorithm` (**41 passed, 0 failed**)
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -28,7 +25,7 @@ External Diff/Merge Usage Design (`external_usage.md`):
 - ⬜ Not-yet-started components: none.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
-- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests (EOF `--ours/--theirs/--union` cases now enforce exact byte-for-byte output parity).
 - ✅ Phase 1B: t6427 zdiff3 — 4 tests.
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
@@ -39,7 +36,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents are fully implemented and verified. This is the tenth independent completion verification (iterations 13, 15–22, 24–26). Test count at 1132.
+Conclusion: All components from both design documents remain fully implemented; this iteration hardened a remaining strictness gap in Phase 1A parity assertions.
 
 ### Progress Snapshot (Iteration 25, Setup Tool-Help Discoverability Hardening — March 2, 2026)
 

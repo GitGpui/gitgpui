@@ -839,36 +839,41 @@ fn merge_diff3_marker_size_10() {
 
 #[test]
 fn merge_ours_strategy_at_eof() {
-    // Conflict at EOF without trailing LF.
-    let base = "aaa\nbbb";
-    let ours = "aaa\nOURS";
-    let theirs = "aaa\nTHEIRS";
+    // Git t6403 parity: conflict at EOF without trailing LF resolved by --ours
+    // should preserve no-LF output exactly.
+    let base = "line1\nline2\nline3";
+    let ours = "line1\nline2\nline3x";
+    let theirs = "line1\nline2\nline3y";
     let result = merge_file(base, ours, theirs, &opts_strategy(MergeStrategy::Ours));
     assert!(result.is_clean());
-    assert!(result.output.contains("OURS"));
-    assert!(!result.output.contains("THEIRS"));
+    assert_eq!(result.output, "line1\nline2\nline3x");
+    assert!(!result.output.ends_with('\n'));
 }
 
 #[test]
 fn merge_theirs_strategy_at_eof() {
-    let base = "aaa\nbbb";
-    let ours = "aaa\nOURS";
-    let theirs = "aaa\nTHEIRS";
+    // Git t6403 parity: conflict at EOF without trailing LF resolved by --theirs
+    // should preserve no-LF output exactly.
+    let base = "line1\nline2\nline3";
+    let ours = "line1\nline2\nline3x";
+    let theirs = "line1\nline2\nline3y";
     let result = merge_file(base, ours, theirs, &opts_strategy(MergeStrategy::Theirs));
     assert!(result.is_clean());
-    assert!(result.output.contains("THEIRS"));
-    assert!(!result.output.contains("OURS"));
+    assert_eq!(result.output, "line1\nline2\nline3y");
+    assert!(!result.output.ends_with('\n'));
 }
 
 #[test]
 fn merge_union_strategy_at_eof() {
-    let base = "aaa\nbbb";
-    let ours = "aaa\nOURS";
-    let theirs = "aaa\nTHEIRS";
+    // Git t6403 parity: --union keeps both sides with exactly one newline
+    // separator and still no trailing LF at EOF.
+    let base = "line1\nline2\nline3";
+    let ours = "line1\nline2\nline3x";
+    let theirs = "line1\nline2\nline3y";
     let result = merge_file(base, ours, theirs, &opts_strategy(MergeStrategy::Union));
     assert!(result.is_clean());
-    assert!(result.output.contains("OURS"));
-    assert!(result.output.contains("THEIRS"));
+    assert_eq!(result.output, "line1\nline2\nline3x\nline3y");
+    assert!(!result.output.ends_with('\n'));
 }
 
 // ===========================================================================
