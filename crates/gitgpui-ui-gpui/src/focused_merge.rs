@@ -281,7 +281,7 @@ fn render_unresolved_marker_block(
     out.push_str(newline);
     out.push_str(&block.ours);
     // Guard: ensure content ends with a newline so marker starts on its own line.
-    if !block.ours.is_empty() && !block.ours.ends_with('\n') {
+    if !block.ours.is_empty() && !block.ours.ends_with(newline) {
         out.push_str(newline);
     }
     if let Some(base) = block.base.as_deref() {
@@ -289,14 +289,14 @@ fn render_unresolved_marker_block(
         out.push_str(label_base);
         out.push_str(newline);
         out.push_str(base);
-        if !base.is_empty() && !base.ends_with('\n') {
+        if !base.is_empty() && !base.ends_with(newline) {
             out.push_str(newline);
         }
     }
     out.push_str("=======");
     out.push_str(newline);
     out.push_str(&block.theirs);
-    if !block.theirs.is_empty() && !block.theirs.ends_with('\n') {
+    if !block.theirs.is_empty() && !block.theirs.ends_with(newline) {
         out.push_str(newline);
     }
     out.push_str(">>>>>>> ");
@@ -313,9 +313,64 @@ fn detect_line_ending(block: &ConflictBlock) -> &'static str {
             .as_deref()
             .is_some_and(|base| base.contains("\r\n"));
     if uses_crlf {
-        "\r\n"
-    } else {
-        "\n"
+        return "\r\n";
+    }
+
+    let uses_cr = block.ours.contains('\r')
+        || block.theirs.contains('\r')
+        || block
+            .base
+            .as_deref()
+            .is_some_and(|base| base.contains('\r'));
+    if uses_cr {
+        return "\r";
+    }
+
+    "\n"
+}
+
+#[cfg(test)]
+fn normalize_line_endings_for_assert(text: &str) -> String {
+    text.replace("\r\n", "\\r\\n")
+        .replace('\r', "\\r")
+        .replace('\n', "\\n")
+}
+
+#[cfg(test)]
+fn assert_contains_with_line_ending_context(haystack: &str, needle: &str) {
+    assert!(
+        haystack.contains(needle),
+        "missing fragment {needle:?}\nactual(normalized): {}",
+        normalize_line_endings_for_assert(haystack)
+    );
+}
+
+#[cfg(test)]
+fn assert_not_contains_with_line_ending_context(haystack: &str, needle: &str) {
+    assert!(
+        !haystack.contains(needle),
+        "unexpected fragment {needle:?}\nactual(normalized): {}",
+        normalize_line_endings_for_assert(haystack)
+    );
+}
+
+#[cfg(test)]
+fn assert_line_ending_styles(output: &str, expected_newline: &str) {
+    match expected_newline {
+        "\r\n" => {
+            assert_contains_with_line_ending_context(output, "\r\n");
+            assert_not_contains_with_line_ending_context(output, ">>>>>>> R\n");
+        }
+        "\r" => {
+            assert_contains_with_line_ending_context(output, "\r");
+            assert_not_contains_with_line_ending_context(output, "\r\n");
+            assert_not_contains_with_line_ending_context(output, ">>>>>>> R\n");
+        }
+        "\n" => {
+            assert_not_contains_with_line_ending_context(output, "\r");
+            assert_contains_with_line_ending_context(output, "\n");
+        }
+        other => panic!("unsupported expected newline marker: {other:?}"),
     }
 }
 
@@ -958,6 +1013,24 @@ mod tests {
     }
 
     #[test]
+    fn build_output_unresolved_uses_cr_when_block_uses_cr() {
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base line\r".to_string()),
+            ours: "ours line\r".to_string(),
+            theirs: "theirs line\r".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "LOCAL", "REMOTE", "BASE");
+        assert_contains_with_line_ending_context(&output, "<<<<<<< LOCAL\r");
+        assert_contains_with_line_ending_context(&output, "||||||| BASE\r");
+        assert_contains_with_line_ending_context(&output, "=======\r");
+        assert_contains_with_line_ending_context(&output, ">>>>>>> REMOTE\r");
+        assert_not_contains_with_line_ending_context(&output, "\r\n");
+        assert_not_contains_with_line_ending_context(&output, ">>>>>>> REMOTE\n");
+    }
+
+    #[test]
     fn truncate_lines_short() {
         assert_eq!(truncate_lines("a\nb\nc", 5), "a\nb\nc");
     }
@@ -1068,6 +1141,25 @@ mod tests {
             output.contains("theirs\r\n>>>>>>> R\r\n"),
             "end marker: {output:?}"
         );
+        assert_line_ending_styles(&output, "\r\n");
+    }
+
+    #[test]
+    fn build_output_unresolved_cr_content_without_trailing_newline() {
+        // CR detection should preserve CR-only marker line endings.
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours\rmore".to_string(), // CR in middle, no trailing separator
+            theirs: "theirs".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
+
+        assert_contains_with_line_ending_context(&output, "<<<<<<< L\r");
+        assert_contains_with_line_ending_context(&output, "more\r=======\r");
+        assert_contains_with_line_ending_context(&output, "theirs\r>>>>>>> R\r");
+        assert_line_ending_styles(&output, "\r");
     }
 
     #[test]

@@ -2,6 +2,45 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 49, Focused Merge CR Line-Ending Preservation Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Implemented focused merge conflict-output line-ending preservation hardening in [`crates/gitgpui-ui-gpui/src/focused_merge.rs`](/home/sampo/gitgpui/crates/gitgpui-ui-gpui/src/focused_merge.rs):
+  - Unresolved marker rendering now preserves `CR`-only line endings in addition to existing `LF`/`CRLF`.
+  - Newline guards now honor the detected marker style (`\n`, `\r\n`, or `\r`) to avoid line-ending drift in unresolved marker output.
+  - Added regression tests for CR-only marker generation and CR-only no-trailing-newline conflict blocks.
+- ✅ Validation:
+  - `cargo test -p gitgpui-ui-gpui focused_merge` (**23 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+  - Hardening this iteration: unresolved focused-merge marker output now preserves CR-only line endings, tightening line-ending fidelity in conflict-resolution flows.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+  - Hardening this iteration: added CR-only conflict-marker line-ending regression checks in focused merge conflict rendering.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. Iteration 49 added line-ending preservation hardening for focused merge conflict output with targeted regression coverage.
+
 ### Progress Snapshot (Iteration 49, Independent Completion Verification — March 2, 2026)
 
 Performed this iteration:
