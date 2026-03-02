@@ -16,6 +16,14 @@ fn should_launch_focused_diff_gui(
     config.gui && result.exit_code == exit_code::SUCCESS
 }
 
+#[cfg(any(feature = "ui-gpui", test))]
+fn should_launch_focused_merge_gui(
+    config: &cli::MergetoolConfig,
+    result: &mergetool_mode::MergetoolRunResult,
+) -> bool {
+    config.gui && result.exit_code == exit_code::CANCELED && result.merge_result.is_some()
+}
+
 fn main() {
     let mode = match cli::parse_app_mode() {
         Ok(mode) => mode,
@@ -137,13 +145,11 @@ fn main() {
 
             match mergetool_mode::run_mergetool(&config) {
                 Ok(result) => {
-                    // When UI is available, --gui was requested, the merge
-                    // produced conflicts, and auto mode is off, open the focused
-                    // GPUI merge window for interactive resolution.
+                    // When UI is available, --gui was requested, and text
+                    // conflicts remain unresolved, open the focused GPUI merge
+                    // window for interactive resolution.
                     #[cfg(feature = "ui-gpui")]
-                    if config.gui
-                        && result.exit_code == exit_code::CANCELED
-                        && !config.auto
+                    if should_launch_focused_merge_gui(&config, &result)
                         && let Some(ref merge_result) = result.merge_result
                     {
                         // Determine labels for display.
@@ -222,6 +228,31 @@ fn path_label(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitgpui_core::merge::{ConflictStyle, DiffAlgorithm, MergeResult, DEFAULT_MARKER_SIZE};
+
+    fn mergetool_config(gui: bool, auto: bool) -> cli::MergetoolConfig {
+        cli::MergetoolConfig {
+            merged: std::path::PathBuf::from("merged.txt"),
+            local: std::path::PathBuf::from("local.txt"),
+            remote: std::path::PathBuf::from("remote.txt"),
+            base: Some(std::path::PathBuf::from("base.txt")),
+            label_base: None,
+            label_local: None,
+            label_remote: None,
+            conflict_style: ConflictStyle::Merge,
+            diff_algorithm: DiffAlgorithm::Myers,
+            marker_size: DEFAULT_MARKER_SIZE,
+            auto,
+            gui,
+        }
+    }
+
+    fn unresolved_merge_result() -> MergeResult {
+        MergeResult {
+            output: "<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n".to_string(),
+            conflict_count: 1,
+        }
+    }
 
     #[test]
     fn focused_diff_gui_launches_for_success_even_when_diff_output_is_empty() {
@@ -278,5 +309,73 @@ mod tests {
         };
 
         assert!(!should_launch_focused_diff_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_merge_gui_launches_for_unresolved_text_conflict() {
+        let config = mergetool_config(true, false);
+        let result = mergetool_mode::MergetoolRunResult {
+            stdout: String::new(),
+            stderr: "conflict".to_string(),
+            exit_code: exit_code::CANCELED,
+            merge_result: Some(unresolved_merge_result()),
+        };
+
+        assert!(should_launch_focused_merge_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_merge_gui_launches_after_auto_mode_when_unresolved_conflicts_remain() {
+        let config = mergetool_config(true, true);
+        let result = mergetool_mode::MergetoolRunResult {
+            stdout: String::new(),
+            stderr: "auto could not resolve all conflicts".to_string(),
+            exit_code: exit_code::CANCELED,
+            merge_result: Some(unresolved_merge_result()),
+        };
+
+        assert!(should_launch_focused_merge_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_merge_gui_does_not_launch_when_not_requested() {
+        let config = mergetool_config(false, false);
+        let result = mergetool_mode::MergetoolRunResult {
+            stdout: String::new(),
+            stderr: "conflict".to_string(),
+            exit_code: exit_code::CANCELED,
+            merge_result: Some(unresolved_merge_result()),
+        };
+
+        assert!(!should_launch_focused_merge_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_merge_gui_does_not_launch_on_success_exit() {
+        let config = mergetool_config(true, false);
+        let result = mergetool_mode::MergetoolRunResult {
+            stdout: String::new(),
+            stderr: "clean merge".to_string(),
+            exit_code: exit_code::SUCCESS,
+            merge_result: Some(MergeResult {
+                output: "clean\n".to_string(),
+                conflict_count: 0,
+            }),
+        };
+
+        assert!(!should_launch_focused_merge_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_merge_gui_does_not_launch_for_binary_conflict_without_merge_result() {
+        let config = mergetool_config(true, false);
+        let result = mergetool_mode::MergetoolRunResult {
+            stdout: String::new(),
+            stderr: "binary conflict".to_string(),
+            exit_code: exit_code::CANCELED,
+            merge_result: None,
+        };
+
+        assert!(!should_launch_focused_merge_gui(&config, &result));
     }
 }

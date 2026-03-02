@@ -2,24 +2,31 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 31, Comprehensive Verification Audit — March 2, 2026)
+### Progress Snapshot (Iteration 31, Mergetool GUI Launch Contract Hardening — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Full verification audit confirming all design components are implemented:
-  - Ran full test suite: **1152 passed, 0 failed, 5 ignored**.
-  - Ran clippy: **0 warnings**.
-  - Searched all production code for TODO/FIXME/HACK/XXX/unimplemented!(): **none found**.
-  - Verified all 10 behavior matrix items have dedicated test coverage (80+ integration tests).
-  - Verified `--tool-help` discoverability: 4 integration tests confirm gitgpui appears in Git's tool-help after setup.
-  - Verified `setup` subcommand: 33 tests (18 unit + 15 integration) covering dry-run, local/global scope, headless+GUI variants, shell quoting, and end-to-end Git integration.
+- ✅ Implemented a focused GUI-path hardening component in `crates/gitgpui-app/src/main.rs`:
+  - Added `should_launch_focused_merge_gui(...)` helper so mergetool GUI launch gating is explicit and unit-testable (matching existing difftool helper style).
+  - Refactored inline launch condition to use the helper.
+  - Removed the `!config.auto` restriction so `--gui --auto` with unresolved text conflicts now opens the focused merge resolver window instead of only printing/stopping with exit 1.
+- ✅ Added 5 new unit tests covering mergetool focused-GUI launch semantics:
+  - launch for unresolved text conflicts
+  - launch after unresolved auto-mode merge
+  - no launch when `--gui` is not requested
+  - no launch on success exit
+  - no launch for binary conflicts (no `merge_result`)
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix focused_merge_gui -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix`
+  - `cargo test -p gitgpui-app --no-default-features --features "gix,ui-gpui" focused_merge_gui -- --nocapture`
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
-- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract; `--help`/`--version` exit 0.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract; GUI unresolved/cancel path remains mapped to `1`.
 - ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
 - ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
-- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Behavior matrix: all 10 required scenarios covered; item 10 (close/cancel/exit semantics) hardened with explicit mergetool GUI launch gating tests.
 - ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
 - ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
 - ✅ Acceptance criteria: all 5 criteria met.
@@ -32,13 +39,13 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
-- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4A: Mergetool E2E — 65 tests (plus focused-GUI launch contract unit coverage hardening this iteration).
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: Comprehensive verification audit confirms all components from both design documents are fully implemented. No gaps, no remaining work items. Total test suite: 1152 passing, 0 failing, 5 ignored; clippy clean.
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened mergetool focused-GUI launch behavior for unresolved conflicts (including `--auto --gui`) and added dedicated regression coverage.
 
 ### Progress Snapshot (Iteration 30, Difftool Label-Header Rewrite Hardening — March 2, 2026)
 
