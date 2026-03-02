@@ -2,6 +2,44 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 48, Global Setup Tool-Help Discoverability Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Implemented missing isolated-global setup tool-help parity coverage in [`crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`](/home/sampo/gitgpui/crates/gitgpui-app/tests/standalone_tool_mode_integration.rs):
+  - Added `setup_global_mergetool_tool_help_lists_headless_and_gui_entries`.
+  - Added `setup_global_difftool_tool_help_lists_headless_and_gui_entries`.
+  - Both tests verify `gitgpui-app setup` (global scope) exposes both `gitgpui` and `gitgpui-gui` in Git `--tool-help` output under isolated global config, and validate `*guitool` + `*guiDefault=auto` keys.
+- ✅ Validation:
+  - `cargo test -p gitgpui-app --test standalone_tool_mode_integration --no-default-features --features gix setup_global_` (**4 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+  - Hardening this iteration: explicit isolated-global `--tool-help` discoverability tests for both mergetool and difftool setup paths.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. Iteration 48 adds missing isolated-global setup `--tool-help` parity coverage for both external mergetool and difftool flows.
+
 ### Progress Snapshot (Iteration 48, Independent Completion Verification — March 2, 2026)
 
 Performed this iteration:

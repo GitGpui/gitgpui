@@ -2476,6 +2476,104 @@ fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
     );
 }
 
+/// `gitgpui-app setup` (global scope) should make both headless and GUI
+/// mergetool entries discoverable via `git mergetool --tool-help`.
+#[test]
+fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let env = IsolatedGlobalGitEnv::new(tmp.path());
+
+    setup_e2e_init_with_env(&repo, &env);
+
+    let setup = run_gitgpui_in_dir_with_global_env(&repo, [OsString::from("setup")], &env);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+    assert_eq!(
+        git_config_get_global_with_env(&env, "merge.guitool").as_deref(),
+        Some("gitgpui-gui"),
+        "expected merge.guitool in isolated global config"
+    );
+    assert_eq!(
+        git_config_get_global_with_env(&env, "mergetool.guiDefault").as_deref(),
+        Some("auto"),
+        "expected mergetool.guiDefault=auto in isolated global config"
+    );
+
+    let tool_help = setup_e2e_git_capture_with_env(&repo, &["mergetool", "--tool-help"], &env);
+    let text = output_text(&tool_help);
+    assert!(
+        tool_help.status.success(),
+        "git mergetool --tool-help failed\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui.cmd"),
+        "expected headless gitgpui tool in mergetool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui-gui.cmd"),
+        "expected gui gitgpui-gui tool in mergetool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("mergetool --base"),
+        "expected mergetool command shape in --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("mergetool --gui"),
+        "expected gui mergetool command shape in --tool-help output\n{text}"
+    );
+}
+
+/// `gitgpui-app setup` (global scope) should make both headless and GUI
+/// difftool entries discoverable via `git difftool --tool-help`.
+#[test]
+fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let env = IsolatedGlobalGitEnv::new(tmp.path());
+
+    setup_e2e_init_with_env(&repo, &env);
+
+    let setup = run_gitgpui_in_dir_with_global_env(&repo, [OsString::from("setup")], &env);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+    assert_eq!(
+        git_config_get_global_with_env(&env, "diff.guitool").as_deref(),
+        Some("gitgpui-gui"),
+        "expected diff.guitool in isolated global config"
+    );
+    assert_eq!(
+        git_config_get_global_with_env(&env, "difftool.guiDefault").as_deref(),
+        Some("auto"),
+        "expected difftool.guiDefault=auto in isolated global config"
+    );
+
+    let tool_help = setup_e2e_git_capture_with_env(&repo, &["difftool", "--tool-help"], &env);
+    let text = output_text(&tool_help);
+    assert!(
+        tool_help.status.success(),
+        "git difftool --tool-help failed\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui.cmd"),
+        "expected headless gitgpui tool in difftool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("gitgpui-gui.cmd"),
+        "expected gui gitgpui-gui tool in difftool --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("difftool --local"),
+        "expected difftool command shape in --tool-help output\n{text}"
+    );
+    assert!(
+        text.contains("difftool --gui"),
+        "expected gui difftool command shape in --tool-help output\n{text}"
+    );
+}
+
 // ── --help / --version exit code tests ───────────────────────────────
 
 #[test]
