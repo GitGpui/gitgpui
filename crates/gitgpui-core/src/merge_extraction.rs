@@ -315,7 +315,7 @@ pub fn write_fixture_files(
         write_text_file(&contrib1_path, &case.contrib1)?;
         write_text_file(&contrib2_path, &case.contrib2)?;
 
-        if !expected_path.exists() {
+        if should_generate_expected_result(&expected_path)? {
             // Generate a golden expected result from the current merge engine
             // so newly extracted fixtures are immediately runnable in the
             // Phase 2 fixture harness without manual bootstrapping.
@@ -480,6 +480,18 @@ fn write_text_file(path: &Path, contents: &str) -> Result<(), MergeExtractionErr
         path: path.to_path_buf(),
         source,
     })
+}
+
+fn should_generate_expected_result(path: &Path) -> Result<bool, MergeExtractionError> {
+    match std::fs::read(path) {
+        Ok(existing) => Ok(existing.iter().all(|byte| byte.is_ascii_whitespace())),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(source) => Err(MergeExtractionError::Io {
+            action: "read file",
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn git_command_string(args: &[&str]) -> String {
@@ -1010,6 +1022,40 @@ mod tests {
         assert_eq!(
             expected, merge_expected,
             "expected_result should match merge engine output for extracted fixture"
+        );
+    }
+
+    #[test]
+    fn write_fixture_files_backfills_whitespace_only_expected_placeholder() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dest = tmp.path().join("fixtures");
+        std::fs::create_dir_all(&dest).expect("create fixture dir");
+
+        let case = ExtractedMergeCase {
+            merge_commit: "1234abcd".to_string(),
+            file_path: "src/placeholder.rs".to_string(),
+            base: "base\n".to_string(),
+            contrib1: "left\n".to_string(),
+            contrib2: "right\n".to_string(),
+        };
+        let prefix = "1234abcd_src_placeholder_rs";
+        let expected_path = dest.join(format!("{prefix}_expected_result.txt"));
+        std::fs::write(&expected_path, " \n\t\n").expect("write placeholder expected result");
+
+        write_fixture_files(std::slice::from_ref(&case), &dest).expect("write fixtures");
+
+        let expected =
+            std::fs::read_to_string(&expected_path).expect("read generated expected result");
+        let merge_expected = merge_file(
+            &case.base,
+            &case.contrib1,
+            &case.contrib2,
+            &MergeOptions::default(),
+        )
+        .output;
+        assert_eq!(
+            expected, merge_expected,
+            "whitespace-only placeholder expected result should be backfilled"
         );
     }
 

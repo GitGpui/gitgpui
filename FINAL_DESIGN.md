@@ -2,13 +2,19 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 41, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 41, Merge-Extraction Expected Placeholder Backfill — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Ran full workspace test suite: `cargo test --workspace --no-default-features --features gix` — **1,187 passed, 0 failed, 5 ignored**.
-- ✅ Ran clippy: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — **0 warnings**.
-- ✅ Verified all design document components against codebase — no remaining gaps found.
+- ✅ Identified a remaining Phase 3C fixture-portability hardening gap in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `write_fixture_files()` generated `*_expected_result.*` only when the file was missing.
+  - legacy runs that left whitespace-only placeholder expected files were preserved as-is, leaving extracted fixture sets without runnable golden expectations.
+- ✅ Implemented placeholder backfill logic:
+  - added `should_generate_expected_result()` to generate expected output when the expected file is missing OR whitespace-only.
+  - preserved existing non-empty expected files unchanged.
+- ✅ Added regression coverage:
+  - `write_fixture_files_backfills_whitespace_only_expected_placeholder`
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**17 passed, 0 failed**).
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -28,13 +34,14 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - hardening this iteration: extracted fixture writer now backfills whitespace-only expected placeholders with merge-generated golden output.
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents are fully implemented and verified. Full test suite passes clean with 1,187 tests and zero clippy warnings.
+Conclusion: All components from both design documents remain fully implemented. This iteration hardened Phase 3C extracted-fixture portability by automatically replacing whitespace-only expected placeholders with generated golden expectations.
 
 ### Progress Snapshot (Iteration 40, Merge-Extraction Newline-Path Portability Hardening — March 2, 2026)
 
