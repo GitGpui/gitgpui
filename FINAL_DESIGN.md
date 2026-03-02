@@ -2,6 +2,25 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 3 — March 2, 2026)
+
+Independent verification audit confirms all design document components remain fully implemented.
+
+- **Test suite**: 1093 passed, 0 failed, 5 ignored (3 intentionally deferred: exhaustive 161K permutation corpus, external repo extraction, fixture generation utility; 2 in vendor gpui crate)
+- **Clippy**: clean (zero warnings in CI mode)
+- **Audit scope**: three parallel deep audits cross-referencing every section from `external_usage.md`, every Phase (1A–5C) from `REFERENCE_TEST_PORTABILITY.md`, and the conflict resolver module internals against actual source and test files
+- **Verified areas**:
+  - CLI modes: both `difftool` and `mergetool` subcommands with all design-specified flags, env fallback, and KDiff3/Meld compat parsing
+  - Exit code policy: constants `SUCCESS=0`, `CANCELED=1`, `ERROR=2` enforced throughout all code paths
+  - Git global config setup: `gitgpui-app setup` generates exact config from design including headless+GUI entries, trust keys, prompt defaults, and shell-safe quoting
+  - Behavior matrix (10 items): all covered by 60+ dedicated tests — spaced/unicode paths, subdirectory invocation, no-base, binary/non-UTF8, deleted output, symlink, submodule, CRLF, directory-diff, close/cancel exit codes
+  - Test strategy: t7610/t7800 E2E ports (63 mergetool + 26 difftool integration tests), KDiff3-style fixture harness (11 tests + 243 permutation corpus), Meld algorithm parity (32 tests), standalone E2E (37 tests)
+  - Focused GPUI windows: diff viewer (3 unit tests) and merge conflict resolver (21 unit tests) with full keyboard navigation, auto-resolve, CRLF-aware marker serialization
+  - Main.rs wiring: GUI path correctly gates on `--gui` flag, `ui-gpui` feature, conflict presence, and auto mode; headless builds reject `--gui` with exit 2
+  - Conflict resolver internals: `parse_conflict_markers` handles diff3/zdiff3, CRLF (via `split_inclusive('\n')`), nested marker-like content, and malformed markers gracefully; 97 resolver tests + 122 conflict session tests in core
+  - Reference test portability: all Phases 1A–5C complete (41 merge algorithm + 4 zdiff3 + 5 label + 11 fixture + 243 permutation + 10 extraction + 32 Meld)
+- **No remaining gaps**: all ✅, no 🔧 or ⬜ items
+
 ### Progress Snapshot (Iteration 2, Follow-up — March 2, 2026)
 
 External Diff/Merge Usage Design (`external_usage.md`)
