@@ -8,6 +8,14 @@ mod setup_mode;
 use cli::{AppMode, exit_code};
 use std::io::{self, Write};
 
+#[cfg(any(feature = "ui-gpui", test))]
+fn should_launch_focused_diff_gui(
+    config: &cli::DifftoolConfig,
+    result: &difftool_mode::DifftoolRunResult,
+) -> bool {
+    config.gui && result.exit_code == exit_code::SUCCESS
+}
+
 fn main() {
     let mode = match cli::parse_app_mode() {
         Ok(mode) => mode,
@@ -35,7 +43,7 @@ fn main() {
                 // When UI is available and --gui was requested, open a focused
                 // GPUI diff window instead of printing raw text to stdout.
                 #[cfg(feature = "ui-gpui")]
-                if config.gui && result.exit_code == exit_code::SUCCESS && !result.stdout.is_empty() {
+                if should_launch_focused_diff_gui(&config, &result) {
                     let label_left = config
                         .label_left
                         .clone()
@@ -209,4 +217,66 @@ fn path_label(path: &std::path::Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_diff_gui_launches_for_success_even_when_diff_output_is_empty() {
+        let config = cli::DifftoolConfig {
+            local: std::path::PathBuf::from("left.txt"),
+            remote: std::path::PathBuf::from("right.txt"),
+            display_path: None,
+            label_left: None,
+            label_right: None,
+            gui: true,
+        };
+        let result = difftool_mode::DifftoolRunResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: exit_code::SUCCESS,
+        };
+
+        assert!(should_launch_focused_diff_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_diff_gui_does_not_launch_when_not_requested() {
+        let config = cli::DifftoolConfig {
+            local: std::path::PathBuf::from("left.txt"),
+            remote: std::path::PathBuf::from("right.txt"),
+            display_path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+        let result = difftool_mode::DifftoolRunResult {
+            stdout: "diff --git".to_string(),
+            stderr: String::new(),
+            exit_code: exit_code::SUCCESS,
+        };
+
+        assert!(!should_launch_focused_diff_gui(&config, &result));
+    }
+
+    #[test]
+    fn focused_diff_gui_does_not_launch_on_error_exit() {
+        let config = cli::DifftoolConfig {
+            local: std::path::PathBuf::from("left.txt"),
+            remote: std::path::PathBuf::from("right.txt"),
+            display_path: None,
+            label_left: None,
+            label_right: None,
+            gui: true,
+        };
+        let result = difftool_mode::DifftoolRunResult {
+            stdout: "diff --git".to_string(),
+            stderr: "error".to_string(),
+            exit_code: exit_code::ERROR,
+        };
+
+        assert!(!should_launch_focused_diff_gui(&config, &result));
+    }
 }
