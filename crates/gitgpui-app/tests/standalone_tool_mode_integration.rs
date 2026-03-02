@@ -654,6 +654,36 @@ fn standalone_difftool_directory_diff_rejects_symlink_cycle_exits_two() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn standalone_difftool_broken_symlink_inputs_exit_zero() {
+    use std::os::unix::fs as unix_fs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let local = dir.path().join("left-link");
+    let remote = dir.path().join("right-link");
+
+    unix_fs::symlink("missing-left-target", &local).expect("create local broken symlink");
+    unix_fs::symlink("missing-right-target", &remote).expect("create remote broken symlink");
+
+    let output = run_gitgpui([
+        OsString::from("difftool"),
+        OsString::from("--local"),
+        local.as_os_str().to_owned(),
+        OsString::from("--remote"),
+        remote.as_os_str().to_owned(),
+    ]);
+
+    let text = output_text(&output);
+    assert_eq!(output.status.code(), Some(0), "expected exit 0\n{text}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("@@"), "expected symlink diff hunk\n{text}");
+    assert!(
+        stdout.contains("missing-left-target") && stdout.contains("missing-right-target"),
+        "expected broken symlink targets in diff output\n{text}"
+    );
+}
+
 #[test]
 fn standalone_difftool_handles_unicode_paths() {
     let dir = tempfile::tempdir().unwrap();

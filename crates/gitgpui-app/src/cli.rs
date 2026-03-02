@@ -242,15 +242,29 @@ fn resolve_difftool_with_env(
         "remote",
     )?;
 
-    if !local.exists() {
-        return Err(format!("Local path does not exist: {}", local.display()));
-    }
-    if !remote.exists() {
-        return Err(format!("Remote path does not exist: {}", remote.display()));
-    }
-    if local.is_dir() != remote.is_dir() {
-        let local_kind = if local.is_dir() { "directory" } else { "file" };
-        let remote_kind = if remote.is_dir() { "directory" } else { "file" };
+    let local_meta = std::fs::symlink_metadata(&local).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("Local path does not exist: {}", local.display())
+        } else {
+            format!("Failed to read metadata for local path {}: {e}", local.display())
+        }
+    })?;
+    let remote_meta = std::fs::symlink_metadata(&remote).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            format!("Remote path does not exist: {}", remote.display())
+        } else {
+            format!(
+                "Failed to read metadata for remote path {}: {e}",
+                remote.display()
+            )
+        }
+    })?;
+
+    let local_is_dir = local_meta.file_type().is_dir();
+    let remote_is_dir = remote_meta.file_type().is_dir();
+    if local_is_dir != remote_is_dir {
+        let local_kind = if local_is_dir { "directory" } else { "file" };
+        let remote_kind = if remote_is_dir { "directory" } else { "file" };
         return Err(format!(
             "Difftool input kind mismatch: local is a {local_kind} and remote is a {remote_kind}. Use two files or two directories."
         ));
@@ -1317,6 +1331,32 @@ mod tests {
             err.contains("two files or two directories"),
             "error should explain valid combinations: {err}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn difftool_accepts_broken_symlink_inputs() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("left-link");
+        let remote = dir.path().join("right-link");
+
+        unix_fs::symlink("missing-left-target", &local).unwrap();
+        unix_fs::symlink("missing-right-target", &remote).unwrap();
+
+        let args = DifftoolArgs {
+            local: Some(local.clone()),
+            remote: Some(remote.clone()),
+            path: None,
+            label_left: None,
+            label_right: None,
+            gui: false,
+        };
+
+        let config = resolve_difftool_with_env(args, &TestEnv::new()).unwrap();
+        assert_eq!(config.local, local);
+        assert_eq!(config.remote, remote);
     }
 
     // ── MergetoolArgs resolution ─────────────────────────────────────

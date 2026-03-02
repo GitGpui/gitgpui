@@ -2,6 +2,34 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 15, Broken-Symlink Difftool Validation Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Hardened dedicated `difftool` input validation in `crates/gitgpui-app/src/cli.rs` to treat symlink paths (including broken symlinks) as valid file-like inputs by using `symlink_metadata` kind checks instead of `Path::exists()/is_dir()` target-following checks.
+- ✅ Added resolver regression test: `cli::tests::difftool_accepts_broken_symlink_inputs`.
+- ✅ Added standalone E2E regression test: `standalone_difftool_broken_symlink_inputs_exit_zero` in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix difftool_accepts_broken_symlink_inputs -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration standalone_difftool_broken_symlink_inputs_exit_zero -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix cli::tests::difftool_`
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ Behavior matrix item 6 (symlink edge cases) now has explicit standalone dedicated-difftool coverage for broken symlink file inputs.
+- ✅ All other components remain implemented and verified.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete.
+- ✅ Phase 2 complete.
+- ✅ Phase 3A–3C complete.
+- ✅ Phase 4A–4B complete.
+- ✅ Phase 5A–5C complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 15, Independent Completion Verification — March 2, 2026)
 
 Verification scope (this iteration):
