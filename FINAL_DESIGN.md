@@ -2,6 +2,33 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 21, Codex Completion Verification Refresh — March 2, 2026)
+
+Verification performed this iteration:
+- ✅ Read and cross-checked both design documents (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`) against the current codebase.
+- ✅ `cargo test --workspace --no-default-features --features gix`: **all tests passed** (no failures).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Re-audited external tool behavior and portability test coverage; no unimplemented components found.
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with documented flags/env fallback and compatibility aliases.
+- ✅ Exit policy: `0`/`1`/`>=2` contract implemented across dedicated modes.
+- ✅ Git integration: setup/config emits full headless+GUI tool config including `guiDefault=auto`, trust settings, and prompt settings.
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A–1C complete (core merge algorithm portability, zdiff3, conflict label formatting).
+- ✅ Phase 2A–2C complete (KDiff3-style fixture harness + seed fixtures + invariants).
+- ✅ Phase 3A–3C complete (sampled/exhaustive permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (`git mergetool`/`git difftool` end-to-end parity suites).
+- ✅ Phase 5A–5C complete (Meld-derived matcher, interval, and newline-aware tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: all components from both design documents are fully implemented and verified in the current workspace.
+
 ### Progress Snapshot (Iteration 21, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:
