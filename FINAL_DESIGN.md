@@ -2,6 +2,58 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 17, Independent Completion Verification — March 2, 2026)
+
+Verification scope (this iteration):
+- ✅ Full independent audit of both design documents against the codebase. No unimplemented components found.
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1123 passed, 0 failed, 5 ignored**.
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Zero `TODO`/`FIXME`/`HACK`/`unimplemented!()`/`todo!()` in any first-party production `src/` code.
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ All CLI modes implemented (difftool, mergetool, setup subcommands with all specified flags).
+- ✅ Exit code policy (0/1/≥2) correctly propagated through all tool modes.
+- ✅ Git global config setup emits all 18 config keys (headless + GUI + guiDefault=auto).
+- ✅ Env var fallback (LOCAL, REMOTE, BASE, MERGED) for both difftool and mergetool.
+- ✅ KDiff3/Meld compat mode (positional args, --L1/--L2/--L3, -o/--output).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Behavior matrix re-verification (all 10 items from `external_usage.md`):
+1. ✅ File paths with spaces and unicode
+2. ✅ Invocation from repo subdirectory
+3. ✅ No-base conflicts / BASE absent
+4. ✅ Binary and non-UTF8 content
+5. ✅ Deleted output / tool chooses deletion
+6. ✅ Symlink conflicts (including broken symlinks and symlinked directories)
+7. ✅ Submodule path conflicts
+8. ✅ CRLF preservation
+9. ✅ Directory diff mode (including symlinked directory inputs)
+10. ✅ Close/cancel behavior and exit code
+
+Reference Test Portability Plan re-verification (all phases):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests
+- ✅ Phase 1B: t6427 zdiff3 — included in Phase 1A
+- ✅ Phase 1C: Conflict label formatting — 5 tests
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures
+- ✅ Phase 3A: Permutation corpus — 243 sampled cases + exhaustive 161K (ignored, on-demand)
+- ✅ Phase 3B: Implementation approach — Rust test-time generator
+- ✅ Phase 3C: Real-world merge extraction — 8 active + 2 on-demand tests
+- ✅ Phase 4A: Mergetool E2E — 64 tests
+- ✅ Phase 4B: Difftool E2E — 28 tests
+- ✅ Phase 5A: Myers matching blocks — included in Meld suite
+- ✅ Phase 5B: Interval merging — included in Meld suite
+- ✅ Phase 5C: Newline-aware operations — included in Meld suite (32 total Meld tests)
+
+Ignored tests (5, all intentional):
+- `extraction_regression_on_external_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` env var
+- `generate_fixtures_from_repo` — requires `GITGPUI_MERGE_EXTRACTION_REPO` + `GITGPUI_MERGE_EXTRACTION_DEST`
+- `kdiff3_permutation_corpus_exhaustive_11_pow_5` — 161K cases, too slow for CI
+- `perf_treesitter_tokenization_smoke` — performance benchmark
+- `perf_word_diff_ranges_smoke` — performance benchmark
+
+Conclusion: Both design documents are fully implemented with comprehensive test coverage. No remaining gaps found. This is the fourth independent completion verification (iterations 13, 15, 16, 17).
+
 ### Progress Snapshot (Iteration 16, Difftool Symlinked-Directory Parity Hardening — March 2, 2026)
 
 Implemented this iteration:
