@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 22, Codex Completion Verification Refresh — March 2, 2026)
+
+Verification performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Re-audited implementation coverage in the current workspace for external difftool/mergetool and portability test phases.
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration --test difftool_git_integration --test standalone_tool_mode_integration` (all passing).
+- ✅ `cargo test -p gitgpui-core --test merge_algorithm --test conflict_label_formatting --test merge_fixture_harness --test merge_permutation_corpus --test merge_git_extraction --test meld_algorithm_tests` (all passing; ignored tests unchanged).
+- ✅ `cargo test --workspace --no-default-features --features gix` (all passing).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (clean).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with documented flags, env fallback, and compatibility parsing.
+- ✅ Exit policy: `0`/`1`/`>=2` contract implemented and validated end-to-end.
+- ✅ Setup/config integration: headless+GUI entries, quoting, trust settings, and `guiDefault=auto` present.
+- ✅ Behavior matrix: all required scenarios covered by automated tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A–1C complete (t6403 merge algorithm, t6427 zdiff3, label formatting).
+- ✅ Phase 2A–2C complete (KDiff3-style fixture harness, invariants, seed fixtures).
+- ✅ Phase 3A–3C complete (sampled+exhaustive permutation corpus and real-world merge extraction).
+- ✅ Phase 4A–4B complete (`git mergetool`/`git difftool` end-to-end parity suites).
+- ✅ Phase 5A–5C complete (Meld-derived matcher/interval/newline-port tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: no unimplemented components remain from either design document; repository status remains complete.
+
 ### Progress Snapshot (Iteration 22, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:
