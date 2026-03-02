@@ -7,6 +7,10 @@ mod history;
 mod keep_delete_conflict;
 mod status_nav;
 
+fn show_external_mergetool_actions(view_mode: GitGpuiViewMode) -> bool {
+    matches!(view_mode, GitGpuiViewMode::Normal)
+}
+
 impl MainPaneView {
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
@@ -353,17 +357,19 @@ impl MainPaneView {
                 let mergetool_path = path.clone();
                 let save_path = path.clone();
                 controls = controls
-                    .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
-                    .child(
-                        zed::Button::new("conflict_launch_mergetool", "Mergetool")
-                            .style(zed::ButtonStyle::Transparent)
-                            .on_click(theme, cx, move |this, _e, _w, _cx| {
-                                this.store.dispatch(Msg::LaunchMergetool {
-                                    repo_id,
-                                    path: mergetool_path.clone(),
-                                });
-                            }),
-                    )
+                    .when(show_external_mergetool_actions(self.view_mode), |d| {
+                        d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
+                            .child(
+                                zed::Button::new("conflict_launch_mergetool", "Mergetool")
+                                    .style(zed::ButtonStyle::Transparent)
+                                    .on_click(theme, cx, move |this, _e, _w, _cx| {
+                                        this.store.dispatch(Msg::LaunchMergetool {
+                                            repo_id,
+                                            path: mergetool_path.clone(),
+                                        });
+                                    }),
+                            )
+                    })
                     .child(
                         zed::Button::new("conflict_save", "Save")
                             .style(zed::ButtonStyle::Outlined)
@@ -2988,5 +2994,19 @@ impl MainPaneView {
             )
             .child(div().flex_1().min_h(px(0.0)).w_full().h_full().child(body))
             .child(DiffTextSelectionTracker { view: cx.entity() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::show_external_mergetool_actions;
+    use crate::view::GitGpuiViewMode;
+
+    #[test]
+    fn shows_external_mergetool_actions_only_in_normal_mode() {
+        assert!(show_external_mergetool_actions(GitGpuiViewMode::Normal));
+        assert!(!show_external_mergetool_actions(
+            GitGpuiViewMode::FocusedMergetool
+        ));
     }
 }

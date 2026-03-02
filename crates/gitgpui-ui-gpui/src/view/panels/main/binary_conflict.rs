@@ -137,17 +137,19 @@ impl MainPaneView {
                         });
                     }),
             )
-            .child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
-            .child(
-                zed::Button::new("binary_launch_mergetool", "External Mergetool")
-                    .style(zed::ButtonStyle::Outlined)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::LaunchMergetool {
-                            repo_id,
-                            path: mergetool_path.clone(),
-                        });
-                    }),
-            );
+            .when(show_external_mergetool_actions(self.view_mode), |d| {
+                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
+                    .child(
+                        zed::Button::new("binary_launch_mergetool", "External Mergetool")
+                            .style(zed::ButtonStyle::Outlined)
+                            .on_click(theme, cx, move |this, _e, _w, _cx| {
+                                this.store.dispatch(Msg::LaunchMergetool {
+                                    repo_id,
+                                    path: mergetool_path.clone(),
+                                });
+                            }),
+                    )
+            });
 
         let image_preview = has_image_preview.then(|| {
             let image_cell =
