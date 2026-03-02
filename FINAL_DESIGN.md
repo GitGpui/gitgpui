@@ -2,14 +2,14 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 25 — March 2, 2026)
+### Progress Snapshot (Iteration 1 — March 2, 2026)
 
 External Diff/Merge Usage Design (`external_usage.md`)
 - ✅ Dedicated CLI modes, robust arg/env validation, and no-subcommand KDiff3/Meld compatibility parsing are implemented.
 - ✅ Git integration parity is implemented and covered for trust-exit semantics, GUI selection (`guiDefault` + `--gui/--no-gui`), `--tool-help`, path overrides (`*.path`), subdir/pathspec flows, spaced+Unicode paths, `--dir-diff`, and edge cases (no-base, delete/delete, symlink, submodule, deleted output).
 - ✅ Focused runtime modes are implemented: `difftool` (`git diff --no-index --no-ext-diff` wrapper) and `mergetool` (built-in 3-way merge, conflict-style/diff-algorithm/marker-size controls, binary/non-UTF8 handling, CRLF preservation, autosolve heuristics).
 - ✅ Setup automation is implemented (`gitgpui-app setup`), including headless+GUI tool entries, trust keys, prompt defaults, and shell-safe dry-run quoting.
-- ✅ Iteration 25 component implemented: hardened `render_unresolved_marker_block()` to defensively insert newlines before marker lines when content lacks trailing newline, preventing malformed markers; added 7 new edge-case tests (content without trailing newline in 2-way/diff3/CRLF modes, empty ours/theirs/base sections, mixed resolved+unresolved output, and multiple consecutive unresolved blocks).
+- ✅ Iteration 1 component implemented: added standalone compatibility-mode invalid-invocation E2E coverage in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs` for strict validation paths (`--auto` without `-o/--output/--out`, diff-mode `--base` rejection, label overflow rejection, and too-many diff positionals), all asserting actionable stderr and exit code `2`.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -21,6 +21,7 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
 - ✅ Phase 3 complete: permutation corpus generation/invariant checks (sampled + ignored exhaustive) and real-world merge extraction harness.
 - ✅ Phase 4 complete: critical `t7610`/`t7800` mergetool+difftool E2E parity suites.
 - ✅ Phase 5 complete: Meld-derived matcher/interval/newline portability suites.
+- ✅ Iteration 1 portability hardening: process-level tests now enforce strict compatibility-argument rejection behavior expected by Meld/KDiff3-style invocation contracts.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
