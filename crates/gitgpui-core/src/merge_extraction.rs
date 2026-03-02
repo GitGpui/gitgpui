@@ -399,13 +399,29 @@ fn changed_files(
     from: &str,
     to: &str,
 ) -> Result<BTreeSet<String>, MergeExtractionError> {
-    let text = run_git_text(repo, &["diff", "--name-only", from, to])?;
-    Ok(text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    let output = run_git(repo, &["diff", "--name-only", "-z", from, to])?;
+    if !output.status.success() {
+        return Err(MergeExtractionError::GitCommandFailed {
+            command: git_command_string(&["diff", "--name-only", "-z", from, to]),
+            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        });
+    }
+
+    let mut files = BTreeSet::new();
+    for raw_path in output.stdout.split(|byte| *byte == 0) {
+        if raw_path.is_empty() {
+            continue;
+        }
+
+        // Extraction fixtures currently store paths as UTF-8 strings.
+        // Skip non-UTF8 paths instead of lossy conversion to avoid creating
+        // invalid blob refs in later `git show <sha>:<path>` calls.
+        if let Ok(path) = std::str::from_utf8(raw_path) {
+            files.insert(path.to_string());
+        }
+    }
+
+    Ok(files)
 }
 
 fn run_git_text(repo: &Path, args: &[&str]) -> Result<String, MergeExtractionError> {
@@ -769,6 +785,39 @@ mod tests {
             assert!(case.contrib1.is_ascii());
             assert!(case.contrib2.is_ascii());
         }
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn changed_files_handles_paths_with_newlines() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let repo = tmp.path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["checkout", "-b", "main"]);
+        configure_git_user(repo);
+
+        let tricky_path = "dir/line\nbreak.txt";
+        std::fs::create_dir_all(repo.join("dir")).expect("create dir");
+        std::fs::write(repo.join(tricky_path), "base\n").expect("write base file");
+        run_git(repo, &["add", "--", tricky_path]);
+        run_git(repo, &["commit", "-m", "base"]);
+
+        std::fs::write(repo.join(tricky_path), "changed\n").expect("write changed file");
+        run_git(repo, &["add", "--", tricky_path]);
+        run_git(repo, &["commit", "-m", "changed"]);
+
+        let from = run_git_text(repo, &["rev-parse", "HEAD~1"]).expect("rev-parse HEAD~1");
+        let to = run_git_text(repo, &["rev-parse", "HEAD"]).expect("rev-parse HEAD");
+        let files = changed_files(repo, from.trim(), to.trim()).expect("changed files");
+
+        assert_eq!(files.len(), 1, "expected exactly one changed path");
+        assert!(
+            files.contains(tricky_path),
+            "expected changed path set to include {:?}, got {:?}",
+            tricky_path,
+            files
+        );
     }
 
     #[test]

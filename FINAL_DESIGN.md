@@ -2,15 +2,17 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 40, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 40, Merge-Extraction Newline-Path Portability Hardening — March 2, 2026)
 
 Performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ Independent verification: all components from both design documents confirmed fully implemented.
-- ✅ Full test suite: `cargo test --workspace --no-default-features --features gix` — **1,187 passed, 0 failed, 5 ignored**.
-- ✅ Clippy: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` — **0 warnings**.
-- ✅ No outstanding TODOs/FIXMEs in production gitgpui code (all TODOs are in vendored third-party crates).
-- ✅ 5 ignored tests are all intentional: 2 external-repo extraction tests (require `GITGPUI_MERGE_EXTRACTION_REPO`), 1 exhaustive 161K permutation corpus, 2 perf benchmarks.
+- ✅ Identified and implemented a remaining Phase 3C robustness gap in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `changed_files()` previously used line-based parsing of `git diff --name-only`, which is not robust for special filenames (notably newline-containing paths).
+  - switched to NUL-delimited parsing via `git diff --name-only -z`.
+  - added UTF-8-safe path decoding to avoid lossy path corruption before `git show <sha>:<path>` extraction.
+- ✅ Added regression coverage:
+  - `changed_files_handles_paths_with_newlines`
+- ✅ Validation: `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**16 passed, 0 failed**).
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -21,6 +23,8 @@ External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
 - ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
 - ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
 
 Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
@@ -28,11 +32,14 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 1C: Conflict label formatting — 5 tests.
 - ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
 - ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - hardening this iteration: path discovery now uses NUL-delimited git output for portability with newline/special-character filenames.
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 32 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents remain fully implemented. No new gaps identified. Nothing to implement.
+Conclusion: All components from both design documents remain fully implemented. This iteration tightened Phase 3C real-world extraction portability for special-path repositories.
 
 ### Progress Snapshot (Iteration 39, Merge-Extraction Git Error Classification Hardening — March 2, 2026)
 
