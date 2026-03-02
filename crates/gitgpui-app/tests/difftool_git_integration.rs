@@ -684,6 +684,64 @@ fn git_difftool_no_gui_flag_overrides_gui_default_true() {
 }
 
 #[test]
+fn git_difftool_gui_fallback_when_no_guitool_configured() {
+    // When --gui is requested but only diff.tool is configured, git difftool
+    // should fall back to the regular tool selection.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", None, Some("false"));
+
+    let output = run_git_capture_with_display(
+        repo,
+        &["difftool", "--gui", "--no-prompt", "--", "a.txt"],
+        Some(":99"),
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected fallback to diff.tool when no diff.guitool configured\n{text}"
+    );
+}
+
+#[test]
+fn git_difftool_gui_default_true_fallback_when_no_guitool_configured() {
+    // Even with guiDefault=true, git difftool should fall back to diff.tool
+    // if no diff.guitool is configured.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    init_repo(repo);
+    write_file(repo, "a.txt", "before\n");
+    commit_all(repo, "base");
+    write_file(repo, "a.txt", "after\n");
+
+    configure_difftool_command(repo, "cli", &gitgpui_difftool_cmd("cli", None));
+    configure_difftool_trust_exit_code(repo, true);
+    configure_difftool_selection(repo, "cli", None, Some("true"));
+
+    let output = run_git_capture_with_display(
+        repo,
+        &["difftool", "--no-prompt", "--", "a.txt"],
+        Some(":99"),
+    );
+    let text = output_text(&output);
+    assert!(output.status.success(), "git difftool failed\n{text}");
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected fallback to diff.tool with guiDefault=true and no diff.guitool\n{text}"
+    );
+}
+
+#[test]
 fn git_difftool_honors_tool_trust_exit_code_false() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();

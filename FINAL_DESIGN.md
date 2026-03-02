@@ -2,6 +2,32 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 12, Difftool GUI Fallback Parity Coverage — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Closed remaining difftool GUI-selection fallback coverage gap in `crates/gitgpui-app/tests/difftool_git_integration.rs`.
+  - Added `git_difftool_gui_fallback_when_no_guitool_configured` (`git difftool --gui` falls back to `diff.tool` when `diff.guitool` is unset).
+  - Added `git_difftool_gui_default_true_fallback_when_no_guitool_configured` (`difftool.guiDefault=true` also falls back to `diff.tool` when `diff.guitool` is unset).
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration gui_fallback_when_no_guitool_configured -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration gui_default_true_fallback_when_no_guitool_configured -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test difftool_git_integration` (**28 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified, including explicit difftool GUI fallback parity coverage when no `diff.guitool` is configured.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 12, Independent Verification Audit — March 2, 2026)
 
 Implemented this iteration:
