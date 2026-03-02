@@ -231,106 +231,23 @@ pub fn active_conflict_autosolve_trace_label(
 }
 
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
-    let mut segments: Vec<ConflictSegment> = Vec::new();
-    let mut buf = String::new();
-
-    let mut it = text.split_inclusive('\n').peekable();
-    while let Some(line) = it.next() {
-        if !line.starts_with("<<<<<<<") {
-            buf.push_str(line);
-            continue;
-        }
-
-        // Flush prior text.
-        if !buf.is_empty() {
-            segments.push(ConflictSegment::Text(std::mem::take(&mut buf)));
-        }
-
-        let start_marker = line;
-
-        let mut base_marker_line: Option<&str> = None;
-        let mut separator_line: Option<String> = None;
-        let mut base: Option<String> = None;
-        let mut ours = String::new();
-        let mut found_sep = false;
-
-        while let Some(l) = it.next() {
-            if l.starts_with("=======") {
-                found_sep = true;
-                separator_line = Some(l.to_string());
-                break;
+    gitgpui_core::conflict_session::parse_conflict_marker_segments(text)
+        .into_iter()
+        .map(|segment| match segment {
+            gitgpui_core::conflict_session::ParsedConflictSegment::Text(text) => {
+                ConflictSegment::Text(text)
             }
-            if l.starts_with("|||||||") {
-                base_marker_line = Some(l);
-                let mut base_buf = String::new();
-                for l in it.by_ref() {
-                    if l.starts_with("=======") {
-                        found_sep = true;
-                        separator_line = Some(l.to_string());
-                        break;
-                    }
-                    base_buf.push_str(l);
-                }
-                base = Some(base_buf);
-                break;
+            gitgpui_core::conflict_session::ParsedConflictSegment::Conflict(block) => {
+                ConflictSegment::Block(ConflictBlock {
+                    base: block.base,
+                    ours: block.ours,
+                    theirs: block.theirs,
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                })
             }
-            ours.push_str(l);
-        }
-
-        if !found_sep {
-            // Malformed marker; preserve as plain text.
-            buf.push_str(start_marker);
-            buf.push_str(&ours);
-            if let Some(base_marker_line) = base_marker_line {
-                buf.push_str(base_marker_line);
-            }
-            if let Some(base) = base.as_deref() {
-                buf.push_str(base);
-            }
-            break;
-        }
-
-        let mut theirs = String::new();
-        let mut found_end = false;
-        for l in it.by_ref() {
-            if l.starts_with(">>>>>>>") {
-                found_end = true;
-                break;
-            }
-            theirs.push_str(l);
-        }
-
-        if !found_end {
-            // Malformed marker; preserve as plain text.
-            buf.push_str(start_marker);
-            buf.push_str(&ours);
-            if let Some(base_marker_line) = base_marker_line {
-                buf.push_str(base_marker_line);
-            }
-            if let Some(base) = base.as_deref() {
-                buf.push_str(base);
-            }
-            if let Some(separator_line) = separator_line.as_deref() {
-                buf.push_str(separator_line);
-            }
-            buf.push_str(&theirs);
-            break;
-        }
-
-        segments.push(ConflictSegment::Block(ConflictBlock {
-            base,
-            ours,
-            theirs,
-            choice: ConflictChoice::Ours,
-            resolved: false,
-        }));
-    }
-
-    if !buf.is_empty() {
-        segments.push(ConflictSegment::Text(buf));
-    }
-
-    segments
+        })
+        .collect()
 }
 
 fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: String) {
@@ -1735,8 +1652,7 @@ mod tests {
     fn malformed_diff3_missing_end_marker_preserved_as_text() {
         // Diff3 malformed block (no >>>>>>> end marker). Ensure the base marker
         // section and separator are preserved exactly.
-        let input =
-            "a\r\n<<<<<<< ours\r\none\r\n||||||| base\r\norig\r\n=======\r\nuno\r\n";
+        let input = "a\r\n<<<<<<< ours\r\none\r\n||||||| base\r\norig\r\n=======\r\nuno\r\n";
         let segments = parse_conflict_markers(input);
         assert_eq!(conflict_count(&segments), 0);
         assert_eq!(generate_resolved_text(&segments), input);

@@ -677,90 +677,25 @@ impl ConflictSession {
     }
 }
 
-/// Parse conflict marker blocks from merged text into conflict regions.
-///
-/// Parsing is intentionally conservative: if a malformed/incomplete block is
-/// encountered, parsing stops and returns regions successfully parsed so far.
-fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
-    let mut regions = Vec::new();
-    let mut it = text.split_inclusive('\n').peekable();
-
-    while let Some(line) = it.next() {
-        if !line.starts_with("<<<<<<<") {
-            continue;
-        }
-
-        let mut base: Option<String> = None;
-        let mut ours = String::new();
-        let mut found_sep = false;
-
-        while let Some(l) = it.next() {
-            if l.starts_with("=======") {
-                found_sep = true;
-                break;
-            }
-            if l.starts_with("|||||||") {
-                let mut base_buf = String::new();
-                for base_line in it.by_ref() {
-                    if base_line.starts_with("=======") {
-                        found_sep = true;
-                        break;
-                    }
-                    base_buf.push_str(base_line);
-                }
-                base = Some(base_buf);
-                break;
-            }
-            ours.push_str(l);
-        }
-
-        if !found_sep {
-            break;
-        }
-
-        let mut theirs = String::new();
-        let mut found_end = false;
-        for l in it.by_ref() {
-            if l.starts_with(">>>>>>>") {
-                found_end = true;
-                break;
-            }
-            theirs.push_str(l);
-        }
-
-        if !found_end {
-            break;
-        }
-
-        regions.push(ConflictRegion {
-            base,
-            ours,
-            theirs,
-            resolution: ConflictRegionResolution::Unresolved,
-        });
-    }
-
-    regions
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ParsedConflictBlock {
+    pub base: Option<String>,
+    pub ours: String,
+    pub theirs: String,
 }
 
-// ── Standalone autosolve for merged text ────────────────────────────
-
-/// Span of merged text: either context (non-conflict) or a conflict block.
-enum MergedSpan {
-    Context(String),
-    Conflict {
-        base: Option<String>,
-        ours: String,
-        theirs: String,
-    },
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ParsedConflictSegment {
+    Text(String),
+    Conflict(ParsedConflictBlock),
 }
 
-/// Parse merged text into alternating context and conflict spans.
+/// Parse merged text into alternating context text and conflict blocks.
 ///
-/// Unlike [`parse_conflict_regions_from_markers`] which discards context,
-/// this preserves all text so the full file can be reconstructed.
-fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
-    let mut spans = Vec::new();
+/// Parsing is intentionally conservative. If a marker block is malformed,
+/// all consumed marker text is preserved as context and parsing stops.
+pub fn parse_conflict_marker_segments(text: &str) -> Vec<ParsedConflictSegment> {
+    let mut segments = Vec::new();
     let mut context = String::new();
     let mut it = text.split_inclusive('\n').peekable();
 
@@ -772,7 +707,7 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
 
         // Flush context before the conflict block.
         if !context.is_empty() {
-            spans.push(MergedSpan::Context(std::mem::take(&mut context)));
+            segments.push(ParsedConflictSegment::Text(std::mem::take(&mut context)));
         }
 
         let mut base_marker_line: Option<&str> = None;
@@ -844,16 +779,41 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
             break;
         }
 
-        spans.push(MergedSpan::Conflict { base, ours, theirs });
+        segments.push(ParsedConflictSegment::Conflict(ParsedConflictBlock {
+            base,
+            ours,
+            theirs,
+        }));
     }
 
     // Flush trailing context.
     if !context.is_empty() {
-        spans.push(MergedSpan::Context(context));
+        segments.push(ParsedConflictSegment::Text(context));
     }
 
-    spans
+    segments
 }
+
+/// Parse conflict marker blocks from merged text into conflict regions.
+///
+/// This is a thin wrapper over [`parse_conflict_marker_segments`] that
+/// discards context text and keeps only conflict blocks.
+fn parse_conflict_regions_from_markers(text: &str) -> Vec<ConflictRegion> {
+    parse_conflict_marker_segments(text)
+        .into_iter()
+        .filter_map(|segment| match segment {
+            ParsedConflictSegment::Text(_) => None,
+            ParsedConflictSegment::Conflict(block) => Some(ConflictRegion {
+                base: block.base,
+                ours: block.ours,
+                theirs: block.theirs,
+                resolution: ConflictRegionResolution::Unresolved,
+            }),
+        })
+        .collect()
+}
+
+// ── Standalone autosolve for merged text ────────────────────────────
 
 /// Try to resolve a single conflict block using safe heuristics.
 ///
@@ -927,11 +887,11 @@ fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Opt
 /// KDiff3's auto-resolve behavior: attempt to resolve all conflicts automatically,
 /// write clean output and exit 0 if successful, otherwise leave markers and exit 1.
 pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
-    let spans = parse_merged_spans(text);
+    let segments = parse_conflict_marker_segments(text);
 
-    let has_conflicts = spans
+    let has_conflicts = segments
         .iter()
-        .any(|s| matches!(s, MergedSpan::Conflict { .. }));
+        .any(|s| matches!(s, ParsedConflictSegment::Conflict(_)));
     if !has_conflicts {
         // No conflicts to resolve — return the text as-is.
         return Some(text.to_string());
@@ -939,11 +899,13 @@ pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
 
     let mut output = String::with_capacity(text.len());
 
-    for span in &spans {
-        match span {
-            MergedSpan::Context(text) => output.push_str(text),
-            MergedSpan::Conflict { base, ours, theirs } => {
-                if let Some(resolved) = try_resolve_single_block(base.as_deref(), ours, theirs) {
+    for segment in segments {
+        match segment {
+            ParsedConflictSegment::Text(text) => output.push_str(&text),
+            ParsedConflictSegment::Conflict(block) => {
+                if let Some(resolved) =
+                    try_resolve_single_block(block.base.as_deref(), &block.ours, &block.theirs)
+                {
                     output.push_str(&resolved);
                 } else {
                     return None;
@@ -3844,7 +3806,7 @@ unterminated content with no separator
         );
     }
 
-    // ── parse_merged_spans malformed-marker preservation tests ──────
+    // ── parse_conflict_marker_segments malformed-marker preservation tests ──────
 
     #[test]
     fn autosolve_malformed_no_separator_preserves_all_content() {

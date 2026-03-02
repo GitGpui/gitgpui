@@ -3,7 +3,7 @@
 ## Implementation Progress
 
 - ✅ `0a. Unified line-ending detection` — Added shared `gitgpui-core::text_utils::detect_line_ending_from_texts` with explicit heuristics, switched focused merge and subchunk autosolve to use it, and documented why `merge.rs` keeps its existing full-file heuristic.
-- ⬜ `0b. Unified marker parsing`
+- ✅ `0b. Unified marker parsing` — Added shared `gitgpui_core::conflict_session::parse_conflict_marker_segments` + segment/block types, converted core region parsing and autosolve text parsing to thin wrappers over it, removed `MergedSpan`, and switched UI `parse_conflict_markers` to map from core segments.
 - ⬜ `0c. Marker-preserving output generation`
 - ⬜ `0d. Consolidate auto-resolve on segments`
 - ⬜ `0e. Tests for consolidated primitives`
