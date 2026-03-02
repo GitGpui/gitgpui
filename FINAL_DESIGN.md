@@ -2,6 +2,36 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 14, Setup Command E2E Integration Tests — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Added E2E integration tests that verify `gitgpui-app setup --local` produces config that works end-to-end with `git mergetool` and `git difftool`.
+  - `setup_local_enables_git_mergetool_end_to_end`: Runs setup, creates a merge conflict, invokes `git mergetool`, and verifies gitgpui-app was invoked via its specific stderr messages ("conflict(s) remain", "CONFLICT (content)").
+  - `setup_local_enables_git_difftool_end_to_end`: Runs setup, modifies a tracked file, invokes `git difftool`, and verifies gitgpui-app produced unified diff output with correct hunk headers and content.
+  - Both tests remove DISPLAY/WAYLAND_DISPLAY to exercise the `guiDefault=auto` headless path.
+
+Gap closed:
+- Previously, the setup command had extensive unit tests (config key verification, quoting, shell executability) and the mergetool/difftool had extensive integration tests (with manually configured tool commands), but there was no test verifying the **setup-generated config** actually works when Git invokes the tool. This E2E test closes that gap, directly validating acceptance criteria 2–3 from `external_usage.md`.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration setup_local_enables -- --nocapture` (**2 passed, 0 failed**).
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1116 passed, 0 failed, 5 ignored** (2 new tests since iteration 13).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified, now including E2E integration coverage for the setup command → git tool invocation flow.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 13, Backend Unicode Path Mergetool Coverage — March 2, 2026)
 
 Implemented this iteration:

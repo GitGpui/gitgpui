@@ -1557,3 +1557,171 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
         "all line endings should be CRLF"
     );
 }
+
+// ── Setup E2E integration ────────────────────────────────────────────
+//
+// These tests verify that `gitgpui-app setup --local` produces config that
+// actually works when Git invokes `git mergetool` / `git difftool`.  This
+// closes the gap between "config keys are written" and "the configured tool
+// is invoked end-to-end" — directly validating acceptance criteria 2-3 from
+// external_usage.md.
+
+/// Run a git command in a repo; assert success.
+fn setup_e2e_git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .expect("git command to run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+/// Run a git command in a repo; return output (may succeed or fail).
+fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env_remove("DISPLAY")
+        .env_remove("WAYLAND_DISPLAY")
+        .output()
+        .expect("git command to run")
+}
+
+/// Initialize a git repo with user config for tests.
+fn setup_e2e_init(repo: &Path) {
+    setup_e2e_git(repo, &["init", "-b", "main"]);
+    setup_e2e_git(repo, &["config", "user.email", "test@test.com"]);
+    setup_e2e_git(repo, &["config", "user.name", "Test"]);
+    setup_e2e_git(repo, &["config", "commit.gpgsign", "false"]);
+}
+
+/// Stage all and commit.
+fn setup_e2e_commit(repo: &Path, message: &str) {
+    setup_e2e_git(repo, &["add", "-A"]);
+    setup_e2e_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+    );
+}
+
+/// After `gitgpui-app setup --local`, `git mergetool` should invoke
+/// gitgpui-app's built-in 3-way merge for conflicted files.
+///
+/// For a true content conflict, gitgpui-app exits 1 and git mergetool
+/// restores the original file (expected behavior with trustExitCode=true).
+/// We verify the tool was invoked by checking for gitgpui-app's specific
+/// stderr messages, which differ from git's own merge output.
+#[test]
+fn setup_local_enables_git_mergetool_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    // 1. Initialize repo and run setup.
+    setup_e2e_init(repo);
+    let setup = run_gitgpui_in_dir(
+        repo,
+        [OsString::from("setup"), OsString::from("--local")],
+    );
+    let text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
+
+    // 2. Create a merge conflict (both sides modify line 2).
+    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
+    setup_e2e_commit(repo, "base");
+
+    setup_e2e_git(repo, &["checkout", "-b", "ours"]);
+    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
+    setup_e2e_commit(repo, "ours");
+
+    setup_e2e_git(repo, &["checkout", "main"]);
+    write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
+    setup_e2e_commit(repo, "theirs");
+
+    let merge = setup_e2e_git_capture(repo, &["merge", "ours"]);
+    assert!(
+        !merge.status.success(),
+        "expected merge conflict but git merge succeeded"
+    );
+
+    // 3. Run `git mergetool` — should invoke gitgpui-app via setup config.
+    //    DISPLAY is removed so guiDefault=auto selects the headless tool.
+    let mt = setup_e2e_git_capture(repo, &["mergetool"]);
+    let mt_stderr = String::from_utf8_lossy(&mt.stderr);
+
+    // 4. Verify gitgpui-app was invoked by checking for its specific stderr
+    //    messages.  "conflict(s) remain" is emitted by gitgpui-app's mergetool
+    //    mode and is NOT part of git's own output (git says "fix conflicts and
+    //    then commit the result" instead).
+    assert!(
+        mt_stderr.contains("conflict(s) remain"),
+        "expected gitgpui-app's conflict message in mergetool stderr\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&mt.stdout),
+        mt_stderr,
+    );
+
+    // Also verify gitgpui-app's "CONFLICT (content)" message is present.
+    assert!(
+        mt_stderr.contains("CONFLICT (content)"),
+        "expected CONFLICT marker from gitgpui-app\nstderr: {}",
+        mt_stderr,
+    );
+}
+
+/// After `gitgpui-app setup --local`, `git difftool` should invoke
+/// gitgpui-app's built-in diff and produce unified diff output.
+#[test]
+fn setup_local_enables_git_difftool_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    // 1. Initialize repo and run setup.
+    setup_e2e_init(repo);
+    let setup = run_gitgpui_in_dir(
+        repo,
+        [OsString::from("setup"), OsString::from("--local")],
+    );
+    let text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
+
+    // 2. Create a commit and then modify the file.
+    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
+    setup_e2e_commit(repo, "initial");
+    write_file(&repo.join("file.txt"), "line1\nMODIFIED\nline3\n");
+
+    // 3. Run `git difftool` — should invoke gitgpui-app difftool.
+    //    DISPLAY is removed so guiDefault=auto selects the headless tool.
+    let dt = setup_e2e_git_capture(repo, &["difftool"]);
+    let dt_text = output_text(&dt);
+
+    assert_eq!(
+        dt.status.code(),
+        Some(0),
+        "git difftool should exit 0\n{dt_text}"
+    );
+
+    // gitgpui-app difftool produces unified diff output.
+    let stdout = String::from_utf8_lossy(&dt.stdout);
+    assert!(
+        stdout.contains("@@"),
+        "expected diff hunk header in output\n{dt_text}"
+    );
+    assert!(
+        stdout.contains("-line2"),
+        "expected removed line in diff\n{dt_text}"
+    );
+    assert!(
+        stdout.contains("+MODIFIED"),
+        "expected added line in diff\n{dt_text}"
+    );
+}
