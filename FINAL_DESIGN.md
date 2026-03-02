@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 6 — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Closed a remaining Phase 2B portability gap in the KDiff3-style fixture harness: expected-result files are now optional, matching the design contract ("compare against expected when present").
+  - `crates/gitgpui-core/tests/merge_fixture_harness.rs` now discovers fixtures when `{base,contrib1,contrib2}` exist, regardless of `*_expected_result.*`.
+  - Harness execution now always runs invariants and only performs golden/alignment comparisons when expected data exists.
+  - Added regression tests:
+    - `discover_fixtures_includes_cases_without_expected_result`
+    - `run_fixture_without_expected_result_succeeds`
+    - `actual_result_path_without_expected_uses_base_directory`
+
+Verification run:
+- ✅ `cargo test -p gitgpui-core --test merge_fixture_harness`
+- ✅ `cargo test -p gitgpui-core`
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 6, Independent Verification — March 2, 2026)
 
 Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.

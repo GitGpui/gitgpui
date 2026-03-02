@@ -5,7 +5,7 @@
 //!   - `{prefix}_base.{ext}`
 //!   - `{prefix}_contrib1.{ext}` (ours / local)
 //!   - `{prefix}_contrib2.{ext}` (theirs / remote)
-//!   - `{prefix}_expected_result.{ext}`
+//!   - `{prefix}_expected_result.{ext}` (optional)
 //!
 //! Expected result files support two formats:
 //! 1. **Merged output golden** (plain text): compare directly to `merge_file`.
@@ -18,7 +18,7 @@
 //! 3. Applies algorithm-independent merge-output invariants.
 //! 4. If fixture uses alignment triples, builds a three-way line alignment and
 //!    validates sequence monotonicity + equality consistency invariants.
-//! 5. Compares actual output/alignment against expected result.
+//! 5. Compares actual output/alignment against expected result when present.
 //! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
 use gitgpui_core::merge::{MergeOptions, merge_file};
@@ -32,7 +32,7 @@ struct MergeFixture {
     base_path: PathBuf,
     contrib1_path: PathBuf,
     contrib2_path: PathBuf,
-    expected_path: PathBuf,
+    expected_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -64,8 +64,8 @@ struct SideProjection {
 
 /// Discover all merge fixtures in the given directory.
 ///
-/// Scans for files matching `*_base.*` and derives the companion file paths.
-/// Only returns fixtures where all four files exist.
+/// Scans for files matching `*_base.*` and derives companion file paths.
+/// Returns fixtures when `base/contrib1/contrib2` exist; expected result is optional.
 fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
     let mut fixtures_by_name: BTreeMap<String, MergeFixture> = BTreeMap::new();
 
@@ -95,7 +95,7 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
             let contrib2_path = dir.join(format!("{}_contrib2{}", prefix, ext));
             let expected_path = dir.join(format!("{}_expected_result{}", prefix, ext));
 
-            if contrib1_path.exists() && contrib2_path.exists() && expected_path.exists() {
+            if contrib1_path.exists() && contrib2_path.exists() {
                 fixtures_by_name.insert(
                     prefix.to_string(),
                     MergeFixture {
@@ -103,7 +103,7 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
                         base_path: path.clone(),
                         contrib1_path,
                         contrib2_path,
-                        expected_path,
+                        expected_path: expected_path.exists().then_some(expected_path),
                     },
                 );
             }
@@ -114,7 +114,7 @@ fn discover_fixtures(dir: &Path) -> Vec<MergeFixture> {
 }
 
 fn actual_result_path(fixture: &MergeFixture) -> PathBuf {
-    fixture.expected_path.with_file_name(format!(
+    let file_name = format!(
         "{}_actual_result{}",
         fixture.name,
         fixture
@@ -122,7 +122,13 @@ fn actual_result_path(fixture: &MergeFixture) -> PathBuf {
             .extension()
             .map(|e| format!(".{}", e.to_string_lossy()))
             .unwrap_or_default()
-    ))
+    );
+
+    if let Some(expected_path) = &fixture.expected_path {
+        expected_path.with_file_name(file_name)
+    } else {
+        fixture.base_path.with_file_name(file_name)
+    }
 }
 
 fn parse_expected_fixture(raw: &str) -> ExpectedFixture {
@@ -673,16 +679,22 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
         .map_err(|e| format!("[{}] failed to read contrib1: {}", fixture.name, e))?;
     let contrib2 = std::fs::read_to_string(&fixture.contrib2_path)
         .map_err(|e| format!("[{}] failed to read contrib2: {}", fixture.name, e))?;
-    let expected_raw = std::fs::read_to_string(&fixture.expected_path)
-        .map_err(|e| format!("[{}] failed to read expected_result: {}", fixture.name, e))?;
 
     let result = merge_file(&base, &contrib1, &contrib2, &MergeOptions::default());
     validate_merge_output_invariants(&base, &contrib1, &contrib2, &result.output, &fixture.name);
 
-    let expected = parse_expected_fixture(&expected_raw);
+    let expected = match &fixture.expected_path {
+        Some(expected_path) => {
+            let expected_raw = std::fs::read_to_string(expected_path)
+                .map_err(|e| format!("[{}] failed to read expected_result: {}", fixture.name, e))?;
+            Some(parse_expected_fixture(&expected_raw))
+        }
+        None => None,
+    };
+
     match expected {
-        ExpectedFixture::Empty => Ok(()),
-        ExpectedFixture::MergeOutput(expected_output) => {
+        None | Some(ExpectedFixture::Empty) => Ok(()),
+        Some(ExpectedFixture::MergeOutput(expected_output)) => {
             if result.output == expected_output {
                 Ok(())
             } else {
@@ -697,7 +709,7 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
                 ))
             }
         }
-        ExpectedFixture::Alignment(expected_rows) => {
+        Some(ExpectedFixture::Alignment(expected_rows)) => {
             let actual_rows = build_three_way_alignment(&base, &contrib1, &contrib2);
             validate_alignment_invariants(&base, &contrib1, &contrib2, &actual_rows, &fixture.name);
 
@@ -820,6 +832,64 @@ fn parses_alignment_expected_rows() {
          1 2 1\n",
     );
     assert!(matches!(parsed, ExpectedFixture::Alignment(_)));
+}
+
+#[test]
+fn discover_fixtures_includes_cases_without_expected_result() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures_dir = dir.path();
+
+    std::fs::write(fixtures_dir.join("10_optional_base.txt"), "line\n").expect("write base");
+    std::fs::write(fixtures_dir.join("10_optional_contrib1.txt"), "line\n").expect("write c1");
+    std::fs::write(fixtures_dir.join("10_optional_contrib2.txt"), "line\n").expect("write c2");
+
+    let fixtures = discover_fixtures(fixtures_dir);
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.name == "10_optional")
+        .expect("fixture should be discovered");
+
+    assert!(
+        fixture.expected_path.is_none(),
+        "expected_path should be optional when expected fixture file is absent"
+    );
+}
+
+#[test]
+fn run_fixture_without_expected_result_succeeds() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixtures_dir = dir.path();
+
+    std::fs::write(fixtures_dir.join("11_no_expected_base.txt"), "base\n").expect("write base");
+    std::fs::write(fixtures_dir.join("11_no_expected_contrib1.txt"), "base\n")
+        .expect("write c1");
+    std::fs::write(fixtures_dir.join("11_no_expected_contrib2.txt"), "base\n")
+        .expect("write c2");
+
+    let fixtures = discover_fixtures(fixtures_dir);
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.name == "11_no_expected")
+        .expect("fixture should be discovered");
+
+    run_fixture(fixture).expect("fixture should pass without expected result file");
+}
+
+#[test]
+fn actual_result_path_without_expected_uses_base_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fixture = MergeFixture {
+        name: "12_path_fallback".to_string(),
+        base_path: dir.path().join("12_path_fallback_base.txt"),
+        contrib1_path: dir.path().join("12_path_fallback_contrib1.txt"),
+        contrib2_path: dir.path().join("12_path_fallback_contrib2.txt"),
+        expected_path: None,
+    };
+
+    assert_eq!(
+        actual_result_path(&fixture),
+        dir.path().join("12_path_fallback_actual_result.txt")
+    );
 }
 
 fn run_single_fixture(name: &str) {
