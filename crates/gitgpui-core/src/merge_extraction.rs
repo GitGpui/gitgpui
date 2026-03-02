@@ -180,6 +180,10 @@ pub fn discover_merge_commits(
 ///
 /// The extractor keeps only files changed in both parents relative to merge-base,
 /// skipping trivial cases and binary/non-UTF8 contents.
+///
+/// Missing blobs (path absent in base or one parent) are materialized as empty
+/// content so add/add and modify/delete style conflicts are retained in the
+/// extracted corpus.
 pub fn extract_merge_cases(
     repo: &Path,
     merge: &MergeCommit,
@@ -220,18 +224,11 @@ pub fn extract_merge_cases(
         let parent1_ref = format!("{}:{file_path}", merge.parent1_sha);
         let parent2_ref = format!("{}:{file_path}", merge.parent2_sha);
 
-        let base_bytes = match run_git_bytes_optional(repo, &["show", &base_ref])? {
-            Some(bytes) => bytes,
-            None => continue,
-        };
-        let contrib1_bytes = match run_git_bytes_optional(repo, &["show", &parent1_ref])? {
-            Some(bytes) => bytes,
-            None => continue,
-        };
-        let contrib2_bytes = match run_git_bytes_optional(repo, &["show", &parent2_ref])? {
-            Some(bytes) => bytes,
-            None => continue,
-        };
+        let base_bytes = run_git_bytes_optional(repo, &["show", &base_ref])?.unwrap_or_default();
+        let contrib1_bytes =
+            run_git_bytes_optional(repo, &["show", &parent1_ref])?.unwrap_or_default();
+        let contrib2_bytes =
+            run_git_bytes_optional(repo, &["show", &parent2_ref])?.unwrap_or_default();
 
         // Trivial merge cases are not useful as regression samples.
         if base_bytes == contrib1_bytes
@@ -566,6 +563,50 @@ mod tests {
         tmp
     }
 
+    fn create_missing_side_conflict_merge_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let repo = tmp.path();
+
+        run_git(repo, &["init"]);
+        run_git(repo, &["checkout", "-b", "main"]);
+        configure_git_user(repo);
+
+        std::fs::write(repo.join("moddel.txt"), "base moddel\n").expect("write moddel base");
+        run_git(repo, &["add", "moddel.txt"]);
+        run_git(repo, &["commit", "-m", "base"]);
+
+        run_git(repo, &["checkout", "-b", "branch-a"]);
+        std::fs::remove_file(repo.join("moddel.txt")).expect("delete moddel in branch-a");
+        std::fs::write(repo.join("addadd.txt"), "branch a add\n").expect("write addadd branch-a");
+        run_git(repo, &["add", "-A"]);
+        run_git(repo, &["commit", "-m", "branch-a delete+add"]);
+
+        run_git(repo, &["checkout", "main"]);
+        run_git(repo, &["checkout", "-b", "branch-b"]);
+        std::fs::write(repo.join("moddel.txt"), "branch b modify\n")
+            .expect("write moddel branch-b");
+        std::fs::write(repo.join("addadd.txt"), "branch b add\n").expect("write addadd branch-b");
+        run_git(repo, &["add", "moddel.txt", "addadd.txt"]);
+        run_git(repo, &["commit", "-m", "branch-b modify+add"]);
+
+        let output = Command::new("git")
+            .args(["merge", "branch-a", "--no-edit"])
+            .current_dir(repo)
+            .output()
+            .expect("git merge");
+        assert!(
+            !output.status.success(),
+            "expected merge conflict while building missing-side fixture"
+        );
+
+        std::fs::write(repo.join("moddel.txt"), "resolved moddel\n").expect("resolve moddel");
+        std::fs::write(repo.join("addadd.txt"), "resolved addadd\n").expect("resolve addadd");
+        run_git(repo, &["add", "moddel.txt", "addadd.txt"]);
+        run_git(repo, &["commit", "-m", "merge commit"]);
+
+        tmp
+    }
+
     #[test]
     fn discovers_merge_commits_with_two_parents() {
         let repo = create_conflicting_merge_repo();
@@ -714,6 +755,64 @@ mod tests {
             assert!(case.contrib1.is_ascii());
             assert!(case.contrib2.is_ascii());
         }
+    }
+
+    #[test]
+    fn extracts_cases_with_missing_base_or_parent_as_empty_text() {
+        let repo = create_missing_side_conflict_merge_repo();
+        let merges = discover_merge_commits(repo.path(), 10).expect("discover merges");
+        assert_eq!(merges.len(), 1, "expected one merge commit");
+
+        let cases = extract_merge_cases(repo.path(), &merges[0], 10).expect("extract cases");
+        let paths: Vec<&str> = cases.iter().map(|case| case.file_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["addadd.txt", "moddel.txt"],
+            "expected deterministic extraction including add/add and modify/delete paths"
+        );
+
+        let addadd = cases
+            .iter()
+            .find(|case| case.file_path == "addadd.txt")
+            .expect("find add/add case");
+        assert!(
+            addadd.base.is_empty(),
+            "add/add base should be materialized as empty text"
+        );
+        assert!(
+            !addadd.contrib1.is_empty() && !addadd.contrib2.is_empty(),
+            "both add/add sides should contain added content"
+        );
+        assert_ne!(
+            addadd.contrib1, addadd.contrib2,
+            "add/add conflicting sides should remain distinct"
+        );
+        assert!(
+            addadd.contrib1 == "branch a add\n" || addadd.contrib1 == "branch b add\n",
+            "unexpected contrib1 add/add content: {:?}",
+            addadd.contrib1
+        );
+        assert!(
+            addadd.contrib2 == "branch a add\n" || addadd.contrib2 == "branch b add\n",
+            "unexpected contrib2 add/add content: {:?}",
+            addadd.contrib2
+        );
+
+        let moddel = cases
+            .iter()
+            .find(|case| case.file_path == "moddel.txt")
+            .expect("find modify/delete case");
+        assert_eq!(moddel.base, "base moddel\n");
+        assert!(
+            moddel.contrib1.is_empty() ^ moddel.contrib2.is_empty(),
+            "modify/delete should have exactly one empty side"
+        );
+        assert!(
+            moddel.contrib1 == "branch b modify\n" || moddel.contrib2 == "branch b modify\n",
+            "modify/delete should retain modified content on one side; got {:?} / {:?}",
+            moddel.contrib1,
+            moddel.contrib2
+        );
     }
 
     #[test]
