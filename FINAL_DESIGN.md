@@ -2,6 +2,42 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 38, Fix Stale Test After Golden Expected Generation — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified and fixed a stale test in `crates/gitgpui-core/tests/merge_git_extraction.rs`:
+  - `extraction_writes_fixture_files` was asserting `expected.is_empty()`, which contradicted the iteration 37 change that made `write_fixture_files()` generate golden expected results from the merge engine.
+  - Updated the test to assert expected result equals `merge_file(base, contrib1, contrib2, &MergeOptions::default()).output` and is non-empty.
+- ✅ Validation: `cargo test --workspace --no-default-features --features gix` (**all passed, 0 failed, 5 ignored**).
+- ✅ Validation: `cargo clippy --workspace --no-default-features --features gix -- -D warnings` (**0 warnings**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 18 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration fixed a stale test assertion that was left inconsistent after the iteration 37 golden expected generation change.
+
 ### Progress Snapshot (Iteration 37, Merge-Extraction Golden Expected Generation — March 2, 2026)
 
 Performed this iteration:

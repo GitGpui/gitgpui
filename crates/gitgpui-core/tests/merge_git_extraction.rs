@@ -572,10 +572,18 @@ fn extraction_writes_fixture_files() {
     let base = std::fs::read_to_string(dest.join("abc12345_src_main_rs_base.txt")).unwrap();
     assert_eq!(base, "fn main() {}\n");
 
-    // Expected result should be empty (to be filled later)
+    // Expected result should contain merge engine output (generated golden)
     let expected =
         std::fs::read_to_string(dest.join("abc12345_src_main_rs_expected_result.txt")).unwrap();
-    assert!(expected.is_empty());
+    let golden = merge_file(
+        "fn main() {}\n",
+        "fn main() { println!(\"A\"); }\n",
+        "fn main() { println!(\"B\"); }\n",
+        &MergeOptions::default(),
+    )
+    .output;
+    assert_eq!(expected, golden);
+    assert!(!expected.is_empty());
 }
 
 #[test]
