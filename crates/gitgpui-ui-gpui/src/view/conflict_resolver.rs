@@ -857,9 +857,18 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
 }
 
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
+    use gitgpui_core::conflict_output::GenerateResolvedTextOptions;
+
+    generate_resolved_text_with_options(segments, GenerateResolvedTextOptions::default())
+}
+
+pub fn generate_resolved_text_with_options(
+    segments: &[ConflictSegment],
+    options: gitgpui_core::conflict_output::GenerateResolvedTextOptions<'_>,
+) -> String {
     use gitgpui_core::conflict_output::{
         ConflictOutputBlockRef, ConflictOutputChoice, ConflictOutputSegmentRef,
-        GenerateResolvedTextOptions, generate_resolved_text as generate_core_resolved_text,
+        generate_resolved_text as generate_core_resolved_text,
     };
 
     fn map_choice(choice: ConflictChoice) -> ConflictOutputChoice {
@@ -887,7 +896,7 @@ pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
         })
         .collect();
 
-    generate_core_resolved_text(&core_segments, GenerateResolvedTextOptions::default())
+    generate_core_resolved_text(&core_segments, options)
 }
 
 pub fn build_inline_rows(rows: &[gitgpui_core::file_diff::FileDiffRow]) -> Vec<ConflictInlineRow> {
@@ -1514,6 +1523,9 @@ pub fn is_source_line_in_output(
 #[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
+    use gitgpui_core::conflict_output::{
+        ConflictMarkerLabels, GenerateResolvedTextOptions, UnresolvedConflictMode,
+    };
     use gitgpui_core::file_diff::FileDiffRow;
     use gitgpui_core::file_diff::FileDiffRowKind as RK;
 
@@ -1571,6 +1583,29 @@ mod tests {
         assert_eq!(block.ours, "one\n");
         assert_eq!(block.base.as_deref(), Some("orig\n"));
         assert_eq!(block.theirs, "uno\n");
+    }
+
+    #[test]
+    fn generate_with_options_preserves_unresolved_markers_with_labels() {
+        let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
+        let segments = parse_conflict_markers(input);
+
+        let output = generate_resolved_text_with_options(
+            &segments,
+            GenerateResolvedTextOptions {
+                unresolved_mode: UnresolvedConflictMode::PreserveMarkers,
+                labels: Some(ConflictMarkerLabels {
+                    local: "LOCAL",
+                    remote: "REMOTE",
+                    base: "BASE",
+                }),
+            },
+        );
+
+        assert_eq!(
+            output,
+            "a\n<<<<<<< LOCAL\none\n||||||| BASE\norig\n=======\nuno\n>>>>>>> REMOTE\nb\n"
+        );
     }
 
     #[test]

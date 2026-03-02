@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::AtomicI32;
 use std::time::Duration;
 
 mod app_model;
@@ -807,6 +808,7 @@ pub struct GitGpuiViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub view_mode: GitGpuiViewMode,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
+    pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
 }
 
 impl GitGpuiViewConfig {
@@ -815,14 +817,23 @@ impl GitGpuiViewConfig {
             initial_path,
             view_mode: GitGpuiViewMode::Normal,
             focused_mergetool: None,
+            focused_mergetool_exit_code: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FocusedMergetoolLabels {
+    pub local: String,
+    pub remote: String,
+    pub base: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FocusedMergetoolViewConfig {
     pub repo_path: std::path::PathBuf,
     pub conflicted_file_path: std::path::PathBuf,
+    pub labels: FocusedMergetoolLabels,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1070,10 +1081,12 @@ impl GitGpuiView {
             mut initial_path,
             view_mode,
             focused_mergetool,
+            focused_mergetool_exit_code,
         } = config;
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
         }
+        let focused_mergetool_labels = focused_mergetool.as_ref().map(|cfg| cfg.labels.clone());
         let focused_mergetool_bootstrap = if view_mode == GitGpuiViewMode::FocusedMergetool {
             focused_mergetool
                 .clone()
@@ -1215,6 +1228,8 @@ impl GitGpuiView {
                 conflict_enable_regex_autosolve,
                 conflict_enable_history_autosolve,
                 view_mode,
+                focused_mergetool_labels,
+                focused_mergetool_exit_code.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 window,
@@ -2155,6 +2170,11 @@ mod tests {
         FocusedMergetoolBootstrap::from_view_config(FocusedMergetoolViewConfig {
             repo_path: PathBuf::from(repo_path),
             conflicted_file_path: PathBuf::from(conflicted_file_path),
+            labels: FocusedMergetoolLabels {
+                local: "LOCAL".to_string(),
+                remote: "REMOTE".to_string(),
+                base: "BASE".to_string(),
+            },
         })
     }
 

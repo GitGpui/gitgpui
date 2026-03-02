@@ -1,5 +1,8 @@
 use crate::assets::GitGpuiAssets;
-use crate::view::{FocusedMergetoolViewConfig, GitGpuiView, GitGpuiViewConfig, GitGpuiViewMode};
+use crate::view::{
+    FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitGpuiView, GitGpuiViewConfig,
+    GitGpuiViewMode,
+};
 use gitgpui_core::services::GitBackend;
 use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
@@ -9,12 +12,17 @@ use gpui::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
 const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
 const WINDOW_DEFAULT_WIDTH_PX: f32 = 1100.0;
 const WINDOW_DEFAULT_HEIGHT_PX: f32 = 720.0;
 const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;
+#[cfg(test)]
+const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
+#[cfg(test)]
+const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FocusedMergetoolConfig {
@@ -39,13 +47,13 @@ pub fn run(backend: Arc<dyn GitBackend>) {
 }
 
 /// Launch the unified focused mergetool window using the shared `GitGpuiView`.
-///
-/// Phase 2 only introduces the focused entrypoint and shared bootstrap; save/exit
-/// result wiring is implemented later. For now, a focused window close maps to
-/// "canceled" (`1`) per mergetool conventions.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
-    run_windowed_app(backend, focused_mergetool_launch_config(&config));
-    FOCUSED_MERGETOOL_EXIT_CANCELED
+    let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
+    run_windowed_app(
+        backend,
+        focused_mergetool_launch_config(&config, Some(exit_code.clone())),
+    );
+    exit_code.load(Ordering::SeqCst)
 }
 
 fn normal_launch_config(initial_path: Option<PathBuf>) -> WindowLaunchConfig {
@@ -57,7 +65,10 @@ fn normal_launch_config(initial_path: Option<PathBuf>) -> WindowLaunchConfig {
     }
 }
 
-fn focused_mergetool_launch_config(config: &FocusedMergetoolConfig) -> WindowLaunchConfig {
+fn focused_mergetool_launch_config(
+    config: &FocusedMergetoolConfig,
+    exit_code: Option<Arc<AtomicI32>>,
+) -> WindowLaunchConfig {
     WindowLaunchConfig {
         title: focused_mergetool_window_title(&config.conflicted_file_path),
         app_id: "gitgpui-mergetool".to_string(),
@@ -67,7 +78,13 @@ fn focused_mergetool_launch_config(config: &FocusedMergetoolConfig) -> WindowLau
             focused_mergetool: Some(FocusedMergetoolViewConfig {
                 repo_path: config.repo_path.clone(),
                 conflicted_file_path: config.conflicted_file_path.clone(),
+                labels: FocusedMergetoolLabels {
+                    local: config.label_local.clone(),
+                    remote: config.label_remote.clone(),
+                    base: config.label_base.clone(),
+                },
             }),
+            focused_mergetool_exit_code: exit_code,
         },
         use_legacy_constructor: false,
     }
@@ -234,7 +251,7 @@ mod tests {
             label_base: "BASE".to_string(),
         };
 
-        let launch = focused_mergetool_launch_config(&config);
+        let launch = focused_mergetool_launch_config(&config, None);
         assert_eq!(launch.app_id, "gitgpui-mergetool");
         assert_eq!(launch.title, "GitGpui - Mergetool (conflict.txt)");
         assert_eq!(launch.view_config.initial_path, Some(config.repo_path));
@@ -247,7 +264,20 @@ mod tests {
             Some(FocusedMergetoolViewConfig {
                 repo_path: PathBuf::from("/repo"),
                 conflicted_file_path: PathBuf::from("/repo/src/conflict.txt"),
+                labels: FocusedMergetoolLabels {
+                    local: "LOCAL".to_string(),
+                    remote: "REMOTE".to_string(),
+                    base: "BASE".to_string(),
+                },
             })
         );
+        assert!(launch.view_config.focused_mergetool_exit_code.is_none());
+    }
+
+    #[test]
+    fn focused_mergetool_exit_codes_match_mergetool_contract() {
+        assert_eq!(FOCUSED_MERGETOOL_EXIT_SUCCESS, 0);
+        assert_eq!(FOCUSED_MERGETOOL_EXIT_CANCELED, 1);
+        assert_eq!(FOCUSED_MERGETOOL_EXIT_ERROR, 2);
     }
 }

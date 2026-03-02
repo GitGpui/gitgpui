@@ -11,6 +11,10 @@ fn show_external_mergetool_actions(view_mode: GitGpuiViewMode) -> bool {
     matches!(view_mode, GitGpuiViewMode::Normal)
 }
 
+fn show_conflict_save_stage_action(view_mode: GitGpuiViewMode) -> bool {
+    matches!(view_mode, GitGpuiViewMode::Normal)
+}
+
 impl MainPaneView {
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
@@ -354,6 +358,12 @@ impl MainPaneView {
             }
 
             if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
+                let focused_mergetool_mode = self.view_mode == GitGpuiViewMode::FocusedMergetool;
+                let save_label = if focused_mergetool_mode {
+                    "Save & close"
+                } else {
+                    "Save"
+                };
                 let mergetool_path = path.clone();
                 let save_path = path.clone();
                 controls = controls
@@ -371,9 +381,17 @@ impl MainPaneView {
                             )
                     })
                     .child(
-                        zed::Button::new("conflict_save", "Save")
+                        zed::Button::new("conflict_save", save_label)
                             .style(zed::ButtonStyle::Outlined)
                             .on_click(theme, cx, move |this, _e, _w, cx| {
+                                if this.view_mode == GitGpuiViewMode::FocusedMergetool {
+                                    this.focused_mergetool_save_and_exit(
+                                        repo_id,
+                                        save_path.clone(),
+                                        cx,
+                                    );
+                                    return;
+                                }
                                 let text = this
                                     .conflict_resolver_input
                                     .read_with(cx, |i, _| i.text().to_string());
@@ -386,42 +404,46 @@ impl MainPaneView {
                                 });
                             }),
                     )
-                    .child({
+                    .when(show_conflict_save_stage_action(self.view_mode), |d| {
                         let save_path = path.clone();
-                        zed::Button::new("conflict_save_stage", "Save & stage")
-                            .style(zed::ButtonStyle::Filled)
-                            .on_click(theme, cx, move |this, e, window, cx| {
-                                let text = this
-                                    .conflict_resolver_input
-                                    .read_with(cx, |i, _| i.text().to_string());
-                                let stage_safety = conflict_resolver::conflict_stage_safety_check(
-                                    &text,
-                                    &this.conflict_resolver.marker_segments,
-                                );
-                                if stage_safety.requires_confirmation() {
-                                    this.open_popover_at(
-                                        PopoverKind::ConflictSaveStageConfirm {
+                        d.child(
+                            zed::Button::new("conflict_save_stage", "Save & stage")
+                                .style(zed::ButtonStyle::Filled)
+                                .on_click(theme, cx, move |this, e, window, cx| {
+                                    let text = this
+                                        .conflict_resolver_input
+                                        .read_with(cx, |i, _| i.text().to_string());
+                                    let stage_safety =
+                                        conflict_resolver::conflict_stage_safety_check(
+                                            &text,
+                                            &this.conflict_resolver.marker_segments,
+                                        );
+                                    if stage_safety.requires_confirmation() {
+                                        this.open_popover_at(
+                                            PopoverKind::ConflictSaveStageConfirm {
+                                                repo_id,
+                                                path: save_path.clone(),
+                                                has_conflict_markers: stage_safety
+                                                    .has_conflict_markers,
+                                                unresolved_blocks: stage_safety.unresolved_blocks,
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.conflict_resolver_sync_session_resolutions_from_output(
+                                            &text,
+                                        );
+                                        this.store.dispatch(Msg::SaveWorktreeFile {
                                             repo_id,
                                             path: save_path.clone(),
-                                            has_conflict_markers: stage_safety.has_conflict_markers,
-                                            unresolved_blocks: stage_safety.unresolved_blocks,
-                                        },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                } else {
-                                    this.conflict_resolver_sync_session_resolutions_from_output(
-                                        &text,
-                                    );
-                                    this.store.dispatch(Msg::SaveWorktreeFile {
-                                        repo_id,
-                                        path: save_path.clone(),
-                                        contents: text,
-                                        stage: true,
-                                    });
-                                }
-                            })
+                                            contents: text,
+                                            stage: true,
+                                        });
+                                    }
+                                }),
+                        )
                     });
             }
         } else if !is_file_preview {
@@ -2999,13 +3021,21 @@ impl MainPaneView {
 
 #[cfg(test)]
 mod tests {
-    use super::show_external_mergetool_actions;
+    use super::{show_conflict_save_stage_action, show_external_mergetool_actions};
     use crate::view::GitGpuiViewMode;
 
     #[test]
     fn shows_external_mergetool_actions_only_in_normal_mode() {
         assert!(show_external_mergetool_actions(GitGpuiViewMode::Normal));
         assert!(!show_external_mergetool_actions(
+            GitGpuiViewMode::FocusedMergetool
+        ));
+    }
+
+    #[test]
+    fn shows_save_stage_action_only_in_normal_mode() {
+        assert!(show_conflict_save_stage_action(GitGpuiViewMode::Normal));
+        assert!(!show_conflict_save_stage_action(
             GitGpuiViewMode::FocusedMergetool
         ));
     }

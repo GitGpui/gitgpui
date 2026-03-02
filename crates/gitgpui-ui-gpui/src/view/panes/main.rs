@@ -1,6 +1,7 @@
 use super::super::path_display;
 use super::super::*;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 mod diff_cache;
 mod diff_search;
@@ -8,6 +9,9 @@ mod diff_text;
 mod preview;
 
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
+const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
+const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;
+const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;
 
 /// Extract unique source lines from two-way diff rows for provenance matching.
 ///
@@ -41,10 +45,20 @@ fn clear_diff_selection_action(view_mode: GitGpuiViewMode) -> ClearDiffSelection
     }
 }
 
+fn focused_mergetool_save_exit_code(total_conflicts: usize, resolved_conflicts: usize) -> i32 {
+    if total_conflicts == 0 || total_conflicts == resolved_conflicts {
+        FOCUSED_MERGETOOL_EXIT_SUCCESS
+    } else {
+        FOCUSED_MERGETOOL_EXIT_CANCELED
+    }
+}
+
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) view_mode: GitGpuiViewMode,
+    pub(in super::super) focused_mergetool_labels: Option<FocusedMergetoolLabels>,
+    pub(in super::super) focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) date_time_format: DateTimeFormat,
     _ui_model_subscription: gpui::Subscription,
@@ -211,8 +225,87 @@ impl MainPaneView {
             ClearDiffSelectionAction::ClearSelection => {
                 self.store.dispatch(Msg::ClearDiffSelection { repo_id });
             }
-            ClearDiffSelectionAction::ExitFocusedMergetool => cx.quit(),
+            ClearDiffSelectionAction::ExitFocusedMergetool => {
+                self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_CANCELED);
+                cx.quit();
+            }
         }
+    }
+
+    fn set_focused_mergetool_exit_code(&self, code: i32) {
+        if let Some(exit_code) = &self.focused_mergetool_exit_code {
+            exit_code.store(code, Ordering::SeqCst);
+        }
+    }
+
+    fn focused_mergetool_labels_or_default(&self) -> FocusedMergetoolLabels {
+        self.focused_mergetool_labels
+            .clone()
+            .unwrap_or(FocusedMergetoolLabels {
+                local: "LOCAL".to_string(),
+                remote: "REMOTE".to_string(),
+                base: "BASE".to_string(),
+            })
+    }
+
+    pub(in super::super) fn focused_mergetool_save_and_exit(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use gitgpui_core::conflict_output::{
+            ConflictMarkerLabels, GenerateResolvedTextOptions, UnresolvedConflictMode,
+        };
+
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            cx.quit();
+            return;
+        };
+
+        let labels = self.focused_mergetool_labels_or_default();
+        let output = conflict_resolver::generate_resolved_text_with_options(
+            &self.conflict_resolver.marker_segments,
+            GenerateResolvedTextOptions {
+                unresolved_mode: UnresolvedConflictMode::PreserveMarkers,
+                labels: Some(ConflictMarkerLabels {
+                    local: labels.local.as_str(),
+                    remote: labels.remote.as_str(),
+                    base: labels.base.as_str(),
+                }),
+            },
+        );
+
+        let full_path = repo.spec.workdir.join(&path);
+        if let Some(parent) = full_path.parent().filter(|p| !p.as_os_str().is_empty())
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "Failed to create parent directory for {}: {err}",
+                full_path.display()
+            );
+            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            cx.quit();
+            return;
+        }
+
+        if let Err(err) = std::fs::write(&full_path, output.as_bytes()) {
+            eprintln!(
+                "Failed to write merged output to {}: {err}",
+                full_path.display()
+            );
+            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            cx.quit();
+            return;
+        }
+
+        let total = conflict_resolver::conflict_count(&self.conflict_resolver.marker_segments);
+        let resolved =
+            conflict_resolver::resolved_conflict_count(&self.conflict_resolver.marker_segments);
+        let exit_code = focused_mergetool_save_exit_code(total, resolved);
+        self.set_focused_mergetool_exit_code(exit_code);
+        cx.quit();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -229,6 +322,8 @@ impl MainPaneView {
         conflict_enable_regex_autosolve: bool,
         conflict_enable_history_autosolve: bool,
         view_mode: GitGpuiViewMode,
+        focused_mergetool_labels: Option<FocusedMergetoolLabels>,
+        focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
         root_view: WeakEntity<GitGpuiView>,
         tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
@@ -350,6 +445,8 @@ impl MainPaneView {
             store,
             state,
             view_mode,
+            focused_mergetool_labels,
+            focused_mergetool_exit_code,
             theme,
             date_time_format,
             _ui_model_subscription: subscription,
@@ -3177,7 +3274,9 @@ impl Render for MainPaneView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClearDiffSelectionAction, clear_diff_selection_action};
+    use super::{
+        ClearDiffSelectionAction, clear_diff_selection_action, focused_mergetool_save_exit_code,
+    };
     use crate::view::GitGpuiViewMode;
 
     #[test]
@@ -3194,5 +3293,16 @@ mod tests {
             clear_diff_selection_action(GitGpuiViewMode::FocusedMergetool),
             ClearDiffSelectionAction::ExitFocusedMergetool
         );
+    }
+
+    #[test]
+    fn focused_mergetool_save_exit_code_is_success_when_all_resolved() {
+        assert_eq!(focused_mergetool_save_exit_code(0, 0), 0);
+        assert_eq!(focused_mergetool_save_exit_code(3, 3), 0);
+    }
+
+    #[test]
+    fn focused_mergetool_save_exit_code_is_canceled_when_unresolved_remain() {
+        assert_eq!(focused_mergetool_save_exit_code(3, 2), 1);
     }
 }
