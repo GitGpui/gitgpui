@@ -2408,3 +2408,57 @@ fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
         "expected added line\n{dt_text}"
     );
 }
+
+// ── --help / --version exit code tests ───────────────────────────────
+
+#[test]
+fn help_flag_exits_zero() {
+    let out = run_gitgpui(["--help"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--help should exit 0, not 2 (error)"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("gitgpui-app"),
+        "help output should mention the binary name"
+    );
+}
+
+#[test]
+fn version_flag_exits_zero() {
+    let out = run_gitgpui(["--version"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--version should exit 0, not 2 (error)"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("gitgpui-app"),
+        "version output should mention the binary name"
+    );
+}
+
+#[test]
+fn subcommand_help_exits_zero() {
+    for subcmd in ["difftool", "mergetool", "setup"] {
+        let out = run_gitgpui([subcmd, "--help"]);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{subcmd} --help should exit 0"
+        );
+    }
+}
+
+#[test]
+fn help_subcommand_exits_zero() {
+    let out = run_gitgpui(["help"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "help subcommand should exit 0"
+    );
+}

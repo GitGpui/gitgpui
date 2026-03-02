@@ -917,6 +917,17 @@ fn parse_app_mode_from_args_env_and_config(
             }),
         },
         Err(clap_err) => {
+            // --help and --version produce informational clap errors that
+            // should print to stdout and exit 0, not fall through to the
+            // compat parser and be treated as real errors (exit 2).
+            use clap::error::ErrorKind;
+            match clap_err.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    clap_err.exit();
+                }
+                _ => {}
+            }
+
             let compat_args = if normalized_args.len() > 1 {
                 &normalized_args[1..]
             } else {
