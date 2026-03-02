@@ -2,6 +2,46 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 33, Merge Extraction Subdirectory Support Hardening — March 2, 2026)
+
+Performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Implemented a Phase 3C robustness hardening in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - Replaced repository validation heuristic (`repo/.git` existence) with git-native validation via `git rev-parse --git-dir`.
+  - This enables merge extraction APIs to work when called from nested subdirectories inside a repository (not only repo root paths).
+- ✅ Added regression tests in `crates/gitgpui-core/src/merge_extraction.rs`:
+  - `discovers_merge_commits_from_repo_subdirectory`
+  - `extracts_merge_cases_from_repo_subdirectory`
+- ✅ Validation command:
+  - `cargo test -p gitgpui-core merge_extraction -- --nocapture` (**6 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Test strategy: all three sections (A: Git scenarios, B: existing test extensions, C: fixture harness) complete.
+- ✅ Rollout plan: all three phases (MVP, compat parity hardening, regression suite) complete.
+- ✅ Acceptance criteria: all 5 criteria met.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — 41 tests.
+- ✅ Phase 1B: t6427 zdiff3 — 4 tests.
+- ✅ Phase 1C: Conflict label formatting — 5 tests.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — 16 tests + 9 seed fixtures.
+- ✅ Phase 3A–3C: Permutation corpus (243 sampled + 161K on-demand) + real-world merge extraction.
+  - Hardening this iteration: extraction discovery now works from repository subdirectory paths.
+- ✅ Phase 4A: Mergetool E2E — 65 tests.
+- ✅ Phase 4B: Difftool E2E — 32 tests.
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented. This iteration improved Phase 3C portability/robustness by making repository detection git-native and adding dedicated regression coverage for subdirectory invocation.
+
 ### Progress Snapshot (Iteration 33, Comprehensive Verification Audit — March 2, 2026)
 
 Performed this iteration:

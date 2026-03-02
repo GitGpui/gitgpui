@@ -304,7 +304,8 @@ fn allocate_unique_prefix(base_prefix: &str, used_prefixes: &mut HashSet<String>
 }
 
 fn ensure_git_repository(repo: &Path) -> Result<(), MergeExtractionError> {
-    if repo.join(".git").exists() {
+    let output = run_git(repo, &["rev-parse", "--git-dir"])?;
+    if output.status.success() {
         Ok(())
     } else {
         Err(MergeExtractionError::NotGitRepository(repo.to_path_buf()))
@@ -493,6 +494,20 @@ mod tests {
     }
 
     #[test]
+    fn discovers_merge_commits_from_repo_subdirectory() {
+        let repo = create_conflicting_merge_repo();
+        let subdir = repo.path().join("nested").join("dir");
+        std::fs::create_dir_all(&subdir).expect("create nested subdirectory");
+
+        let merges = discover_merge_commits(&subdir, 10).expect("discover merges from subdir");
+        assert_eq!(
+            merges.len(),
+            1,
+            "expected merge discovery to work from nested subdirectory"
+        );
+    }
+
+    #[test]
     fn extracts_sorted_text_cases_and_skips_binary() {
         let repo = create_conflicting_merge_repo();
         let merges = discover_merge_commits(repo.path(), 10).expect("discover merges");
@@ -511,6 +526,29 @@ mod tests {
             assert!(case.contrib1.is_ascii());
             assert!(case.contrib2.is_ascii());
         }
+    }
+
+    #[test]
+    fn extracts_merge_cases_from_repo_subdirectory() {
+        let repo = create_conflicting_merge_repo();
+        let subdir = repo.path().join("nested").join("dir");
+        std::fs::create_dir_all(&subdir).expect("create nested subdirectory");
+
+        let cases = extract_merge_cases_from_repo(
+            &subdir,
+            MergeExtractionOptions {
+                max_merges: 10,
+                max_files_per_merge: 10,
+            },
+        )
+        .expect("extract cases from subdir");
+
+        let paths: Vec<&str> = cases.iter().map(|case| case.file_path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec!["a.txt", "z.txt"],
+            "expected deterministic sorted text-only extraction from subdir"
+        );
     }
 
     #[test]
