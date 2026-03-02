@@ -427,12 +427,35 @@ mod tests {
         let entries = build_config_entries("/bin/gitgpui-app");
         let output = format_commands(&entries, "--global");
 
+        // Headless mergetool entries
         assert!(output.contains("git config --global merge.tool"));
-        assert!(output.contains("git config --global diff.tool"));
+        assert!(output.contains("git config --global mergetool.gitgpui.cmd"));
         assert!(output.contains("git config --global mergetool.trustExitCode"));
         assert!(output.contains("git config --global mergetool.gitgpui.trustExitCode"));
+        assert!(output.contains("git config --global mergetool.prompt"));
+
+        // Headless difftool entries
+        assert!(output.contains("git config --global diff.tool"));
+        assert!(output.contains("git config --global difftool.gitgpui.cmd"));
+        assert!(output.contains("git config --global difftool.trustExitCode"));
+        assert!(
+            output.contains("git config --global difftool.gitgpui.trustExitCode"),
+            "expected per-tool difftool trustExitCode entry:\n{output}"
+        );
+        assert!(output.contains("git config --global difftool.prompt"));
+
+        // GUI tool entries
+        assert!(output.contains("git config --global merge.guitool"));
         assert!(output.contains("git config --global mergetool.gitgpui-gui.cmd"));
+        assert!(output.contains("git config --global mergetool.gitgpui-gui.trustExitCode"));
+        assert!(output.contains("git config --global diff.guitool"));
         assert!(output.contains("git config --global difftool.gitgpui-gui.cmd"));
+        assert!(output.contains("git config --global difftool.gitgpui-gui.trustExitCode"));
+
+        // GUI default auto-selection
+        assert!(output.contains("git config --global mergetool.guiDefault"));
+        assert!(output.contains("git config --global difftool.guiDefault"));
+
         assert!(
             !output.contains("''/bin/gitgpui-app'"),
             "dry-run output should not contain broken nested quoting:\n{output}"

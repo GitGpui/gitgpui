@@ -703,7 +703,8 @@ fn patience_lis(pairs: &[(usize, usize)]) -> Vec<(usize, usize)> {
 
     // Reconstruct.
     let mut result = Vec::with_capacity(tails.len());
-    let mut idx = *tails.last().unwrap();
+    // SAFETY: loop above runs at least once (n >= 1) and always pushes to `tails`.
+    let mut idx = *tails.last().expect("tails is non-empty after processing pairs");
     loop {
         result.push(pairs[idx]);
         match prev[idx] {

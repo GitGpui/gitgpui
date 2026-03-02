@@ -976,10 +976,26 @@ mod tests {
         assert_eq!(result.exit_code, exit_code::CANCELED);
 
         let merged = fs::read_to_string(&config.merged).unwrap();
-        // Conflict markers should use CRLF when input uses CRLF.
-        assert!(merged.contains("<<<<<<<"), "output: {merged}");
-        assert!(merged.contains("======="), "output: {merged}");
-        assert!(merged.contains(">>>>>>>"), "output: {merged}");
+        // Conflict markers should use CRLF when input uses CRLF —
+        // verify the markers themselves are terminated with \r\n.
+        assert!(
+            merged.contains("<<<<<<< local.txt\r\n"),
+            "opening marker should be terminated with CRLF: {merged:?}"
+        );
+        assert!(
+            merged.contains("\r\n=======\r\n"),
+            "separator marker should be surrounded by CRLF: {merged:?}"
+        );
+        assert!(
+            merged.contains("\r\n>>>>>>> remote.txt\r\n"),
+            "closing marker should be surrounded by CRLF: {merged:?}"
+        );
+        // Verify all line endings in the output use CRLF consistently.
+        assert_eq!(
+            merged.matches("\r\n").count(),
+            merged.matches('\n').count(),
+            "all line endings in conflict output should be CRLF: {merged:?}"
+        );
     }
 
     // ── Merged output path ───────────────────────────────────────────

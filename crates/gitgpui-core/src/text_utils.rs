@@ -560,7 +560,8 @@ pub fn merge_intervals(intervals: &[(usize, usize)]) -> Vec<(usize, usize)> {
     let mut result = vec![sorted[0]];
 
     for &(start, end) in &sorted[1..] {
-        let last = result.last_mut().unwrap();
+        // SAFETY: `result` is initialized with `vec![sorted[0]]` and only grows.
+        let last = result.last_mut().expect("result is non-empty by construction");
         if start <= last.1 {
             last.1 = last.1.max(end);
         } else {
