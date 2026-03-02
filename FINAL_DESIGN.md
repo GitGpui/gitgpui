@@ -2,15 +2,25 @@
 
 ## Implementation Progress
 
-### Progress Snapshot (Iteration 24, Independent Completion Verification — March 2, 2026)
+### Progress Snapshot (Iteration 24, Global Setup E2E Hardening — March 2, 2026)
 
-Verification performed this iteration:
+Implementation performed this iteration:
 - ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
-- ✅ `cargo test --workspace --no-default-features --features gix`: **1128 passed, 0 failed, 5 ignored**.
-- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
-- ✅ Two parallel agent-driven audits verified all design document components against implementation:
-  - External usage audit: all CLI modes (difftool, mergetool, setup) confirmed with all documented flags and env fallback in cli.rs. Exit code policy (0/1/≥2) confirmed. Setup config emits all 18 entries (headless+GUI tools, guiDefault=auto, trustExitCode, prompt). All 10 behavior matrix items verified (spaces/unicode, subdirectory, no-base, binary, deleted output, symlink, submodule, CRLF, dir-diff, cancel/exit). KDiff3/Meld compatibility (--L1/--L2/--L3, -o/--output/--out, --base, positional forms) confirmed.
-  - Reference test portability audit: all 12 sub-phases verified with specific test counts — Phase 1A (41 tests), 1B (4 tests), 1C (5 tests), 2A-2C (16 tests + 9 fixtures), 3A (243 sampled + 161K exhaustive), 3C (merge extraction framework), 4A (65 tests), 4B (28 tests), 5A (8+ tests), 5B (8 tests), 5C (16 tests).
+- ✅ Added isolated global Git-config test harness in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs`:
+  - temp `HOME`
+  - temp `XDG_CONFIG_HOME`
+  - temp `GIT_CONFIG_GLOBAL`
+  - `GIT_CONFIG_NOSYSTEM=1`
+- ✅ Added new end-to-end setup coverage for global scope (no `--local`):
+  - `setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config`
+  - `setup_global_enables_git_difftool_end_to_end_with_isolated_global_config`
+- ✅ New tests verify:
+  - `setup` writes to isolated global config
+  - no unintended repo-local `merge.tool` / `diff.tool` overrides are created
+  - `git mergetool` and `git difftool` invocation works via global config in real Git execution flow
+- ✅ Validation commands:
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration setup_global_ -- --nocapture`
+  - `cargo test -p gitgpui-app --no-default-features --features gix --test standalone_tool_mode_integration`
 
 External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with all documented flags and env fallback.
@@ -18,6 +28,7 @@ External Diff/Merge Usage Design (`external_usage.md`):
 - ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
 - ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
 - ✅ Behavior matrix: all 10 required scenarios covered by automated tests.
+- ✅ Setup E2E now covers both local (`--local`) and isolated global scopes end-to-end.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
@@ -30,10 +41,11 @@ Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
 - ✅ Phase 4A: Mergetool E2E — 65 tests.
 - ✅ Phase 4B: Difftool E2E — 28 tests.
 - ✅ Phase 5A–5C: Meld-derived algorithm tests — 32 tests.
+- ✅ Phase 4A/4B strengthened with isolated global-setup invocation parity tests.
 - 🔧 Partially implemented components: none.
 - ⬜ Not-yet-started components: none.
 
-Conclusion: All components from both design documents are fully implemented and verified. This is the tenth independent completion verification (iterations 13, 15, 16, 17, 18, 19, 20, 21, 22, 24). Test count stable at 1128.
+Conclusion: All components from both design documents remain fully implemented, with additional global setup invocation coverage now locked in by automated E2E tests.
 
 ### Progress Snapshot (Iteration 23, Completion Verification Refresh — March 2, 2026)
 

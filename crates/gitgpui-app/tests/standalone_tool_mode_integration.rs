@@ -32,6 +32,24 @@ where
         .expect("gitgpui-app command to run")
 }
 
+fn run_gitgpui_in_dir_with_global_env<I, S>(
+    dir: &Path,
+    args: I,
+    env: &IsolatedGlobalGitEnv,
+) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new(gitgpui_bin());
+    env.apply_to_command(&mut command);
+    command
+        .current_dir(dir)
+        .args(args)
+        .output()
+        .expect("gitgpui-app command to run")
+}
+
 fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
     let output = Command::new("git")
         .args(["-C"])
@@ -1371,10 +1389,7 @@ fn setup_local_writes_config_to_repo() {
 
     let gui_diff_cmd = git_config_get(dir.path(), "difftool.gitgpui-gui.cmd")
         .expect("GUI difftool cmd should be set");
-    assert!(
-        gui_diff_cmd.contains("--gui"),
-        "GUI diff cmd missing --gui"
-    );
+    assert!(gui_diff_cmd.contains("--gui"), "GUI diff cmd missing --gui");
     assert_placeholder_is_quoted(&gui_diff_cmd, "LOCAL");
     assert_placeholder_is_quoted(&gui_diff_cmd, "REMOTE");
     assert_placeholder_is_quoted(&gui_diff_cmd, "MERGED");
@@ -1683,6 +1698,97 @@ fn setup_e2e_commit(repo: &Path, message: &str) {
     );
 }
 
+struct IsolatedGlobalGitEnv {
+    home_dir: PathBuf,
+    xdg_config_home: PathBuf,
+    global_config: PathBuf,
+}
+
+impl IsolatedGlobalGitEnv {
+    fn new(root: &Path) -> Self {
+        let home_dir = root.join("home");
+        let xdg_config_home = root.join("xdg");
+        let global_config = root.join("global.gitconfig");
+
+        fs::create_dir_all(&home_dir).expect("create isolated HOME directory");
+        fs::create_dir_all(&xdg_config_home).expect("create isolated XDG_CONFIG_HOME directory");
+        fs::write(&global_config, "").expect("create isolated global git config file");
+
+        Self {
+            home_dir,
+            xdg_config_home,
+            global_config,
+        }
+    }
+
+    fn apply_to_command(&self, command: &mut Command) {
+        command
+            .env("HOME", &self.home_dir)
+            .env("XDG_CONFIG_HOME", &self.xdg_config_home)
+            .env("GIT_CONFIG_GLOBAL", &self.global_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_CONFIG_SYSTEM")
+            .env_remove("DISPLAY")
+            .env_remove("WAYLAND_DISPLAY");
+    }
+}
+
+fn setup_e2e_git_capture_with_env(
+    repo: &Path,
+    args: &[&str],
+    env: &IsolatedGlobalGitEnv,
+) -> Output {
+    let mut command = Command::new("git");
+    env.apply_to_command(&mut command);
+    command
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git command to run")
+}
+
+fn setup_e2e_git_with_env(repo: &Path, args: &[&str], env: &IsolatedGlobalGitEnv) {
+    let output = setup_e2e_git_capture_with_env(repo, args, env);
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn setup_e2e_init_with_env(repo: &Path, env: &IsolatedGlobalGitEnv) {
+    setup_e2e_git_with_env(repo, &["init", "-b", "main"], env);
+    setup_e2e_git_with_env(repo, &["config", "user.email", "test@test.com"], env);
+    setup_e2e_git_with_env(repo, &["config", "user.name", "Test"], env);
+    setup_e2e_git_with_env(repo, &["config", "commit.gpgsign", "false"], env);
+}
+
+fn setup_e2e_commit_with_env(repo: &Path, message: &str, env: &IsolatedGlobalGitEnv) {
+    setup_e2e_git_with_env(repo, &["add", "-A"], env);
+    setup_e2e_git_with_env(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", message],
+        env,
+    );
+}
+
+fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Option<String> {
+    let mut command = Command::new("git");
+    env.apply_to_command(&mut command);
+    let output = command
+        .args(["config", "--global", "--get", key])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
 /// After `gitgpui-app setup --local`, `git mergetool` should invoke
 /// gitgpui-app's built-in 3-way merge for conflicted files.
 ///
@@ -1697,10 +1803,7 @@ fn setup_local_enables_git_mergetool_end_to_end() {
 
     // 1. Initialize repo and run setup.
     setup_e2e_init(repo);
-    let setup = run_gitgpui_in_dir(
-        repo,
-        [OsString::from("setup"), OsString::from("--local")],
-    );
+    let setup = run_gitgpui_in_dir(repo, [OsString::from("setup"), OsString::from("--local")]);
     let text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
 
@@ -1756,10 +1859,7 @@ fn setup_local_enables_git_difftool_end_to_end() {
 
     // 1. Initialize repo and run setup.
     setup_e2e_init(repo);
-    let setup = run_gitgpui_in_dir(
-        repo,
-        [OsString::from("setup"), OsString::from("--local")],
-    );
+    let setup = run_gitgpui_in_dir(repo, [OsString::from("setup"), OsString::from("--local")]);
     let text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{text}");
 
@@ -1804,10 +1904,7 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
     let conflict_path = "docs/spaced 日本語 file.txt";
 
     setup_e2e_init(repo);
-    let setup = run_gitgpui_in_dir(
-        repo,
-        [OsString::from("setup"), OsString::from("--local")],
-    );
+    let setup = run_gitgpui_in_dir(repo, [OsString::from("setup"), OsString::from("--local")]);
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
@@ -1860,10 +1957,7 @@ fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
     let diff_path = "docs/spaced 日本語 file.txt";
 
     setup_e2e_init(repo);
-    let setup = run_gitgpui_in_dir(
-        repo,
-        [OsString::from("setup"), OsString::from("--local")],
-    );
+    let setup = run_gitgpui_in_dir(repo, [OsString::from("setup"), OsString::from("--local")]);
     let setup_text = output_text(&setup);
     assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
 
@@ -1896,5 +1990,133 @@ fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
     assert!(
         !dt_stderr.contains("No such file or directory"),
         "quoted path handling failed\n{dt_text}"
+    );
+}
+
+/// `gitgpui-app setup` (global scope) should configure an isolated global
+/// gitconfig so `git mergetool` works end-to-end without local repo config.
+#[test]
+fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let env = IsolatedGlobalGitEnv::new(tmp.path());
+
+    setup_e2e_init_with_env(&repo, &env);
+
+    let setup = run_gitgpui_in_dir_with_global_env(&repo, [OsString::from("setup")], &env);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+    assert!(
+        String::from_utf8_lossy(&setup.stdout).contains("Configured gitgpui as global"),
+        "expected global setup message\n{setup_text}"
+    );
+
+    assert_eq!(
+        git_config_get_global_with_env(&env, "merge.tool").as_deref(),
+        Some("gitgpui"),
+        "expected merge.tool in isolated global config"
+    );
+    assert_eq!(
+        git_config_get_global_with_env(&env, "diff.tool").as_deref(),
+        Some("gitgpui"),
+        "expected diff.tool in isolated global config"
+    );
+
+    // Ensure setup did not write a local-scope override.
+    let local_merge_tool =
+        setup_e2e_git_capture_with_env(&repo, &["config", "--local", "--get", "merge.tool"], &env);
+    assert!(
+        !local_merge_tool.status.success(),
+        "setup without --local should not set repo-local merge.tool"
+    );
+
+    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
+    setup_e2e_commit_with_env(&repo, "base", &env);
+
+    setup_e2e_git_with_env(&repo, &["checkout", "-b", "ours"], &env);
+    write_file(&repo.join("file.txt"), "line1\nOURS_CHANGE\nline3\n");
+    setup_e2e_commit_with_env(&repo, "ours", &env);
+
+    setup_e2e_git_with_env(&repo, &["checkout", "main"], &env);
+    write_file(&repo.join("file.txt"), "line1\nTHEIRS_CHANGE\nline3\n");
+    setup_e2e_commit_with_env(&repo, "theirs", &env);
+
+    let merge = setup_e2e_git_capture_with_env(&repo, &["merge", "ours"], &env);
+    assert!(
+        !merge.status.success(),
+        "expected merge conflict but git merge succeeded"
+    );
+
+    let mt = setup_e2e_git_capture_with_env(&repo, &["mergetool"], &env);
+    let mt_stderr = String::from_utf8_lossy(&mt.stderr);
+    assert_eq!(
+        mt.status.code(),
+        Some(1),
+        "expected unresolved exit\n{mt_stderr}"
+    );
+    assert!(
+        mt_stderr.contains("conflict(s) remain"),
+        "expected gitgpui conflict message in mergetool stderr\n{}",
+        output_text(&mt)
+    );
+    assert!(
+        mt_stderr.contains("CONFLICT (content)"),
+        "expected CONFLICT marker from gitgpui\n{}",
+        output_text(&mt)
+    );
+}
+
+/// `gitgpui-app setup` (global scope) should configure an isolated global
+/// gitconfig so `git difftool` works end-to-end without local repo config.
+#[test]
+fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    let env = IsolatedGlobalGitEnv::new(tmp.path());
+
+    setup_e2e_init_with_env(&repo, &env);
+
+    let setup = run_gitgpui_in_dir_with_global_env(&repo, [OsString::from("setup")], &env);
+    let setup_text = output_text(&setup);
+    assert_eq!(setup.status.code(), Some(0), "setup failed\n{setup_text}");
+
+    let local_diff_tool =
+        setup_e2e_git_capture_with_env(&repo, &["config", "--local", "--get", "diff.tool"], &env);
+    assert!(
+        !local_diff_tool.status.success(),
+        "setup without --local should not set repo-local diff.tool"
+    );
+    assert_eq!(
+        git_config_get_global_with_env(&env, "diff.tool").as_deref(),
+        Some("gitgpui"),
+        "expected diff.tool in isolated global config"
+    );
+
+    write_file(&repo.join("file.txt"), "line1\nline2\nline3\n");
+    setup_e2e_commit_with_env(&repo, "initial", &env);
+    write_file(&repo.join("file.txt"), "line1\nMODIFIED\nline3\n");
+
+    let dt = setup_e2e_git_capture_with_env(&repo, &["difftool"], &env);
+    let dt_text = output_text(&dt);
+    assert_eq!(
+        dt.status.code(),
+        Some(0),
+        "git difftool should exit 0\n{dt_text}"
+    );
+
+    let stdout = String::from_utf8_lossy(&dt.stdout);
+    assert!(
+        stdout.contains("@@"),
+        "expected diff hunk header\n{dt_text}"
+    );
+    assert!(
+        stdout.contains("-line2"),
+        "expected removed line\n{dt_text}"
+    );
+    assert!(
+        stdout.contains("+MODIFIED"),
+        "expected added line\n{dt_text}"
     );
 }
