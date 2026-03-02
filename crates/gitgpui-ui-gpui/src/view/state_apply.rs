@@ -100,6 +100,7 @@ impl GitGpuiView {
         });
 
         self.state = next;
+        self.drive_focused_mergetool_bootstrap();
 
         prev_error != next_error
     }

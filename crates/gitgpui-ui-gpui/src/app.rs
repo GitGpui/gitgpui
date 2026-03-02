@@ -1,5 +1,5 @@
 use crate::assets::GitGpuiAssets;
-use crate::view::{GitGpuiView, GitGpuiViewConfig, GitGpuiViewMode};
+use crate::view::{FocusedMergetoolViewConfig, GitGpuiView, GitGpuiViewConfig, GitGpuiViewMode};
 use gitgpui_core::services::GitBackend;
 use gitgpui_state::session;
 use gitgpui_state::store::AppStore;
@@ -64,6 +64,10 @@ fn focused_mergetool_launch_config(config: &FocusedMergetoolConfig) -> WindowLau
         view_config: GitGpuiViewConfig {
             initial_path: Some(config.repo_path.clone()),
             view_mode: GitGpuiViewMode::FocusedMergetool,
+            focused_mergetool: Some(FocusedMergetoolViewConfig {
+                repo_path: config.repo_path.clone(),
+                conflicted_file_path: config.conflicted_file_path.clone(),
+            }),
         },
         use_legacy_constructor: false,
     }
@@ -237,6 +241,13 @@ mod tests {
         assert_eq!(
             launch.view_config.view_mode,
             GitGpuiViewMode::FocusedMergetool
+        );
+        assert_eq!(
+            launch.view_config.focused_mergetool,
+            Some(FocusedMergetoolViewConfig {
+                repo_path: PathBuf::from("/repo"),
+                conflicted_file_path: PathBuf::from("/repo/src/conflict.txt"),
+            })
         );
     }
 }

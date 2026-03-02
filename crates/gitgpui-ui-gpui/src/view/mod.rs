@@ -806,6 +806,7 @@ pub enum GitGpuiViewMode {
 pub struct GitGpuiViewConfig {
     pub initial_path: Option<std::path::PathBuf>,
     pub view_mode: GitGpuiViewMode,
+    pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
 }
 
 impl GitGpuiViewConfig {
@@ -813,8 +814,123 @@ impl GitGpuiViewConfig {
         Self {
             initial_path,
             view_mode: GitGpuiViewMode::Normal,
+            focused_mergetool: None,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FocusedMergetoolViewConfig {
+    pub repo_path: std::path::PathBuf,
+    pub conflicted_file_path: std::path::PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FocusedMergetoolBootstrap {
+    repo_path: std::path::PathBuf,
+    target_path: std::path::PathBuf,
+}
+
+impl FocusedMergetoolBootstrap {
+    fn from_view_config(config: FocusedMergetoolViewConfig) -> Self {
+        let repo_path = normalize_bootstrap_repo_path(config.repo_path);
+        let target_path = focused_mergetool_target_path(&repo_path, &config.conflicted_file_path);
+        Self {
+            repo_path,
+            target_path,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FocusedMergetoolBootstrapAction {
+    OpenRepo(std::path::PathBuf),
+    SetActiveRepo(RepoId),
+    SelectDiff {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    LoadConflictFile {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    Complete,
+}
+
+fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    let path = if path.is_relative() {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(path)
+    } else {
+        path
+    };
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+fn focused_mergetool_target_path(
+    repo_path: &std::path::Path,
+    conflicted_file_path: &std::path::Path,
+) -> std::path::PathBuf {
+    if conflicted_file_path.is_relative() {
+        return conflicted_file_path.to_path_buf();
+    }
+
+    if let Ok(relative) = conflicted_file_path.strip_prefix(repo_path) {
+        return relative.to_path_buf();
+    }
+
+    let normalized_conflicted = std::fs::canonicalize(conflicted_file_path)
+        .unwrap_or_else(|_| conflicted_file_path.to_path_buf());
+    if let Ok(relative) = normalized_conflicted.strip_prefix(repo_path) {
+        return relative.to_path_buf();
+    }
+
+    conflicted_file_path.to_path_buf()
+}
+
+fn focused_mergetool_bootstrap_action(
+    state: &AppState,
+    bootstrap: &FocusedMergetoolBootstrap,
+) -> Option<FocusedMergetoolBootstrapAction> {
+    let Some(repo) = state
+        .repos
+        .iter()
+        .find(|r| r.spec.workdir == bootstrap.repo_path)
+    else {
+        return Some(FocusedMergetoolBootstrapAction::OpenRepo(
+            bootstrap.repo_path.clone(),
+        ));
+    };
+
+    if state.active_repo != Some(repo.id) {
+        return Some(FocusedMergetoolBootstrapAction::SetActiveRepo(repo.id));
+    }
+
+    if !matches!(repo.open, Loadable::Ready(())) {
+        return None;
+    }
+
+    let target = DiffTarget::WorkingTree {
+        area: DiffArea::Unstaged,
+        path: bootstrap.target_path.clone(),
+    };
+    if repo.diff_target.as_ref() != Some(&target) {
+        return Some(FocusedMergetoolBootstrapAction::SelectDiff {
+            repo_id: repo.id,
+            target,
+        });
+    }
+
+    let has_conflict_file_target = repo.conflict_file_path.as_ref() == Some(&bootstrap.target_path);
+    if !has_conflict_file_target || matches!(repo.conflict_file, Loadable::NotLoaded) {
+        return Some(FocusedMergetoolBootstrapAction::LoadConflictFile {
+            repo_id: repo.id,
+            path: bootstrap.target_path.clone(),
+        });
+    }
+
+    Some(FocusedMergetoolBootstrapAction::Complete)
 }
 
 fn renders_full_chrome(view_mode: GitGpuiViewMode) -> bool {
@@ -840,6 +956,7 @@ pub struct GitGpuiView {
     tooltip_host: Entity<TooltipHost>,
     toast_host: Entity<ToastHost>,
     popover_host: Entity<PopoverHost>,
+    focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
 
     last_window_size: Size<Pixels>,
     ui_window_size_last_seen: Size<Pixels>,
@@ -950,14 +1067,27 @@ impl GitGpuiView {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let GitGpuiViewConfig {
-            initial_path,
+            mut initial_path,
             view_mode,
+            focused_mergetool,
         } = config;
+        if initial_path.is_none() {
+            initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
+        }
+        let focused_mergetool_bootstrap = if view_mode == GitGpuiViewMode::FocusedMergetool {
+            focused_mergetool
+                .clone()
+                .map(FocusedMergetoolBootstrap::from_view_config)
+        } else {
+            None
+        };
         let store = Arc::new(store);
         let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
         let mut ui_session = session::load();
-        if let Some(path) = initial_path.as_ref() {
+        if view_mode == GitGpuiViewMode::Normal
+            && let Some(path) = initial_path.as_ref()
+        {
             if !ui_session.open_repos.iter().any(|p| p == path) {
                 ui_session.open_repos.push(path.clone());
             }
@@ -993,7 +1123,9 @@ impl GitGpuiView {
         // This avoids re-opening repos (and changing RepoIds) when the UI is attached to an
         // already-initialized store (notably in `gpui::test` setup).
         let store_preloaded = !store.snapshot().repos.is_empty();
-        let should_auto_restore = {
+        let should_auto_restore = if view_mode == GitGpuiViewMode::FocusedMergetool {
+            false
+        } else {
             #[cfg(test)]
             {
                 false
@@ -1194,6 +1326,7 @@ impl GitGpuiView {
             tooltip_host,
             toast_host,
             popover_host,
+            focused_mergetool_bootstrap,
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
@@ -1222,6 +1355,8 @@ impl GitGpuiView {
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
+
+        view.drive_focused_mergetool_bootstrap();
 
         view
     }
@@ -1341,6 +1476,33 @@ impl GitGpuiView {
 
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    fn drive_focused_mergetool_bootstrap(&mut self) {
+        let Some(bootstrap) = self.focused_mergetool_bootstrap.as_ref() else {
+            return;
+        };
+        let Some(action) = focused_mergetool_bootstrap_action(&self.state, bootstrap) else {
+            return;
+        };
+
+        match action {
+            FocusedMergetoolBootstrapAction::OpenRepo(path) => {
+                self.store.dispatch(Msg::OpenRepo(path))
+            }
+            FocusedMergetoolBootstrapAction::SetActiveRepo(repo_id) => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            FocusedMergetoolBootstrapAction::SelectDiff { repo_id, target } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            FocusedMergetoolBootstrapAction::LoadConflictFile { repo_id, path } => {
+                self.store.dispatch(Msg::LoadConflictFile { repo_id, path });
+            }
+            FocusedMergetoolBootstrapAction::Complete => {
+                self.focused_mergetool_bootstrap = None;
+            }
+        }
     }
 
     fn active_repo(&self) -> Option<&RepoState> {
@@ -1986,6 +2148,106 @@ mod tests {
         assert_eq!(
             ConflictResolverPreviewMode::default(),
             ConflictResolverPreviewMode::Text
+        );
+    }
+
+    fn focused_bootstrap(repo_path: &str, conflicted_file_path: &str) -> FocusedMergetoolBootstrap {
+        FocusedMergetoolBootstrap::from_view_config(FocusedMergetoolViewConfig {
+            repo_path: PathBuf::from(repo_path),
+            conflicted_file_path: PathBuf::from(conflicted_file_path),
+        })
+    }
+
+    fn open_repo_state_with_workdir(workdir: &str) -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from(workdir),
+            },
+        );
+        repo.open = Loadable::Ready(());
+        repo
+    }
+
+    #[test]
+    fn focused_mergetool_target_path_prefers_repo_relative_path() {
+        let target = focused_mergetool_target_path(
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/src/conflict.txt"),
+        );
+        assert_eq!(target, PathBuf::from("src/conflict.txt"));
+    }
+
+    #[test]
+    fn focused_mergetool_bootstrap_requests_open_repo_when_missing() {
+        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let state = AppState::default();
+
+        assert_eq!(
+            focused_mergetool_bootstrap_action(&state, &bootstrap),
+            Some(FocusedMergetoolBootstrapAction::OpenRepo(PathBuf::from(
+                "/repo"
+            )))
+        );
+    }
+
+    #[test]
+    fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
+        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let mut state = AppState::default();
+        state.active_repo = Some(RepoId(1));
+        state.repos.push(open_repo_state_with_workdir("/repo"));
+
+        assert_eq!(
+            focused_mergetool_bootstrap_action(&state, &bootstrap),
+            Some(FocusedMergetoolBootstrapAction::SelectDiff {
+                repo_id: RepoId(1),
+                target: DiffTarget::WorkingTree {
+                    area: DiffArea::Unstaged,
+                    path: PathBuf::from("src/conflict.txt"),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
+        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let mut state = AppState::default();
+        state.active_repo = Some(RepoId(1));
+        let mut repo = open_repo_state_with_workdir("/repo");
+        repo.diff_target = Some(DiffTarget::WorkingTree {
+            area: DiffArea::Unstaged,
+            path: PathBuf::from("src/conflict.txt"),
+        });
+        state.repos.push(repo);
+
+        assert_eq!(
+            focused_mergetool_bootstrap_action(&state, &bootstrap),
+            Some(FocusedMergetoolBootstrapAction::LoadConflictFile {
+                repo_id: RepoId(1),
+                path: PathBuf::from("src/conflict.txt"),
+            })
+        );
+    }
+
+    #[test]
+    fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
+        let bootstrap = focused_bootstrap("/repo", "/repo/src/conflict.txt");
+        let mut state = AppState::default();
+        state.active_repo = Some(RepoId(1));
+        let mut repo = open_repo_state_with_workdir("/repo");
+        repo.diff_target = Some(DiffTarget::WorkingTree {
+            area: DiffArea::Unstaged,
+            path: PathBuf::from("src/conflict.txt"),
+        });
+        repo.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
+        repo.conflict_file = Loadable::Loading;
+        state.repos.push(repo);
+
+        assert_eq!(
+            focused_mergetool_bootstrap_action(&state, &bootstrap),
+            Some(FocusedMergetoolBootstrapAction::Complete)
         );
     }
 
