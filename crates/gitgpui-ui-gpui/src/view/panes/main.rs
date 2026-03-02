@@ -31,6 +31,7 @@ fn collect_two_way_source_lines(
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
+    pub(in super::super) view_mode: GitGpuiViewMode,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) date_time_format: DateTimeFormat,
     _ui_model_subscription: gpui::Subscription,
@@ -201,6 +202,7 @@ impl MainPaneView {
         conflict_enable_whitespace_autosolve: bool,
         conflict_enable_regex_autosolve: bool,
         conflict_enable_history_autosolve: bool,
+        view_mode: GitGpuiViewMode,
         root_view: WeakEntity<GitGpuiView>,
         tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
@@ -321,6 +323,7 @@ impl MainPaneView {
         let mut pane = Self {
             store,
             state,
+            view_mode,
             theme,
             date_time_format,
             _ui_model_subscription: subscription,
@@ -3127,6 +3130,10 @@ impl MainPaneView {
 
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        debug_assert!(matches!(
+            self.view_mode,
+            GitGpuiViewMode::Normal | GitGpuiViewMode::FocusedMergetool
+        ));
         self.last_window_size = window.window_bounds().get_bounds().size;
         self.history_view
             .update(cx, |v, _| v.set_last_window_size(self.last_window_size));

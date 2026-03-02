@@ -794,6 +794,29 @@ enum PatchSplitRow {
     },
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum GitGpuiViewMode {
+    #[default]
+    Normal,
+    #[allow(dead_code)]
+    FocusedMergetool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct GitGpuiViewConfig {
+    pub initial_path: Option<std::path::PathBuf>,
+    pub view_mode: GitGpuiViewMode,
+}
+
+impl GitGpuiViewConfig {
+    pub fn normal(initial_path: Option<std::path::PathBuf>) -> Self {
+        Self {
+            initial_path,
+            view_mode: GitGpuiViewMode::Normal,
+        }
+    }
+}
+
 pub struct GitGpuiView {
     store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -802,6 +825,7 @@ pub struct GitGpuiView {
     _ui_model_subscription: gpui::Subscription,
     _activation_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
+    view_mode: GitGpuiViewMode,
     theme: AppTheme,
     title_bar: Entity<TitleBarView>,
     sidebar_pane: Entity<SidebarPaneView>,
@@ -905,6 +929,26 @@ impl GitGpuiView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
+        Self::new_with_config(
+            store,
+            events,
+            GitGpuiViewConfig::normal(initial_path),
+            window,
+            cx,
+        )
+    }
+
+    pub fn new_with_config(
+        store: AppStore,
+        events: smol::channel::Receiver<StoreEvent>,
+        config: GitGpuiViewConfig,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let GitGpuiViewConfig {
+            initial_path,
+            view_mode,
+        } = config;
         let store = Arc::new(store);
         let initial_theme = AppTheme::default_for_window_appearance(window.appearance());
 
@@ -1034,6 +1078,7 @@ impl GitGpuiView {
                 conflict_enable_whitespace_autosolve,
                 conflict_enable_regex_autosolve,
                 conflict_enable_history_autosolve,
+                view_mode,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 window,
@@ -1134,6 +1179,7 @@ impl GitGpuiView {
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
+            view_mode,
             theme: initial_theme,
             title_bar,
             sidebar_pane,
@@ -1349,6 +1395,10 @@ impl GitGpuiView {
 impl Render for GitGpuiView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        debug_assert!(matches!(
+            self.view_mode,
+            GitGpuiViewMode::Normal | GitGpuiViewMode::FocusedMergetool
+        ));
         self.last_window_size = window.window_bounds().get_bounds().size;
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
