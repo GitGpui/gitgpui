@@ -2,6 +2,32 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 4, Follow-up — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Phase 3C fixture-generation hardening in `crates/gitgpui-core/src/merge_extraction.rs`: `write_fixture_files` now disambiguates colliding sanitized fixture stems (for example, `src/a-b.txt` vs `src/a/b.txt`) with deterministic numeric suffixes, preventing silent fixture overwrites during real-world merge corpus extraction.
+- ✅ Added regression coverage in `merge_extraction::tests::write_fixture_files_disambiguates_colliding_sanitized_paths`.
+
+Verification run:
+- ✅ `cargo test -p gitgpui-core`
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1097 passed, 0 failed, 5 ignored**
+- ✅ `cargo clippy -p gitgpui-core -- -D warnings`
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + seed fixtures + invariants).
+- ✅ Phase 3A–3B complete (permutation corpus generation + invariants).
+- ✅ Phase 3C complete (production extraction module + integration tests using public API, now hardened against fixture-stem collisions).
+- ✅ Phase 4 complete (t7610/t7800 mergetool/difftool E2E parity suites).
+- ✅ Phase 5 complete (Meld-derived matcher/interval/newline behavior tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 4 — March 2, 2026)
 
 Independent verification audit: all design document components remain fully implemented.

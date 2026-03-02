@@ -4,7 +4,7 @@
 //! `docs/REFERENCE_TEST_PORTABILITY.md` Phase 3C (real-world merge extraction)
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -262,9 +262,12 @@ pub fn write_fixture_files(
         source,
     })?;
 
+    let mut used_prefixes: HashSet<String> = HashSet::with_capacity(cases.len());
+
     for case in cases {
         let simplified = sanitize_fixture_component(&case.file_path);
-        let prefix = format!("{}_{}", case.merge_commit, simplified);
+        let base_prefix = format!("{}_{}", case.merge_commit, simplified);
+        let prefix = allocate_unique_prefix(&base_prefix, &mut used_prefixes);
 
         let base_path = dest_dir.join(format!("{prefix}_base.txt"));
         let contrib1_path = dest_dir.join(format!("{prefix}_contrib1.txt"));
@@ -281,6 +284,23 @@ pub fn write_fixture_files(
     }
 
     Ok(())
+}
+
+fn allocate_unique_prefix(base_prefix: &str, used_prefixes: &mut HashSet<String>) -> String {
+    let mut suffix = 0usize;
+    loop {
+        let candidate = if suffix == 0 {
+            base_prefix.to_string()
+        } else {
+            format!("{base_prefix}_{suffix}")
+        };
+
+        if used_prefixes.insert(candidate.clone()) {
+            return candidate;
+        }
+
+        suffix += 1;
+    }
 }
 
 fn ensure_git_repository(repo: &Path) -> Result<(), MergeExtractionError> {
@@ -522,5 +542,47 @@ mod tests {
         let base =
             std::fs::read_to_string(dest.join(format!("{prefix}_base.txt"))).expect("read base");
         assert_eq!(base, "base\n");
+    }
+
+    #[test]
+    fn write_fixture_files_disambiguates_colliding_sanitized_paths() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let dest = tmp.path().join("fixtures");
+
+        let cases = vec![
+            ExtractedMergeCase {
+                merge_commit: "abc12345".to_string(),
+                file_path: "src/a-b.txt".to_string(),
+                base: "base one\n".to_string(),
+                contrib1: "one\n".to_string(),
+                contrib2: "one-two\n".to_string(),
+            },
+            ExtractedMergeCase {
+                merge_commit: "abc12345".to_string(),
+                file_path: "src/a/b.txt".to_string(),
+                base: "base two\n".to_string(),
+                contrib1: "two\n".to_string(),
+                contrib2: "two-two\n".to_string(),
+            },
+        ];
+
+        write_fixture_files(&cases, &dest).expect("write fixtures");
+
+        let first_prefix = "abc12345_src_a_b_txt";
+        let second_prefix = "abc12345_src_a_b_txt_1";
+
+        let first_base = std::fs::read_to_string(dest.join(format!("{first_prefix}_base.txt")))
+            .expect("read first base");
+        let second_base = std::fs::read_to_string(dest.join(format!("{second_prefix}_base.txt")))
+            .expect("read second base");
+        assert_eq!(first_base, "base one\n");
+        assert_eq!(second_base, "base two\n");
+
+        assert!(dest
+            .join(format!("{first_prefix}_expected_result.txt"))
+            .exists());
+        assert!(dest
+            .join(format!("{second_prefix}_expected_result.txt"))
+            .exists());
     }
 }
