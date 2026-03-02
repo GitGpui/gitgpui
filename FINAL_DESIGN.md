@@ -2,6 +2,31 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 18, Difftool Fatal Diagnostic Hardening — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Hardened dedicated difftool stderr classification in `crates/gitgpui-app/src/difftool_mode.rs`.
+  - `has_git_error_prefix` now treats both `error:` and `fatal:` diagnostics as operational failures when `git diff --no-index` exits with status `1`.
+  - Prevents fatal runtime diagnostics from being normalized as successful diffs.
+- ✅ Added dedicated regression tests:
+  - `difftool_mode::tests::has_git_error_prefix_detects_error_and_fatal_diagnostics`
+  - `difftool_mode::tests::has_git_error_prefix_ignores_non_error_output`
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix` (**all passing**: 164 unit + 28 difftool integration + 64 mergetool integration + 43 standalone integration).
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ Dedicated difftool-mode error handling is now stricter and more robust for actionable runtime failures (aligned with strict validation goals).
+- ✅ All other external-tool components remain implemented.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 4B (`git difftool` parity) hardened with explicit fatal-diagnostic regression coverage in dedicated mode.
+- ✅ Phases 1A–1C, 2A–2C, 3A–3C, 4A, and 5A–5C remain complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 18, Independent Completion Verification — March 2, 2026)
 
 Verification performed this iteration:

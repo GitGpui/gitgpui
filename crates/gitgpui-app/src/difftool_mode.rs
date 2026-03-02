@@ -244,7 +244,7 @@ fn has_git_error_prefix(stderr: &str) -> bool {
     stderr
         .lines()
         .map(str::trim_start)
-        .any(|line| line.starts_with("error:"))
+        .any(|line| line.starts_with("error:") || line.starts_with("fatal:"))
 }
 
 fn apply_labels_to_unified_diff_headers(diff: &str, left: &str, right: &str) -> String {
@@ -554,5 +554,21 @@ mod tests {
         assert!(got.contains("--- LEFT"));
         assert!(got.contains("+++ RIGHT"));
         assert!(got.contains("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn has_git_error_prefix_detects_error_and_fatal_diagnostics() {
+        assert!(has_git_error_prefix("error: unable to read file"));
+        assert!(has_git_error_prefix(
+            "warning: context\nfatal: cannot stat '/tmp/missing'"
+        ));
+    }
+
+    #[test]
+    fn has_git_error_prefix_ignores_non_error_output() {
+        assert!(!has_git_error_prefix(
+            "diff --git a/file b/file\nindex 1..2 100644"
+        ));
+        assert!(!has_git_error_prefix("warning: textconv failed"));
     }
 }
