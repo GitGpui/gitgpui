@@ -507,6 +507,8 @@ impl PopoverHost {
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
@@ -925,6 +927,8 @@ impl PopoverHost {
                 | PopoverKind::HistoryColumnSettings
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::TagMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
@@ -1034,8 +1038,6 @@ impl PopoverHost {
                             ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
                         };
 
-                        let selection_empty = self.conflict_resolver_selection_is_empty();
-
                         let toggle_mode_split = |this: &mut GitGpuiView,
                                                  _e: &ClickEvent,
                                                  _w: &mut Window,
@@ -1047,20 +1049,6 @@ impl PopoverHost {
                                                   _w: &mut Window,
                                                   cx: &mut gpui::Context<Self>| {
                             this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
-                        };
-
-                        let clear_selection = |this: &mut GitGpuiView,
-                                               _e: &ClickEvent,
-                                               _w: &mut Window,
-                                               cx: &mut gpui::Context<Self>| {
-                            this.conflict_resolver_clear_selection(cx);
-                        };
-
-                        let append_selection = |this: &mut GitGpuiView,
-                                               _e: &ClickEvent,
-                                               _w: &mut Window,
-                                               cx: &mut gpui::Context<Self>| {
-                            this.conflict_resolver_append_selection_to_output(cx);
                         };
 
                         let ours_for_btn = ours.clone();
@@ -1140,23 +1128,6 @@ impl PopoverHost {
                                     .on_click(theme, cx, toggle_mode_inline),
                             );
 
-                        let selection_controls = div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                zed::Button::new("conflict_append_selected", "Append selection")
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .disabled(selection_empty)
-                                    .on_click(theme, cx, append_selection),
-                            )
-                            .child(
-                                zed::Button::new("conflict_clear_selected", "Clear selection")
-                                    .style(zed::ButtonStyle::Transparent)
-                                    .disabled(selection_empty)
-                                    .on_click(theme, cx, clear_selection),
-                            );
-
                         let start_controls = div()
                             .flex()
                             .items_center()
@@ -1190,7 +1161,7 @@ impl PopoverHost {
                                     .text_color(theme.colors.text_muted)
                                     .child("Diff (ours ↔ theirs)"),
                             )
-                            .child(div().flex().items_center().gap_2().child(mode_controls).child(selection_controls));
+                            .child(div().flex().items_center().gap_2().child(mode_controls));
 
                         let diff_title_row = div()
                             .h(px(22.0))
@@ -1498,6 +1469,44 @@ impl PopoverHost {
                 )
                 .min_w(px(160.0))
                 .max_w(px(260.0)),
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverInputRowMenu {
+                        line_label,
+                        line_target,
+                        chunk_label,
+                        chunk_target,
+                    },
+                    cx,
+                )
+                .min_w(px(180.0))
+                .max_w(px(280.0)),
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverOutputMenu {
+                        cursor_line,
+                        selected_text,
+                        has_source_a,
+                        has_source_b,
+                        has_source_c,
+                        is_three_way,
+                    },
+                    cx,
+                )
+                .min_w(px(200.0))
+                .max_w(px(300.0)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

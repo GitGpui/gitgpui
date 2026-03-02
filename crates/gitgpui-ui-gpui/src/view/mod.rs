@@ -68,7 +68,8 @@ use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
 use conflict_resolver::{
-    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
+    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverHoverState,
+    ConflictResolverViewMode, ResolvedLineMeta, SourceLineKey,
 };
 #[cfg(test)]
 use date_time::format_datetime_utc;
@@ -216,6 +217,31 @@ enum DiffViewMode {
 enum SvgDiffViewMode {
     Image,
     Code,
+}
+
+/// Preview mode for the conflict resolver merge-input pane.
+///
+/// When the conflicted file supports a visual preview (e.g. SVG images),
+/// the user can toggle between the normal text diff view and a rendered
+/// preview of each conflict side.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ConflictResolverPreviewMode {
+    /// Normal text/diff view with syntax highlighting.
+    #[default]
+    Text,
+    /// Rendered preview (image for SVG files, syntax-highlighted view for markdown).
+    Preview,
+}
+
+fn is_markdown_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn"
+            )
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -445,8 +471,6 @@ struct ConflictResolverUiState {
     diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
     diff_mode: ConflictDiffMode,
     nav_anchor: Option<usize>,
-    split_selected: std::collections::BTreeSet<(usize, ConflictPickSide)>,
-    inline_selected: std::collections::BTreeSet<usize>,
     hide_resolved: bool,
     three_way_visible_map: Vec<conflict_resolver::ThreeWayVisibleItem>,
     diff_visible_row_indices: Vec<usize>,
@@ -465,6 +489,16 @@ struct ConflictResolverUiState {
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
     /// that don't change the underlying file content.
     conflict_rev: u64,
+    /// Sequence token for debounced resolved-output outline recompute tasks.
+    resolver_pending_recompute_seq: u64,
+    /// Per-line provenance metadata for the resolved output outline.
+    resolved_line_meta: Vec<ResolvedLineMeta>,
+    /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
+    resolved_output_line_sources_index: HashSet<SourceLineKey>,
+    /// Hover state for chunk outlines and row plus-icons.
+    resolver_hover: ConflictResolverHoverState,
+    /// Preview mode for the merge-input pane (Text vs rendered Preview).
+    resolver_preview_mode: ConflictResolverPreviewMode,
 }
 
 impl Default for ConflictResolverUiState {
@@ -491,8 +525,6 @@ impl Default for ConflictResolverUiState {
             diff_word_highlights_split: Vec::new(),
             diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
-            split_selected: std::collections::BTreeSet::new(),
-            inline_selected: std::collections::BTreeSet::new(),
             hide_resolved: false,
             three_way_visible_map: Vec::new(),
             diff_visible_row_indices: Vec::new(),
@@ -503,8 +535,34 @@ impl Default for ConflictResolverUiState {
             conflict_kind: None,
             last_autosolve_summary: None,
             conflict_rev: 0,
+            resolver_pending_recompute_seq: 0,
+            resolved_line_meta: Vec::new(),
+            resolved_output_line_sources_index: HashSet::default(),
+            resolver_hover: ConflictResolverHoverState::default(),
+            resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum ResolverPickTarget {
+    /// Append a specific line from the 3-way resolver pane.
+    ThreeWayLine {
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+    },
+    /// Append a specific line from the 2-way split resolver pane.
+    TwoWaySplitLine {
+        row_ix: usize,
+        side: conflict_resolver::ConflictPickSide,
+    },
+    /// Append a specific line from the 2-way inline resolver pane.
+    TwoWayInlineLine { row_ix: usize },
+    /// Pick a full conflict chunk for the requested side.
+    Chunk {
+        conflict_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -661,6 +719,20 @@ enum PopoverKind {
         discard_lines_patch: Option<String>,
         lines_count: usize,
         copy_text: Option<String>,
+    },
+    ConflictResolverInputRowMenu {
+        line_label: SharedString,
+        line_target: ResolverPickTarget,
+        chunk_label: SharedString,
+        chunk_target: ResolverPickTarget,
+    },
+    ConflictResolverOutputMenu {
+        cursor_line: usize,
+        selected_text: Option<String>,
+        has_source_a: bool,
+        has_source_b: bool,
+        has_source_c: bool,
+        is_three_way: bool,
     },
     CommitMenu {
         repo_id: RepoId,
@@ -1815,6 +1887,34 @@ mod tests {
         assert_eq!(
             cursor_style_for_resize_edge(ResizeEdge::TopRight),
             CursorStyle::ResizeUpRightDownLeft
+        );
+    }
+
+    #[test]
+    fn is_markdown_path_detects_common_extensions() {
+        use std::path::Path;
+        assert!(is_markdown_path(Path::new("README.md")));
+        assert!(is_markdown_path(Path::new("doc.markdown")));
+        assert!(is_markdown_path(Path::new("notes.mdown")));
+        assert!(is_markdown_path(Path::new("CHANGES.mkd")));
+        assert!(is_markdown_path(Path::new("file.mkdn")));
+        assert!(is_markdown_path(Path::new("file.mdwn")));
+        assert!(is_markdown_path(Path::new("UPPER.MD")));
+    }
+
+    #[test]
+    fn is_markdown_path_rejects_non_markdown() {
+        use std::path::Path;
+        assert!(!is_markdown_path(Path::new("file.txt")));
+        assert!(!is_markdown_path(Path::new("file.rs")));
+        assert!(!is_markdown_path(Path::new("file")));
+    }
+
+    #[test]
+    fn conflict_resolver_preview_mode_defaults_to_text() {
+        assert_eq!(
+            ConflictResolverPreviewMode::default(),
+            ConflictResolverPreviewMode::Text
         );
     }
 }

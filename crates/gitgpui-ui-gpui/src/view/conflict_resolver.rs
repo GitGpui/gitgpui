@@ -1,4 +1,4 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictChoice {
     Base,
     Ours,
@@ -12,7 +12,7 @@ pub enum ConflictDiffMode {
     Inline,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictResolverViewMode {
     ThreeWay,
     TwoWayDiff,
@@ -61,6 +61,84 @@ pub struct ConflictInlineRow {
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
     pub content: String,
+}
+
+/// Source provenance for a resolved output line.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ResolvedLineSource {
+    /// Line matches source A (Base in three-way, Ours in two-way).
+    A,
+    /// Line matches source B (Ours in three-way, Theirs in two-way).
+    B,
+    /// Line matches source C (Theirs in three-way; not used in two-way).
+    C,
+    /// Line was manually edited or does not match any source.
+    Manual,
+}
+
+impl ResolvedLineSource {
+    /// Compact single-character label for UI badges.
+    pub fn badge_char(self) -> char {
+        match self {
+            Self::A => 'A',
+            Self::B => 'B',
+            Self::C => 'C',
+            Self::Manual => 'M',
+        }
+    }
+}
+
+/// Per-line provenance metadata for the resolved output outline.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedLineMeta {
+    /// 0-based line index in the resolved output.
+    pub output_line: u32,
+    /// Which source this line came from (or Manual).
+    pub source: ResolvedLineSource,
+    /// If source is A/B/C, the 1-based line number in that source pane.
+    pub input_line: Option<u32>,
+}
+
+/// Key identifying a specific source line for dedupe gating (plus-icon visibility).
+///
+/// Two source lines with the same key are considered "the same row" for purposes
+/// of preventing duplicate insertion into the resolved output.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SourceLineKey {
+    pub view_mode: ConflictResolverViewMode,
+    pub side: ResolvedLineSource,
+    /// 1-based line number in the source pane.
+    pub line_no: u32,
+    /// Hash of the line's text content for fast equality checks.
+    pub content_hash: u64,
+}
+
+impl SourceLineKey {
+    pub fn new(
+        view_mode: ConflictResolverViewMode,
+        side: ResolvedLineSource,
+        line_no: u32,
+        content: &str,
+    ) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        content.hash(&mut hasher);
+        Self {
+            view_mode,
+            side,
+            line_no,
+            content_hash: hasher.finish(),
+        }
+    }
+}
+
+/// Hover state for conflict resolver input panes (chunk outline + row plus-icon).
+#[derive(Clone, Debug, Default)]
+pub struct ConflictResolverHoverState {
+    /// Currently hovered chunk (for green outline). (conflict_index, side)
+    pub hovered_chunk: Option<(usize, ConflictPickSide)>,
+    /// Currently hovered row index (for plus-icon). (row_index, side)
+    pub hovered_line: Option<(usize, ResolvedLineSource)>,
 }
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
@@ -1000,6 +1078,17 @@ fn build_two_way_conflict_line_ranges(
     ranges
 }
 
+/// Build marker-conflict line ranges for the two-way resolver panes.
+///
+/// Returns one entry per marker conflict block:
+/// - `.0` is the 1-based `A`/ours line range (`start..end_exclusive`)
+/// - `.1` is the 1-based `B`/theirs line range (`start..end_exclusive`)
+pub fn two_way_conflict_line_ranges(
+    segments: &[ConflictSegment],
+) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+    build_two_way_conflict_line_ranges(segments)
+}
+
 fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,
@@ -1107,44 +1196,6 @@ pub fn two_way_conflict_index_for_visible_row(
 ) -> Option<usize> {
     let row_ix = *visible_row_indices.get(visible_ix)?;
     row_conflict_map.get(row_ix).copied().flatten()
-}
-
-pub fn collect_split_selection(
-    rows: &[gitgpui_core::file_diff::FileDiffRow],
-    selected: &std::collections::BTreeSet<(usize, ConflictPickSide)>,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(selected.len());
-    for &(row_ix, side) in selected {
-        let Some(row) = rows.get(row_ix) else {
-            continue;
-        };
-        match side {
-            ConflictPickSide::Ours => {
-                if let Some(t) = row.old.as_deref() {
-                    out.push(t.to_string());
-                }
-            }
-            ConflictPickSide::Theirs => {
-                if let Some(t) = row.new.as_deref() {
-                    out.push(t.to_string());
-                }
-            }
-        }
-    }
-    out
-}
-
-pub fn collect_inline_selection(
-    rows: &[ConflictInlineRow],
-    selected: &std::collections::BTreeSet<usize>,
-) -> Vec<String> {
-    let mut out: Vec<String> = Vec::with_capacity(selected.len());
-    for &ix in selected {
-        if let Some(row) = rows.get(ix) {
-            out.push(row.content.clone());
-        }
-    }
-    out
 }
 
 /// Represents a visible row in the three-way view when hide-resolved is active.
@@ -1415,6 +1466,13 @@ pub fn conflict_stage_safety_check(
     }
 }
 
+/// Split resolved output into one logical row per newline for outline rendering.
+///
+/// Uses `split('\n')` so trailing newlines are preserved as a final empty row.
+pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
+    output.split('\n').map(|line| line.to_string()).collect()
+}
+
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -1436,6 +1494,122 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     }
     out.push('\n');
     out
+}
+
+// ---------------------------------------------------------------------------
+// Provenance mapping: classify resolved output lines as A/B/C/Manual
+// ---------------------------------------------------------------------------
+
+/// Source lines from the three input panes, used for provenance matching.
+///
+/// In three-way mode: A = Base, B = Ours, C = Theirs.
+/// In two-way mode: A = Ours (old), B = Theirs (new), C is empty.
+pub struct SourceLines<'a> {
+    pub a: &'a [gpui::SharedString],
+    pub b: &'a [gpui::SharedString],
+    pub c: &'a [gpui::SharedString],
+}
+
+/// Compute per-line provenance metadata for the resolved output.
+///
+/// Each output line is compared (exact text equality) against every source line
+/// in A, B, C. The first match found (priority: A, B, C) wins; if none match
+/// the line is labeled `Manual`.
+pub fn compute_resolved_line_provenance(
+    output_lines: &[String],
+    sources: &SourceLines<'_>,
+) -> Vec<ResolvedLineMeta> {
+    // Build lookup tables: content -> Vec<(source, 1-based line_no)>
+    // We iterate sources in priority order (A, B, C) and take the first match.
+    let mut result = Vec::with_capacity(output_lines.len());
+
+    for (out_ix, out_line) in output_lines.iter().enumerate() {
+        let trimmed = out_line.as_str();
+        let mut found = None;
+
+        // Check A
+        for (i, src_line) in sources.a.iter().enumerate() {
+            if src_line.as_ref() == trimmed {
+                found = Some((ResolvedLineSource::A, (i + 1) as u32));
+                break;
+            }
+        }
+        // Check B (only if A didn't match)
+        if found.is_none() {
+            for (i, src_line) in sources.b.iter().enumerate() {
+                if src_line.as_ref() == trimmed {
+                    found = Some((ResolvedLineSource::B, (i + 1) as u32));
+                    break;
+                }
+            }
+        }
+        // Check C (only if A and B didn't match)
+        if found.is_none() {
+            for (i, src_line) in sources.c.iter().enumerate() {
+                if src_line.as_ref() == trimmed {
+                    found = Some((ResolvedLineSource::C, (i + 1) as u32));
+                    break;
+                }
+            }
+        }
+
+        let (source, input_line) = match found {
+            Some((src, line_no)) => (src, Some(line_no)),
+            None => (ResolvedLineSource::Manual, None),
+        };
+        result.push(ResolvedLineMeta {
+            output_line: out_ix as u32,
+            source,
+            input_line,
+        });
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Dedupe key index: tracks which source lines are present in resolved output
+// ---------------------------------------------------------------------------
+
+/// Build the set of `SourceLineKey`s currently represented in the resolved output.
+///
+/// Used to gate the plus-icon: a source row's plus-icon is hidden when its key
+/// is already in this set (preventing duplicate insertion).
+pub fn build_resolved_output_line_sources_index(
+    meta: &[ResolvedLineMeta],
+    output_lines: &[String],
+    view_mode: ConflictResolverViewMode,
+) -> rustc_hash::FxHashSet<SourceLineKey> {
+    let mut index = rustc_hash::FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
+    for m in meta {
+        if m.source == ResolvedLineSource::Manual {
+            continue;
+        }
+        let Some(line_no) = m.input_line else {
+            continue;
+        };
+        let content = output_lines
+            .get(m.output_line as usize)
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        index.insert(SourceLineKey::new(view_mode, m.source, line_no, content));
+    }
+    index
+}
+
+/// Check whether a given source line is already present in the resolved output.
+///
+/// Returns `true` if the source line's key is in the dedupe index — meaning
+/// the plus-icon for that row should be hidden.
+pub fn is_source_line_in_output(
+    index: &rustc_hash::FxHashSet<SourceLineKey>,
+    view_mode: ConflictResolverViewMode,
+    side: ResolvedLineSource,
+    line_no: u32,
+    content: &str,
+) -> bool {
+    let key = SourceLineKey::new(view_mode, side, line_no, content);
+    index.contains(&key)
 }
 
 #[cfg(test)]
@@ -1888,6 +2062,203 @@ theirs only line
         assert_eq!(out, "a\nb\nc\n");
         let out = append_lines_to_output("a", &["b".into()]);
         assert_eq!(out, "a\nb\n");
+    }
+
+    #[test]
+    fn split_output_lines_for_outline_keeps_trailing_newline_row() {
+        let lines = split_output_lines_for_outline("a\nb\n");
+        assert_eq!(lines, vec!["a", "b", ""]);
+    }
+
+    #[test]
+    fn split_output_lines_for_outline_keeps_single_empty_row_for_empty_text() {
+        let lines = split_output_lines_for_outline("");
+        assert_eq!(lines, vec![""]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Provenance mapping tests
+    // -----------------------------------------------------------------------
+
+    fn shared(s: &str) -> gpui::SharedString {
+        s.to_string().into()
+    }
+
+    #[test]
+    fn provenance_matches_exact_source_lines() {
+        let a = vec![shared("alpha"), shared("beta")];
+        let b = vec![shared("gamma"), shared("delta")];
+        let c = vec![shared("epsilon")];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+
+        let output = vec![
+            "gamma".to_string(),   // matches B[0]
+            "alpha".to_string(),   // matches A[0]
+            "epsilon".to_string(), // matches C[0]
+            "manual".to_string(),  // no match
+        ];
+
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        assert_eq!(meta.len(), 4);
+
+        assert_eq!(meta[0].source, ResolvedLineSource::B);
+        assert_eq!(meta[0].input_line, Some(1));
+
+        assert_eq!(meta[1].source, ResolvedLineSource::A);
+        assert_eq!(meta[1].input_line, Some(1));
+
+        assert_eq!(meta[2].source, ResolvedLineSource::C);
+        assert_eq!(meta[2].input_line, Some(1));
+
+        assert_eq!(meta[3].source, ResolvedLineSource::Manual);
+        assert_eq!(meta[3].input_line, None);
+    }
+
+    #[test]
+    fn provenance_priority_a_over_b() {
+        // When the same text exists in A and B, A wins.
+        let a = vec![shared("same")];
+        let b = vec![shared("same")];
+        let c: Vec<gpui::SharedString> = vec![];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+
+        let output = vec!["same".to_string()];
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        assert_eq!(meta[0].source, ResolvedLineSource::A);
+    }
+
+    #[test]
+    fn provenance_empty_output_returns_empty() {
+        let a: Vec<gpui::SharedString> = vec![];
+        let b: Vec<gpui::SharedString> = vec![];
+        let c: Vec<gpui::SharedString> = vec![];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+        let output: Vec<String> = vec![];
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        assert!(meta.is_empty());
+    }
+
+    #[test]
+    fn provenance_empty_line_matches_empty_source() {
+        let a = vec![shared("")];
+        let b: Vec<gpui::SharedString> = vec![];
+        let c: Vec<gpui::SharedString> = vec![];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+        let output = vec!["".to_string()];
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        assert_eq!(meta[0].source, ResolvedLineSource::A);
+        assert_eq!(meta[0].input_line, Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dedupe key builder tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn dedupe_index_contains_matched_lines() {
+        let a = vec![shared("fn main()"), shared("  println!()")];
+        let b = vec![shared("fn main()"), shared("  eprintln!()")];
+        let c: Vec<gpui::SharedString> = vec![];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+
+        let output = vec!["fn main()".to_string(), "  eprintln!()".to_string()];
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        let index = build_resolved_output_line_sources_index(
+            &meta,
+            &output,
+            ConflictResolverViewMode::ThreeWay,
+        );
+
+        // "fn main()" matched A line 1
+        assert!(is_source_line_in_output(
+            &index,
+            ConflictResolverViewMode::ThreeWay,
+            ResolvedLineSource::A,
+            1,
+            "fn main()",
+        ));
+        // "  eprintln!()" matched B line 2
+        assert!(is_source_line_in_output(
+            &index,
+            ConflictResolverViewMode::ThreeWay,
+            ResolvedLineSource::B,
+            2,
+            "  eprintln!()",
+        ));
+        // A line 2 "  println!()" is NOT in output
+        assert!(!is_source_line_in_output(
+            &index,
+            ConflictResolverViewMode::ThreeWay,
+            ResolvedLineSource::A,
+            2,
+            "  println!()",
+        ));
+    }
+
+    #[test]
+    fn dedupe_index_excludes_manual_lines() {
+        let a: Vec<gpui::SharedString> = vec![];
+        let b: Vec<gpui::SharedString> = vec![];
+        let c: Vec<gpui::SharedString> = vec![];
+        let sources = SourceLines {
+            a: &a,
+            b: &b,
+            c: &c,
+        };
+
+        let output = vec!["manually typed".to_string()];
+        let meta = compute_resolved_line_provenance(&output, &sources);
+        let index = build_resolved_output_line_sources_index(
+            &meta,
+            &output,
+            ConflictResolverViewMode::TwoWayDiff,
+        );
+        assert!(index.is_empty());
+    }
+
+    #[test]
+    fn source_line_key_content_hash_differs_for_different_text() {
+        let k1 = SourceLineKey::new(
+            ConflictResolverViewMode::ThreeWay,
+            ResolvedLineSource::A,
+            1,
+            "hello",
+        );
+        let k2 = SourceLineKey::new(
+            ConflictResolverViewMode::ThreeWay,
+            ResolvedLineSource::A,
+            1,
+            "world",
+        );
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn resolved_line_source_badge_chars() {
+        assert_eq!(ResolvedLineSource::A.badge_char(), 'A');
+        assert_eq!(ResolvedLineSource::B.badge_char(), 'B');
+        assert_eq!(ResolvedLineSource::C.badge_char(), 'C');
+        assert_eq!(ResolvedLineSource::Manual.badge_char(), 'M');
     }
 
     #[test]

@@ -874,22 +874,6 @@ impl MainPaneView {
                                     this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
                                 };
 
-                            let clear_selection =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_clear_selection(cx)
-                                };
-
-                            let append_selection =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_append_selection_to_output(cx);
-                                };
-
                             let set_view_three_way =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1088,9 +1072,6 @@ impl MainPaneView {
                                 },
                             };
 
-                            let selection_empty = view_mode == ConflictResolverViewMode::ThreeWay
-                                || self.conflict_resolver_selection_is_empty();
-
                             let mode_controls = div()
                                 .id("conflict_mode_toggle")
                                 .flex()
@@ -1118,30 +1099,6 @@ impl MainPaneView {
                                         .selected(mode == ConflictDiffMode::Inline)
                                         .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, toggle_mode_inline),
-                                );
-
-                            let selection_controls = div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    zed::Button::new(
-                                        "conflict_append_selected",
-                                        "Append selection",
-                                    )
-                                    .style(zed::ButtonStyle::Outlined)
-                                    .disabled(selection_empty)
-                                    .on_click(
-                                        theme,
-                                        cx,
-                                        append_selection,
-                                    ),
-                                )
-                                .child(
-                                    zed::Button::new("conflict_clear_selected", "Clear selection")
-                                        .style(zed::ButtonStyle::Transparent)
-                                        .disabled(selection_empty)
-                                        .on_click(theme, cx, clear_selection),
                                 );
 
                             let conflict_count = self.conflict_resolver_conflict_count();
@@ -1189,21 +1146,6 @@ impl MainPaneView {
                                 file.base.is_some()
                             };
 
-                            let prev_conflict =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_prev_conflict(cx);
-                                };
-                            let next_conflict =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_next_conflict(cx);
-                                };
-
                             let auto_resolve =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1250,15 +1192,6 @@ impl MainPaneView {
                                     let resolved_label: SharedString =
                                         format!("Resolved {}/{}", resolved_count, conflict_count)
                                             .into();
-                                    let unresolved_indices =
-                                        conflict_resolver::unresolved_conflict_indices(
-                                            &self.conflict_resolver.marker_segments,
-                                        );
-                                    let unresolved_preview_limit = 6usize;
-                                    let unresolved_overflow =
-                                        unresolved_indices.len().saturating_sub(
-                                            unresolved_preview_limit,
-                                        );
 
                                     let mut d = d.child(
                                         div()
@@ -1284,63 +1217,7 @@ impl MainPaneView {
                                                 .child(label.clone()),
                                         );
                                     }
-
-                                    if !unresolved_indices.is_empty() {
-                                        d = d.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(theme.colors.text_muted)
-                                                .child("Queue"),
-                                        );
-                                        for conflict_ix in unresolved_indices
-                                            .iter()
-                                            .copied()
-                                            .take(unresolved_preview_limit)
-                                        {
-                                            let label: SharedString =
-                                                format!("#{}", conflict_ix + 1).into();
-                                            d = d.child(
-                                                zed::Button::new(
-                                                    format!("conflict_queue_{conflict_ix}"),
-                                                    label,
-                                                )
-                                                .style(
-                                                    if conflict_ix == active_conflict {
-                                                        zed::ButtonStyle::Outlined
-                                                    } else {
-                                                        zed::ButtonStyle::Transparent
-                                                    },
-                                                )
-                                                .on_click(theme, cx, move |this, _e, _w, cx| {
-                                                    this.conflict_resolver_focus_conflict(
-                                                        conflict_ix,
-                                                        cx,
-                                                    );
-                                                }),
-                                            );
-                                        }
-                                        if unresolved_overflow > 0 {
-                                            d = d.child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(theme.colors.text_muted)
-                                                    .child(format!("+{}", unresolved_overflow)),
-                                            );
-                                        }
-                                    }
-
-                                    d.child(
-                                        zed::Button::new("conflict_pick_prev", "Prev")
-                                            .style(zed::ButtonStyle::Transparent)
-                                            .disabled(unresolved_count == 0)
-                                            .on_click(theme, cx, prev_conflict),
-                                    )
-                                    .child(
-                                        zed::Button::new("conflict_pick_next", "Next")
-                                            .style(zed::ButtonStyle::Transparent)
-                                            .disabled(unresolved_count == 0)
-                                            .on_click(theme, cx, next_conflict),
-                                    )
+                                    d
                                 })
                                 .child(
                                     zed::Button::new("conflict_use_base", "A (base)")
@@ -1484,6 +1361,58 @@ impl MainPaneView {
                                     )
                                 });
 
+                            let is_svg_conflict = super::super::is_svg_path(&path);
+                            let is_markdown_conflict = super::super::is_markdown_path(&path);
+                            let show_preview_toggle = is_svg_conflict || is_markdown_conflict;
+                            let preview_mode = self.conflict_resolver.resolver_preview_mode;
+
+                            let preview_toggle = show_preview_toggle.then(|| {
+                                let view_toggle_border = theme.colors.border;
+                                let view_toggle_selected_bg = theme.colors.active;
+                                let view_toggle_divider = theme.colors.border;
+                                div()
+                                    .id("conflict_preview_toggle")
+                                    .flex()
+                                    .items_center()
+                                    .h(px(zed::CONTROL_HEIGHT_PX))
+                                    .rounded(px(theme.radii.row))
+                                    .border_1()
+                                    .border_color(view_toggle_border)
+                                    .bg(gpui::rgba(0x00000000))
+                                    .overflow_hidden()
+                                    .p(px(1.0))
+                                    .child(
+                                        zed::Button::new("conflict_preview_text", "Text")
+                                            .borderless()
+                                            .style(zed::ButtonStyle::Subtle)
+                                            .selected(preview_mode == ConflictResolverPreviewMode::Text)
+                                            .selected_bg(view_toggle_selected_bg)
+                                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                                this.conflict_resolver.resolver_preview_mode =
+                                                    ConflictResolverPreviewMode::Text;
+                                                cx.notify();
+                                            }),
+                                    )
+                                    .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
+                                    .child(
+                                        zed::Button::new(
+                                            "conflict_preview_preview",
+                                            if is_svg_conflict { "Image" } else { "Preview" },
+                                        )
+                                        .borderless()
+                                        .style(zed::ButtonStyle::Subtle)
+                                        .selected(
+                                            preview_mode == ConflictResolverPreviewMode::Preview,
+                                        )
+                                        .selected_bg(view_toggle_selected_bg)
+                                        .on_click(theme, cx, |this, _e, _w, cx| {
+                                            this.conflict_resolver.resolver_preview_mode =
+                                                ConflictResolverPreviewMode::Preview;
+                                            cx.notify();
+                                        }),
+                                    )
+                            });
+
                             let top_header = div()
                                 .flex()
                                 .items_center()
@@ -1503,10 +1432,11 @@ impl MainPaneView {
                                         .flex()
                                         .items_center()
                                         .gap_2()
+                                        .when_some(preview_toggle, |d, toggle| d.child(toggle))
                                         .child(view_mode_controls)
                                         .when(
                                             view_mode == ConflictResolverViewMode::TwoWayDiff,
-                                            |d| d.child(mode_controls).child(selection_controls),
+                                            |d| d.child(mode_controls),
                                         ),
                                 );
 
@@ -1834,6 +1764,97 @@ impl MainPaneView {
                             let top_body: AnyElement = if diff_len == 0 {
                                 zed::empty_state(theme, "Inputs", "Stage data not available.")
                                     .into_any_element()
+                            } else if preview_mode == ConflictResolverPreviewMode::Preview
+                                && is_svg_conflict
+                            {
+                                // SVG image preview: render each side as a visual image.
+                                let svg_image = |text: &str| -> Option<Arc<gpui::Image>> {
+                                    if text.is_empty() {
+                                        return None;
+                                    }
+                                    Some(Arc::new(gpui::Image::from_bytes(
+                                        gpui::ImageFormat::Svg,
+                                        text.as_bytes().to_vec(),
+                                    )))
+                                };
+                                let base_img = svg_image(&base);
+                                let ours_img = svg_image(&local);
+                                let theirs_img = svg_image(&remote);
+
+                                let preview_cell =
+                                    |id: &'static str,
+                                     label: &'static str,
+                                     img: Option<Arc<gpui::Image>>| {
+                                        div()
+                                            .id(id)
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .h_full()
+                                            .border_1()
+                                            .border_color(theme.colors.border)
+                                            .rounded(px(theme.radii.row))
+                                            .overflow_hidden()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .h(px(24.0))
+                                                    .px_2()
+                                                    .flex()
+                                                    .items_center()
+                                                    .bg(theme.colors.surface_bg_elevated)
+                                                    .text_xs()
+                                                    .text_color(theme.colors.text_muted)
+                                                    .child(label),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_h(px(0.0))
+                                                    .bg(theme.colors.window_bg)
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(match img {
+                                                        Some(data) => gpui::img(data)
+                                                            .w_full()
+                                                            .h_full()
+                                                            .object_fit(gpui::ObjectFit::Contain)
+                                                            .into_any_element(),
+                                                        None => div()
+                                                            .text_xs()
+                                                            .text_color(theme.colors.text_muted)
+                                                            .child("(empty)")
+                                                            .into_any_element(),
+                                                    }),
+                                            )
+                                    };
+
+                                div()
+                                    .id("conflict_resolver_preview")
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .w_full()
+                                    .flex()
+                                    .gap_2()
+                                    .p_2()
+                                    .bg(theme.colors.window_bg)
+                                    .child(preview_cell(
+                                        "conflict_preview_base",
+                                        "Base (A)",
+                                        base_img,
+                                    ))
+                                    .child(preview_cell(
+                                        "conflict_preview_ours",
+                                        "Ours (B)",
+                                        ours_img,
+                                    ))
+                                    .child(preview_cell(
+                                        "conflict_preview_theirs",
+                                        "Theirs (C)",
+                                        theirs_img,
+                                    ))
+                                    .into_any_element()
                             } else {
                                 let list = match view_mode {
                                     ConflictResolverViewMode::ThreeWay => uniform_list(
@@ -2024,9 +2045,29 @@ impl MainPaneView {
                                                     .flex_1()
                                                     .min_h(px(0.0))
                                                     .overflow_y_scroll()
-                                                    .child(div().p_2().child(
-                                                        self.conflict_resolver_input.clone(),
-                                                    )),
+                                                    .child(
+                                                        div()
+                                                            .p_2()
+                                                            .on_mouse_down(
+                                                                MouseButton::Right,
+                                                                cx.listener(
+                                                                    |this,
+                                                                     e: &MouseDownEvent,
+                                                                     window,
+                                                                     cx| {
+                                                                        this.open_conflict_resolver_output_context_menu(
+                                                                            e.position,
+                                                                            window,
+                                                                            cx,
+                                                                        );
+                                                                    },
+                                                                ),
+                                                            )
+                                                            .child(
+                                                                self.conflict_resolver_input
+                                                                    .clone(),
+                                                            ),
+                                                    ),
                                             );
                                     bottom_section.style().flex_grow = Some(1.0 - vsplit_ratio);
                                     bottom_section.style().flex_shrink = Some(1.0);

@@ -65,7 +65,9 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
         | PopoverKind::DiffHunks
-        | PopoverKind::HistoryColumnSettings => state.active_repo,
+        | PopoverKind::HistoryColumnSettings
+        | PopoverKind::ConflictResolverInputRowMenu { .. }
+        | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
 
         // Popovers that carry an explicit repo id.
         PopoverKind::ResetPrompt { repo_id, .. }
@@ -224,6 +226,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::HistoryColumnSettings
+        | PopoverKind::ConflictResolverInputRowMenu { .. }
+        | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
         | PopoverKind::Settings
         | PopoverKind::RepoPicker
@@ -434,6 +438,34 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path.hash(hasher);
             hunks_count.hash(hasher);
             lines_count.hash(hasher);
+        }
+        PopoverKind::ConflictResolverInputRowMenu {
+            line_label,
+            line_target,
+            chunk_label,
+            chunk_target,
+        } => {
+            53u8.hash(hasher);
+            line_label.hash(hasher);
+            line_target.hash(hasher);
+            chunk_label.hash(hasher);
+            chunk_target.hash(hasher);
+        }
+        PopoverKind::ConflictResolverOutputMenu {
+            cursor_line,
+            selected_text,
+            has_source_a,
+            has_source_b,
+            has_source_c,
+            is_three_way,
+        } => {
+            54u8.hash(hasher);
+            cursor_line.hash(hasher);
+            selected_text.hash(hasher);
+            has_source_a.hash(hasher);
+            has_source_b.hash(hasher);
+            has_source_c.hash(hasher);
+            is_three_way.hash(hasher);
         }
         PopoverKind::CommitMenu { repo_id, commit_id } => {
             42u8.hash(hasher);

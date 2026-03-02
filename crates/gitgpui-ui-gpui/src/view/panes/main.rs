@@ -7,6 +7,27 @@ mod diff_search;
 mod diff_text;
 mod preview;
 
+const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
+
+/// Extract unique source lines from two-way diff rows for provenance matching.
+///
+/// Returns (old_lines, new_lines) as `Vec<SharedString>` suitable for `SourceLines`.
+fn collect_two_way_source_lines(
+    diff_rows: &[FileDiffRow],
+) -> (Vec<SharedString>, Vec<SharedString>) {
+    let mut old_lines = Vec::with_capacity(diff_rows.len());
+    let mut new_lines = Vec::with_capacity(diff_rows.len());
+    for row in diff_rows {
+        if let Some(ref text) = row.old {
+            old_lines.push(SharedString::from(text.clone()));
+        }
+        if let Some(ref text) = row.new {
+            new_lines.push(SharedString::from(text.clone()));
+        }
+    }
+    (old_lines, new_lines)
+}
+
 pub(in super::super) struct MainPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -215,28 +236,30 @@ impl MainPaneView {
         });
 
         let conflict_resolver_input = cx.new(|cx| {
-            zed::TextInput::new(
+            let mut input = zed::TextInput::new(
                 zed::TextInputOptions {
                     placeholder: "Resolve file contents…".into(),
                     multiline: true,
                     read_only: false,
                     chromeless: true,
-                    soft_wrap: true,
+                    soft_wrap: false,
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_suppress_right_click(true);
+            input
         });
 
         let conflict_resolver_subscription =
             cx.observe(&conflict_resolver_input, |this, input, cx| {
-                let output_text = input.read(cx).text();
+                let output_text = input.read(cx).text().to_string();
                 let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
                 output_text.hash(&mut output_hasher);
                 let output_hash = output_hasher.finish();
 
                 let path = this.conflict_resolver.path.clone();
-                let needs_update = this.conflict_resolved_preview_path != path
+                let needs_update = this.conflict_resolved_preview_path.as_ref() != path.as_ref()
                     || this.conflict_resolved_preview_source_hash != Some(output_hash);
                 if !needs_update {
                     return;
@@ -244,16 +267,7 @@ impl MainPaneView {
 
                 this.conflict_resolved_preview_path = path.clone();
                 this.conflict_resolved_preview_source_hash = Some(output_hash);
-                this.conflict_resolved_preview_syntax_language = path.as_ref().and_then(|p| {
-                    rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
-                });
-                this.conflict_resolved_preview_lines =
-                    output_text.split('\n').map(|s| s.to_string()).collect();
-                if this.conflict_resolved_preview_lines.is_empty() {
-                    this.conflict_resolved_preview_lines.push(String::new());
-                }
-                this.conflict_resolved_preview_segments_cache.clear();
-                cx.notify();
+                this.schedule_conflict_resolved_outline_recompute(path, output_hash, cx);
             });
 
         let diff_search_input = cx.new(|cx| {
@@ -448,6 +462,96 @@ impl MainPaneView {
         cx.notify();
     }
 
+    fn conflict_resolver_invalidate_resolved_outline(&mut self) {
+        self.conflict_resolver.resolver_pending_recompute_seq = self
+            .conflict_resolver
+            .resolver_pending_recompute_seq
+            .wrapping_add(1);
+        self.conflict_resolved_preview_path = None;
+        self.conflict_resolved_preview_source_hash = None;
+        self.conflict_resolved_preview_syntax_language = None;
+        self.conflict_resolved_preview_lines.clear();
+        self.conflict_resolved_preview_segments_cache.clear();
+        self.conflict_resolver.resolved_line_meta.clear();
+        self.conflict_resolver
+            .resolved_output_line_sources_index
+            .clear();
+    }
+
+    fn schedule_conflict_resolved_outline_recompute(
+        &mut self,
+        path: Option<std::path::PathBuf>,
+        output_hash: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.resolver_pending_recompute_seq = self
+            .conflict_resolver
+            .resolver_pending_recompute_seq
+            .wrapping_add(1);
+        let seq = self.conflict_resolver.resolver_pending_recompute_seq;
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                        return;
+                    }
+                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                    {
+                        return;
+                    }
+
+                    this.conflict_resolved_preview_syntax_language = path.as_ref().and_then(|p| {
+                        rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref())
+                    });
+                    let output_text = this
+                        .conflict_resolver_input
+                        .read_with(cx, |input, _| input.text().to_string());
+                    this.conflict_resolved_preview_lines =
+                        conflict_resolver::split_output_lines_for_outline(&output_text);
+                    this.conflict_resolved_preview_segments_cache.clear();
+
+                    // Provenance: classify each output line as A/B/C/Manual.
+                    let view_mode = this.conflict_resolver.view_mode;
+                    let (two_way_old, two_way_new) =
+                        if view_mode == ConflictResolverViewMode::TwoWayDiff {
+                            collect_two_way_source_lines(&this.conflict_resolver.diff_rows)
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
+                    let sources = match view_mode {
+                        ConflictResolverViewMode::ThreeWay => conflict_resolver::SourceLines {
+                            a: &this.conflict_resolver.three_way_base_lines,
+                            b: &this.conflict_resolver.three_way_ours_lines,
+                            c: &this.conflict_resolver.three_way_theirs_lines,
+                        },
+                        ConflictResolverViewMode::TwoWayDiff => conflict_resolver::SourceLines {
+                            a: &two_way_old,
+                            b: &two_way_new,
+                            c: &[],
+                        },
+                    };
+                    let meta = conflict_resolver::compute_resolved_line_provenance(
+                        &this.conflict_resolved_preview_lines,
+                        &sources,
+                    );
+                    this.conflict_resolver.resolved_output_line_sources_index =
+                        conflict_resolver::build_resolved_output_line_sources_index(
+                            &meta,
+                            &this.conflict_resolved_preview_lines,
+                            view_mode,
+                        );
+                    this.conflict_resolver.resolved_line_meta = meta;
+
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
     pub(in super::super) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,
@@ -571,6 +675,89 @@ impl MainPaneView {
         let _ = self.root_view.update(cx, move |root, cx| {
             root.set_active_context_menu_invoker(Some(invoker), cx);
         });
+    }
+
+    pub(in super::super) fn open_conflict_resolver_input_row_context_menu(
+        &mut self,
+        invoker: SharedString,
+        line_label: SharedString,
+        line_target: ResolverPickTarget,
+        chunk_label: SharedString,
+        chunk_target: ResolverPickTarget,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.activate_context_menu_invoker(invoker, cx);
+        self.open_popover_at(
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            },
+            anchor,
+            window,
+            cx,
+        );
+    }
+
+    pub(in super::super) fn open_conflict_resolver_output_context_menu(
+        &mut self,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (selected_text, cursor_offset, content) =
+            self.conflict_resolver_input.read_with(cx, |i, _| {
+                (i.selected_text(), i.cursor_offset(), i.text().to_string())
+            });
+        let cursor_line = content[..cursor_offset.min(content.len())]
+            .matches('\n')
+            .count();
+
+        let is_three_way = self.conflict_resolver.view_mode
+            == conflict_resolver::ConflictResolverViewMode::ThreeWay;
+
+        let (has_source_a, has_source_b, has_source_c) = if is_three_way {
+            (
+                cursor_line < self.conflict_resolver.three_way_base_lines.len(),
+                cursor_line < self.conflict_resolver.three_way_ours_lines.len(),
+                cursor_line < self.conflict_resolver.three_way_theirs_lines.len(),
+            )
+        } else {
+            (
+                cursor_line < self.conflict_resolver.diff_rows.len()
+                    && self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(cursor_line)
+                        .and_then(|r| r.old.as_ref())
+                        .is_some(),
+                cursor_line < self.conflict_resolver.diff_rows.len()
+                    && self
+                        .conflict_resolver
+                        .diff_rows
+                        .get(cursor_line)
+                        .and_then(|r| r.new.as_ref())
+                        .is_some(),
+                false,
+            )
+        };
+
+        self.open_popover_at(
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
+            },
+            anchor,
+            window,
+            cx,
+        );
     }
 
     pub(in super::super) fn open_popover_at_cursor(
@@ -1572,20 +1759,24 @@ impl MainPaneView {
     fn sync_conflict_resolver(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(repo_id) = self.active_repo_id() else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
 
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
 
         let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
         if *area != DiffArea::Unstaged {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         }
 
@@ -1597,6 +1788,7 @@ impl MainPaneView {
         };
         let Some(conflict_entry) = conflict_entry else {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         };
         let conflict_kind = conflict_entry.conflict;
@@ -1607,6 +1799,7 @@ impl MainPaneView {
             && !matches!(repo.conflict_file, Loadable::Loading);
         if should_load {
             self.conflict_resolver = ConflictResolverUiState::default();
+            self.conflict_resolver_invalidate_resolved_outline();
             let theme = self.theme;
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
@@ -1686,6 +1879,7 @@ impl MainPaneView {
                 conflict_rev: repo.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
+            self.conflict_resolver_invalidate_resolved_outline();
             return;
         }
 
@@ -1829,6 +2023,13 @@ impl MainPaneView {
         } else {
             0
         };
+        let resolver_preview_mode = if self.conflict_resolver.repo_id == Some(repo_id)
+            && self.conflict_resolver.path.as_ref() == Some(&path)
+        {
+            self.conflict_resolver.resolver_preview_mode
+        } else {
+            ConflictResolverPreviewMode::default()
+        };
 
         let (
             three_way_word_highlights_base,
@@ -1884,8 +2085,6 @@ impl MainPaneView {
             diff_word_highlights_split,
             diff_mode,
             nav_anchor,
-            split_selected: std::collections::BTreeSet::new(),
-            inline_selected: std::collections::BTreeSet::new(),
             hide_resolved,
             three_way_visible_map,
             diff_visible_row_indices,
@@ -1896,15 +2095,27 @@ impl MainPaneView {
             conflict_kind,
             last_autosolve_summary: None,
             conflict_rev: repo.conflict_rev,
+            resolver_pending_recompute_seq: 0,
+            resolved_line_meta: Vec::new(),
+            resolved_output_line_sources_index: HashSet::default(),
+            resolver_hover: ConflictResolverHoverState::default(),
+            resolver_preview_mode,
         };
 
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
+        let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+        resolved.hash(&mut output_hasher);
+        let output_hash = output_hasher.finish();
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved, cx);
         });
+        let output_path = self.conflict_resolver.path.clone();
+        self.conflict_resolved_preview_path = output_path.clone();
+        self.conflict_resolved_preview_source_hash = Some(output_hash);
+        self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, cx);
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
@@ -2051,11 +2262,18 @@ impl MainPaneView {
         // Update the resolved text input.
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
+        let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
+        resolved.hash(&mut output_hasher);
+        let output_hash = output_hasher.finish();
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved, cx);
         });
+        let output_path = self.conflict_resolver.path.clone();
+        self.conflict_resolved_preview_path = output_path.clone();
+        self.conflict_resolved_preview_source_hash = Some(output_hash);
+        self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, cx);
 
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
@@ -2072,8 +2290,6 @@ impl MainPaneView {
         }
         self.conflict_resolver.diff_mode = mode;
         self.conflict_resolver.nav_anchor = None;
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -2090,8 +2306,6 @@ impl MainPaneView {
         }
         self.conflict_resolver.view_mode = view_mode;
         self.conflict_resolver.nav_anchor = None;
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
         if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -2154,97 +2368,112 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
                 self.conflict_resolver.hide_resolved,
             );
-
-        let visible_split_rows: std::collections::BTreeSet<usize> = self
-            .conflict_resolver
-            .diff_visible_row_indices
-            .iter()
-            .copied()
-            .collect();
-        self.conflict_resolver
-            .split_selected
-            .retain(|(row_ix, _)| visible_split_rows.contains(row_ix));
-        let visible_inline_rows: std::collections::BTreeSet<usize> = self
-            .conflict_resolver
-            .inline_visible_row_indices
-            .iter()
-            .copied()
-            .collect();
-        self.conflict_resolver
-            .inline_selected
-            .retain(|row_ix| visible_inline_rows.contains(row_ix));
     }
 
-    pub(in super::super) fn conflict_resolver_selection_is_empty(&self) -> bool {
-        match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => self.conflict_resolver.split_selected.is_empty(),
-            ConflictDiffMode::Inline => self.conflict_resolver.inline_selected.is_empty(),
+    pub(in super::super) fn conflict_resolver_apply_pick_target(
+        &mut self,
+        target: ResolverPickTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match target {
+            ResolverPickTarget::ThreeWayLine { line_ix, choice } => {
+                self.conflict_resolver_append_three_way_line_to_output(line_ix, choice, cx);
+            }
+            ResolverPickTarget::TwoWaySplitLine { row_ix, side } => {
+                self.conflict_resolver_append_split_line_to_output(row_ix, side, cx);
+            }
+            ResolverPickTarget::TwoWayInlineLine { row_ix } => {
+                self.conflict_resolver_append_inline_line_to_output(row_ix, cx);
+            }
+            ResolverPickTarget::Chunk {
+                conflict_ix,
+                choice,
+            } => {
+                self.conflict_resolver_pick_at(conflict_ix, choice, cx);
+            }
         }
     }
 
-    pub(in super::super) fn conflict_resolver_clear_selection(
+    /// Immediately append a single line from the two-way split view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_split_line_to_output(
         &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.conflict_resolver.split_selected.clear();
-        self.conflict_resolver.inline_selected.clear();
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_toggle_split_selected(
-        &mut self,
-        visible_row_ix: usize,
         row_ix: usize,
         side: ConflictPickSide,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.conflict_resolver.nav_anchor = Some(visible_row_ix);
-        let key = (row_ix, side);
-        if self.conflict_resolver.split_selected.contains(&key) {
-            self.conflict_resolver.split_selected.remove(&key);
-        } else {
-            self.conflict_resolver.split_selected.insert(key);
-        }
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_toggle_inline_selected(
-        &mut self,
-        visible_ix: usize,
-        ix: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.conflict_resolver.nav_anchor = Some(visible_ix);
-        if self.conflict_resolver.inline_selected.contains(&ix) {
-            self.conflict_resolver.inline_selected.remove(&ix);
-        } else {
-            self.conflict_resolver.inline_selected.insert(ix);
-        }
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_append_selection_to_output(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let lines = match self.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => conflict_resolver::collect_split_selection(
-                &self.conflict_resolver.diff_rows,
-                &self.conflict_resolver.split_selected,
-            ),
-            ConflictDiffMode::Inline => conflict_resolver::collect_inline_selection(
-                &self.conflict_resolver.inline_rows,
-                &self.conflict_resolver.inline_selected,
-            ),
-        };
-        if lines.is_empty() {
+        let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
             return;
-        }
-
+        };
+        let text = match side {
+            ConflictPickSide::Ours => row.old.as_deref(),
+            ConflictPickSide::Theirs => row.new.as_deref(),
+        };
+        let Some(line) = text else {
+            return;
+        };
         let current = self
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
-        let next = conflict_resolver::append_lines_to_output(&current, &lines);
+        let next = conflict_resolver::append_lines_to_output(&current, &[line.to_string()]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Immediately append a single line from the two-way inline view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_inline_line_to_output(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
+            return;
+        };
+        if row.content.is_empty() {
+            return;
+        }
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let next = conflict_resolver::append_lines_to_output(&current, &[row.content.clone()]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Immediately append a single line from the three-way view to resolved output.
+    pub(in super::super) fn conflict_resolver_append_three_way_line_to_output(
+        &mut self,
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let line = match choice {
+            conflict_resolver::ConflictChoice::Base => {
+                self.conflict_resolver.three_way_base_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Ours => {
+                self.conflict_resolver.three_way_ours_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Theirs => {
+                self.conflict_resolver.three_way_theirs_lines.get(line_ix)
+            }
+            conflict_resolver::ConflictChoice::Both => {
+                // Both is chunk-level only, not line-level.
+                return;
+            }
+        };
+        let Some(content) = line.filter(|l| !l.is_empty()) else {
+            return;
+        };
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let next = conflict_resolver::append_lines_to_output(&current, &[content.to_string()]);
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
@@ -2262,6 +2491,129 @@ impl MainPaneView {
             input.set_theme(theme, cx);
             input.set_text(text, cx);
         });
+    }
+
+    /// Delete the current text selection in the resolved output (used by Cut context action).
+    pub(in super::super) fn conflict_resolver_output_delete_selection(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (content, sel_range) = self.conflict_resolver_input.read_with(cx, |i, _| {
+            (i.text().to_string(), i.selected_range())
+        });
+        if sel_range.is_empty() {
+            return;
+        }
+        let start = sel_range.start.min(content.len());
+        let end = sel_range.end.min(content.len());
+        let mut next = content[..start].to_string();
+        next.push_str(&content[end..]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Paste text into the resolved output at the current cursor position (used by Paste context action).
+    pub(in super::super) fn conflict_resolver_output_paste_text(
+        &mut self,
+        paste_text: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (content, cursor_offset) = self.conflict_resolver_input.read_with(cx, |i, _| {
+            (i.text().to_string(), i.cursor_offset())
+        });
+        let pos = cursor_offset.min(content.len());
+        let mut next = content[..pos].to_string();
+        next.push_str(paste_text);
+        next.push_str(&content[pos..]);
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(next, cx);
+        });
+    }
+
+    /// Replace a line in the resolved output with the source line at the same index from A/B/C.
+    pub(in super::super) fn conflict_resolver_output_replace_line(
+        &mut self,
+        line_ix: usize,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let is_three_way = self.conflict_resolver.view_mode
+            == conflict_resolver::ConflictResolverViewMode::ThreeWay;
+
+        let replacement: Option<String> = if is_three_way {
+            match choice {
+                conflict_resolver::ConflictChoice::Base => self
+                    .conflict_resolver
+                    .three_way_base_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Ours => self
+                    .conflict_resolver
+                    .three_way_ours_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Theirs => self
+                    .conflict_resolver
+                    .three_way_theirs_lines
+                    .get(line_ix)
+                    .map(|s| s.to_string()),
+                conflict_resolver::ConflictChoice::Both => return,
+            }
+        } else {
+            match choice {
+                conflict_resolver::ConflictChoice::Ours => self
+                    .conflict_resolver
+                    .diff_rows
+                    .get(line_ix)
+                    .and_then(|r| r.old.clone()),
+                conflict_resolver::ConflictChoice::Theirs => self
+                    .conflict_resolver
+                    .diff_rows
+                    .get(line_ix)
+                    .and_then(|r| r.new.clone()),
+                _ => return,
+            }
+        };
+        let Some(replacement) = replacement else {
+            return;
+        };
+
+        let current = self
+            .conflict_resolver_input
+            .read_with(cx, |i, _| i.text().to_string());
+        let lines: Vec<&str> = current.split('\n').collect();
+
+        if line_ix < lines.len() {
+            let mut next = String::new();
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    next.push('\n');
+                }
+                if i == line_ix {
+                    next.push_str(&replacement);
+                } else {
+                    next.push_str(line);
+                }
+            }
+            let theme = self.theme;
+            self.conflict_resolver_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text(next, cx);
+            });
+        } else {
+            let next =
+                conflict_resolver::append_lines_to_output(&current, &[replacement]);
+            let theme = self.theme;
+            self.conflict_resolver_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_text(next, cx);
+            });
+        }
     }
 
     pub(in super::super) fn conflict_resolver_sync_session_resolutions_from_output(
@@ -2355,57 +2707,6 @@ impl MainPaneView {
         Some((session.total_regions(), session.solved_count()))
     }
 
-    pub(in super::super) fn conflict_resolver_focus_conflict(
-        &mut self,
-        conflict_ix: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if conflict_ix >= self.conflict_resolver_conflict_count() {
-            return;
-        }
-
-        self.conflict_resolver.active_conflict = conflict_ix;
-
-        let target_visible_ix = match self.conflict_resolver.view_mode {
-            ConflictResolverViewMode::ThreeWay => conflict_resolver::visible_index_for_conflict(
-                &self.conflict_resolver.three_way_visible_map,
-                &self.conflict_resolver.three_way_conflict_ranges,
-                conflict_ix,
-            ),
-            ConflictResolverViewMode::TwoWayDiff => {
-                let (split_map, inline_map) = conflict_resolver::map_two_way_rows_to_conflicts(
-                    &self.conflict_resolver.marker_segments,
-                    &self.conflict_resolver.diff_rows,
-                    &self.conflict_resolver.inline_rows,
-                );
-                match self.conflict_resolver.diff_mode {
-                    ConflictDiffMode::Split => {
-                        conflict_resolver::visible_index_for_two_way_conflict(
-                            &split_map,
-                            &self.conflict_resolver.diff_visible_row_indices,
-                            conflict_ix,
-                        )
-                    }
-                    ConflictDiffMode::Inline => {
-                        conflict_resolver::visible_index_for_two_way_conflict(
-                            &inline_map,
-                            &self.conflict_resolver.inline_visible_row_indices,
-                            conflict_ix,
-                        )
-                    }
-                }
-            }
-        };
-
-        if let Some(visible_ix) = target_visible_ix {
-            self.conflict_resolver_diff_scroll
-                .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
-            self.conflict_resolver.nav_anchor = Some(visible_ix);
-        }
-
-        cx.notify();
-    }
-
     fn conflict_resolver_active_block_mut(
         &mut self,
     ) -> Option<&mut conflict_resolver::ConflictBlock> {
@@ -2421,42 +2722,6 @@ impl MainPaneView {
             seen += 1;
         }
         None
-    }
-
-    pub(in super::super) fn conflict_resolver_prev_conflict(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let current = self.conflict_resolver.active_conflict;
-        let Some(target) = conflict_resolver::prev_unresolved_conflict_index(
-            &self.conflict_resolver.marker_segments,
-            current,
-        ) else {
-            return;
-        };
-        if target == current {
-            return;
-        }
-        self.conflict_resolver.active_conflict = target;
-        cx.notify();
-    }
-
-    pub(in super::super) fn conflict_resolver_next_conflict(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let current = self.conflict_resolver.active_conflict;
-        let Some(target) = conflict_resolver::next_unresolved_conflict_index(
-            &self.conflict_resolver.marker_segments,
-            current,
-        ) else {
-            return;
-        };
-        if target == current {
-            return;
-        }
-        self.conflict_resolver.active_conflict = target;
-        cx.notify();
     }
 
     pub(in super::super) fn conflict_resolver_pick_at(
