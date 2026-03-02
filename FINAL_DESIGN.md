@@ -2,6 +2,35 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 12, Independent Verification Audit — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Removed dead code: 3× `#[allow(unused_variables)] let repo = ();` in `crates/gitgpui-ui-gpui/src/view/panels/main.rs` (unused placeholder bindings in binary, keep-delete, and decision conflict resolver match arms).
+- ✅ Removed unnecessary `#[allow(unused_imports)]` in `crates/gitgpui-app/tests/standalone_tool_mode_integration.rs` (`Path` and `PathBuf` are unconditionally used).
+
+Verification scope (this iteration):
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1110 passed, 0 failed, 5 ignored** (3 new tests since iteration 11).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ `cargo clippy --workspace -- -D warnings`: **0 warnings** (full-feature build).
+- ✅ Conducted independent deep audit via three parallel exploration agents:
+  - **External usage design audit**: Verified all CLI subcommands, env fallbacks, exit code policy, validation, behavior matrix items, and setup command. Zero TODO/FIXME/HACK/unimplemented!() in production code. All FULLY IMPLEMENTED.
+  - **Test quality audit**: Cross-referenced all test files and ignored tests. 5 ignored tests all legitimate (2 env-gated extraction utilities, 1 exhaustive 161K permutation corpus, 2 performance benchmarks). No trivial assertions, no incomplete tests. Coverage exceeds design targets in every phase.
+  - **Code quality audit**: Searched all production crates for unsafe patterns, dead code, and robustness issues. All `unreachable!()` calls protected by prior type/logic guarantees. All production `.unwrap()` calls are in safe contexts. No panicking patterns in production code.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 11, Focused Difftool GUI Launch Parity — March 2, 2026)
 
 Implemented this iteration:

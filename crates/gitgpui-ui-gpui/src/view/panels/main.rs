@@ -819,8 +819,6 @@ impl MainPaneView {
                             // Binary/non-UTF8 side-pick resolver panel.
                             let file_clone = file.clone();
                             let rid = repo_id.unwrap();
-                            #[allow(unused_variables)]
-                            let repo = ();
                             self.render_binary_conflict_resolver(theme, rid, path, &file_clone, cx)
                         }
                         Loadable::Ready(Some(file))
@@ -835,8 +833,6 @@ impl MainPaneView {
                             let kind = self.conflict_resolver.conflict_kind.unwrap_or(
                                 gitgpui_core::domain::FileConflictKind::DeletedByUs,
                             );
-                            #[allow(unused_variables)]
-                            let repo = ();
                             self.render_keep_delete_conflict_resolver(
                                 theme, rid, path, &file_clone, kind, cx,
                             )
@@ -850,8 +846,6 @@ impl MainPaneView {
                             // Decision-only resolver for BothDeleted conflicts.
                             let file_clone = file.clone();
                             let rid = repo_id.unwrap();
-                            #[allow(unused_variables)]
-                            let repo = ();
                             self.render_decision_conflict_resolver(
                                 theme, rid, path, &file_clone, cx,
                             )
