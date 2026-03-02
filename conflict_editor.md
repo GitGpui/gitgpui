@@ -1,5 +1,18 @@
 # Conflict Editor Unification Plan
 
+## Implementation Progress
+
+- ✅ `0a. Unified line-ending detection` — Added shared `gitgpui-core::text_utils::detect_line_ending_from_texts` with explicit heuristics, switched focused merge and subchunk autosolve to use it, and documented why `merge.rs` keeps its existing full-file heuristic.
+- ⬜ `0b. Unified marker parsing`
+- ⬜ `0c. Marker-preserving output generation`
+- ⬜ `0d. Consolidate auto-resolve on segments`
+- ⬜ `0e. Tests for consolidated primitives`
+- ⬜ `1. Add Focused Mergetool View Mode to Existing UI`
+- ⬜ `2. New GPUI Entrypoint for Mergetool Focused Window`
+- ⬜ `3. Focused Mode State Bootstrapping`
+- ⬜ `4. Save/Cancel/Exit Semantics`
+- ⬜ `5. Remove Old Standalone Merge UI`
+
 ## Goal
 
 Unify `git mergetool --gui` and in-app conflict resolution so both use the same `gitgpui-app` conflict resolver surface, theme, and settings. Consolidate all duplicate marker parsing, output generation, auto-resolve, and line-ending detection into single implementations. Remove the standalone focused merge after parity.

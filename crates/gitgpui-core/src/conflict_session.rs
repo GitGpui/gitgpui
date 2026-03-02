@@ -1,5 +1,6 @@
 use crate::domain::FileConflictKind;
 use crate::file_diff::{Edit, EditKind, myers_edits, split_lines};
+use crate::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
 use regex::Regex;
 use std::path::PathBuf;
 
@@ -843,11 +844,7 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
             break;
         }
 
-        spans.push(MergedSpan::Conflict {
-            base,
-            ours,
-            theirs,
-        });
+        spans.push(MergedSpan::Conflict { base, ours, theirs });
     }
 
     // Flush trailing context.
@@ -867,11 +864,7 @@ fn parse_merged_spans(text: &str) -> Vec<MergedSpan> {
 /// 4. Subchunk splitting (line-level re-merge) when base is available.
 ///
 /// Returns `Some(resolved_text)` if the block can be auto-resolved.
-fn try_resolve_single_block(
-    base: Option<&str>,
-    ours: &str,
-    theirs: &str,
-) -> Option<String> {
+fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Option<String> {
     // Rule 1: identical sides.
     if ours == theirs {
         return Some(ours.to_string());
@@ -949,14 +942,8 @@ pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
     for span in &spans {
         match span {
             MergedSpan::Context(text) => output.push_str(text),
-            MergedSpan::Conflict {
-                base,
-                ours,
-                theirs,
-            } => {
-                if let Some(resolved) =
-                    try_resolve_single_block(base.as_deref(), ours, theirs)
-                {
+            MergedSpan::Conflict { base, ours, theirs } => {
+                if let Some(resolved) = try_resolve_single_block(base.as_deref(), ours, theirs) {
                     output.push_str(&resolved);
                 } else {
                     return None;
@@ -1476,24 +1463,6 @@ struct LineHunk {
 /// Maximum number of lines per side before we skip subchunk splitting.
 const SUBCHUNK_MAX_LINES: usize = 500;
 
-/// Detect the dominant line ending in a block of text.
-///
-/// Returns `"\r\n"` if CRLF endings outnumber LF-only endings, `"\n"` otherwise.
-fn detect_subchunk_line_ending(texts: &[&str]) -> &'static str {
-    let mut crlf = 0usize;
-    let mut lf_only = 0usize;
-    for text in texts {
-        for line in text.split_inclusive('\n') {
-            if line.ends_with("\r\n") {
-                crlf += 1;
-            } else if line.ends_with('\n') {
-                lf_only += 1;
-            }
-        }
-    }
-    if crlf > lf_only { "\r\n" } else { "\n" }
-}
-
 /// Split a conflict region into line-level subchunks using 3-way diff/merge.
 ///
 /// Returns `Some(subchunks)` if the block can be meaningfully decomposed into
@@ -1524,7 +1493,10 @@ pub fn split_conflict_into_subchunks(
 
     // Detect dominant line ending from the input texts so that
     // reconstructed subchunk text preserves CRLF when appropriate.
-    let line_ending = detect_subchunk_line_ending(&[base, ours, theirs]);
+    let line_ending = detect_line_ending_from_texts(
+        [base, ours, theirs],
+        LineEndingDetectionMode::DominantCrlfVsLf,
+    );
 
     let subchunks =
         if base_lines.len() == ours_lines.len() && base_lines.len() == theirs_lines.len() {
@@ -3608,10 +3580,7 @@ unterminated content with no separator
             end\n";
         let result = try_autosolve_merged_text(text);
         // Ours changed line 2, theirs changed line 1 → subchunk merge.
-        assert_eq!(
-            result,
-            Some("ctx\nAAA\nBBB\nccc\nend\n".to_string())
-        );
+        assert_eq!(result, Some("ctx\nAAA\nBBB\nccc\nend\n".to_string()));
     }
 
     #[test]
@@ -3729,7 +3698,10 @@ unterminated content with no separator
         let subchunks = split_conflict_into_subchunks(base, ours, theirs);
 
         // Should produce some resolved content.
-        assert!(subchunks.is_some(), "expected subchunks from diff-based merge");
+        assert!(
+            subchunks.is_some(),
+            "expected subchunks from diff-based merge"
+        );
         let subchunks = subchunks.unwrap();
 
         // Collect all text from resolved subchunks.
@@ -3801,10 +3773,7 @@ unterminated content with no separator
             >>>>>>> theirs\r\n\
             after\r\n";
         let result = try_autosolve_merged_text(text);
-        assert_eq!(
-            result,
-            Some("before\r\nsame\r\nafter\r\n".to_string())
-        );
+        assert_eq!(result, Some("before\r\nsame\r\nafter\r\n".to_string()));
     }
 
     #[test]
@@ -3818,16 +3787,16 @@ unterminated content with no separator
             >>>>>>> theirs\r\n\
             end\r\n";
         let result = try_autosolve_merged_text(text);
-        assert_eq!(
-            result,
-            Some("start\r\nfoo  bar\r\nend\r\n".to_string())
-        );
+        assert_eq!(result, Some("start\r\nfoo  bar\r\nend\r\n".to_string()));
     }
 
     #[test]
     fn detect_subchunk_line_ending_crlf_dominant() {
         assert_eq!(
-            detect_subchunk_line_ending(&["a\r\nb\r\n", "c\r\n"]),
+            detect_line_ending_from_texts(
+                ["a\r\nb\r\n", "c\r\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf
+            ),
             "\r\n"
         );
     }
@@ -3835,7 +3804,10 @@ unterminated content with no separator
     #[test]
     fn detect_subchunk_line_ending_lf_dominant() {
         assert_eq!(
-            detect_subchunk_line_ending(&["a\nb\n", "c\n"]),
+            detect_line_ending_from_texts(
+                ["a\nb\n", "c\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf
+            ),
             "\n"
         );
     }
@@ -3844,20 +3816,32 @@ unterminated content with no separator
     fn detect_subchunk_line_ending_mixed_prefers_majority() {
         // 2 CRLF vs 1 LF → CRLF wins.
         assert_eq!(
-            detect_subchunk_line_ending(&["a\r\nb\r\nc\n"]),
+            detect_line_ending_from_texts(
+                ["a\r\nb\r\nc\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf
+            ),
             "\r\n"
         );
         // 1 CRLF vs 2 LF → LF wins.
         assert_eq!(
-            detect_subchunk_line_ending(&["a\r\nb\nc\n"]),
+            detect_line_ending_from_texts(
+                ["a\r\nb\nc\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf
+            ),
             "\n"
         );
     }
 
     #[test]
     fn detect_subchunk_line_ending_empty_defaults_to_lf() {
-        assert_eq!(detect_subchunk_line_ending(&[""]), "\n");
-        assert_eq!(detect_subchunk_line_ending(&[]), "\n");
+        assert_eq!(
+            detect_line_ending_from_texts([""], LineEndingDetectionMode::DominantCrlfVsLf),
+            "\n"
+        );
+        assert_eq!(
+            detect_line_ending_from_texts([], LineEndingDetectionMode::DominantCrlfVsLf),
+            "\n"
+        );
     }
 
     // ── parse_merged_spans malformed-marker preservation tests ──────
@@ -3893,8 +3877,7 @@ unterminated content with no separator
     #[test]
     fn autosolve_malformed_diff3_no_end_preserves_all_sections() {
         // A full diff3 conflict header (<<<, |||, ===) but no >>>>>>>.
-        let text =
-            "before\n<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n";
+        let text = "before\n<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n";
         let result = try_autosolve_merged_text(text);
         assert_eq!(result.as_deref(), Some(text));
     }

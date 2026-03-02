@@ -7,19 +7,20 @@
 use crate::assets::GitGpuiAssets;
 use crate::theme::AppTheme;
 use crate::view::conflict_resolver::{
-    auto_resolve_segments_with_options, conflict_count, next_unresolved_conflict_index,
-    parse_conflict_markers, prev_unresolved_conflict_index, resolved_conflict_count, ConflictBlock,
-    ConflictChoice, ConflictSegment,
+    ConflictBlock, ConflictChoice, ConflictSegment, auto_resolve_segments_with_options,
+    conflict_count, next_unresolved_conflict_index, parse_conflict_markers,
+    prev_unresolved_conflict_index, resolved_conflict_count,
 };
+use gitgpui_core::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
 use gpui::prelude::*;
 use gpui::{
-    actions, div, point, px, size, App, Application, Bounds, ClickEvent, FocusHandle, Focusable,
-    FontWeight, KeyBinding, Render, ScrollHandle, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions,
+    App, Application, Bounds, ClickEvent, FocusHandle, Focusable, FontWeight, KeyBinding, Render,
+    ScrollHandle, SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations,
+    WindowOptions, actions, div, point, px, size,
 };
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 const EXIT_SUCCESS: i32 = 0;
 const EXIT_CANCELED: i32 = 1;
@@ -274,7 +275,14 @@ fn render_unresolved_marker_block(
     label_remote: &str,
     label_base: &str,
 ) -> String {
-    let newline = detect_line_ending(block);
+    let newline = detect_line_ending_from_texts(
+        [
+            block.ours.as_str(),
+            block.theirs.as_str(),
+            block.base.as_deref().unwrap_or_default(),
+        ],
+        LineEndingDetectionMode::Presence,
+    );
     let mut out = String::new();
     out.push_str("<<<<<<< ");
     out.push_str(label_local);
@@ -303,30 +311,6 @@ fn render_unresolved_marker_block(
     out.push_str(label_remote);
     out.push_str(newline);
     out
-}
-
-fn detect_line_ending(block: &ConflictBlock) -> &'static str {
-    let uses_crlf = block.ours.contains("\r\n")
-        || block.theirs.contains("\r\n")
-        || block
-            .base
-            .as_deref()
-            .is_some_and(|base| base.contains("\r\n"));
-    if uses_crlf {
-        return "\r\n";
-    }
-
-    let uses_cr = block.ours.contains('\r')
-        || block.theirs.contains('\r')
-        || block
-            .base
-            .as_deref()
-            .is_some_and(|base| base.contains('\r'));
-    if uses_cr {
-        return "\r";
-    }
-
-    "\n"
 }
 
 #[cfg(test)]
@@ -1132,11 +1116,11 @@ mod tests {
         })];
         let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
         // Detected CRLF from ours content, so guard should insert \r\n.
+        assert!(output.contains("<<<<<<< L\r\n"), "start marker: {output:?}");
         assert!(
-            output.contains("<<<<<<< L\r\n"),
-            "start marker: {output:?}"
+            output.contains("more\r\n=======\r\n"),
+            "separator: {output:?}"
         );
-        assert!(output.contains("more\r\n=======\r\n"), "separator: {output:?}");
         assert!(
             output.contains("theirs\r\n>>>>>>> R\r\n"),
             "end marker: {output:?}"
@@ -1215,7 +1199,10 @@ mod tests {
         ];
         let output = build_output_from_segments_with_labels(&segments, "L", "R", "B");
         // First block resolved to ours: "A\n"
-        assert!(output.starts_with("header\nA\nmiddle\n"), "output: {output:?}");
+        assert!(
+            output.starts_with("header\nA\nmiddle\n"),
+            "output: {output:?}"
+        );
         // Second block unresolved: markers around C/D
         assert!(
             output.contains("<<<<<<< L\nC\n=======\nD\n>>>>>>> R\n"),

@@ -20,6 +20,69 @@ pub struct MatchingBlock {
     pub length: usize,
 }
 
+/// Heuristic used by [`detect_line_ending_from_texts`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LineEndingDetectionMode {
+    /// Prefer CRLF if any side contains it, then CR, otherwise LF.
+    ///
+    /// This mirrors the focused-merge marker renderer behavior.
+    Presence,
+    /// Pick the dominant ending between CRLF and LF by counting occurrences.
+    ///
+    /// Ties default to LF, matching existing autosolve/subchunk behavior.
+    DominantCrlfVsLf,
+}
+
+/// Detect a line ending style from multiple text inputs.
+///
+/// The caller selects the detection mode to preserve context-specific legacy
+/// behavior while sharing one implementation.
+pub fn detect_line_ending_from_texts<'a, I>(texts: I, mode: LineEndingDetectionMode) -> &'static str
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    match mode {
+        LineEndingDetectionMode::Presence => detect_by_presence(texts),
+        LineEndingDetectionMode::DominantCrlfVsLf => detect_by_dominant_counts(texts),
+    }
+}
+
+fn detect_by_presence<'a, I>(texts: I) -> &'static str
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut saw_cr = false;
+
+    for text in texts {
+        if text.contains("\r\n") {
+            return "\r\n";
+        }
+        if text.contains('\r') {
+            saw_cr = true;
+        }
+    }
+
+    if saw_cr { "\r" } else { "\n" }
+}
+
+fn detect_by_dominant_counts<'a, I>(texts: I) -> &'static str
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut crlf_count = 0usize;
+    let mut lf_only_count = 0usize;
+    for text in texts {
+        let crlf = text.matches("\r\n").count();
+        crlf_count += crlf;
+        lf_only_count += text.matches('\n').count().saturating_sub(crlf);
+    }
+    if crlf_count > lf_only_count {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 /// Validation error for sync-point-constrained matching.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SyncPointError {
@@ -297,7 +360,12 @@ fn index_matching_kmers(a: &[String], b: &[String]) -> (Vec<String>, Vec<usize>)
             continue;
         }
 
-        for (j, item) in b.iter().enumerate().take(i + 1).skip(next_poss_match.max(i - 2)) {
+        for (j, item) in b
+            .iter()
+            .enumerate()
+            .take(i + 1)
+            .skip(next_poss_match.max(i - 2))
+        {
             matches.push(item.clone());
             index.push(j);
         }
@@ -561,7 +629,9 @@ pub fn merge_intervals(intervals: &[(usize, usize)]) -> Vec<(usize, usize)> {
 
     for &(start, end) in &sorted[1..] {
         // SAFETY: `result` is initialized with `vec![sorted[0]]` and only grows.
-        let last = result.last_mut().expect("result is non-empty by construction");
+        let last = result
+            .last_mut()
+            .expect("result is non-empty by construction");
         if start <= last.1 {
             last.1 = last.1.max(end);
         } else {
@@ -625,4 +695,76 @@ pub fn delete_last_line(text: &str) -> &str {
 
     // No line ending found — single line.
     ""
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LineEndingDetectionMode, detect_line_ending_from_texts};
+
+    #[test]
+    fn detect_line_ending_presence_prefers_crlf_when_present() {
+        assert_eq!(
+            detect_line_ending_from_texts(
+                ["ours\n", "theirs\r\n", "base\n"],
+                LineEndingDetectionMode::Presence,
+            ),
+            "\r\n"
+        );
+    }
+
+    #[test]
+    fn detect_line_ending_presence_prefers_cr_when_no_crlf() {
+        assert_eq!(
+            detect_line_ending_from_texts(
+                ["ours\rmore", "theirs\n", "base"],
+                LineEndingDetectionMode::Presence,
+            ),
+            "\r"
+        );
+    }
+
+    #[test]
+    fn detect_line_ending_presence_defaults_to_lf() {
+        assert_eq!(
+            detect_line_ending_from_texts(["no separators"], LineEndingDetectionMode::Presence),
+            "\n"
+        );
+        assert_eq!(
+            detect_line_ending_from_texts([], LineEndingDetectionMode::Presence),
+            "\n"
+        );
+    }
+
+    #[test]
+    fn detect_line_ending_dominant_prefers_majority() {
+        assert_eq!(
+            detect_line_ending_from_texts(
+                ["a\r\nb\r\nc\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf,
+            ),
+            "\r\n"
+        );
+        assert_eq!(
+            detect_line_ending_from_texts(
+                ["a\r\nb\nc\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf,
+            ),
+            "\n"
+        );
+    }
+
+    #[test]
+    fn detect_line_ending_dominant_tie_defaults_to_lf() {
+        assert_eq!(
+            detect_line_ending_from_texts(
+                ["a\r\nb\n"],
+                LineEndingDetectionMode::DominantCrlfVsLf,
+            ),
+            "\n"
+        );
+        assert_eq!(
+            detect_line_ending_from_texts([], LineEndingDetectionMode::DominantCrlfVsLf),
+            "\n"
+        );
+    }
 }

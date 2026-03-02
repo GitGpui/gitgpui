@@ -757,7 +757,11 @@ fn common_prefix_suffix_lines(a: &[String], b: &[String]) -> (usize, usize) {
     (prefix, suffix)
 }
 
-/// Detect the dominant line ending in the input texts.
+/// Detect the dominant line ending in the full-file merge inputs.
+///
+/// This remains a local counting heuristic so merge-file output keeps its
+/// historical full-text behavior even as other modules share
+/// `text_utils::detect_line_ending_from_texts` with context-specific modes.
 fn detect_line_ending(ours: &str, theirs: &str, base: &str) -> &'static str {
     let crlf_count = ours.matches("\r\n").count()
         + theirs.matches("\r\n").count()
