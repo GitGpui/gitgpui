@@ -6,7 +6,7 @@
 - ✅ `0b. Unified marker parsing` — Added shared `gitgpui_core::conflict_session::parse_conflict_marker_segments` + segment/block types, converted core region parsing and autosolve text parsing to thin wrappers over it, removed `MergedSpan`, and switched UI `parse_conflict_markers` to map from core segments.
 - ✅ `0c. Marker-preserving output generation` — Added shared `gitgpui_core::conflict_output::{generate_resolved_text, render_unresolved_marker_block, detect_conflict_block_line_ending}` plus output options/labels, delegated UI `conflict_resolver::generate_resolved_text` and focused merge save rendering to core, and removed focused-merge-local output generator helpers.
 - ✅ `0d. Consolidate auto-resolve on segments` — Added core `safe_auto_resolve_pick(base, ours, theirs, whitespace_normalize)` and delegated UI `auto_resolve_segments_with_options` to it, removing duplicated Pass-1 rule logic while keeping regex/history paths delegated to core helpers.
-- ⬜ `0e. Tests for consolidated primitives`
+- ✅ `0e. Tests for consolidated primitives` — Added direct `gitgpui_core::conflict_output` tests for resolved/unresolved/mixed marker rendering across LF/CRLF/CR and missing-trailing-newline cases, plus parse→generate→parse round-trip coverage via `parse_conflict_marker_segments`; ran required workspace test/clippy commands (currently failing in pre-existing difftool integration and unrelated workspace clippy checks).
 - ⬜ `1. Add Focused Mergetool View Mode to Existing UI`
 - ⬜ `2. New GPUI Entrypoint for Mergetool Focused Window`
 - ⬜ `3. Focused Mode State Bootstrapping`
