@@ -2,6 +2,37 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 13, Mergetool GUI Default Fallback Parity — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Closed remaining mergetool GUI-selection fallback coverage gap in `crates/gitgpui-app/tests/mergetool_git_integration.rs`.
+  - Added `git_mergetool_gui_default_true_fallback_when_no_guitool_configured` (`mergetool.guiDefault=true` falls back to `merge.tool` when `merge.guitool` is unset).
+  - This matches the difftool parity test added in iteration 12, closing the symmetric coverage gap.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration gui_default_true_fallback_when_no_guitool_configured -- --nocapture`
+- ✅ `cargo test -p gitgpui-app --no-default-features --features gix --test mergetool_git_integration` (**64 passed, 0 failed**).
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1113 passed, 0 failed, 5 ignored** (1 new test since iteration 12).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings**.
+- ✅ Conducted independent deep audit via parallel exploration agents:
+  - **Behavior matrix audit**: Cross-referenced all 10 items from `external_usage.md` behavior matrix against actual tests. All items covered: file paths with spaces/unicode (10 tests), subdirectory invocation (3 tests), no-base conflicts (5 tests), binary/non-UTF8 (8 tests), deleted output (5 tests), symlink conflicts (4 tests), submodule conflicts (12 tests), CRLF preservation (7 tests), directory diff mode (4 tests), close/cancel exit codes (30+ tests).
+  - **Code quality audit**: Searched all production crates for TODO/FIXME/HACK/unimplemented!()/todo!(), unsafe unwrap(), dead code. Zero issues. All #[allow(dead_code)] annotations are for planned UI features. No panicking patterns in production code.
+  - **Test coverage audit**: Only untested public function is `crashlog::install()` (intentionally excluded — panic hook registration). All other public APIs have corresponding test coverage.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified, including symmetric GUI default fallback parity coverage for both difftool and mergetool when no guitool is configured.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4A–4B complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5A–5C complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 12, Difftool GUI Fallback Parity Coverage — March 2, 2026)
 
 Implemented this iteration:

@@ -1613,6 +1613,28 @@ fn git_mergetool_gui_fallback_when_no_guitool_configured() {
     );
 }
 
+#[test]
+fn git_mergetool_gui_default_true_fallback_when_no_guitool_configured() {
+    // Even with guiDefault=true, git mergetool should fall back to merge.tool
+    // if no merge.guitool is configured.
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+
+    setup_overlapping_conflict(repo);
+
+    configure_mergetool_command(repo, "cli", &mergetool_marker_cmd("cli"));
+    configure_mergetool_trust_exit_code(repo, "cli", true);
+    // Only merge.tool set, no merge.guitool — but guiDefault=true.
+    configure_mergetool_selection(repo, "cli", None, Some("true"));
+
+    let output = run_git_capture_with_display(repo, &["mergetool", "--no-prompt"], Some(":99"));
+    let text = output_text(&output);
+    assert!(
+        text.contains("TOOL=cli"),
+        "expected fallback to merge.tool with guiDefault=true and no merge.guitool\n{text}"
+    );
+}
+
 // ── Nonexistent tool error handling ──────────────────────────────────
 
 #[test]
