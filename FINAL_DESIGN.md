@@ -2,6 +2,46 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 30, Difftool Label-Header Rewrite Hardening — March 2, 2026)
+
+Implementation performed this iteration:
+- ✅ Read both design documents in full (`external_usage.md`, `docs/REFERENCE_TEST_PORTABILITY.md`).
+- ✅ Identified a remaining difftool correctness gap in `crates/gitgpui-app/src/difftool_mode.rs`:
+  - `apply_labels_to_unified_diff_headers()` rewrote any line beginning with `--- ` / `+++ `.
+  - This could corrupt real hunk content lines that legitimately begin with those prefixes.
+- ✅ Hardened unified-diff relabeling logic:
+  - Added a state-aware header rewriter that only relabels file header pairs (`---` / `+++`) outside hunks.
+  - Preserves hunk payload lines verbatim, including header-like content.
+  - Preserves relabeling across multi-file diff output sections.
+- ✅ Added regression tests in `crates/gitgpui-app/src/difftool_mode.rs`:
+  - `apply_labels_does_not_rewrite_hunk_content_that_looks_like_headers`
+  - `apply_labels_rewrites_each_file_header_pair_in_multi_file_diff`
+- ✅ Validation command:
+  - `cargo test -p gitgpui-app --no-default-features --features gix` (**169 unit tests + 32 difftool integration + 65 mergetool integration + 60 standalone integration passed; 0 failed**)
+
+External Diff/Merge Usage Design (`external_usage.md`):
+- ✅ CLI modes: `difftool`, `mergetool`, and `setup` implemented with documented flags and env fallback.
+- ✅ Exit policy: dedicated modes return `0`/`1`/`>=2` per design contract.
+- ✅ Git integration: setup/config emits full headless+GUI tool config with `guiDefault=auto`.
+- ✅ Compatibility: KDiff3/Meld invocation forms supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional forms).
+- ✅ Behavior matrix coverage remains complete; difftool label output is now hardened to avoid false rewrites in hunk payload lines.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`):
+- ✅ Phase 1A: t6403 core merge algorithm — implemented.
+- ✅ Phase 1B: t6427 zdiff3 — implemented.
+- ✅ Phase 1C: Conflict label formatting — implemented.
+- ✅ Phase 2A–2C: KDiff3-style fixture harness — implemented.
+- ✅ Phase 3A–3C: Permutation corpus + real-world merge extraction — implemented.
+- ✅ Phase 4A: Mergetool E2E — implemented.
+- ✅ Phase 4B: Difftool E2E — implemented (plus relabeling hardening coverage this iteration).
+- ✅ Phase 5A–5C: Meld-derived algorithm tests — implemented.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Conclusion: All components from both design documents remain fully implemented; this iteration fixed a difftool label-rewrite edge case so header relabeling does not mutate legitimate diff hunk content.
+
 ### Progress Snapshot (Iteration 30, Fix --help/--version Exit Code — March 2, 2026)
 
 Implementation performed this iteration:

@@ -260,26 +260,54 @@ fn has_git_error_prefix(stderr: &str) -> bool {
         .any(|line| line.starts_with("error:") || line.starts_with("fatal:"))
 }
 
+fn push_labeled_header_line(out: &mut String, prefix: &str, label: &str, segment: &str) {
+    out.push_str(prefix);
+    out.push(' ');
+    out.push_str(label);
+    if segment.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
 fn apply_labels_to_unified_diff_headers(diff: &str, left: &str, right: &str) -> String {
     let mut out = String::with_capacity(diff.len());
+    // Rewrite only file header lines (`---` / `+++`) and never hunk payload.
+    // Hunk lines can legally begin with `--- ` / `+++ ` when content itself
+    // starts with `-- ` / `++ `, and those must remain untouched.
+    let mut in_hunk = false;
+    let mut awaiting_old_header = true;
+    let mut awaiting_new_header = false;
 
     for segment in diff.split_inclusive('\n') {
-        if segment.starts_with("--- ") {
-            if segment.ends_with('\n') {
-                out.push_str(&format!("--- {left}\n"));
-            } else {
-                out.push_str(&format!("--- {left}"));
-            }
+        if segment.starts_with("diff --git ") {
+            in_hunk = false;
+            awaiting_old_header = true;
+            awaiting_new_header = false;
+            out.push_str(segment);
             continue;
         }
-        if segment.starts_with("+++ ") {
-            if segment.ends_with('\n') {
-                out.push_str(&format!("+++ {right}\n"));
-            } else {
-                out.push_str(&format!("+++ {right}"));
-            }
+
+        if segment.starts_with("@@ ") {
+            in_hunk = true;
+            awaiting_old_header = false;
+            awaiting_new_header = false;
+            out.push_str(segment);
             continue;
         }
+
+        if !in_hunk && awaiting_old_header && segment.starts_with("--- ") {
+            push_labeled_header_line(&mut out, "---", left, segment);
+            awaiting_old_header = false;
+            awaiting_new_header = true;
+            continue;
+        }
+
+        if !in_hunk && awaiting_new_header && segment.starts_with("+++ ") {
+            push_labeled_header_line(&mut out, "+++", right, segment);
+            awaiting_new_header = false;
+            continue;
+        }
+
         out.push_str(segment);
     }
 
@@ -600,6 +628,36 @@ mod tests {
         assert!(got.contains("--- LEFT"));
         assert!(got.contains("+++ RIGHT"));
         assert!(got.contains("@@ -1 +1 @@"));
+    }
+
+    #[test]
+    fn apply_labels_does_not_rewrite_hunk_content_that_looks_like_headers() {
+        let input =
+            "diff --git a/l b/r\n--- a/l\n+++ b/r\n@@ -1 +1 @@\n--- content\n+++ content\n";
+        let got = apply_labels_to_unified_diff_headers(input, "LEFT", "RIGHT");
+        assert!(got.contains("--- LEFT\n+++ RIGHT\n"));
+        assert!(got.contains("@@ -1 +1 @@\n--- content\n+++ content\n"));
+    }
+
+    #[test]
+    fn apply_labels_rewrites_each_file_header_pair_in_multi_file_diff() {
+        let input = concat!(
+            "diff --git a/l b/l\n",
+            "--- a/l\n",
+            "+++ b/l\n",
+            "@@ -1 +1 @@\n",
+            "-a\n",
+            "+b\n",
+            "diff --git a/r b/r\n",
+            "--- a/r\n",
+            "+++ b/r\n",
+            "@@ -1 +1 @@\n",
+            "-c\n",
+            "+d\n",
+        );
+        let got = apply_labels_to_unified_diff_headers(input, "LEFT", "RIGHT");
+        assert_eq!(got.matches("--- LEFT").count(), 2);
+        assert_eq!(got.matches("+++ RIGHT").count(), 2);
     }
 
     #[test]
