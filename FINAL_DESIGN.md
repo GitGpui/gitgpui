@@ -2,6 +2,28 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 13, Backend Unicode Path Mergetool Coverage — March 2, 2026)
+
+Implemented this iteration:
+- ✅ Added explicit backend mergetool Unicode-path integration coverage in `crates/gitgpui-git-gix/tests/status_integration.rs`.
+  - New test: `launch_mergetool_custom_cmd_supports_unicode_conflicted_path`.
+  - Verifies conflicted path handling for `"docs/spaced 日本語 file.txt"` through `launch_mergetool`, including successful staging and conflict clearance.
+
+Verification scope (this iteration):
+- ✅ `cargo test -p gitgpui-git-gix launch_mergetool_custom_cmd_supports_unicode_conflicted_path -- --nocapture` (**1 passed, 0 failed**).
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ Behavior-matrix coverage strengthened for item 1 (paths with spaces/unicode) at backend-launch level (`launch_mergetool` integration path).
+- ✅ All other components remain implemented.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 4A parity coverage remains complete; backend integration now includes an explicit Unicode-path regression check for external mergetool invocation flow.
+- ✅ Phases 1A–1C, 2, 3A–3C, 4A–4B, 5A–5C remain complete.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 13, Mergetool GUI Default Fallback Parity — March 2, 2026)
 
 Implemented this iteration:

@@ -1812,6 +1812,56 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
 }
 
 #[test]
+fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let conflicted_path = "docs/spaced 日本語 file.txt";
+    setup_both_modified_text_conflict(repo, conflicted_path, "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "fake"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.fake.cmd",
+            "cat \"${REMOTE}\" > \"${MERGED}\"; exit 0",
+        ],
+    );
+    run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let path = Path::new(conflicted_path);
+    let result = opened.launch_mergetool(path).unwrap();
+    assert!(
+        result.success,
+        "expected unicode conflicted path to resolve, got {result:?}"
+    );
+    assert_eq!(result.tool_name, "fake");
+    assert_eq!(result.output.exit_code, Some(0));
+
+    let on_disk = fs::read_to_string(repo.join(conflicted_path)).unwrap();
+    assert_eq!(on_disk, "theirs\n");
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("theirs\n".as_bytes())
+    );
+
+    let status = opened.status().unwrap();
+    assert!(
+        status.unstaged.iter().all(|entry| entry.path != path),
+        "expected unicode conflict to clear after mergetool resolution: {status:?}"
+    );
+    assert!(
+        status
+            .staged
+            .iter()
+            .any(|entry| entry.path == path && entry.kind == FileStatusKind::Modified),
+        "expected resolved unicode path to be staged after mergetool run: {status:?}"
+    );
+}
+
+#[test]
 fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
