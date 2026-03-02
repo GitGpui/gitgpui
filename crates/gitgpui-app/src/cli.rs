@@ -806,15 +806,15 @@ fn normalize_empty_mergetool_base_arg(args: &[OsString]) -> Vec<OsString> {
             continue;
         }
 
-        if in_mergetool_subcommand && token == "--base" {
-            if let Some(next) = args.get(idx + 1)
-                && next.is_empty()
-            {
-                // Accept shell-expanded empty `--base "$BASE"` as "no base"
-                // for add/add and other no-base conflict scenarios.
-                idx += 2;
-                continue;
-            }
+        if in_mergetool_subcommand
+            && token == "--base"
+            && let Some(next) = args.get(idx + 1)
+            && next.is_empty()
+        {
+            // Accept shell-expanded empty `--base "$BASE"` as "no base"
+            // for add/add and other no-base conflict scenarios.
+            idx += 2;
+            continue;
         }
 
         if in_mergetool_subcommand && token == "--base=" {

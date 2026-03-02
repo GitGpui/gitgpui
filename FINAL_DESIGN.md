@@ -2,6 +2,36 @@
 
 ## Implementation Progress
 
+### Progress Snapshot (Iteration 8 — March 2, 2026)
+
+Independent verification audit by a fresh agent confirms all design document components remain fully implemented. No new components to add, no gaps found.
+
+Implemented this iteration:
+- ✅ Fixed clippy `collapsible_if` lint in `crates/gitgpui-app/src/cli.rs`: collapsed nested `if` in `normalize_mergetool_args` empty-base handling into a single compound condition with `let`-chain, satisfying the `collapsible_if` lint under `-D warnings`.
+
+Verification scope (this iteration):
+- ✅ `cargo test --workspace --no-default-features --features gix`: **1103 passed, 0 failed, 5 ignored** (6 new tests since iteration 7).
+- ✅ `cargo clippy --workspace --no-default-features --features gix -- -D warnings`: **0 warnings** (fixed collapsible_if regression).
+- ✅ Conducted parallel deep audit of all major subsystems via three independent exploration agents:
+  - **External usage design audit**: Verified all CLI subcommands (`difftool`, `mergetool`, `setup`) with full flag sets, env fallbacks, KDiff3/Meld compatibility parsing, exit code policy (0/1/≥2), setup mode config generation, and all 10 behavior matrix items. All FULLY IMPLEMENTED.
+  - **Reference test portability audit**: Cross-referenced every Phase (1A–5C) from `REFERENCE_TEST_PORTABILITY.md` against actual test names and files — every planned test is present and passing, with many phases exceeding planned counts (e.g., Phase 4A: 63 tests vs 20 planned, Phase 4B: 26 vs 6 planned, Phase 5: 32 vs 19 planned).
+  - **Code quality audit**: Searched for TODO/FIXME/HACK, `unimplemented!()`, `todo!()`, unsafe `unwrap()`, dead code, and robustness issues in all 7 production crates. **No issues found** — all production code is clean with no markers, no panicking patterns, and proper error handling throughout.
+- ✅ Verified `parse_reflog_index` in `gitgpui-git-gix/src/util.rs` is safe despite string slicing — `?` operators guarantee valid bounds before any slice operation.
+
+External Diff/Merge Usage Design (`external_usage.md`)
+- ✅ All components implemented and verified. No remaining gaps.
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
+Reference Test Portability Plan (`docs/REFERENCE_TEST_PORTABILITY.md`)
+- ✅ Phase 1A–1C complete (t6403 core merge, t6427 zdiff3, label formatting).
+- ✅ Phase 2 complete (KDiff3-style fixture harness + invariants + seed fixtures + optional expected-result support).
+- ✅ Phase 3A–3C complete (permutation corpus + real-world merge extraction).
+- ✅ Phase 4 complete (t7610/t7800 mergetool+difftool E2E parity).
+- ✅ Phase 5 complete (Meld-derived algorithm tests).
+- 🔧 Partially implemented components: none.
+- ⬜ Not-yet-started components: none.
+
 ### Progress Snapshot (Iteration 7 — March 2, 2026)
 
 Implemented this iteration:
