@@ -1,4 +1,5 @@
 use super::super::conflict_resolver;
+use super::super::perf::{self, ConflictPerfRenderLane, ConflictPerfSpan};
 use super::conflict_canvas::{
     self, ConflictChunkContext, ThreeWayCanvasColumn, ThreeWayChunkContext,
 };
@@ -13,6 +14,27 @@ fn conflict_syntax_mode_for_total_rows(total_rows: usize) -> DiffSyntaxMode {
     }
 }
 
+fn build_conflict_cached_diff_styled_text(
+    theme: AppTheme,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    let _perf_scope = perf::span(ConflictPerfSpan::StyledTextBuild);
+    build_cached_diff_styled_text(
+        theme,
+        text,
+        word_ranges,
+        query,
+        language,
+        syntax_mode,
+        word_color,
+    )
+}
+
 impl MainPaneView {
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
         this: &mut Self,
@@ -20,6 +42,8 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _perf_scope = perf::span(ConflictPerfSpan::RenderThreeWayRows);
+        let requested_rows = range.len();
         let theme = this.theme;
         let show_ws = this.show_whitespace;
         let [col_a_w, col_b_w, col_c_w] = this.conflict_three_way_col_widths;
@@ -103,7 +127,7 @@ impl MainPaneView {
                 if word_ranges.is_empty() && syntax_lang.is_none() {
                     continue;
                 }
-                let styled = build_cached_diff_styled_text(
+                let styled = build_conflict_cached_diff_styled_text(
                     theme,
                     text,
                     word_ranges,
@@ -619,6 +643,11 @@ impl MainPaneView {
                 }
             }
         }
+        perf::record_row_batch(
+            ConflictPerfRenderLane::ThreeWay,
+            requested_rows,
+            elements.len(),
+        );
         elements
     }
 
@@ -628,9 +657,11 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _perf_scope = perf::span(ConflictPerfSpan::RenderResolvedPreviewRows);
+        let requested_rows = range.len();
         let theme = this.theme;
 
-        range
+        let elements: Vec<AnyElement> = range
             .map(|ix| {
                 if this.conflict_resolved_preview_lines.get(ix).is_none() {
                     return div()
@@ -785,7 +816,13 @@ impl MainPaneView {
                 }
                 row.into_any_element()
             })
-            .collect()
+            .collect();
+        perf::record_row_batch(
+            ConflictPerfRenderLane::ResolvedPreview,
+            requested_rows,
+            elements.len(),
+        );
+        elements
     }
 
     pub(in super::super) fn render_conflict_compare_diff_rows(
@@ -830,6 +867,8 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let _perf_scope = perf::span(ConflictPerfSpan::RenderResolverDiffRows);
+        let requested_rows = range.len();
         let query: SharedString = if this.diff_search_active {
             this.diff_search_query.clone()
         } else {
@@ -838,7 +877,7 @@ impl MainPaneView {
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
-        match this.conflict_resolver.diff_mode {
+        let elements: Vec<AnyElement> = match this.conflict_resolver.diff_mode {
             ConflictDiffMode::Split => {
                 let syntax_mode =
                     conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
@@ -911,7 +950,13 @@ impl MainPaneView {
                     })
                     .collect()
             }
-        }
+        };
+        perf::record_row_batch(
+            ConflictPerfRenderLane::ResolverDiff,
+            requested_rows,
+            elements.len(),
+        );
+        elements
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -939,7 +984,7 @@ impl MainPaneView {
 
         if base_has_style {
             stable_cache.entry(key).or_insert_with(|| {
-                build_cached_diff_styled_text(
+                build_conflict_cached_diff_styled_text(
                     theme,
                     text,
                     word_ranges,
@@ -956,7 +1001,7 @@ impl MainPaneView {
                 if let Some(base) = stable_cache.get(&key) {
                     build_cached_diff_query_overlay_styled_text(theme, base, query)
                 } else {
-                    build_cached_diff_styled_text(
+                    build_conflict_cached_diff_styled_text(
                         theme,
                         text,
                         word_ranges,
@@ -998,7 +1043,15 @@ impl MainPaneView {
 
         if base_has_style {
             stable_cache.entry(row_ix).or_insert_with(|| {
-                build_cached_diff_styled_text(theme, text, &[], "", syntax_lang, syntax_mode, None)
+                build_conflict_cached_diff_styled_text(
+                    theme,
+                    text,
+                    &[],
+                    "",
+                    syntax_lang,
+                    syntax_mode,
+                    None,
+                )
             });
         }
 
@@ -1007,7 +1060,7 @@ impl MainPaneView {
                 if let Some(base) = stable_cache.get(&row_ix) {
                     build_cached_diff_query_overlay_styled_text(theme, base, query)
                 } else {
-                    build_cached_diff_styled_text(
+                    build_conflict_cached_diff_styled_text(
                         theme,
                         text,
                         &[],

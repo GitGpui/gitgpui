@@ -1,3 +1,4 @@
+use super::super::perf::{self, ConflictPerfSpan};
 use super::*;
 use std::sync::{Arc, OnceLock};
 
@@ -43,10 +44,14 @@ fn build_diff_text_segments(
         }];
     }
 
-    let syntax_tokens = language
-        .map(|language| syntax::syntax_tokens_for_line(text, language, syntax_mode))
-        .unwrap_or_default();
+    let syntax_tokens = if let Some(language) = language {
+        let _syntax_scope = perf::span(ConflictPerfSpan::SyntaxHighlighting);
+        syntax::syntax_tokens_for_line(text, language, syntax_mode)
+    } else {
+        Vec::new()
+    };
 
+    let _word_query_scope = perf::span(ConflictPerfSpan::WordQueryHighlighting);
     let query_ranges = if !query.is_empty() {
         find_all_ascii_case_insensitive(text, query)
     } else {
@@ -424,6 +429,7 @@ pub(in crate::view) fn syntax_highlights_for_line(
         return Vec::new();
     }
 
+    let _syntax_scope = perf::span(ConflictPerfSpan::SyntaxHighlighting);
     syntax::syntax_tokens_for_line(text, language, syntax_mode)
         .into_iter()
         .filter_map(|token| {

@@ -50,6 +50,7 @@ mod panels;
 mod panes;
 mod patch_split;
 mod path_display;
+mod perf;
 mod poller;
 mod repo_open;
 pub(crate) mod rows;

@@ -1,4 +1,5 @@
 use super::super::path_display;
+use super::super::perf::{self, ConflictPerfSpan};
 use super::super::*;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -2037,6 +2038,7 @@ impl MainPaneView {
         path: Option<&std::path::PathBuf>,
         cx: &mut gpui::Context<Self>,
     ) {
+        let _perf_scope = perf::span(ConflictPerfSpan::RecomputeResolvedOutline);
         self.conflict_resolved_preview_syntax_language =
             path.and_then(|p| rows::diff_syntax_language_for_path(p.to_string_lossy().as_ref()));
         let output_text = self

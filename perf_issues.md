@@ -13,16 +13,21 @@
   - ✅ Cache invalidation scope reduction (split-resize cache churn removed; conflict split/inline search typing now uses stable base caches + volatile query overlay caches)
 - P2
   - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
+  - ✅ Conflict hot-path tracing counters (debug/dev timing spans + row requested/painted counters for three-way rows, resolver diff rows, resolved preview rows, plus styled-text/syntax/word-query timing buckets)
 
 ### Phase Status
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
 - ✅ Phase 3 (2/2 complete: syntax mode/language caching done; split-resize + conflict search-typing invalidation now narrowed to volatile query overlays)
-- 🔧 Phase 4 (1/2 complete: dedicated `conflict_three_way_scroll/style_window` benchmark added; tracing counters + CI budget reporting still pending)
+- 🔧 Phase 4 (1/2 complete: dedicated `conflict_three_way_scroll/style_window` benchmark + debug/dev tracing counters added; CI budget reporting still pending)
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1982 ms .. 2.2056 ms`
+  - after: `diff_scroll/style_window/200` = `2.1747 ms .. 2.1785 ms`
+  - note: criterion reported `Performance has improved` (`-1.4371% .. -1.0851%`), but this iteration’s change is debug/dev instrumentation only; this harness is generic diff styling and result should be treated as noise for this specific slice.
 - 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_three_way_scroll/style_window`)
   - first run: `conflict_three_way_scroll/style_window/200` = `296.05 µs .. 299.31 µs`
   - note: new conflict-specific benchmark path added in this iteration (synthetic three-way conflict scroll fixture; 10k lines / 300 blocks defaults).
@@ -307,12 +312,14 @@ Expected result: improved responsiveness during search typing and pane resizing.
 
 ### Phase 4 (Measurement and guardrails)
 
-- add dedicated conflict benchmarks and tracing counters
-- set performance budgets in CI reports (alerting first, hard fail later)
+- ✅ add dedicated conflict benchmarks and tracing counters
+- ⬜ set performance budgets in CI reports (alerting first, hard fail later)
 
 Expected result: prevent regressions and quantify gains per phase.
 
 ## Instrumentation Plan
+
+Status: ✅ Partial (iteration 11, 2026-03-05): debug/dev timing spans and row-batch counters are now wired for conflict hot paths; cache hit/miss counters and CI budget reporting remain pending.
 
 Add lightweight timing around hot functions (debug/dev builds first):
 
@@ -328,6 +335,13 @@ Track at least:
 - cache hit/miss ratio by cache type
 - time spent in syntax highlighting vs word/query highlighting
 - per-frame time spent in conflict render functions
+
+Implementation anchors:
+
+- `crates/gitgpui-ui-gpui/src/view/perf.rs`
+- `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs`
+- `crates/gitgpui-ui-gpui/src/view/rows/diff_text.rs`
+- `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 
 ## Benchmark Plan
 
