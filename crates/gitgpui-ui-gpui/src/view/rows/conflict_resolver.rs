@@ -5,6 +5,14 @@ use super::conflict_canvas::{
 use super::diff_text::*;
 use super::*;
 
+fn conflict_syntax_mode_for_total_rows(total_rows: usize) -> DiffSyntaxMode {
+    if total_rows <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+        DiffSyntaxMode::Auto
+    } else {
+        DiffSyntaxMode::HeuristicOnly
+    }
+}
+
 impl MainPaneView {
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
         this: &mut Self,
@@ -39,13 +47,8 @@ impl MainPaneView {
             .collect();
 
         let word_hl_color = Some(theme.colors.warning);
-
-        // Resolve syntax language from the conflict file path for tree-sitter highlighting.
-        let syntax_lang = this
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
+        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
+        let syntax_mode = conflict_syntax_mode_for_total_rows(this.conflict_resolver.three_way_len);
 
         // Pre-build styled text cache entries for all visible lines.
         for &ix in &real_line_indices {
@@ -106,7 +109,7 @@ impl MainPaneView {
                     word_ranges,
                     "",
                     syntax_lang,
-                    DiffSyntaxMode::Auto,
+                    syntax_mode,
                     word_hl_color,
                 );
                 this.conflict_three_way_segments_cache
@@ -791,13 +794,36 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
         match this.diff_view {
-            DiffViewMode::Split => range
-                .map(|row_ix| this.render_conflict_compare_split_row(row_ix, cx))
-                .collect(),
-            DiffViewMode::Inline => range
-                .map(|ix| this.render_conflict_compare_inline_row(ix, cx))
-                .collect(),
+            DiffViewMode::Split => {
+                let syntax_mode =
+                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
+                range
+                    .map(|row_ix| {
+                        this.render_conflict_compare_split_row(
+                            row_ix,
+                            syntax_lang,
+                            syntax_mode,
+                            cx,
+                        )
+                    })
+                    .collect()
+            }
+            DiffViewMode::Inline => {
+                let syntax_mode =
+                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.inline_rows.len());
+                range
+                    .map(|ix| {
+                        this.render_conflict_compare_inline_row(
+                            ix,
+                            syntax_lang,
+                            syntax_mode,
+                            cx,
+                        )
+                    })
+                    .collect()
+            }
         }
     }
 
@@ -807,63 +833,88 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
         match this.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => range
-                .map(|visible_row_ix| {
-                    let Some(&row_ix) = this
-                        .conflict_resolver
-                        .diff_visible_row_indices
-                        .get(visible_row_ix)
-                    else {
-                        return div()
-                            .id(("conflict_diff_split_visible_oob", visible_row_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    let conflict_ix = this
-                        .conflict_resolver
-                        .diff_row_conflict_map
-                        .get(row_ix)
-                        .copied()
-                        .flatten();
-                    this.render_conflict_resolver_split_row(visible_row_ix, row_ix, conflict_ix, cx)
-                })
-                .collect(),
-            ConflictDiffMode::Inline => range
-                .map(|visible_ix| {
-                    let Some(&ix) = this
-                        .conflict_resolver
-                        .inline_visible_row_indices
-                        .get(visible_ix)
-                    else {
-                        return div()
-                            .id(("conflict_diff_inline_visible_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    let conflict_ix = this
-                        .conflict_resolver
-                        .inline_row_conflict_map
-                        .get(ix)
-                        .copied()
-                        .flatten();
-                    this.render_conflict_resolver_inline_row(visible_ix, ix, conflict_ix, cx)
-                })
-                .collect(),
+            ConflictDiffMode::Split => {
+                let syntax_mode =
+                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
+                range
+                    .map(|visible_row_ix| {
+                        let Some(&row_ix) = this
+                            .conflict_resolver
+                            .diff_visible_row_indices
+                            .get(visible_row_ix)
+                        else {
+                            return div()
+                                .id(("conflict_diff_split_visible_oob", visible_row_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .text_xs()
+                                .text_color(this.theme.colors.text_muted)
+                                .child("")
+                                .into_any_element();
+                        };
+                        let conflict_ix = this
+                            .conflict_resolver
+                            .diff_row_conflict_map
+                            .get(row_ix)
+                            .copied()
+                            .flatten();
+                        this.render_conflict_resolver_split_row(
+                            visible_row_ix,
+                            row_ix,
+                            conflict_ix,
+                            syntax_lang,
+                            syntax_mode,
+                            cx,
+                        )
+                    })
+                    .collect()
+            }
+            ConflictDiffMode::Inline => {
+                let syntax_mode =
+                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.inline_rows.len());
+                range
+                    .map(|visible_ix| {
+                        let Some(&ix) = this
+                            .conflict_resolver
+                            .inline_visible_row_indices
+                            .get(visible_ix)
+                        else {
+                            return div()
+                                .id(("conflict_diff_inline_visible_oob", visible_ix))
+                                .h(px(20.0))
+                                .px_2()
+                                .text_xs()
+                                .text_color(this.theme.colors.text_muted)
+                                .child("")
+                                .into_any_element();
+                        };
+                        let conflict_ix = this
+                            .conflict_resolver
+                            .inline_row_conflict_map
+                            .get(ix)
+                            .copied()
+                            .flatten();
+                        this.render_conflict_resolver_inline_row(
+                            visible_ix,
+                            ix,
+                            conflict_ix,
+                            syntax_lang,
+                            syntax_mode,
+                            cx,
+                        )
+                    })
+                    .collect()
+            }
         }
     }
 
     fn render_conflict_compare_split_row(
         &mut self,
         row_ix: usize,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -890,12 +941,6 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
 
-        let syntax_lang = self
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
-
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
@@ -917,7 +962,7 @@ impl MainPaneView {
                             old_word_ranges,
                             query,
                             syntax_lang,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             None,
                         )
                     });
@@ -932,7 +977,7 @@ impl MainPaneView {
                             new_word_ranges,
                             query,
                             syntax_lang,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             None,
                         )
                     });
@@ -1064,6 +1109,8 @@ impl MainPaneView {
     fn render_conflict_compare_inline_row(
         &mut self,
         ix: usize,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1078,12 +1125,6 @@ impl MainPaneView {
                 .child("")
                 .into_any_element();
         };
-
-        let syntax_lang = self
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
 
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
@@ -1102,7 +1143,7 @@ impl MainPaneView {
                         &[],
                         query,
                         syntax_lang,
-                        DiffSyntaxMode::Auto,
+                        syntax_mode,
                         None,
                     )
                 });
@@ -1182,6 +1223,8 @@ impl MainPaneView {
         visible_row_ix: usize,
         row_ix: usize,
         conflict_ix: Option<usize>,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1208,12 +1251,6 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
 
-        let syntax_lang = self
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
-
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
         } else {
@@ -1235,7 +1272,7 @@ impl MainPaneView {
                             old_word_ranges,
                             query,
                             syntax_lang,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             None,
                         )
                     });
@@ -1250,7 +1287,7 @@ impl MainPaneView {
                             new_word_ranges,
                             query,
                             syntax_lang,
-                            DiffSyntaxMode::Auto,
+                            syntax_mode,
                             None,
                         )
                     });
@@ -1459,6 +1496,8 @@ impl MainPaneView {
         visible_ix: usize,
         ix: usize,
         conflict_ix: Option<usize>,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1473,12 +1512,6 @@ impl MainPaneView {
                 .child("")
                 .into_any_element();
         };
-
-        let syntax_lang = self
-            .conflict_resolver
-            .path
-            .as_ref()
-            .and_then(|p| diff_syntax_language_for_path(&p.to_string_lossy()));
 
         let query = if self.diff_search_active {
             self.diff_search_query.clone()
@@ -1497,7 +1530,7 @@ impl MainPaneView {
                         &[],
                         query,
                         syntax_lang,
-                        DiffSyntaxMode::Auto,
+                        syntax_mode,
                         None,
                     )
                 });
@@ -1743,5 +1776,26 @@ fn inline_row_bg(
             if theme.is_dark { 0.10 } else { 0.08 },
         ),
         _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_syntax_mode_uses_auto_below_threshold() {
+        assert_eq!(
+            conflict_syntax_mode_for_total_rows(MAX_LINES_FOR_SYNTAX_HIGHLIGHTING),
+            DiffSyntaxMode::Auto
+        );
+    }
+
+    #[test]
+    fn conflict_syntax_mode_downgrades_above_threshold() {
+        assert_eq!(
+            conflict_syntax_mode_for_total_rows(MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1),
+            DiffSyntaxMode::HeuristicOnly
+        );
     }
 }

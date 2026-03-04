@@ -9,7 +9,7 @@
   - ✅ Render-time recomputation in conflict hot paths (two-way + three-way line/conflict maps precomputed in state; render/nav now use O(1) lookups)
   - ✅ Conflict rows on canvas fast path (two-way + three-way resolver rows and conflict compare split/inline rows now on keyed canvas behind `GITGPUI_CONFLICT_CANVAS_ROWS`, with fallback preserved)
 - P1
-  - ⬜ Syntax mode/language caching in conflict renderers
+  - ✅ Syntax mode/language caching in conflict renderers (cached per-file language in `ConflictResolverUiState` + per-batch syntax mode gating in conflict compare/resolver + three-way rows)
   - ⬜ Cache invalidation scope reduction (search typing + split resize)
 - P2
   - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
@@ -18,11 +18,15 @@
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
-- ⬜ Phase 3
+- 🔧 Phase 3 (1/2 complete: syntax mode/language caching done; cache invalidation scope reduction pending)
 - ⬜ Phase 4
 
 ### Benchmark Notes
 
+- 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1808 ms .. 2.1913 ms`
+  - after: `diff_scroll/style_window/200` = `2.1697 ms .. 2.1733 ms`
+  - note: criterion reported "Change within noise threshold" (estimated `-0.6238% .. -0.1803%`); this remains a generic diff-styling harness and does not isolate conflict syntax mode/language cache wins directly.
 - 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
   - before: `diff_scroll/style_window/200` = `2.1486 ms .. 2.1521 ms`
   - after: `diff_scroll/style_window/200` = `2.1971 ms .. 2.2061 ms`
@@ -180,6 +184,8 @@ Implementation anchors:
 
 ### P1: Syntax mode and language resolution are too expensive in conflict renderers
 
+Status: ✅ Implemented (iteration 7, 2026-03-04): conflict syntax language is now cached per file in `ConflictResolverUiState`, and conflict compare/resolver + three-way render paths compute syntax mode once per render batch using `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING`.
+
 Evidence:
 
 - per-row language resolution in conflict compare/resolver rows:
@@ -203,6 +209,12 @@ Fix:
 - pick syntax mode once per render batch based on total row count
 - reuse main diff threshold strategy (`MAX_LINES_FOR_SYNTAX_HIGHLIGHTING`)
 - optional second stage: split syntax tokens from query highlights so query updates do not force full styled-text rebuild
+
+Implementation anchors:
+
+- state field/default: `crates/gitgpui-ui-gpui/src/view/mod.rs`
+- state sync + resync population: `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
+- conflict render batch syntax mode/language usage: `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs`
 
 ### P1: Cache invalidation is broad and frequent
 

@@ -462,6 +462,7 @@ struct ResolvedOutputConflictMarker {
 struct ConflictResolverUiState {
     repo_id: Option<RepoId>,
     path: Option<std::path::PathBuf>,
+    conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     source_hash: Option<u64>,
     current: Option<String>,
     marker_segments: Vec<conflict_resolver::ConflictSegment>,
@@ -524,6 +525,7 @@ impl Default for ConflictResolverUiState {
         Self {
             repo_id: None,
             path: None,
+            conflict_syntax_language: None,
             source_hash: None,
             current: None,
             marker_segments: Vec::new(),
