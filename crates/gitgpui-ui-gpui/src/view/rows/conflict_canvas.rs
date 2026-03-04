@@ -17,6 +17,13 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
 type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
+type ThreeWayColumnBounds = (
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+);
 
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
@@ -30,6 +37,21 @@ pub(super) struct ConflictChunkContext {
     pub(super) conflict_ix: usize,
     pub(super) has_base: bool,
     pub(super) selected_choices: Vec<conflict_resolver::ConflictChoice>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ThreeWayCanvasColumn {
+    pub(super) line_no: SharedString,
+    pub(super) bg: gpui::Rgba,
+    pub(super) fg: gpui::Rgba,
+    pub(super) text: SharedString,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct ThreeWayChunkContext {
+    pub(super) base: Option<ConflictChunkContext>,
+    pub(super) ours: Option<ConflictChunkContext>,
+    pub(super) theirs: Option<ConflictChunkContext>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -339,11 +361,257 @@ pub(super) fn inline_conflict_row_canvas(
     .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn three_way_conflict_row_canvas(
+    theme: AppTheme,
+    view: Entity<MainPaneView>,
+    visible_row_ix: usize,
+    row_ix: usize,
+    min_width: Pixels,
+    base_target_width: Pixels,
+    ours_target_width: Pixels,
+    theirs_target_width: Pixels,
+    base_column: ThreeWayCanvasColumn,
+    ours_column: ThreeWayCanvasColumn,
+    theirs_column: ThreeWayCanvasColumn,
+    base_styled: Option<&CachedDiffStyledText>,
+    ours_styled: Option<&CachedDiffStyledText>,
+    theirs_styled: Option<&CachedDiffStyledText>,
+    show_whitespace: bool,
+    chunk_context: ThreeWayChunkContext,
+) -> AnyElement {
+    let base_prepared =
+        prepare_conflict_text_for_canvas(base_column.text, base_styled, show_whitespace);
+    let ours_prepared =
+        prepare_conflict_text_for_canvas(ours_column.text, ours_styled, show_whitespace);
+    let theirs_prepared =
+        prepare_conflict_text_for_canvas(theirs_column.text, theirs_styled, show_whitespace);
+
+    keyed_canvas(
+        ("conflict_resolver_three_way_row_canvas", visible_row_ix),
+        move |bounds, _window, _cx| {
+            let handle_width = px(PANE_RESIZE_HANDLE_PX);
+            let (base_col, first_handle, ours_col, second_handle, theirs_col) =
+                three_way_columns_with_widths(
+                    bounds,
+                    base_target_width,
+                    ours_target_width,
+                    theirs_target_width,
+                    handle_width,
+                );
+
+            ThreeWayRowPrepaintState {
+                base_col,
+                first_handle,
+                ours_col,
+                second_handle,
+                theirs_col,
+            }
+        },
+        move |bounds, prepaint, window, cx| {
+            let line_metrics = line_metrics(window);
+            let y = center_text_y(bounds, line_metrics.line_height);
+            let pad = px_2(window);
+            let gap = pad;
+
+            window.paint_quad(fill(prepaint.base_col, base_column.bg));
+            window.paint_quad(fill(prepaint.ours_col, ours_column.bg));
+            window.paint_quad(fill(prepaint.theirs_col, theirs_column.bg));
+
+            let first_divider_x = prepaint.first_handle.left()
+                + ((prepaint.first_handle.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(first_divider_x, prepaint.first_handle.top()),
+                    size(px(1.0), prepaint.first_handle.size.height),
+                ),
+                theme.colors.border,
+            ));
+            let second_divider_x = prepaint.second_handle.left()
+                + ((prepaint.second_handle.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(second_divider_x, prepaint.second_handle.top()),
+                    size(px(1.0), prepaint.second_handle.size.height),
+                ),
+                theme.colors.border,
+            ));
+
+            paint_gutter_text(
+                &base_column.line_no,
+                prepaint.base_col.left() + pad,
+                y,
+                theme.colors.text_muted,
+                line_metrics,
+                window,
+                cx,
+            );
+            paint_gutter_text(
+                &ours_column.line_no,
+                prepaint.ours_col.left() + pad,
+                y,
+                theme.colors.text_muted,
+                line_metrics,
+                window,
+                cx,
+            );
+            paint_gutter_text(
+                &theirs_column.line_no,
+                prepaint.theirs_col.left() + pad,
+                y,
+                theme.colors.text_muted,
+                line_metrics,
+                window,
+                cx,
+            );
+
+            let base_text_bounds = split_column_text_bounds(prepaint.base_col, pad, gap);
+            let ours_text_bounds = split_column_text_bounds(prepaint.ours_col, pad, gap);
+            let theirs_text_bounds = split_column_text_bounds(prepaint.theirs_col, pad, gap);
+
+            window.paint_layer(base_text_bounds, |window| {
+                paint_conflict_text(
+                    base_text_bounds,
+                    base_column.fg,
+                    y,
+                    line_metrics,
+                    &base_prepared,
+                    window,
+                    cx,
+                );
+            });
+            window.paint_layer(ours_text_bounds, |window| {
+                paint_conflict_text(
+                    ours_text_bounds,
+                    ours_column.fg,
+                    y,
+                    line_metrics,
+                    &ours_prepared,
+                    window,
+                    cx,
+                );
+            });
+            window.paint_layer(theirs_text_bounds, |window| {
+                paint_conflict_text(
+                    theirs_text_bounds,
+                    theirs_column.fg,
+                    y,
+                    line_metrics,
+                    &theirs_prepared,
+                    window,
+                    cx,
+                );
+            });
+
+            if chunk_context.base.is_some()
+                || chunk_context.ours.is_some()
+                || chunk_context.theirs.is_some()
+            {
+                let clip_bounds = window.content_mask().bounds;
+                let visible_base = prepaint.base_col.intersect(&clip_bounds);
+                let visible_ours = prepaint.ours_col.intersect(&clip_bounds);
+                let visible_theirs = prepaint.theirs_col.intersect(&clip_bounds);
+                window.on_mouse_event({
+                    let view = view.clone();
+                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Bubble
+                            || event.button != gpui::MouseButton::Right
+                        {
+                            return;
+                        }
+
+                        let (invoker, chunk_context) = if visible_base.contains(&event.position) {
+                            match chunk_context.base.as_ref() {
+                                Some(context) => (
+                                    Some::<SharedString>(
+                                        format!(
+                                            "resolver_three_way_base_chunk_menu_{}_{}",
+                                            context.conflict_ix, row_ix
+                                        )
+                                        .into(),
+                                    ),
+                                    Some(context.clone()),
+                                ),
+                                None => (None, None),
+                            }
+                        } else if visible_ours.contains(&event.position) {
+                            match chunk_context.ours.as_ref() {
+                                Some(context) => (
+                                    Some::<SharedString>(
+                                        format!(
+                                            "resolver_three_way_ours_chunk_menu_{}_{}",
+                                            context.conflict_ix, row_ix
+                                        )
+                                        .into(),
+                                    ),
+                                    Some(context.clone()),
+                                ),
+                                None => (None, None),
+                            }
+                        } else if visible_theirs.contains(&event.position) {
+                            match chunk_context.theirs.as_ref() {
+                                Some(context) => (
+                                    Some::<SharedString>(
+                                        format!(
+                                            "resolver_three_way_theirs_chunk_menu_{}_{}",
+                                            context.conflict_ix, row_ix
+                                        )
+                                        .into(),
+                                    ),
+                                    Some(context.clone()),
+                                ),
+                                None => (None, None),
+                            }
+                        } else {
+                            (None, None)
+                        };
+
+                        let (Some(invoker), Some(chunk_context)) = (invoker, chunk_context) else {
+                            return;
+                        };
+
+                        let anchor = event.position;
+                        view.update(cx, |this, cx| {
+                            this.open_conflict_resolver_chunk_context_menu(
+                                invoker,
+                                chunk_context.conflict_ix,
+                                chunk_context.has_base,
+                                true,
+                                chunk_context.selected_choices,
+                                None,
+                                anchor,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        },
+    )
+    .h(px(20.0))
+    .min_w(min_width)
+    .w_full()
+    .text_xs()
+    .whitespace_nowrap()
+    .into_any_element()
+}
+
 #[derive(Clone, Debug)]
 struct SplitRowPrepaintState {
     left_col: Bounds<Pixels>,
     handle_bounds: Bounds<Pixels>,
     right_col: Bounds<Pixels>,
+}
+
+#[derive(Clone, Debug)]
+struct ThreeWayRowPrepaintState {
+    base_col: Bounds<Pixels>,
+    first_handle: Bounds<Pixels>,
+    ours_col: Bounds<Pixels>,
+    second_handle: Bounds<Pixels>,
+    theirs_col: Bounds<Pixels>,
 }
 
 #[derive(Clone, Debug)]
@@ -483,6 +751,66 @@ fn split_columns_with_widths(
         size(right_w, bounds.size.height),
     );
     (left, handle, right)
+}
+
+fn three_way_columns_with_widths(
+    bounds: Bounds<Pixels>,
+    base_target_width: Pixels,
+    ours_target_width: Pixels,
+    theirs_target_width: Pixels,
+    handle_width: Pixels,
+) -> ThreeWayColumnBounds {
+    let width = bounds.size.width.max(px(0.0));
+    let handles_total = handle_width * 2.0;
+    let available = (width - handles_total).max(px(0.0));
+
+    let min_total = base_target_width + ours_target_width + theirs_target_width;
+    let (base_w, ours_w, theirs_w) = if available >= min_total {
+        (
+            base_target_width.max(px(0.0)),
+            ours_target_width.max(px(0.0)),
+            (available - base_target_width - ours_target_width).max(px(0.0)),
+        )
+    } else if available <= px(0.0) {
+        (px(0.0), px(0.0), px(0.0))
+    } else {
+        let scale = available / min_total.max(px(1.0));
+        let mut base = (base_target_width * scale).max(px(0.0));
+        let mut ours = (ours_target_width * scale).max(px(0.0));
+        let mut theirs = (available - base - ours).max(px(0.0));
+
+        let used = base + ours + theirs;
+        let slack = (available - used).max(px(0.0));
+        theirs += slack;
+
+        if theirs < px(0.0) {
+            theirs = px(0.0);
+        }
+
+        base = base.max(px(0.0));
+        ours = ours.max(px(0.0));
+        (base, ours, theirs)
+    };
+
+    let base_col = Bounds::new(bounds.origin, size(base_w, bounds.size.height));
+    let first_handle = Bounds::new(
+        point(bounds.left() + base_w, bounds.top()),
+        size(handle_width, bounds.size.height),
+    );
+    let ours_col = Bounds::new(
+        point(first_handle.right(), bounds.top()),
+        size(ours_w, bounds.size.height),
+    );
+    let second_handle = Bounds::new(
+        point(ours_col.right(), bounds.top()),
+        size(handle_width, bounds.size.height),
+    );
+    let theirs_col = Bounds::new(
+        point(second_handle.right(), bounds.top()),
+        size(theirs_w, bounds.size.height),
+    );
+
+    (base_col, first_handle, ours_col, second_handle, theirs_col)
 }
 
 fn split_column_text_bounds(col: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bounds<Pixels> {
@@ -687,6 +1015,32 @@ mod tests {
         let prepared = prepare_conflict_text_for_canvas("a b\t".into(), None, true);
         assert_eq!(prepared.text.as_ref(), "a·b→");
         assert!(prepared.highlights.is_empty());
+    }
+
+    #[test]
+    fn three_way_layout_grows_last_column_when_space_allows() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(20.0)));
+        let (base, _, ours, _, theirs) =
+            three_way_columns_with_widths(bounds, px(70.0), px(70.0), px(70.0), px(10.0));
+
+        assert_eq!(base.size.width, px(70.0));
+        assert_eq!(ours.size.width, px(70.0));
+        assert_eq!(theirs.size.width, px(140.0));
+    }
+
+    #[test]
+    fn three_way_layout_scales_columns_when_space_is_tight() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(120.0), px(20.0)));
+        let (base, _, ours, _, theirs) =
+            three_way_columns_with_widths(bounds, px(70.0), px(70.0), px(70.0), px(10.0));
+        let available = px(100.0);
+
+        assert!(
+            (base.size.width + ours.size.width + theirs.size.width - available).abs() < px(0.01)
+        );
+        assert!(base.size.width > px(0.0));
+        assert!(ours.size.width > px(0.0));
+        assert!(theirs.size.width > px(0.0));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use super::super::conflict_resolver;
-use super::conflict_canvas::{self, ConflictChunkContext};
+use super::conflict_canvas::{
+    self, ConflictChunkContext, ThreeWayCanvasColumn, ThreeWayChunkContext,
+};
 use super::diff_text::*;
 use super::*;
 
@@ -287,6 +289,129 @@ impl MainPaneView {
                     } else {
                         with_alpha(theme.colors.surface_bg_elevated, 0.0)
                     };
+                    let base_fg = if base_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    };
+                    let ours_fg = if ours_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    };
+                    let theirs_fg = if theirs_line.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    };
+
+                    let base_line_no = line_number_string(
+                        base_line
+                            .is_some()
+                            .then(|| u32::try_from(ix + 1).ok())
+                            .flatten(),
+                    );
+                    let ours_line_no = line_number_string(
+                        ours_line
+                            .is_some()
+                            .then(|| u32::try_from(ix + 1).ok())
+                            .flatten(),
+                    );
+                    let theirs_line_no = line_number_string(
+                        theirs_line
+                            .is_some()
+                            .then(|| u32::try_from(ix + 1).ok())
+                            .flatten(),
+                    );
+
+                    if this.conflict_canvas_rows_enabled {
+                        let base_chunk_context =
+                            base_range_ix.map(|conflict_ix| ConflictChunkContext {
+                                conflict_ix,
+                                has_base: this
+                                    .conflict_resolver
+                                    .conflict_has_base
+                                    .get(conflict_ix)
+                                    .copied()
+                                    .unwrap_or(false),
+                                selected_choices: this
+                                    .conflict_resolver_selected_choices_for_conflict_ix(
+                                        conflict_ix,
+                                    ),
+                            });
+                        let ours_chunk_context =
+                            ours_range_ix.map(|conflict_ix| ConflictChunkContext {
+                                conflict_ix,
+                                has_base: this
+                                    .conflict_resolver
+                                    .conflict_has_base
+                                    .get(conflict_ix)
+                                    .copied()
+                                    .unwrap_or(false),
+                                selected_choices: this
+                                    .conflict_resolver_selected_choices_for_conflict_ix(
+                                        conflict_ix,
+                                    ),
+                            });
+                        let theirs_chunk_context =
+                            theirs_range_ix.map(|conflict_ix| ConflictChunkContext {
+                                conflict_ix,
+                                has_base: this
+                                    .conflict_resolver
+                                    .conflict_has_base
+                                    .get(conflict_ix)
+                                    .copied()
+                                    .unwrap_or(false),
+                                selected_choices: this
+                                    .conflict_resolver_selected_choices_for_conflict_ix(
+                                        conflict_ix,
+                                    ),
+                            });
+                        let min_width =
+                            col_a_w + col_b_w + col_c_w + px(PANE_RESIZE_HANDLE_PX) * 2.0;
+                        elements.push(conflict_canvas::three_way_conflict_row_canvas(
+                            theme,
+                            cx.entity(),
+                            vi,
+                            ix,
+                            min_width,
+                            col_a_w,
+                            col_b_w,
+                            col_c_w,
+                            ThreeWayCanvasColumn {
+                                line_no: base_line_no,
+                                bg: if base_is_chosen { chosen_bg } else { base_bg },
+                                fg: base_fg,
+                                text: base_line.cloned().unwrap_or_default(),
+                            },
+                            ThreeWayCanvasColumn {
+                                line_no: ours_line_no,
+                                bg: if ours_is_chosen { chosen_bg } else { ours_bg },
+                                fg: ours_fg,
+                                text: ours_line.cloned().unwrap_or_default(),
+                            },
+                            ThreeWayCanvasColumn {
+                                line_no: theirs_line_no,
+                                bg: if theirs_is_chosen {
+                                    chosen_bg
+                                } else {
+                                    theirs_bg
+                                },
+                                fg: theirs_fg,
+                                text: theirs_line.cloned().unwrap_or_default(),
+                            },
+                            base_styled,
+                            ours_styled,
+                            theirs_styled,
+                            show_ws,
+                            ThreeWayChunkContext {
+                                base: base_chunk_context,
+                                ours: ours_chunk_context,
+                                theirs: theirs_chunk_context,
+                            },
+                        ));
+                        continue;
+                    }
 
                     let mut base = div()
                         .id(("conflict_three_way_base", ix))
@@ -298,23 +423,15 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
-                        .text_color(if base_line.is_some() {
-                            theme.colors.text
-                        } else {
-                            theme.colors.text_muted
-                        })
+                        .text_color(base_fg)
                         .whitespace_nowrap()
                         .bg(base_bg)
                         .when(base_is_chosen, |d| d.bg(chosen_bg))
                         .child(
-                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                                line_number_string(
-                                    base_line
-                                        .is_some()
-                                        .then(|| u32::try_from(ix + 1).ok())
-                                        .flatten(),
-                                ),
-                            ),
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(base_line_no),
                         )
                         .child(conflict_diff_text_cell(
                             base_line.cloned().unwrap_or_default(),
@@ -332,23 +449,15 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
-                        .text_color(if ours_line.is_some() {
-                            theme.colors.text
-                        } else {
-                            theme.colors.text_muted
-                        })
+                        .text_color(ours_fg)
                         .whitespace_nowrap()
                         .bg(ours_bg)
                         .when(ours_is_chosen, |d| d.bg(chosen_bg))
                         .child(
-                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                                line_number_string(
-                                    ours_line
-                                        .is_some()
-                                        .then(|| u32::try_from(ix + 1).ok())
-                                        .flatten(),
-                                ),
-                            ),
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(ours_line_no),
                         )
                         .child(conflict_diff_text_cell(
                             ours_line.cloned().unwrap_or_default(),
@@ -367,23 +476,15 @@ impl MainPaneView {
                         .items_center()
                         .gap_2()
                         .text_xs()
-                        .text_color(if theirs_line.is_some() {
-                            theme.colors.text
-                        } else {
-                            theme.colors.text_muted
-                        })
+                        .text_color(theirs_fg)
                         .whitespace_nowrap()
                         .bg(theirs_bg)
                         .when(theirs_is_chosen, |d| d.bg(chosen_bg))
                         .child(
-                            div().w(px(38.0)).text_color(theme.colors.text_muted).child(
-                                line_number_string(
-                                    theirs_line
-                                        .is_some()
-                                        .then(|| u32::try_from(ix + 1).ok())
-                                        .flatten(),
-                                ),
-                            ),
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(theirs_line_no),
                         )
                         .child(conflict_diff_text_cell(
                             theirs_line.cloned().unwrap_or_default(),
