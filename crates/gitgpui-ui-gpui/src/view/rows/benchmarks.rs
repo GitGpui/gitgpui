@@ -656,6 +656,81 @@ impl ConflictSearchQueryUpdateFixture {
     }
 }
 
+pub struct ConflictSplitResizeStepFixture {
+    inner: ConflictSearchQueryUpdateFixture,
+    split_ratio: f32,
+    drag_direction: f32,
+    total_width_px: f32,
+    drag_step_px: f32,
+}
+
+impl ConflictSplitResizeStepFixture {
+    const MIN_RATIO: f32 = 0.1;
+    const MAX_RATIO: f32 = 0.9;
+
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        Self {
+            inner: ConflictSearchQueryUpdateFixture::new(lines, conflict_blocks),
+            split_ratio: 0.5,
+            drag_direction: 1.0,
+            total_width_px: 1_200.0,
+            drag_step_px: 24.0,
+        }
+    }
+
+    fn advance_resize_drag_step(&mut self) -> (f32, f32) {
+        let available_width = (self.total_width_px - PANE_RESIZE_HANDLE_PX).max(1.0);
+        let delta_ratio = (self.drag_step_px * self.drag_direction) / available_width;
+        let next_ratio = (self.split_ratio + delta_ratio).clamp(Self::MIN_RATIO, Self::MAX_RATIO);
+        self.split_ratio = next_ratio;
+        if next_ratio <= Self::MIN_RATIO + f32::EPSILON
+            || next_ratio >= Self::MAX_RATIO - f32::EPSILON
+        {
+            self.drag_direction = -self.drag_direction;
+        }
+
+        let left_col_width = (available_width * next_ratio).max(1.0);
+        let right_col_width = (available_width - left_col_width).max(1.0);
+        (left_col_width, right_col_width)
+    }
+
+    pub fn run_resize_step(&mut self, query: &str, start: usize, window: usize) -> u64 {
+        let (left_col_width, right_col_width) = self.advance_resize_drag_step();
+        let styled_hash = self.inner.run_query_update_step(query, start, window);
+
+        let mut h = DefaultHasher::new();
+        styled_hash.hash(&mut h);
+        self.split_ratio.to_bits().hash(&mut h);
+        left_col_width.to_bits().hash(&mut h);
+        right_col_width.to_bits().hash(&mut h);
+        self.drag_direction.to_bits().hash(&mut h);
+        h.finish()
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.inner.visible_rows()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.inner.conflict_count()
+    }
+
+    #[cfg(test)]
+    fn stable_cache_entries(&self) -> usize {
+        self.inner.stable_cache_entries()
+    }
+
+    #[cfg(test)]
+    fn query_cache_entries(&self) -> usize {
+        self.inner.query_cache_entries()
+    }
+
+    #[cfg(test)]
+    fn split_ratio(&self) -> f32 {
+        self.split_ratio
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolvedOutputGutterMarker {
     conflict_ix: usize,
@@ -1272,6 +1347,43 @@ mod tests {
         let hash_a = fixture.run_query_update_step("shared", 17, 40);
         let hash_b = fixture.run_query_update_step("shared", 17 + fixture.visible_rows() * 3, 40);
         assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn conflict_split_resize_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictSplitResizeStepFixture::new(120, 12);
+        assert_eq!(fixture.conflict_count(), 12);
+        assert!(fixture.visible_rows() > 0);
+    }
+
+    #[test]
+    fn conflict_split_resize_fixture_reuses_caches_across_drag_steps() {
+        let mut fixture = ConflictSplitResizeStepFixture::new(180, 18);
+        let stable_before = fixture.stable_cache_entries();
+        assert_eq!(fixture.query_cache_entries(), 0);
+
+        let _ = fixture.run_resize_step("shared", 5, 40);
+        let ratio_after_first = fixture.split_ratio();
+        let first_query_cache = fixture.query_cache_entries();
+        assert!(first_query_cache > 0);
+        assert_eq!(fixture.stable_cache_entries(), stable_before);
+
+        let _ = fixture.run_resize_step("shared", 25, 40);
+        let ratio_after_second = fixture.split_ratio();
+        let second_query_cache = fixture.query_cache_entries();
+        assert!((ratio_after_first - ratio_after_second).abs() > f32::EPSILON);
+        assert!(second_query_cache >= first_query_cache);
+        assert_eq!(fixture.stable_cache_entries(), stable_before);
+    }
+
+    #[test]
+    fn conflict_split_resize_fixture_clamps_ratio_bounds() {
+        let mut fixture = ConflictSplitResizeStepFixture::new(180, 18);
+        for _ in 0..400 {
+            let _ = fixture.run_resize_step("shared", 0, 32);
+            let ratio = fixture.split_ratio();
+            assert!((0.1..=0.9).contains(&ratio));
+        }
     }
 
     #[test]

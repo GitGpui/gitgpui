@@ -20,10 +20,16 @@
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
 - ✅ Phase 3 (2/2 complete: syntax mode/language caching done; split-resize + conflict search-typing invalidation now narrowed to volatile query overlays)
-- 🔧 Phase 4 (1/2 complete: dedicated conflict benchmarks now include `conflict_three_way_scroll/style_window`, `conflict_two_way_split_scroll/window_{100,200,400}`, `conflict_resolved_output_gutter_scroll/window_{100,200,400}`, and `conflict_search_query_update/window/200` + debug/dev tracing counters; CI budget reporting still pending)
+- 🔧 Phase 4 (1/2 complete: dedicated conflict benchmarks now include `conflict_three_way_scroll/style_window`, `conflict_two_way_split_scroll/window_{100,200,400}`, `conflict_resolved_output_gutter_scroll/window_{100,200,400}`, `conflict_search_query_update/window/200`, and `conflict_split_resize_step/window/200` + debug/dev tracing counters; CI budget reporting still pending)
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_split_resize_step`)
+  - first run: `conflict_split_resize_step/window/200` = `15.295 µs .. 16.722 µs`
+  - note: new split-resize drag-step benchmark fixture added in this iteration (simulated two-way conflict split drag updates while reusing stable/query styled-text caches).
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - measured: `diff_scroll/style_window/200` = `2.1627 ms .. 2.1646 ms`
+  - note: criterion estimated `-1.1231% .. -0.5655%` versus prior baseline but labeled this "Change within noise threshold"; this harness remains generic diff styling and does not isolate split-resize drag behavior directly.
 - 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_search_query_update`)
   - first run: `conflict_search_query_update/window/200` = `59.823 µs .. 60.168 µs`
   - note: new conflict search keystroke-churn benchmark fixture added in this iteration (split-mode query overlay cache simulation over large synthetic conflicts).
@@ -381,7 +387,7 @@ Add fixtures/benches:
 - ✅ `conflict_two_way_split_scroll/window_{100,200,400}`
 - ✅ `conflict_resolved_output_gutter_scroll/window_{100,200,400}`
 - ✅ `conflict_search_query_update/window/200` (simulated keystroke churn in split-mode conflict query-overlay cache path)
-- ⬜ `conflict_split_resize_step` (simulate drag updates)
+- ✅ `conflict_split_resize_step/window/200` (simulated split-drag updates while retaining split stable/query style caches)
 
 Acceptance thresholds (initial):
 
