@@ -107,11 +107,11 @@ Evidence (three-way):
 - `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:59` uses `position()` scan per line (`conflict_range_for_line`)
 - `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:288` to `:292` does repeated lookup per rendered row
 
-Evidence (two-way):
+Evidence (two-way, historical before iteration 2):
 
-- `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:750` calls `map_two_way_rows_to_conflicts(...)` during render
-- `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs:756` calls `two_way_conflict_line_ranges(...)` during render
-- both are derived data that already originate from marker segments
+- `render_conflict_resolver_diff_rows` rebuilt row-to-conflict mappings during render
+- two-way conflict navigation helpers rebuilt mappings while jumping/selecting conflicts
+- both were derived data that already originate from marker segments
 
 Impact:
 
