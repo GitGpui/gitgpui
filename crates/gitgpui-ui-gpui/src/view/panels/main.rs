@@ -15,6 +15,21 @@ fn show_conflict_save_stage_action(view_mode: GitGpuiViewMode) -> bool {
     matches!(view_mode, GitGpuiViewMode::Normal)
 }
 
+fn next_conflict_diff_split_ratio(
+    state: ConflictDiffSplitResizeState,
+    current_x: Pixels,
+    column_widths: [Pixels; 2],
+) -> Option<f32> {
+    let main_width = column_widths[0] + column_widths[1] + px(PANE_RESIZE_HANDLE_PX);
+    if main_width <= px(0.0) {
+        return None;
+    }
+
+    let dx = current_x - state.start_x;
+    let delta = dx / main_width;
+    Some((state.start_ratio + delta).clamp(0.1, 0.9))
+}
+
 impl MainPaneView {
     pub(in super::super) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
@@ -1510,36 +1525,35 @@ impl MainPaneView {
                                                         },
                                                     ),
                                                 )
-                                                .on_drag_move(cx.listener(
-                                                    |this,
-                                                     e: &gpui::DragMoveEvent<
-                                                        ConflictDiffSplitResizeHandle,
-                                                    >,
-                                                     _w,
-                                                     cx| {
+                                                    .on_drag_move(cx.listener(
+                                                        |this,
+                                                         e: &gpui::DragMoveEvent<
+                                                            ConflictDiffSplitResizeHandle,
+                                                        >,
+                                                         _w,
+                                                         cx| {
                                                         let Some(state) =
                                                             this.conflict_diff_split_resize
                                                         else {
                                                             return;
                                                         };
-                                                        let main_w_val =
-                                                            this.conflict_diff_split_col_widths[0]
-                                                                + this
-                                                                    .conflict_diff_split_col_widths
-                                                                    [1]
-                                                                + px(PANE_RESIZE_HANDLE_PX);
-                                                        if main_w_val <= px(0.0) {
+                                                        let Some(new_ratio) =
+                                                            next_conflict_diff_split_ratio(
+                                                                state,
+                                                                e.event.position.x,
+                                                                this.conflict_diff_split_col_widths,
+                                                            )
+                                                        else {
+                                                            return;
+                                                        };
+                                                        if (this.conflict_diff_split_ratio
+                                                            - new_ratio)
+                                                            .abs()
+                                                            <= f32::EPSILON
+                                                        {
                                                             return;
                                                         }
-                                                        let dx =
-                                                            e.event.position.x - state.start_x;
-                                                        let delta = dx / main_w_val;
-                                                        let new_ratio = (state.start_ratio
-                                                            + delta)
-                                                            .clamp(0.1, 0.9);
                                                         this.conflict_diff_split_ratio = new_ratio;
-                                                        this.conflict_diff_segments_cache_split
-                                                            .clear();
                                                         cx.notify();
                                                     },
                                                 ))
@@ -3028,8 +3042,12 @@ impl MainPaneView {
 
 #[cfg(test)]
 mod tests {
-    use super::{show_conflict_save_stage_action, show_external_mergetool_actions};
+    use super::{
+        ConflictDiffSplitResizeState, next_conflict_diff_split_ratio,
+        show_conflict_save_stage_action, show_external_mergetool_actions,
+    };
     use crate::view::GitGpuiViewMode;
+    use gpui::px;
 
     #[test]
     fn shows_external_mergetool_actions_only_in_normal_mode() {
@@ -3045,5 +3063,43 @@ mod tests {
         assert!(!show_conflict_save_stage_action(
             GitGpuiViewMode::FocusedMergetool
         ));
+    }
+
+    #[test]
+    fn next_conflict_diff_split_ratio_returns_none_when_main_width_is_not_positive() {
+        let state = ConflictDiffSplitResizeState {
+            start_x: px(10.0),
+            start_ratio: 0.5,
+        };
+        let ratio = next_conflict_diff_split_ratio(state, px(20.0), [px(-4.0), px(-4.0)]);
+        assert!(ratio.is_none());
+    }
+
+    #[test]
+    fn next_conflict_diff_split_ratio_applies_drag_delta() {
+        let state = ConflictDiffSplitResizeState {
+            start_x: px(100.0),
+            start_ratio: 0.5,
+        };
+        let ratio =
+            next_conflict_diff_split_ratio(state, px(160.0), [px(300.0), px(300.0)]).unwrap();
+
+        let expected =
+            (0.5 + (60.0 / (300.0 + 300.0 + super::PANE_RESIZE_HANDLE_PX))).clamp(0.1, 0.9);
+        assert!((ratio - expected).abs() < 0.0001);
+    }
+
+    #[test]
+    fn next_conflict_diff_split_ratio_clamps_to_expected_bounds() {
+        let state = ConflictDiffSplitResizeState {
+            start_x: px(100.0),
+            start_ratio: 0.5,
+        };
+        let min_ratio =
+            next_conflict_diff_split_ratio(state, px(-10_000.0), [px(240.0), px(240.0)]).unwrap();
+        let max_ratio =
+            next_conflict_diff_split_ratio(state, px(10_000.0), [px(240.0), px(240.0)]).unwrap();
+        assert_eq!(min_ratio, 0.1);
+        assert_eq!(max_ratio, 0.9);
     }
 }

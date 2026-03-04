@@ -10,7 +10,7 @@
   - ✅ Conflict rows on canvas fast path (two-way + three-way resolver rows and conflict compare split/inline rows now on keyed canvas behind `GITGPUI_CONFLICT_CANVAS_ROWS`, with fallback preserved)
 - P1
   - ✅ Syntax mode/language caching in conflict renderers (cached per-file language in `ConflictResolverUiState` + per-batch syntax mode gating in conflict compare/resolver + three-way rows)
-  - ⬜ Cache invalidation scope reduction (search typing + split resize)
+  - 🔧 Cache invalidation scope reduction (split-resize cache churn removed; search-typing cache-layer split pending)
 - P2
   - ✅ Precomputed state usage improved (two-way row/conflict maps + three-way column line maps in state)
 
@@ -18,11 +18,15 @@
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
 - ✅ Phase 2 (3/3 complete: two-way + three-way conflict resolver and compare keyed canvas paths + fallback flag)
-- 🔧 Phase 3 (1/2 complete: syntax mode/language caching done; cache invalidation scope reduction pending)
+- 🔧 Phase 3 (1/2 complete: syntax mode/language caching done; split-resize invalidation narrowed; search-typing invalidation scope reduction pending)
 - ⬜ Phase 4
 
 ### Benchmark Notes
 
+- 2026-03-05 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1486 ms .. 2.1521 ms`
+  - after: `diff_scroll/style_window/200` = `2.1421 ms .. 2.1472 ms`
+  - note: criterion reported `Performance has improved` (`-1.4590% .. -1.1185%`); this harness is still generic diff styling and does not directly isolate split-resize drag cache invalidation.
 - 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
   - before: `diff_scroll/style_window/200` = `2.1808 ms .. 2.1913 ms`
   - after: `diff_scroll/style_window/200` = `2.1697 ms .. 2.1733 ms`
@@ -218,11 +222,13 @@ Implementation anchors:
 
 ### P1: Cache invalidation is broad and frequent
 
+Status: 🔧 Partially implemented (iteration 8, 2026-03-05): split conflict resize drag no longer clears `conflict_diff_segments_cache_split` on each move; search typing cache-layer split/volatile overlay invalidation is still pending.
+
 Evidence:
 
 - on each diff search text change, multiple caches are fully cleared:
   - `crates/gitgpui-ui-gpui/src/view/panes/main.rs:1785` to `:1789`
-- during split resize drag, split conflict style cache is cleared each move:
+- historical (before iteration 8): during split resize drag, split conflict style cache was cleared each move:
   - `crates/gitgpui-ui-gpui/src/view/panels/main.rs:1541` to `:1542`
 
 Impact:
@@ -237,6 +243,11 @@ Fix:
   - volatile layer: search query highlight overlay
 - invalidate only volatile layer on each query keystroke
 - for split resize, avoid full text-style cache clears; only invalidate geometry-dependent artifacts
+
+Implementation anchors (iteration 8):
+
+- resize ratio helper: `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
+- split drag move path (cache clear removed): `crates/gitgpui-ui-gpui/src/view/panels/main.rs`
 
 ### P2: Precomputed state is underused
 
