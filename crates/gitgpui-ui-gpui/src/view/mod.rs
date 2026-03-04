@@ -448,6 +448,16 @@ enum ThreeWayColumn {
     Theirs,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedOutputConflictMarker {
+    conflict_ix: usize,
+    range_start: usize,
+    range_end: usize,
+    is_start: bool,
+    is_end: bool,
+    unresolved: bool,
+}
+
 #[derive(Clone, Debug)]
 struct ConflictResolverUiState {
     repo_id: Option<RepoId>,
@@ -458,6 +468,7 @@ struct ConflictResolverUiState {
     /// Mapping from visible block index to `ConflictSession` region index.
     conflict_region_indices: Vec<usize>,
     active_conflict: usize,
+    hovered_conflict: Option<(usize, ThreeWayColumn)>,
     view_mode: ConflictResolverViewMode,
     diff_rows: Vec<FileDiffRow>,
     inline_rows: Vec<ConflictInlineRow>,
@@ -494,6 +505,8 @@ struct ConflictResolverUiState {
     resolver_pending_recompute_seq: u64,
     /// Per-line provenance metadata for the resolved output outline.
     resolved_line_meta: Vec<ResolvedLineMeta>,
+    /// Per-line conflict marker metadata for resolved output gutter markers.
+    resolved_output_conflict_markers: Vec<Option<ResolvedOutputConflictMarker>>,
     /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
     resolved_output_line_sources_index: HashSet<SourceLineKey>,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
@@ -510,6 +523,7 @@ impl Default for ConflictResolverUiState {
             marker_segments: Vec::new(),
             conflict_region_indices: Vec::new(),
             active_conflict: 0,
+            hovered_conflict: None,
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             diff_rows: Vec::new(),
             inline_rows: Vec::new(),
@@ -536,6 +550,7 @@ impl Default for ConflictResolverUiState {
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_line_meta: Vec::new(),
+            resolved_output_conflict_markers: Vec::new(),
             resolved_output_line_sources_index: HashSet::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
@@ -543,6 +558,7 @@ impl Default for ConflictResolverUiState {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[allow(dead_code)]
 enum ResolverPickTarget {
     /// Append a specific line from the 3-way resolver pane.
     ThreeWayLine {
@@ -560,6 +576,9 @@ enum ResolverPickTarget {
     Chunk {
         conflict_ix: usize,
         choice: conflict_resolver::ConflictChoice,
+        /// Optional resolved-output line that initiated this pick.
+        /// When present, chunk pick scopes to the marker chunk at this line.
+        output_line_ix: Option<usize>,
     },
 }
 
@@ -718,11 +737,19 @@ enum PopoverKind {
         lines_count: usize,
         copy_text: Option<String>,
     },
+    #[allow(dead_code)]
     ConflictResolverInputRowMenu {
         line_label: SharedString,
         line_target: ResolverPickTarget,
         chunk_label: SharedString,
         chunk_target: ResolverPickTarget,
+    },
+    ConflictResolverChunkMenu {
+        conflict_ix: usize,
+        has_base: bool,
+        is_three_way: bool,
+        selected_choices: Vec<conflict_resolver::ConflictChoice>,
+        output_line_ix: Option<usize>,
     },
     ConflictResolverOutputMenu {
         cursor_line: usize,

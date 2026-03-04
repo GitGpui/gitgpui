@@ -67,6 +67,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiffHunks
         | PopoverKind::HistoryColumnSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
+        | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
 
         // Popovers that carry an explicit repo id.
@@ -227,6 +228,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::TagMenu { .. }
         | PopoverKind::HistoryColumnSettings
         | PopoverKind::ConflictResolverInputRowMenu { .. }
+        | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
         | PopoverKind::Settings
@@ -450,6 +452,20 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             line_target.hash(hasher);
             chunk_label.hash(hasher);
             chunk_target.hash(hasher);
+        }
+        PopoverKind::ConflictResolverChunkMenu {
+            conflict_ix,
+            has_base,
+            is_three_way,
+            selected_choices,
+            output_line_ix,
+        } => {
+            59u8.hash(hasher);
+            conflict_ix.hash(hasher);
+            has_base.hash(hasher);
+            is_three_way.hash(hasher);
+            selected_choices.hash(hasher);
+            output_line_ix.hash(hasher);
         }
         PopoverKind::ConflictResolverOutputMenu {
             cursor_line,

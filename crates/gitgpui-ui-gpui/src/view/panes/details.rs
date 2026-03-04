@@ -240,9 +240,10 @@ impl DetailsPaneView {
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.commit_message_user_edited = false;
-            self.commit_message_programmatic_change = false;
-            self.commit_message_last_text =
-                self.commit_message_input.read(cx).text().to_string().into();
+            self.commit_message_programmatic_change = true;
+            self.commit_message_input
+                .update(cx, |input, cx| input.set_text(String::new(), cx));
+            self.commit_message_last_text = SharedString::default();
         } else if prev_selected_commit != next_selected_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll

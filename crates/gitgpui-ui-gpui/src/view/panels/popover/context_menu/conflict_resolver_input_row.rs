@@ -40,6 +40,7 @@ mod tests {
         let chunk_target = ResolverPickTarget::Chunk {
             conflict_ix: 3,
             choice: conflict_resolver::ConflictChoice::Ours,
+            output_line_ix: None,
         };
 
         let model = super::model(&line_label, &line_target, &chunk_label, &chunk_target);
@@ -80,6 +81,7 @@ mod tests {
                         target: ResolverPickTarget::Chunk {
                             conflict_ix: 3,
                             choice: conflict_resolver::ConflictChoice::Ours,
+                            output_line_ix: None,
                         }
                     }
                 ));

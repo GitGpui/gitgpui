@@ -353,6 +353,82 @@ fn text_input_supports_shift_pageup_pagedown_selection(cx: &mut gpui::TestAppCon
     );
 }
 
+#[gpui::test]
+fn text_input_supports_up_down_with_sticky_column(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            KeyBinding::new("up", crate::kit::Up, Some("TextInput")),
+            KeyBinding::new("down", crate::kit::Down, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("aaaaa\nbb\nccccc", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    // Cursor starts at EOF (offset 14). Move to column 4 on the third line.
+    cx.simulate_keystrokes("left");
+    let offset = cx.update(|_window, app| view.read(app).input.read(app).cursor_offset());
+    assert_eq!(offset, 13);
+
+    // Move up onto shorter middle line, then keep sticky column when moving again.
+    cx.simulate_keystrokes("up");
+    let offset = cx.update(|_window, app| view.read(app).input.read(app).cursor_offset());
+    assert_eq!(offset, 8);
+
+    cx.simulate_keystrokes("up");
+    let offset = cx.update(|_window, app| view.read(app).input.read(app).cursor_offset());
+    assert_eq!(offset, 4);
+
+    cx.simulate_keystrokes("down down");
+    let offset = cx.update(|_window, app| view.read(app).input.read(app).cursor_offset());
+    assert_eq!(offset, 13);
+}
+
+#[gpui::test]
+fn text_input_supports_shift_up_down_selection(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        app.bind_keys([
+            KeyBinding::new("home", crate::kit::Home, Some("TextInput")),
+            KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
+            KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+        ]);
+
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("abcde\n12345\nxyz", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    // Move the cursor to the start of the second line.
+    cx.simulate_keystrokes("home left home");
+    cx.dispatch_action(crate::kit::SelectUp);
+    let selection = cx.update(|_window, app| view.read(app).input.read(app).selected_text());
+    assert_eq!(selection, Some("abcde\n".into()));
+
+    // Collapse selection to the start of the second line.
+    cx.simulate_keystrokes("right");
+    cx.dispatch_action(crate::kit::SelectDown);
+    let selection = cx.update(|_window, app| view.read(app).input.read(app).selected_text());
+    assert_eq!(selection, Some("12345\n".into()));
+}
+
 struct TestBackend;
 
 impl GitBackend for TestBackend {

@@ -7,12 +7,12 @@ use crate::assets::GitGpuiAssets;
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, Focusable, FocusHandle, FontWeight, KeyBinding, Render, ScrollHandle,
+    App, Application, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
     SharedString, TitlebarOptions, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
     div, point, px, size,
 };
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 // ── Actions ──────────────────────────────────────────────────────────
 
@@ -186,9 +186,12 @@ impl Render for FocusedDiffView {
                     .track_scroll(&self.scroll_handle)
                     .px(px(16.0))
                     .py(px(4.0))
-                    .children(self.lines.iter().enumerate().map(|(i, line)| {
-                        render_diff_line(i, line, &theme)
-                    })),
+                    .children(
+                        self.lines
+                            .iter()
+                            .enumerate()
+                            .map(|(i, line)| render_diff_line(i, line, &theme)),
+                    ),
             )
     }
 }

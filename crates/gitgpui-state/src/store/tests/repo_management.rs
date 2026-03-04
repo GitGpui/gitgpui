@@ -610,6 +610,46 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
 }
 
 #[test]
+fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/not-a-repo"),
+            },
+            error: Error::new(ErrorKind::NotARepository),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.repos[0].id, RepoId(2));
+    assert_eq!(state.repos[0].spec.workdir, PathBuf::from("/tmp/repo"));
+    assert!(state.repos[0].open.is_loading());
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+}
+
+#[test]
 fn set_active_repo_ignores_unknown_repo() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

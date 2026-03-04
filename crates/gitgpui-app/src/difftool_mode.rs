@@ -605,8 +605,7 @@ mod tests {
         let non_utf8_target = OsStr::from_bytes(non_utf8_bytes);
 
         // Left side: broken symlink with non-UTF-8 target (materialized as target bytes).
-        unix_fs::symlink(non_utf8_target, left.join("entry"))
-            .expect("create non-UTF-8 symlink");
+        unix_fs::symlink(non_utf8_target, left.join("entry")).expect("create non-UTF-8 symlink");
 
         // Right side: file containing the exact same raw bytes.
         write_bytes(&right.join("entry"), non_utf8_bytes);
@@ -632,8 +631,7 @@ mod tests {
 
     #[test]
     fn apply_labels_does_not_rewrite_hunk_content_that_looks_like_headers() {
-        let input =
-            "diff --git a/l b/r\n--- a/l\n+++ b/r\n@@ -1 +1 @@\n--- content\n+++ content\n";
+        let input = "diff --git a/l b/r\n--- a/l\n+++ b/r\n@@ -1 +1 @@\n--- content\n+++ content\n";
         let got = apply_labels_to_unified_diff_headers(input, "LEFT", "RIGHT");
         assert!(got.contains("--- LEFT\n+++ RIGHT\n"));
         assert!(got.contains("@@ -1 +1 @@\n--- content\n+++ content\n"));
@@ -694,8 +692,7 @@ mod tests {
         let result = run_difftool(&config(left, right)).expect("difftool run");
         assert_eq!(result.exit_code, exit_code::SUCCESS);
         assert!(
-            result.stdout.contains("original line")
-                || result.stdout.contains("changed line"),
+            result.stdout.contains("original line") || result.stdout.contains("changed line"),
             "diff output should contain file content: {}",
             result.stdout
         );
@@ -734,7 +731,10 @@ mod tests {
         std::fs::create_dir_all(&right_dir).unwrap();
 
         write_file(&left_dir.join("main.rs"), "fn main() {}\n");
-        write_file(&right_dir.join("main.rs"), "fn main() { println!(\"hello\"); }\n");
+        write_file(
+            &right_dir.join("main.rs"),
+            "fn main() { println!(\"hello\"); }\n",
+        );
 
         let result = run_difftool(&config(left_dir, right_dir)).expect("difftool run");
         assert_eq!(result.exit_code, exit_code::SUCCESS);

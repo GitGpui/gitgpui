@@ -923,128 +923,12 @@ impl MainPaneView {
                                     );
                                 };
 
-                            let base_for_btn = base.clone();
-                            let set_output_base =
-                                move |this: &mut Self,
-                                      _e: &ClickEvent,
-                                      _w: &mut Window,
-                                      cx: &mut gpui::Context<Self>| {
-                                    if this.conflict_resolver_conflict_count() > 0 {
-                                        this.conflict_resolver_pick_active_conflict(
-                                            conflict_resolver::ConflictChoice::Base,
-                                            cx,
-                                        );
-                                    } else {
-                                        this.conflict_resolver_set_output(
-                                            base_for_btn.clone(),
-                                            cx,
-                                        );
-                                    }
-                                };
-                            let local_for_btn = local.clone();
-                            let set_output_local =
-                                move |this: &mut Self,
-                                      _e: &ClickEvent,
-                                      _w: &mut Window,
-                                      cx: &mut gpui::Context<Self>| {
-                                    if this.conflict_resolver_conflict_count() > 0 {
-                                        this.conflict_resolver_pick_active_conflict(
-                                            conflict_resolver::ConflictChoice::Ours,
-                                            cx,
-                                        );
-                                    } else {
-                                        this.conflict_resolver_set_output(
-                                            local_for_btn.clone(),
-                                            cx,
-                                        );
-                                    }
-                                };
-                            let remote_for_btn = remote.clone();
-                            let set_output_remote =
-                                move |this: &mut Self,
-                                      _e: &ClickEvent,
-                                      _w: &mut Window,
-                                      cx: &mut gpui::Context<Self>| {
-                                    if this.conflict_resolver_conflict_count() > 0 {
-                                        this.conflict_resolver_pick_active_conflict(
-                                            conflict_resolver::ConflictChoice::Theirs,
-                                            cx,
-                                        );
-                                    } else {
-                                        this.conflict_resolver_set_output(
-                                            remote_for_btn.clone(),
-                                            cx,
-                                        );
-                                    }
-                                };
-                            let local_for_both_btn = local.clone();
-                            let remote_for_both_btn = remote.clone();
-                            let set_output_both =
-                                move |this: &mut Self,
-                                      _e: &ClickEvent,
-                                      _w: &mut Window,
-                                      cx: &mut gpui::Context<Self>| {
-                                    if this.conflict_resolver_conflict_count() > 0 {
-                                        this.conflict_resolver_pick_active_conflict(
-                                            conflict_resolver::ConflictChoice::Both,
-                                            cx,
-                                        );
-                                    } else {
-                                        let mut both = String::with_capacity(
-                                            local_for_both_btn.len() + remote_for_both_btn.len(),
-                                        );
-                                        both.push_str(&local_for_both_btn);
-                                        both.push_str(&remote_for_both_btn);
-                                        this.conflict_resolver_set_output(both, cx);
-                                    }
-                                };
                             let reset_from_markers =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_reset_output_from_markers(cx);
-                                };
-
-                            let pick_all_base =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_pick_all_conflicts(
-                                        conflict_resolver::ConflictChoice::Base,
-                                        cx,
-                                    );
-                                };
-                            let pick_all_local =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_pick_all_conflicts(
-                                        conflict_resolver::ConflictChoice::Ours,
-                                        cx,
-                                    );
-                                };
-                            let pick_all_remote =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_pick_all_conflicts(
-                                        conflict_resolver::ConflictChoice::Theirs,
-                                        cx,
-                                    );
-                                };
-                            let pick_all_both =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_pick_all_conflicts(
-                                        conflict_resolver::ConflictChoice::Both,
-                                        cx,
-                                    );
                                 };
 
                             let view_toggle_selected_bg = with_alpha(
@@ -1146,34 +1030,6 @@ impl MainPaneView {
                                 })
                                 .map(SharedString::from);
 
-                            let any_unresolved_block_missing_base = has_conflicts
-                                && self.conflict_resolver.marker_segments.iter().any(|seg| {
-                                    matches!(
-                                        seg,
-                                        conflict_resolver::ConflictSegment::Block(b)
-                                            if !b.resolved && b.base.is_none()
-                                    )
-                                });
-
-                            let active_block_has_base = if has_conflicts {
-                                let mut seen = 0usize;
-                                self.conflict_resolver
-                                    .marker_segments
-                                    .iter()
-                                    .find_map(|seg| {
-                                        let conflict_resolver::ConflictSegment::Block(block) = seg
-                                        else {
-                                            return None;
-                                        };
-                                        let hit = seen == active_conflict;
-                                        seen += 1;
-                                        hit.then_some(block.base.is_some())
-                                    })
-                                    .unwrap_or(false)
-                            } else {
-                                file.base.is_some()
-                            };
-
                             let auto_resolve =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -1246,77 +1102,6 @@ impl MainPaneView {
                                         );
                                     }
                                     d
-                                })
-                                .child(
-                                    zed::Button::new("conflict_use_base", "A (base)")
-                                        .style(zed::ButtonStyle::Transparent)
-                                        .disabled(if has_conflicts {
-                                            !active_block_has_base
-                                        } else {
-                                            file.base.is_none()
-                                        })
-                                        .on_click(theme, cx, set_output_base),
-                                )
-                                .child(
-                                    zed::Button::new("conflict_use_local", "B (local)")
-                                        .style(zed::ButtonStyle::Transparent)
-                                        .disabled(!has_conflicts && file.ours.is_none())
-                                        .on_click(theme, cx, set_output_local),
-                                )
-                                .child(
-                                    zed::Button::new("conflict_use_remote", "C (remote)")
-                                        .style(zed::ButtonStyle::Transparent)
-                                        .disabled(!has_conflicts && file.theirs.is_none())
-                                        .on_click(theme, cx, set_output_remote),
-                                )
-                                .when(has_conflicts, |d| {
-                                    d.child(
-                                        zed::Button::new("conflict_use_both", "BC (both)")
-                                            .style(zed::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, set_output_both),
-                                    )
-                                })
-                                .when(has_conflicts && conflict_count > 1, |d| {
-                                    d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
-                                        .child(
-                                            zed::Button::new(
-                                                "conflict_all_base",
-                                                "Unresolved → A",
-                                            )
-                                                .style(zed::ButtonStyle::Transparent)
-                                                .disabled(
-                                                    unresolved_count == 0
-                                                        || any_unresolved_block_missing_base,
-                                                )
-                                                .on_click(theme, cx, pick_all_base),
-                                        )
-                                        .child(
-                                            zed::Button::new(
-                                                "conflict_all_local",
-                                                "Unresolved → B",
-                                            )
-                                                .style(zed::ButtonStyle::Transparent)
-                                                .disabled(unresolved_count == 0)
-                                                .on_click(theme, cx, pick_all_local),
-                                        )
-                                        .child(
-                                            zed::Button::new(
-                                                "conflict_all_remote",
-                                                "Unresolved → C",
-                                            )
-                                                .style(zed::ButtonStyle::Transparent)
-                                                .disabled(unresolved_count == 0)
-                                                .on_click(theme, cx, pick_all_remote),
-                                        )
-                                        .child(
-                                            zed::Button::new(
-                                                "conflict_all_both",
-                                                "Unresolved → BC",
-                                            )
-                                                .style(zed::ButtonStyle::Transparent)
-                                                .disabled(unresolved_count == 0)
-                                                .on_click(theme, cx, pick_all_both),
-                                        )
                                 })
                                 .child(
                                     zed::Button::new(
@@ -1495,9 +1280,13 @@ impl MainPaneView {
                             {
                                 let two_available = (main_w - handle_w).max(px(0.0));
                                 let two_ratio = self.conflict_diff_split_ratio;
-                                let left_w = (two_available * two_ratio)
-                                    .max(min_col_w)
-                                    .min(two_available - min_col_w);
+                                let left_w = if two_available <= min_col_w * 2.0 {
+                                    two_available * 0.5
+                                } else {
+                                    (two_available * two_ratio)
+                                        .max(min_col_w)
+                                        .min(two_available - min_col_w)
+                                };
                                 let right_w = two_available - left_w;
                                 self.conflict_diff_split_col_widths = [left_w, right_w];
                             }
@@ -1560,10 +1349,9 @@ impl MainPaneView {
                                                 let mut r = state.start_ratios;
                                                 match state.handle {
                                                     ConflictHSplitResizeHandle::First => {
-                                                        let new_pos =
-                                                            (avail * r[0] + dx).max(min_col_w).min(
-                                                                avail - min_col_w * 2.0 - handle_w,
-                                                            );
+                                                        let new_pos = (avail * r[0] + dx)
+                                                            .max(min_col_w)
+                                                            .min(avail - min_col_w * 2.0);
                                                         r[0] = (new_pos / avail).clamp(0.0, 1.0);
                                                         // Ensure second divider stays valid
                                                         let min_r1 = r[0] + (min_col_w / avail);
@@ -1574,7 +1362,7 @@ impl MainPaneView {
                                                     }
                                                     ConflictHSplitResizeHandle::Second => {
                                                         let new_pos = (avail * r[1] + dx)
-                                                            .max(min_col_w * 2.0 + handle_w)
+                                                            .max(min_col_w * 2.0)
                                                             .min(avail - min_col_w);
                                                         r[1] = (new_pos / avail).clamp(0.0, 1.0);
                                                         // Ensure first divider stays valid
@@ -1941,6 +1729,33 @@ impl MainPaneView {
                                 .child(start_controls);
                             let autosolve_summary =
                                 self.conflict_resolver.last_autosolve_summary.clone();
+                            let merge_conflict_markers = self
+                                .conflict_resolver
+                                .resolved_output_conflict_markers
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(line_ix, marker)| {
+                                    marker
+                                        .as_ref()
+                                        .copied()
+                                        .map(|m| (line_ix, m))
+                                })
+                                .collect::<Vec<_>>();
+                            let has_merge_conflict_marker =
+                                !merge_conflict_markers.is_empty();
+                            let unresolved_merge_conflict_row_bg = {
+                                let mut color = theme.colors.danger;
+                                let t = if theme.is_dark { 0.72 } else { 0.82 };
+                                color.r = color.r + (theme.colors.surface_bg_elevated.r - color.r) * t;
+                                color.g = color.g + (theme.colors.surface_bg_elevated.g - color.g) * t;
+                                color.b = color.b + (theme.colors.surface_bg_elevated.b - color.b) * t;
+                                color.a = if theme.is_dark { 0.72 } else { 0.58 };
+                                color
+                            };
+                            let resolved_merge_conflict_row_bg = with_alpha(
+                                theme.colors.surface_bg_elevated,
+                                if theme.is_dark { 0.54 } else { 0.74 },
+                            );
 
                             // Vertical resize handle between merge inputs and resolved output
                             let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
@@ -2068,34 +1883,205 @@ impl MainPaneView {
                                             .flex_col()
                                             .bg(theme.colors.window_bg)
                                             .child(
-                                                div()
-                                                    .id("conflict_resolver_output_scroll")
-                                                    .flex_1()
-                                                    .min_h(px(0.0))
-                                                    .overflow_y_scroll()
-                                                    .child(
-                                                        div()
-                                                            .p_2()
-                                                            .on_mouse_down(
-                                                                MouseButton::Right,
-                                                                cx.listener(
-                                                                    |this,
-                                                                     e: &MouseDownEvent,
-                                                                     window,
-                                                                     cx| {
-                                                                        this.open_conflict_resolver_output_context_menu(
-                                                                            e.position,
-                                                                            window,
-                                                                            cx,
-                                                                        );
-                                                                    },
+                                                {
+                                                    let output_scroll_handle = self
+                                                        .conflict_resolved_preview_scroll
+                                                        .0
+                                                        .borrow()
+                                                        .base_handle
+                                                        .clone();
+                                                    let outline_len =
+                                                        self.conflict_resolved_preview_lines.len();
+                                                    let outline_rows =
+                                                        Self::render_conflict_resolved_preview_rows(
+                                                            self,
+                                                            0..outline_len,
+                                                            cx,
+                                                        );
+
+                                                    div()
+                                                        .id("conflict_resolver_output_body")
+                                                        .relative()
+                                                        .flex_1()
+                                                        .min_h(px(0.0))
+                                                        .bg(theme.colors.window_bg)
+                                                        .child(
+                                                            div()
+                                                                .id("conflict_resolver_output_scroll")
+                                                                .h_full()
+                                                                .overflow_y_scroll()
+                                                                .track_scroll(&output_scroll_handle)
+                                                                .child(
+                                                                    div()
+                                                                        .p_2()
+                                                                        .font_family("monospace")
+                                                                        .min_w_full()
+                                                                        .on_mouse_down(
+                                                                            MouseButton::Right,
+                                                                            cx.listener(
+                                                                                |this,
+                                                                                 e: &MouseDownEvent,
+                                                                                 window,
+                                                                                 cx| {
+                                                                                    this.open_conflict_resolver_output_context_menu(
+                                                                                        e.position,
+                                                                                        window,
+                                                                                        cx,
+                                                                                    );
+                                                                                },
+                                                                            ),
+                                                                        )
+                                                                        .child(
+                                                                            div()
+                                                                                .flex()
+                                                                                .items_start()
+                                                                                .min_w_full()
+                                                                                .child(
+                                                                                    div()
+                                                                                        .id("conflict_resolver_output_gutter")
+                                                                                        .w(px(92.0))
+                                                                                        .flex_shrink_0()
+                                                                                        .border_r_1()
+                                                                                        .border_color(
+                                                                                            theme.colors.border,
+                                                                                        )
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .flex_col()
+                                                                                                .children(outline_rows),
+                                                                                        ),
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .id(
+                                                                                            "conflict_resolver_output_editor",
+                                                                                        )
+                                                                                        .relative()
+                                                                                        .flex_1()
+                                                                                        .min_w(px(0.0))
+                                                                                        .pl_2()
+                                                                                        .child(
+                                                                                            div()
+                                                                                                .h_full()
+                                                                                                .child(
+                                                                                                    self.conflict_resolver_input
+                                                                                                        .clone(),
+                                                                                                ),
+                                                                                        )
+                                                                                        .when(
+                                                                                            has_merge_conflict_marker,
+                                                                                            |d| {
+                                                                                                d.child(
+                                                                                                    div()
+                                                                                                        .absolute()
+                                                                                                        .top(px(0.0))
+                                                                                                        .left(px(0.0))
+                                                                                                        .right(px(0.0))
+                                                                                                        .children(
+                                                                                                            merge_conflict_markers
+                                                                                                                .iter()
+                                                                                                                .copied()
+                                                                                                                .map(
+                                                                                                                    |(line_ix, marker)| {
+                                                                                                                        let conflict_ix = marker.conflict_ix;
+                                                                                                                        let top = px(
+                                                                                                                            (line_ix as f32)
+                                                                                                                                * 20.0,
+                                                                                                                        );
+                                                                                                                        let has_base = self
+                                                                                                                            .conflict_resolver_has_base_for_conflict_ix(
+                                                                                                                                conflict_ix,
+                                                                                                                            );
+                                                                                                                        let is_three_way = self
+                                                                                                                            .conflict_resolver
+                                                                                                                            .view_mode
+                                                                                                                            == ConflictResolverViewMode::ThreeWay;
+                                                                                                                        let selected_choices = self
+                                                                                                                            .conflict_resolver_selected_choices_for_conflict_ix(
+                                                                                                                                conflict_ix,
+                                                                                                                            );
+                                                                                                                        let context_menu_invoker: SharedString = format!(
+                                                                                                                            "resolver_output_merge_conflict_row_{}_{}",
+                                                                                                                            conflict_ix, line_ix
+                                                                                                                        )
+                                                                                                                        .into();
+                                                                                                                        let row_bg = if marker.unresolved {
+                                                                                                                            unresolved_merge_conflict_row_bg
+                                                                                                                        } else {
+                                                                                                                            resolved_merge_conflict_row_bg
+                                                                                                                        };
+                                                                                                                        div()
+                                                                                                                            .absolute()
+                                                                                                                            .left(px(0.0))
+                                                                                                                            .right(px(0.0))
+                                                                                                                            .top(top)
+                                                                                                                            .h(px(20.0))
+                                                                                                                            .bg(row_bg)
+                                                                                                                            .on_mouse_down(
+                                                                                                                                MouseButton::Right,
+                                                                                                                                cx.listener(
+                                                                                                                                    move |this, e: &MouseDownEvent, window, cx| {
+                                                                                                                                        cx.stop_propagation();
+                                                                                                                                        this.open_conflict_resolver_chunk_context_menu(
+                                                                                                                                            context_menu_invoker.clone(),
+                                                                                                                                            conflict_ix,
+                                                                                                                                            has_base,
+                                                                                                                                            is_three_way,
+                                                                                                                                            selected_choices.clone(),
+                                                                                                                                            Some(line_ix),
+                                                                                                                                            e.position,
+                                                                                                                                            window,
+                                                                                                                                            cx,
+                                                                                                                                        );
+                                                                                                                                    },
+                                                                                                                                ),
+                                                                                                                            )
+                                                                                                                            .child({
+                                                                                                                                let label = div()
+                                                                                                                                    .flex()
+                                                                                                                                    .w_full()
+                                                                                                                                    .h_full()
+                                                                                                                                    .items_center()
+                                                                                                                                    .px_2()
+                                                                                                                                    .text_size(px(10.0))
+                                                                                                                                    .font_family("monospace")
+                                                                                                                                    .font_weight(FontWeight::BOLD)
+                                                                                                                                    .text_color(with_alpha(
+                                                                                                                                        theme.colors.text,
+                                                                                                                                        0.0,
+                                                                                                                                    ))
+                                                                                                                                    .hover(move |s| {
+                                                                                                                                        s.text_color(
+                                                                                                                                            theme.colors
+                                                                                                                                                .text,
+                                                                                                                                        )
+                                                                                                                                    });
+                                                                                                                                if marker.is_start {
+                                                                                                                                    label.child("<Merge conflict>")
+                                                                                                                                } else {
+                                                                                                                                    label
+                                                                                                                                }
+                                                                                                                            })
+                                                                                                                            .into_any_element()
+                                                                                                                    },
+                                                                                                                ),
+                                                                                                        ),
+                                                                                                )
+                                                                                            },
+                                                                                        ),
+                                                                                ),
+                                                                        ),
                                                                 ),
+                                                        )
+                                                        .child(
+                                                            zed::Scrollbar::new(
+                                                                "conflict_resolver_output_scrollbar",
+                                                                output_scroll_handle.clone(),
                                                             )
-                                                            .child(
-                                                                self.conflict_resolver_input
-                                                                    .clone(),
-                                                            ),
-                                                    ),
+                                                            .always_visible()
+                                                            .render(theme),
+                                                        )
+                                                },
                                             );
                                     bottom_section.style().flex_grow = Some(1.0 - vsplit_ratio);
                                     bottom_section.style().flex_shrink = Some(1.0);

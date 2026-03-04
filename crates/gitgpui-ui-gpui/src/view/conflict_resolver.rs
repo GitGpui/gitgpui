@@ -567,6 +567,7 @@ pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
 /// 2-way blocks that don't have an ancestor section.
 ///
 /// Returns the number of blocks updated.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn apply_choice_to_unresolved_segments(
     segments: &mut [ConflictSegment],
     choice: ConflictChoice,
@@ -1183,7 +1184,7 @@ pub fn compute_three_way_word_highlights(
     base_lines: &[gpui::SharedString],
     ours_lines: &[gpui::SharedString],
     theirs_lines: &[gpui::SharedString],
-    conflict_ranges: &[std::ops::Range<usize>],
+    marker_segments: &[ConflictSegment],
 ) -> (WordHighlights, WordHighlights, WordHighlights) {
     let len = base_lines
         .len()
@@ -1193,31 +1194,142 @@ pub fn compute_three_way_word_highlights(
     let mut wh_ours: WordHighlights = vec![None; len];
     let mut wh_theirs: WordHighlights = vec![None; len];
 
-    for range in conflict_ranges {
-        for i in range.clone() {
-            if i >= len {
-                break;
+    fn merge_line_ranges(
+        highlights: &mut WordHighlights,
+        line_ix: usize,
+        ranges: Vec<std::ops::Range<usize>>,
+    ) {
+        if ranges.is_empty() {
+            return;
+        }
+        let Some(slot) = highlights.get_mut(line_ix) else {
+            return;
+        };
+        match slot {
+            Some(existing) => {
+                *existing = merge_ranges(existing, &ranges);
             }
-            let base = base_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
-            let ours = ours_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
-            let theirs = theirs_lines.get(i).map(|s| s.as_ref()).unwrap_or("");
-
-            let (base_vs_ours_base, ours_ranges) =
-                super::word_diff::capped_word_diff_ranges(base, ours);
-            let (base_vs_theirs_base, theirs_ranges) =
-                super::word_diff::capped_word_diff_ranges(base, theirs);
-
-            // Merge base ranges from both comparisons (union).
-            let merged_base = merge_ranges(&base_vs_ours_base, &base_vs_theirs_base);
-
-            if !merged_base.is_empty() {
-                wh_base[i] = Some(merged_base);
+            None => {
+                *slot = Some(ranges);
             }
-            if !ours_ranges.is_empty() {
-                wh_ours[i] = Some(ours_ranges);
+        }
+    }
+
+    fn line_index(start: usize, line_no: Option<u32>) -> Option<usize> {
+        let local = usize::try_from(line_no?).ok()?.checked_sub(1)?;
+        start.checked_add(local)
+    }
+
+    fn full_line_range(
+        lines: &[gpui::SharedString],
+        line_ix: usize,
+    ) -> Vec<std::ops::Range<usize>> {
+        let Some(line) = lines.get(line_ix).map(|s| s.as_ref()) else {
+            return Vec::new();
+        };
+        if line.is_empty() {
+            return Vec::new();
+        }
+        vec![0..line.len()]
+    }
+
+    fn apply_aligned_word_highlights(
+        old_text: &str,
+        new_text: &str,
+        old_global_start: usize,
+        new_global_start: usize,
+        old_lines: &[gpui::SharedString],
+        new_lines: &[gpui::SharedString],
+        old_highlights: &mut WordHighlights,
+        new_highlights: &mut WordHighlights,
+    ) {
+        use gitgpui_core::file_diff::FileDiffRowKind;
+
+        let rows = gitgpui_core::file_diff::side_by_side_rows(old_text, new_text);
+        for row in rows {
+            match row.kind {
+                FileDiffRowKind::Modify => {
+                    let old = row.old.as_deref().unwrap_or("");
+                    let new = row.new.as_deref().unwrap_or("");
+                    let (old_ranges, new_ranges) =
+                        super::word_diff::capped_word_diff_ranges(old, new);
+
+                    if let Some(ix) = line_index(old_global_start, row.old_line) {
+                        merge_line_ranges(old_highlights, ix, old_ranges);
+                    }
+                    if let Some(ix) = line_index(new_global_start, row.new_line) {
+                        merge_line_ranges(new_highlights, ix, new_ranges);
+                    }
+                }
+                FileDiffRowKind::Remove => {
+                    if let Some(ix) = line_index(old_global_start, row.old_line) {
+                        merge_line_ranges(old_highlights, ix, full_line_range(old_lines, ix));
+                    }
+                }
+                FileDiffRowKind::Add => {
+                    if let Some(ix) = line_index(new_global_start, row.new_line) {
+                        merge_line_ranges(new_highlights, ix, full_line_range(new_lines, ix));
+                    }
+                }
+                FileDiffRowKind::Context => {}
             }
-            if !theirs_ranges.is_empty() {
-                wh_theirs[i] = Some(theirs_ranges);
+        }
+    }
+
+    let mut base_offset = 0usize;
+    let mut ours_offset = 0usize;
+    let mut theirs_offset = 0usize;
+    for seg in marker_segments {
+        match seg {
+            ConflictSegment::Text(text) => {
+                let n = usize::try_from(text_line_count(text)).unwrap_or(0);
+                base_offset = base_offset.saturating_add(n);
+                ours_offset = ours_offset.saturating_add(n);
+                theirs_offset = theirs_offset.saturating_add(n);
+            }
+            ConflictSegment::Block(block) => {
+                if let Some(base) = block.base.as_deref() {
+                    apply_aligned_word_highlights(
+                        base,
+                        &block.ours,
+                        base_offset,
+                        ours_offset,
+                        base_lines,
+                        ours_lines,
+                        &mut wh_base,
+                        &mut wh_ours,
+                    );
+                    apply_aligned_word_highlights(
+                        base,
+                        &block.theirs,
+                        base_offset,
+                        theirs_offset,
+                        base_lines,
+                        theirs_lines,
+                        &mut wh_base,
+                        &mut wh_theirs,
+                    );
+                }
+                // Local/Remote highlighting must align by diff rows, not absolute same-row index.
+                apply_aligned_word_highlights(
+                    &block.ours,
+                    &block.theirs,
+                    ours_offset,
+                    theirs_offset,
+                    ours_lines,
+                    theirs_lines,
+                    &mut wh_ours,
+                    &mut wh_theirs,
+                );
+
+                let base_count =
+                    usize::try_from(text_line_count(block.base.as_deref().unwrap_or_default()))
+                        .unwrap_or(0);
+                let ours_count = usize::try_from(text_line_count(&block.ours)).unwrap_or(0);
+                let theirs_count = usize::try_from(text_line_count(&block.theirs)).unwrap_or(0);
+                base_offset = base_offset.saturating_add(base_count);
+                ours_offset = ours_offset.saturating_add(ours_count);
+                theirs_offset = theirs_offset.saturating_add(theirs_count);
             }
         }
     }
@@ -1501,6 +1613,7 @@ pub fn build_resolved_output_line_sources_index(
 ///
 /// Returns `true` if the source line's key is in the dedupe index — meaning
 /// the plus-icon for that row should be hidden.
+#[allow(dead_code)]
 pub fn is_source_line_in_output(
     index: &rustc_hash::FxHashSet<SourceLineKey>,
     view_mode: ConflictResolverViewMode,
@@ -4258,6 +4371,99 @@ theirs only line
         assert_eq!(
             two_way_conflict_index_for_visible_row(&split_map, &visible_rows, usize::MAX),
             None
+        );
+    }
+
+    #[test]
+    fn three_way_word_highlights_align_shifted_local_and_remote_rows() {
+        fn shared_lines(text: &str) -> Vec<gpui::SharedString> {
+            text.lines().map(|line| line.to_string().into()).collect()
+        }
+
+        let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "alpha\nbeta changed\ngamma\n".into(),
+            theirs: "alpha\ninserted\nbeta remote\ngamma\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let base_lines = Vec::new();
+        let ours_lines = shared_lines("alpha\nbeta changed\ngamma\n");
+        let theirs_lines = shared_lines("alpha\ninserted\nbeta remote\ngamma\n");
+
+        let (_base_hl, ours_hl, theirs_hl) = compute_three_way_word_highlights(
+            &base_lines,
+            &ours_lines,
+            &theirs_lines,
+            &marker_segments,
+        );
+
+        assert!(
+            ours_hl[1].is_some(),
+            "local modified line should be highlighted even when remote line is shifted"
+        );
+        assert!(
+            ours_hl[0].is_none(),
+            "unchanged local line should not be highlighted"
+        );
+        assert!(
+            ours_hl[2].is_none(),
+            "unchanged local line should not be highlighted"
+        );
+
+        assert!(
+            theirs_hl[1].is_some(),
+            "remote added line should be highlighted"
+        );
+        assert!(
+            theirs_hl[2].is_some(),
+            "remote modified line should be highlighted at its aligned row"
+        );
+        assert!(
+            theirs_hl[3].is_none(),
+            "unchanged remote line should not be highlighted"
+        );
+    }
+
+    #[test]
+    fn three_way_word_highlights_keep_global_offsets_per_column() {
+        fn shared_lines(text: &str) -> Vec<gpui::SharedString> {
+            text.lines().map(|line| line.to_string().into()).collect()
+        }
+
+        let marker_segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "same\n".into(),
+                theirs: "added\nsame\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("tail\n".into()),
+        ];
+        let base_lines = Vec::new();
+        let ours_lines = shared_lines("ctx\nsame\ntail\n");
+        let theirs_lines = shared_lines("ctx\nadded\nsame\ntail\n");
+
+        let (_base_hl, ours_hl, theirs_hl) = compute_three_way_word_highlights(
+            &base_lines,
+            &ours_lines,
+            &theirs_lines,
+            &marker_segments,
+        );
+
+        assert!(
+            ours_hl[1].is_none(),
+            "local unchanged block line should stay unhighlighted"
+        );
+        assert!(
+            theirs_hl[1].is_some(),
+            "remote inserted block line should map to its own global row"
+        );
+        assert!(
+            theirs_hl[2].is_none(),
+            "remote aligned context line should not be highlighted"
         );
     }
 }

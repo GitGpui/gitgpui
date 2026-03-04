@@ -508,6 +508,7 @@ impl PopoverHost {
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverChunkMenu { .. }
                 | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::StatusFileMenu { .. }
@@ -928,6 +929,7 @@ impl PopoverHost {
                 | PopoverKind::DiffHunkMenu { .. }
                 | PopoverKind::DiffEditorMenu { .. }
                 | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverChunkMenu { .. }
                 | PopoverKind::ConflictResolverOutputMenu { .. }
                 | PopoverKind::CommitMenu { .. }
                 | PopoverKind::TagMenu { .. }
@@ -1485,6 +1487,25 @@ impl PopoverHost {
                     cx,
                 )
                 .min_w(px(180.0))
+                .max_w(px(280.0)),
+            PopoverKind::ConflictResolverChunkMenu {
+                conflict_ix,
+                has_base,
+                is_three_way,
+                selected_choices,
+                output_line_ix,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverChunkMenu {
+                        conflict_ix,
+                        has_base,
+                        is_three_way,
+                        selected_choices,
+                        output_line_ix,
+                    },
+                    cx,
+                )
+                .min_w(px(190.0))
                 .max_w(px(280.0)),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,

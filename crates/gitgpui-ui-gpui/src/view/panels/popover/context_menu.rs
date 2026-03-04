@@ -4,6 +4,7 @@ mod branch;
 mod branch_section;
 mod commit;
 mod commit_file;
+mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
 mod diff_editor;
@@ -255,6 +256,19 @@ impl PopoverHost {
                 line_target,
                 chunk_label,
                 chunk_target,
+            )),
+            PopoverKind::ConflictResolverChunkMenu {
+                conflict_ix,
+                has_base,
+                is_three_way,
+                selected_choices,
+                output_line_ix,
+            } => Some(conflict_resolver_chunk::model(
+                *conflict_ix,
+                *has_base,
+                *is_three_way,
+                selected_choices,
+                *output_line_ix,
             )),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,
@@ -629,11 +643,6 @@ impl PopoverHost {
                         pane.conflict_resolver_output_paste_text(&text, cx);
                     });
                 }
-            }
-            ContextMenuAction::ConflictResolverOutputPickLine { line_ix, choice } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_output_replace_line(line_ix, choice, cx);
-                });
             }
             ContextMenuAction::CopyText { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));

@@ -175,6 +175,8 @@ fn bind_text_input_keys(cx: &mut App) {
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
         KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
         KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
+        KeyBinding::new("up", crate::kit::Up, Some("TextInput")),
+        KeyBinding::new("down", crate::kit::Down, Some("TextInput")),
         // Word navigation (Ctrl on Windows/Linux, Option on macOS)
         KeyBinding::new("ctrl-left", crate::kit::WordLeft, Some("TextInput")),
         KeyBinding::new("ctrl-right", crate::kit::WordRight, Some("TextInput")),
@@ -202,6 +204,8 @@ fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("shift-left", crate::kit::SelectLeft, Some("TextInput")),
         KeyBinding::new("shift-right", crate::kit::SelectRight, Some("TextInput")),
+        KeyBinding::new("shift-up", crate::kit::SelectUp, Some("TextInput")),
+        KeyBinding::new("shift-down", crate::kit::SelectDown, Some("TextInput")),
         KeyBinding::new("home", crate::kit::Home, Some("TextInput")),
         KeyBinding::new("shift-home", crate::kit::SelectHome, Some("TextInput")),
         KeyBinding::new("end", crate::kit::End, Some("TextInput")),

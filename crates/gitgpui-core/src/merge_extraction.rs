@@ -444,7 +444,9 @@ fn read_blob_bytes_optional(
     if !existence.status.success() {
         return Err(MergeExtractionError::GitCommandFailed {
             command: git_command_string(&existence_args),
-            stderr: String::from_utf8_lossy(&existence.stderr).trim().to_string(),
+            stderr: String::from_utf8_lossy(&existence.stderr)
+                .trim()
+                .to_string(),
         });
     }
     if existence.stdout.is_empty() {
@@ -1090,14 +1092,12 @@ mod tests {
         assert_eq!(first_base, "base one\n");
         assert_eq!(second_base, "base two\n");
 
-        let first_expected = std::fs::read_to_string(dest.join(format!(
-            "{first_prefix}_expected_result.txt"
-        )))
-        .expect("read first expected result");
-        let second_expected = std::fs::read_to_string(dest.join(format!(
-            "{second_prefix}_expected_result.txt"
-        )))
-        .expect("read second expected result");
+        let first_expected =
+            std::fs::read_to_string(dest.join(format!("{first_prefix}_expected_result.txt")))
+                .expect("read first expected result");
+        let second_expected =
+            std::fs::read_to_string(dest.join(format!("{second_prefix}_expected_result.txt")))
+                .expect("read second expected result");
         assert!(
             !first_expected.is_empty(),
             "generated expected result should not be empty"
@@ -1170,9 +1170,10 @@ mod tests {
         assert_eq!(appended_base, "new base\n");
         assert_eq!(appended_contrib1, "new contrib1\n");
         assert_eq!(appended_contrib2, "new contrib2\n");
-        assert!(dest
-            .join(format!("{appended_prefix}_expected_result.txt"))
-            .exists());
+        assert!(
+            dest.join(format!("{appended_prefix}_expected_result.txt"))
+                .exists()
+        );
     }
 
     #[test]

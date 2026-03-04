@@ -40,4 +40,6 @@ mod status;
 
 pub(crate) mod benchmarks;
 
-pub(super) use diff_text::{DiffSyntaxLanguage, diff_syntax_language_for_path};
+pub(super) use diff_text::{
+    DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path, syntax_highlights_for_line,
+};

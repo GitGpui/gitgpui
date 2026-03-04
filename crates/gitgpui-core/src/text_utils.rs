@@ -756,10 +756,7 @@ mod tests {
     #[test]
     fn detect_line_ending_dominant_tie_defaults_to_lf() {
         assert_eq!(
-            detect_line_ending_from_texts(
-                ["a\r\nb\n"],
-                LineEndingDetectionMode::DominantCrlfVsLf,
-            ),
+            detect_line_ending_from_texts(["a\r\nb\n"], LineEndingDetectionMode::DominantCrlfVsLf,),
             "\n"
         );
         assert_eq!(

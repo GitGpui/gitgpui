@@ -205,12 +205,16 @@ fn t6403_merge_delete_vs_modify_conflict() {
     );
     // Remote section should contain the modified uppercase line, not the base line.
     assert!(
-        result.output.contains("non timebo mala, quoniam TU mecum es:"),
+        result
+            .output
+            .contains("non timebo mala, quoniam TU mecum es:"),
         "expected modified remote content in conflict:\n{}",
         result.output
     );
     assert!(
-        !result.output.contains("non timebo mala, quoniam tu mecum es:"),
+        !result
+            .output
+            .contains("non timebo mala, quoniam tu mecum es:"),
         "did not expect unmodified base line in conflict output:\n{}",
         result.output
     );

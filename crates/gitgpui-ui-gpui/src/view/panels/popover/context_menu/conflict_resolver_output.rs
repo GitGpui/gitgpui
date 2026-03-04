@@ -1,26 +1,18 @@
 use super::*;
 
 pub(super) fn model(
-    cursor_line: usize,
+    _cursor_line: usize,
     selected_text: &Option<String>,
-    has_source_a: bool,
-    has_source_b: bool,
-    has_source_c: bool,
-    is_three_way: bool,
+    _has_source_a: bool,
+    _has_source_b: bool,
+    _has_source_c: bool,
+    _is_three_way: bool,
 ) -> ContextMenuModel {
     let has_selection = selected_text.is_some();
     let copy_text = selected_text.clone().unwrap_or_default();
     let cut_text = copy_text.clone();
 
-    let line_label = cursor_line + 1; // 1-based display
-
-    let (label_a, label_b, label_c): (&str, &str, &str) = if is_three_way {
-        ("Base", "Ours", "Theirs")
-    } else {
-        ("Ours", "Theirs", "")
-    };
-
-    let mut items = vec![
+    let items = vec![
         ContextMenuItem::Entry {
             label: "Copy".into(),
             icon: None,
@@ -42,49 +34,7 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverOutputPaste),
         },
-        ContextMenuItem::Separator,
-        ContextMenuItem::Entry {
-            label: format!("Pick line {line_label} from {label_a}").into(),
-            icon: Some("A".into()),
-            shortcut: None,
-            disabled: !has_source_a,
-            action: Box::new(ContextMenuAction::ConflictResolverOutputPickLine {
-                line_ix: cursor_line,
-                choice: if is_three_way {
-                    conflict_resolver::ConflictChoice::Base
-                } else {
-                    conflict_resolver::ConflictChoice::Ours
-                },
-            }),
-        },
-        ContextMenuItem::Entry {
-            label: format!("Pick line {line_label} from {label_b}").into(),
-            icon: Some("B".into()),
-            shortcut: None,
-            disabled: !has_source_b,
-            action: Box::new(ContextMenuAction::ConflictResolverOutputPickLine {
-                line_ix: cursor_line,
-                choice: if is_three_way {
-                    conflict_resolver::ConflictChoice::Ours
-                } else {
-                    conflict_resolver::ConflictChoice::Theirs
-                },
-            }),
-        },
     ];
-
-    if is_three_way {
-        items.push(ContextMenuItem::Entry {
-            label: format!("Pick line {line_label} from {label_c}").into(),
-            icon: Some("C".into()),
-            shortcut: None,
-            disabled: !has_source_c,
-            action: Box::new(ContextMenuAction::ConflictResolverOutputPickLine {
-                line_ix: cursor_line,
-                choice: conflict_resolver::ConflictChoice::Theirs,
-            }),
-        });
-    }
 
     ContextMenuModel::new(items)
 }
@@ -98,8 +48,8 @@ mod tests {
         let selected = Some("hello".to_string());
         let m = model(2, &selected, true, true, true, true);
 
-        // Copy, Cut, Paste, Separator, Pick A, Pick B, Pick C
-        assert_eq!(m.items.len(), 7);
+        // Copy, Cut, Paste
+        assert_eq!(m.items.len(), 3);
 
         // Copy should be enabled with selection
         match &m.items[0] {
@@ -112,43 +62,18 @@ mod tests {
             _ => panic!("expected Copy entry"),
         }
 
-        // Pick line 3 from Base (A in three-way)
-        match &m.items[4] {
-            ContextMenuItem::Entry {
-                label,
-                disabled,
-                icon,
-                ..
-            } => {
-                assert_eq!(label.as_ref(), "Pick line 3 from Base");
-                assert_eq!(icon.as_ref().map(|s| s.as_ref()), Some("A"));
-                assert!(!*disabled);
-            }
-            _ => panic!("expected Pick A entry"),
-        }
-
-        // Pick line 3 from Theirs (C in three-way)
-        match &m.items[6] {
-            ContextMenuItem::Entry {
-                label,
-                disabled,
-                icon,
-                ..
-            } => {
-                assert_eq!(label.as_ref(), "Pick line 3 from Theirs");
-                assert_eq!(icon.as_ref().map(|s| s.as_ref()), Some("C"));
-                assert!(!*disabled);
-            }
-            _ => panic!("expected Pick C entry"),
+        match &m.items[2] {
+            ContextMenuItem::Entry { label, .. } => assert_eq!(label.as_ref(), "Paste"),
+            _ => panic!("expected Paste entry"),
         }
     }
 
     #[test]
-    fn model_two_way_omits_pick_c() {
+    fn model_two_way_has_only_clipboard_actions() {
         let m = model(0, &None, true, true, false, false);
 
-        // Copy, Cut, Paste, Separator, Pick A, Pick B (no Pick C)
-        assert_eq!(m.items.len(), 6);
+        // Copy, Cut, Paste
+        assert_eq!(m.items.len(), 3);
 
         // Copy/Cut disabled without selection
         match &m.items[0] {
@@ -160,40 +85,18 @@ mod tests {
             _ => panic!("expected entry"),
         }
 
-        // Pick A label in two-way uses "Ours"
-        match &m.items[4] {
-            ContextMenuItem::Entry { label, .. } => {
-                assert_eq!(label.as_ref(), "Pick line 1 from Ours");
-            }
-            _ => panic!("expected Pick A entry"),
-        }
-
-        // Pick B label in two-way uses "Theirs"
-        match &m.items[5] {
-            ContextMenuItem::Entry { label, .. } => {
-                assert_eq!(label.as_ref(), "Pick line 1 from Theirs");
-            }
-            _ => panic!("expected Pick B entry"),
+        match &m.items[2] {
+            ContextMenuItem::Entry { label, .. } => assert_eq!(label.as_ref(), "Paste"),
+            _ => panic!("expected entry"),
         }
     }
 
     #[test]
-    fn pick_disabled_when_source_unavailable() {
+    fn paste_is_always_enabled() {
         let m = model(5, &None, false, true, false, true);
 
-        // Pick A disabled
-        match &m.items[4] {
-            ContextMenuItem::Entry { disabled, .. } => assert!(*disabled),
-            _ => panic!("expected entry"),
-        }
-        // Pick B enabled
-        match &m.items[5] {
+        match &m.items[2] {
             ContextMenuItem::Entry { disabled, .. } => assert!(!*disabled),
-            _ => panic!("expected entry"),
-        }
-        // Pick C disabled
-        match &m.items[6] {
-            ContextMenuItem::Entry { disabled, .. } => assert!(*disabled),
             _ => panic!("expected entry"),
         }
     }

@@ -318,3 +318,69 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
         assert_eq!(lines.as_ref(), &vec!["one".to_string(), "two".to_string()]);
     });
 }
+
+#[gpui::test]
+fn switching_active_repo_clears_commit_message_input(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitGpuiView::new(store, events, None, window, cx)
+    });
+
+    let repo_a = gitgpui_state::model::RepoId(41);
+    let repo_b = gitgpui_state::model::RepoId(42);
+    let make_state = |active_repo: gitgpui_state::model::RepoId| {
+        Arc::new(AppState {
+            repos: vec![
+                gitgpui_state::model::RepoState::new_opening(
+                    repo_a,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: std::path::PathBuf::from("/tmp/repo-a"),
+                    },
+                ),
+                gitgpui_state::model::RepoState::new_opening(
+                    repo_b,
+                    gitgpui_core::domain::RepoSpec {
+                        workdir: std::path::PathBuf::from("/tmp/repo-b"),
+                    },
+                ),
+            ],
+            active_repo: Some(active_repo),
+            ..Default::default()
+        })
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let next_state = make_state(repo_a);
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("draft message".to_string(), cx)
+                });
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let next_state = make_state(repo_b);
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        assert_eq!(pane.commit_message_input.read(app).text(), "");
+    });
+}
