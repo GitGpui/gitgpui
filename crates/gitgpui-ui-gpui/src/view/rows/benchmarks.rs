@@ -416,6 +416,246 @@ impl ConflictTwoWaySplitScrollFixture {
     }
 }
 
+pub struct ConflictSearchQueryUpdateFixture {
+    diff_rows: Vec<gitgpui_core::file_diff::FileDiffRow>,
+    diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
+    visible_row_indices: Vec<usize>,
+    conflict_count: usize,
+    language: Option<super::diff_text::DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    theme: AppTheme,
+    stable_cache: HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+    query_cache: HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+    query_cache_query: SharedString,
+}
+
+impl ConflictSearchQueryUpdateFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let theme = AppTheme::zed_ayu_dark();
+        let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
+        let (ours_text, theirs_text) = materialize_two_way_side_texts(&segments);
+        let diff_rows = gitgpui_core::file_diff::side_by_side_rows(&ours_text, &theirs_text);
+        let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+        let (diff_row_conflict_map, _) =
+            conflict_resolver::map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
+        let visible_row_indices = conflict_resolver::build_two_way_visible_indices(
+            &diff_row_conflict_map,
+            &segments,
+            false,
+        );
+        let diff_word_highlights_split =
+            conflict_resolver::compute_two_way_word_highlights(&diff_rows);
+        let syntax_mode = if diff_rows.len() > 4_000 {
+            DiffSyntaxMode::HeuristicOnly
+        } else {
+            DiffSyntaxMode::Auto
+        };
+
+        let mut fixture = Self {
+            diff_rows,
+            diff_word_highlights_split,
+            visible_row_indices,
+            conflict_count: segments
+                .iter()
+                .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
+                .count(),
+            language: diff_syntax_language_for_path("src/conflict.rs"),
+            syntax_mode,
+            theme,
+            stable_cache: HashMap::default(),
+            query_cache: HashMap::default(),
+            query_cache_query: SharedString::default(),
+        };
+        fixture.prewarm_stable_cache();
+        fixture
+    }
+
+    fn prewarm_stable_cache(&mut self) {
+        for row_ix in 0..self.diff_rows.len() {
+            let Some(row) = self.diff_rows.get(row_ix) else {
+                continue;
+            };
+            let (old_word_ranges, new_word_ranges) =
+                two_way_word_ranges_for_row(&self.diff_word_highlights_split, row_ix);
+
+            let _ = Self::split_row_styled(
+                self.theme,
+                &mut self.stable_cache,
+                &mut self.query_cache,
+                row_ix,
+                ConflictPickSide::Ours,
+                row.old.as_deref(),
+                old_word_ranges,
+                "",
+                self.language,
+                self.syntax_mode,
+            );
+            let _ = Self::split_row_styled(
+                self.theme,
+                &mut self.stable_cache,
+                &mut self.query_cache,
+                row_ix,
+                ConflictPickSide::Theirs,
+                row.new.as_deref(),
+                new_word_ranges,
+                "",
+                self.language,
+                self.syntax_mode,
+            );
+        }
+        self.query_cache.clear();
+        self.query_cache_query = SharedString::default();
+    }
+
+    fn sync_query_cache(&mut self, query: &str) {
+        if self.query_cache_query.as_ref() != query {
+            self.query_cache_query = query.to_string().into();
+            self.query_cache.clear();
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn split_row_styled(
+        theme: AppTheme,
+        stable_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        query_cache: &mut HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
+        row_ix: usize,
+        side: ConflictPickSide,
+        text: Option<&str>,
+        word_ranges: &[Range<usize>],
+        query: &str,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
+    ) -> Option<CachedDiffStyledText> {
+        let text = text?;
+        if text.is_empty() {
+            return None;
+        }
+
+        let query = query.trim();
+        let query_active = !query.is_empty();
+        let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
+        let key = (row_ix, side);
+
+        if base_has_style {
+            stable_cache.entry(key).or_insert_with(|| {
+                super::diff_text::build_cached_diff_styled_text(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    syntax_lang,
+                    syntax_mode,
+                    None,
+                )
+            });
+        }
+
+        if query_active {
+            query_cache.entry(key).or_insert_with(|| {
+                if let Some(base) = stable_cache.get(&key) {
+                    super::diff_text::build_cached_diff_query_overlay_styled_text(
+                        theme, base, query,
+                    )
+                } else {
+                    super::diff_text::build_cached_diff_styled_text(
+                        theme,
+                        text,
+                        word_ranges,
+                        query,
+                        syntax_lang,
+                        syntax_mode,
+                        None,
+                    )
+                }
+            });
+            return query_cache.get(&key).cloned();
+        }
+
+        if base_has_style {
+            stable_cache.get(&key).cloned()
+        } else {
+            None
+        }
+    }
+
+    pub fn run_query_update_step(&mut self, query: &str, start: usize, window: usize) -> u64 {
+        if self.visible_row_indices.is_empty() || window == 0 {
+            return 0;
+        }
+
+        self.sync_query_cache(query);
+        let start = start % self.visible_row_indices.len();
+        let end = (start + window).min(self.visible_row_indices.len());
+        let query = self.query_cache_query.as_ref();
+
+        let mut h = DefaultHasher::new();
+        for &row_ix in &self.visible_row_indices[start..end] {
+            row_ix.hash(&mut h);
+            let Some(row) = self.diff_rows.get(row_ix) else {
+                continue;
+            };
+            let (old_word_ranges, new_word_ranges) =
+                two_way_word_ranges_for_row(&self.diff_word_highlights_split, row_ix);
+
+            let old = Self::split_row_styled(
+                self.theme,
+                &mut self.stable_cache,
+                &mut self.query_cache,
+                row_ix,
+                ConflictPickSide::Ours,
+                row.old.as_deref(),
+                old_word_ranges,
+                query,
+                self.language,
+                self.syntax_mode,
+            );
+            if let Some(styled) = old {
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
+            }
+
+            let new = Self::split_row_styled(
+                self.theme,
+                &mut self.stable_cache,
+                &mut self.query_cache,
+                row_ix,
+                ConflictPickSide::Theirs,
+                row.new.as_deref(),
+                new_word_ranges,
+                query,
+                self.language,
+                self.syntax_mode,
+            );
+            if let Some(styled) = new {
+                styled.text_hash.hash(&mut h);
+                styled.highlights_hash.hash(&mut h);
+            }
+        }
+        self.stable_cache.len().hash(&mut h);
+        self.query_cache.len().hash(&mut h);
+        h.finish()
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.visible_row_indices.len()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_count
+    }
+
+    #[cfg(test)]
+    fn stable_cache_entries(&self) -> usize {
+        self.stable_cache.len()
+    }
+
+    #[cfg(test)]
+    fn query_cache_entries(&self) -> usize {
+        self.query_cache.len()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolvedOutputGutterMarker {
     conflict_ix: usize,
@@ -998,6 +1238,39 @@ mod tests {
         let fixture = ConflictTwoWaySplitScrollFixture::new(180, 18);
         let hash_a = fixture.run_scroll_step(17, 40);
         let hash_b = fixture.run_scroll_step(17 + fixture.visible_rows() * 3, 40);
+        assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn conflict_search_query_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictSearchQueryUpdateFixture::new(120, 12);
+        assert_eq!(fixture.conflict_count(), 12);
+        assert!(fixture.visible_rows() > 0);
+        assert!(fixture.stable_cache_entries() > 0);
+    }
+
+    #[test]
+    fn conflict_search_query_fixture_reuses_stable_cache_across_queries() {
+        let mut fixture = ConflictSearchQueryUpdateFixture::new(180, 18);
+        let stable_before = fixture.stable_cache_entries();
+        assert_eq!(fixture.query_cache_entries(), 0);
+
+        let _ = fixture.run_query_update_step("conf", 5, 40);
+        let first_query_cache = fixture.query_cache_entries();
+        assert!(first_query_cache > 0);
+        assert_eq!(fixture.stable_cache_entries(), stable_before);
+
+        let _ = fixture.run_query_update_step("conflict", 5, 40);
+        let second_query_cache = fixture.query_cache_entries();
+        assert!(second_query_cache > 0);
+        assert_eq!(fixture.stable_cache_entries(), stable_before);
+    }
+
+    #[test]
+    fn conflict_search_query_fixture_wraps_start_offsets() {
+        let mut fixture = ConflictSearchQueryUpdateFixture::new(180, 18);
+        let hash_a = fixture.run_query_update_step("shared", 17, 40);
+        let hash_b = fixture.run_query_update_step("shared", 17 + fixture.visible_rows() * 3, 40);
         assert_eq!(hash_a, hash_b);
     }
 
