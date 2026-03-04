@@ -416,6 +416,113 @@ impl ConflictTwoWaySplitScrollFixture {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedOutputGutterMarker {
+    conflict_ix: usize,
+    is_start: bool,
+    is_end: bool,
+    unresolved: bool,
+}
+
+pub struct ConflictResolvedOutputGutterScrollFixture {
+    line_sources: Vec<conflict_resolver::ResolvedLineSource>,
+    markers: Vec<Option<ResolvedOutputGutterMarker>>,
+    active_conflict: usize,
+    conflict_count: usize,
+}
+
+impl ConflictResolvedOutputGutterScrollFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let segments = build_synthetic_three_way_segments(lines, conflict_blocks);
+        let conflict_count = segments
+            .iter()
+            .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
+            .count();
+
+        let (resolved_text, block_ranges) =
+            materialize_resolved_output_with_block_ranges(&segments);
+        let output_lines = conflict_resolver::split_output_lines_for_outline(&resolved_text);
+
+        let (base_text, ours_text, theirs_text) = materialize_three_way_side_texts(&segments);
+        let base_lines = split_lines_shared(&base_text);
+        let ours_lines = split_lines_shared(&ours_text);
+        let theirs_lines = split_lines_shared(&theirs_text);
+
+        let meta = conflict_resolver::compute_resolved_line_provenance(
+            &output_lines,
+            &conflict_resolver::SourceLines {
+                a: &base_lines,
+                b: &ours_lines,
+                c: &theirs_lines,
+            },
+        );
+        let line_sources = meta
+            .into_iter()
+            .map(|entry| entry.source)
+            .collect::<Vec<_>>();
+        let markers =
+            build_synthetic_resolved_output_markers(&segments, &block_ranges, output_lines.len());
+
+        Self {
+            line_sources,
+            markers,
+            active_conflict: conflict_count / 2,
+            conflict_count,
+        }
+    }
+
+    pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
+        if self.line_sources.is_empty() || window == 0 {
+            return 0;
+        }
+        let start = start % self.line_sources.len();
+        let end = (start + window).min(self.line_sources.len());
+
+        let mut h = DefaultHasher::new();
+        for line_ix in start..end {
+            let source = self
+                .line_sources
+                .get(line_ix)
+                .copied()
+                .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
+            source.hash(&mut h);
+            source.badge_char().hash(&mut h);
+            (line_ix + 1).hash(&mut h);
+
+            let marker = self.markers.get(line_ix).copied().flatten();
+            (source == conflict_resolver::ResolvedLineSource::Manual && marker.is_none())
+                .hash(&mut h);
+
+            if let Some(marker) = marker {
+                marker.conflict_ix.hash(&mut h);
+                marker.is_start.hash(&mut h);
+                marker.is_end.hash(&mut h);
+                marker.unresolved.hash(&mut h);
+                let lane_state = if marker.unresolved {
+                    0u8
+                } else if marker.conflict_ix == self.active_conflict {
+                    1u8
+                } else {
+                    2u8
+                };
+                lane_state.hash(&mut h);
+            } else {
+                255u8.hash(&mut h);
+            }
+        }
+
+        h.finish()
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.line_sources.len()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_count
+    }
+}
+
 fn build_synthetic_repo_state(
     local_branches: usize,
     remote_branches: usize,
@@ -747,6 +854,89 @@ fn materialize_two_way_side_texts(segments: &[ConflictSegment]) -> (String, Stri
     (ours, theirs)
 }
 
+fn materialize_resolved_output_with_block_ranges(
+    segments: &[ConflictSegment],
+) -> (String, Vec<Range<usize>>) {
+    let mut output = String::new();
+    let mut block_byte_ranges = Vec::new();
+
+    for segment in segments {
+        let start = output.len();
+        match segment {
+            ConflictSegment::Text(text) => output.push_str(text),
+            ConflictSegment::Block(block) => {
+                let rendered =
+                    conflict_resolver::generate_resolved_text(&[ConflictSegment::Block(
+                        block.clone(),
+                    )]);
+                output.push_str(&rendered);
+                block_byte_ranges.push(start..output.len());
+            }
+        }
+    }
+
+    let block_ranges = block_byte_ranges
+        .into_iter()
+        .map(|byte_range| {
+            let start_line = output[..byte_range.start]
+                .bytes()
+                .filter(|&byte| byte == b'\n')
+                .count();
+            let line_count = conflict_resolver::split_output_lines_for_outline(
+                &output[byte_range.start..byte_range.end],
+            )
+            .len();
+            start_line..start_line.saturating_add(line_count)
+        })
+        .collect();
+
+    (output, block_ranges)
+}
+
+fn build_synthetic_resolved_output_markers(
+    segments: &[ConflictSegment],
+    block_ranges: &[Range<usize>],
+    output_line_count: usize,
+) -> Vec<Option<ResolvedOutputGutterMarker>> {
+    let mut markers = vec![None; output_line_count];
+    if output_line_count == 0 {
+        return markers;
+    }
+
+    let mut block_ix = 0usize;
+    for segment in segments {
+        let ConflictSegment::Block(block) = segment else {
+            continue;
+        };
+        let Some(range) = block_ranges.get(block_ix) else {
+            break;
+        };
+        if range.start < range.end {
+            let start = range.start.min(output_line_count);
+            let end = range.end.min(output_line_count);
+            for (line_ix, marker_slot) in markers.iter_mut().enumerate().take(end).skip(start) {
+                *marker_slot = Some(ResolvedOutputGutterMarker {
+                    conflict_ix: block_ix,
+                    is_start: line_ix == range.start,
+                    is_end: line_ix + 1 == range.end,
+                    unresolved: !block.resolved,
+                });
+            }
+        } else {
+            let anchor = range.start.min(output_line_count.saturating_sub(1));
+            markers[anchor] = Some(ResolvedOutputGutterMarker {
+                conflict_ix: block_ix,
+                is_start: true,
+                is_end: true,
+                unresolved: !block.resolved,
+            });
+        }
+        block_ix = block_ix.saturating_add(1);
+    }
+
+    markers
+}
+
 fn split_lines_shared(text: &str) -> Vec<SharedString> {
     if text.is_empty() {
         return Vec::new();
@@ -806,6 +996,21 @@ mod tests {
     #[test]
     fn conflict_two_way_fixture_wraps_start_offsets() {
         let fixture = ConflictTwoWaySplitScrollFixture::new(180, 18);
+        let hash_a = fixture.run_scroll_step(17, 40);
+        let hash_b = fixture.run_scroll_step(17 + fixture.visible_rows() * 3, 40);
+        assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn conflict_resolved_output_gutter_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictResolvedOutputGutterScrollFixture::new(120, 12);
+        assert_eq!(fixture.conflict_count(), 12);
+        assert!(fixture.visible_rows() > 0);
+    }
+
+    #[test]
+    fn conflict_resolved_output_gutter_fixture_wraps_start_offsets() {
+        let fixture = ConflictResolvedOutputGutterScrollFixture::new(180, 18);
         let hash_a = fixture.run_scroll_step(17, 40);
         let hash_b = fixture.run_scroll_step(17 + fixture.visible_rows() * 3, 40);
         assert_eq!(hash_a, hash_b);
