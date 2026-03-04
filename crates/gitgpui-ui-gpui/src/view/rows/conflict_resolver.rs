@@ -864,7 +864,7 @@ impl MainPaneView {
     fn render_conflict_compare_split_row(
         &mut self,
         row_ix: usize,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
@@ -955,6 +955,41 @@ impl MainPaneView {
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
 
         let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
+        let left_fg = if row.old.is_some() {
+            theme.colors.text
+        } else {
+            theme.colors.text_muted
+        };
+        let right_fg = if row.new.is_some() {
+            theme.colors.text
+        } else {
+            theme.colors.text_muted
+        };
+
+        if self.conflict_canvas_rows_enabled {
+            let min_width = left_col_w + right_col_w + px(PANE_RESIZE_HANDLE_PX);
+            return conflict_canvas::split_conflict_row_canvas(
+                theme,
+                cx.entity(),
+                row_ix,
+                row_ix,
+                min_width,
+                left_col_w,
+                right_col_w,
+                line_number_string(row.old_line),
+                line_number_string(row.new_line),
+                left_bg,
+                right_bg,
+                left_fg,
+                right_fg,
+                left_text,
+                right_text,
+                left_styled,
+                right_styled,
+                show_ws,
+                None,
+            );
+        }
 
         let left = div()
             .id(("conflict_compare_split_ours", row_ix))
@@ -967,11 +1002,7 @@ impl MainPaneView {
             .gap_2()
             .text_xs()
             .bg(left_bg)
-            .text_color(if row.old.is_some() {
-                theme.colors.text
-            } else {
-                theme.colors.text_muted
-            })
+            .text_color(left_fg)
             .whitespace_nowrap()
             .child(
                 div()
@@ -997,11 +1028,7 @@ impl MainPaneView {
             .gap_2()
             .text_xs()
             .bg(right_bg)
-            .text_color(if row.new.is_some() {
-                theme.colors.text
-            } else {
-                theme.colors.text_muted
-            })
+            .text_color(right_fg)
             .whitespace_nowrap()
             .child(
                 div()
@@ -1037,7 +1064,7 @@ impl MainPaneView {
     fn render_conflict_compare_inline_row(
         &mut self,
         ix: usize,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
@@ -1085,13 +1112,33 @@ impl MainPaneView {
             .flatten();
 
         let bg = inline_row_bg(theme, row.kind, row.side);
-        let prefix = match row.kind {
+        let prefix: SharedString = match row.kind {
             gitgpui_core::domain::DiffLineKind::Add => "+",
             gitgpui_core::domain::DiffLineKind::Remove => "-",
             gitgpui_core::domain::DiffLineKind::Context => " ",
             gitgpui_core::domain::DiffLineKind::Header => " ",
             gitgpui_core::domain::DiffLineKind::Hunk => " ",
-        };
+        }
+        .into();
+
+        if self.conflict_canvas_rows_enabled {
+            return conflict_canvas::inline_conflict_row_canvas(
+                theme,
+                cx.entity(),
+                ix,
+                ix,
+                px(0.0),
+                line_number_string(row.old_line),
+                line_number_string(row.new_line),
+                prefix.clone(),
+                bg,
+                theme.colors.text,
+                row.content.clone().into(),
+                styled,
+                show_ws,
+                None,
+            );
+        }
 
         div()
             .id(("conflict_compare_inline", ix))

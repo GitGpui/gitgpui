@@ -1044,6 +1044,22 @@ mod tests {
     }
 
     #[test]
+    fn split_layout_preserves_right_target_by_shrinking_left() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(200.0), px(20.0)));
+        let handle_width = px(10.0);
+        let (left, handle, right) =
+            split_columns_with_widths(bounds, px(120.0), px(120.0), handle_width);
+
+        assert_eq!(left.size.width, px(70.0));
+        assert_eq!(handle.size.width, handle_width);
+        assert_eq!(right.size.width, px(120.0));
+        assert_eq!(
+            left.size.width + handle.size.width + right.size.width,
+            bounds.size.width
+        );
+    }
+
+    #[test]
     fn prepare_text_cell_keeps_highlighted_styled_text_unmodified() {
         let style = gpui::HighlightStyle::default();
         let styled = CachedDiffStyledText {
