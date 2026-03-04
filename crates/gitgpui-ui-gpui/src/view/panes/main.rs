@@ -1533,6 +1533,7 @@ pub(in super::super) struct MainPaneView {
     pub(in super::super) conflict_diff_split_ratio: f32,
     pub(in super::super) conflict_diff_split_resize: Option<ConflictDiffSplitResizeState>,
     pub(in super::super) conflict_diff_split_col_widths: [Pixels; 2],
+    pub(in super::super) conflict_canvas_rows_enabled: bool,
     pub(in super::super) conflict_diff_segments_cache_split:
         HashMap<(usize, ConflictPickSide), CachedDiffStyledText>,
     pub(in super::super) conflict_diff_segments_cache_inline: HashMap<usize, CachedDiffStyledText>,
@@ -1562,6 +1563,19 @@ enum DiffTextAutoscrollTarget {
     DiffSplitRight,
     WorktreePreview,
     ConflictResolvedPreview,
+}
+
+fn parse_conflict_canvas_rows_env(value: &str) -> bool {
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
+fn conflict_canvas_rows_enabled_from_env() -> bool {
+    std::env::var("GITGPUI_CONFLICT_CANVAS_ROWS")
+        .ok()
+        .is_none_or(|value| parse_conflict_canvas_rows_env(&value))
 }
 
 impl MainPaneView {
@@ -1916,6 +1930,7 @@ impl MainPaneView {
             conflict_diff_split_ratio: 0.5,
             conflict_diff_split_resize: None,
             conflict_diff_split_col_widths: [px(0.0); 2],
+            conflict_canvas_rows_enabled: conflict_canvas_rows_enabled_from_env(),
             conflict_diff_segments_cache_split: HashMap::default(),
             conflict_diff_segments_cache_inline: HashMap::default(),
             conflict_three_way_segments_cache: HashMap::default(),
@@ -5185,8 +5200,9 @@ mod tests {
         build_resolved_output_conflict_markers, clear_diff_selection_action,
         conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
         focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
-        replace_output_lines_in_range, resolved_output_marker_for_line,
-        resolved_output_markers_for_text, split_target_conflict_block_into_subchunks,
+        parse_conflict_canvas_rows_env, replace_output_lines_in_range,
+        resolved_output_marker_for_line, resolved_output_markers_for_text,
+        split_target_conflict_block_into_subchunks,
     };
     use crate::view::GitGpuiViewMode;
     use crate::view::conflict_resolver::{
@@ -5219,6 +5235,23 @@ mod tests {
     #[test]
     fn focused_mergetool_save_exit_code_is_canceled_when_unresolved_remain() {
         assert_eq!(focused_mergetool_save_exit_code(3, 2), 1);
+    }
+
+    #[test]
+    fn parse_conflict_canvas_rows_env_accepts_truthy_values() {
+        assert!(parse_conflict_canvas_rows_env("1"));
+        assert!(parse_conflict_canvas_rows_env("true"));
+        assert!(parse_conflict_canvas_rows_env("on"));
+        assert!(parse_conflict_canvas_rows_env("yes"));
+        assert!(parse_conflict_canvas_rows_env("maybe"));
+    }
+
+    #[test]
+    fn parse_conflict_canvas_rows_env_rejects_falsey_values() {
+        assert!(!parse_conflict_canvas_rows_env("0"));
+        assert!(!parse_conflict_canvas_rows_env("false"));
+        assert!(!parse_conflict_canvas_rows_env("off"));
+        assert!(!parse_conflict_canvas_rows_env("no"));
     }
 
     #[test]

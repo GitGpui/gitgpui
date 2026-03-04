@@ -7,7 +7,7 @@
 - P0
   - ✅ Resolved output gutter virtualization (`uniform_list` + shared `conflict_resolved_preview_scroll`)
   - ✅ Render-time recomputation in conflict hot paths (two-way + three-way line/conflict maps precomputed in state; render/nav now use O(1) lookups)
-  - ⬜ Conflict rows on canvas fast path (fallback renderer still primary)
+  - 🔧 Conflict rows on canvas fast path (two-way resolver split/inline rows now on keyed canvas behind `GITGPUI_CONFLICT_CANVAS_ROWS`; three-way remains on fallback)
 - P1
   - ⬜ Syntax mode/language caching in conflict renderers
   - ⬜ Cache invalidation scope reduction (search typing + split resize)
@@ -17,12 +17,16 @@
 ### Phase Status
 
 - ✅ Phase 1 (3/3 complete: gutter virtualization + two-way/three-way conflict map precompute + render-time map/range rebuild removal)
-- ⬜ Phase 2
+- 🔧 Phase 2 (1/3 complete: two-way conflict resolver split/inline keyed canvas path + fallback flag; three-way and compare rows pending)
 - ⬜ Phase 3
 - ⬜ Phase 4
 
 ### Benchmark Notes
 
+- 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
+  - before: `diff_scroll/style_window/200` = `2.1486 ms .. 2.1521 ms`
+  - after: `diff_scroll/style_window/200` = `2.1565 ms .. 2.1669 ms`
+  - note: criterion reported "Change within noise threshold"; benchmark remains generic diff styling and does not isolate two-way conflict canvas row rendering directly.
 - 2026-03-04 (`cargo bench -p gitgpui-ui-gpui --bench performance -- diff_scroll/style_window`)
   - before: `diff_scroll/style_window/200` = `2.1615 ms .. 2.1768 ms`
   - after: `diff_scroll/style_window/200` = `2.1763 ms .. 2.1908 ms`
@@ -136,6 +140,8 @@ State integration anchors:
 
 ### P0: Conflict rows are not on the canvas fast path
 
+Status: 🔧 Partially implemented (iteration 4, 2026-03-04): two-way conflict resolver split/inline rows now use keyed canvas via `rows/conflict_canvas.rs`, guarded by `GITGPUI_CONFLICT_CANVAS_ROWS` fallback (enabled by default). Three-way rows are still on the fallback renderer.
+
 Evidence:
 
 - conflict rows use `div` + `StyledText` through `conflict_diff_text_cell(...)`
@@ -157,6 +163,12 @@ Fix:
 - create `conflict_canvas.rs` and port conflict split/inline/three-way line rendering to keyed canvas
 - preserve interactions via hitboxes (selection, context menus, hover state)
 - keep current non-canvas renderer behind a temporary fallback flag until parity is verified
+
+Implementation anchors (current partial state):
+
+- canvas module: `crates/gitgpui-ui-gpui/src/view/rows/conflict_canvas.rs`
+- two-way resolver integration: `crates/gitgpui-ui-gpui/src/view/rows/conflict_resolver.rs`
+- fallback flag/state: `crates/gitgpui-ui-gpui/src/view/panes/main.rs`
 
 ### P1: Syntax mode and language resolution are too expensive in conflict renderers
 
