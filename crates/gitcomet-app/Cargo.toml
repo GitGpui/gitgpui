@@ -1,0 +1,25 @@
+[package]
+name = "gitcomet-app"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["ui-gpui", "gix"]
+ui = ["dep:gitcomet-ui"]
+ui-gpui = ["ui", "dep:gitcomet-ui-gpui"]
+gix = ["dep:gitcomet-git-gix"]
+
+[dependencies]
+clap = { workspace = true }
+gitcomet-core = { workspace = true }
+gitcomet-git = { workspace = true }
+gitcomet-git-gix = { workspace = true, optional = true }
+gitcomet-ui = { workspace = true, optional = true }
+gitcomet-ui-gpui = { workspace = true, optional = true }
+mimalloc = { workspace = true }
+tempfile = { workspace = true }

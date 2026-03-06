@@ -1,0 +1,16 @@
+[package]
+name = "gitcomet-git-gix"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+gitcomet-core = { workspace = true }
+gix = { workspace = true }
+gix-diff = { workspace = true }
+rustc-hash = { workspace = true }
+tempfile = { workspace = true }

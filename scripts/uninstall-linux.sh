@@ -17,12 +17,12 @@ bindir="${prefix}/bin"
 appdir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 icondir="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/scalable/apps"
 
-rm -f "${bindir}/gitgpui-app"
-rm -f "${appdir}/gitgpui.desktop"
+rm -f "${bindir}/gitcomet-app"
+rm -f "${appdir}/gitcomet.desktop"
 rm -f "${icondir}/gitcomet-512.svg"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
 
-echo "Uninstalled GitGpui desktop integration from ${prefix} and ~/.local/share."
+echo "Uninstalled GitComet desktop integration from ${prefix} and ~/.local/share."
 

@@ -2245,21 +2245,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitgpui-app"
+name = "gitcomet-app"
 version = "0.1.0"
 dependencies = [
  "clap",
- "gitgpui-core",
- "gitgpui-git",
- "gitgpui-git-gix",
- "gitgpui-ui",
- "gitgpui-ui-gpui",
+ "gitcomet-core",
+ "gitcomet-git",
+ "gitcomet-git-gix",
+ "gitcomet-ui",
+ "gitcomet-ui-gpui",
  "mimalloc",
  "tempfile",
 ]
 
 [[package]]
-name = "gitgpui-core"
+name = "gitcomet-core"
 version = "0.1.0"
 dependencies = [
  "regex",
@@ -2268,17 +2268,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitgpui-git"
+name = "gitcomet-git"
 version = "0.1.0"
 dependencies = [
- "gitgpui-core",
+ "gitcomet-core",
 ]
 
 [[package]]
-name = "gitgpui-git-gix"
+name = "gitcomet-git-gix"
 version = "0.1.0"
 dependencies = [
- "gitgpui-core",
+ "gitcomet-core",
  "gix",
  "gix-diff",
  "rustc-hash 2.1.1",
@@ -2286,10 +2286,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitgpui-state"
+name = "gitcomet-state"
 version = "0.1.0"
 dependencies = [
- "gitgpui-core",
+ "gitcomet-core",
  "globset",
  "notify",
  "rustc-hash 2.1.1",
@@ -2299,20 +2299,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitgpui-ui"
+name = "gitcomet-ui"
 version = "0.1.0"
 dependencies = [
- "gitgpui-core",
+ "gitcomet-core",
 ]
 
 [[package]]
-name = "gitgpui-ui-gpui"
+name = "gitcomet-ui-gpui"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "gitgpui-core",
- "gitgpui-state",
- "gitgpui-ui",
+ "gitcomet-core",
+ "gitcomet-state",
+ "gitcomet-ui",
  "gpui",
  "rustc-hash 2.1.1",
  "serde",

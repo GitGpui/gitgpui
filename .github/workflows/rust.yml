@@ -8,7 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # Build gitgpui-app in headless mode (no GPUI system deps required).
+  # Build gitcomet-app in headless mode (no GPUI system deps required).
   # The UI-only code paths are behind #[cfg(feature = "ui-gpui")] guards.
   APP_FEATURES: "--no-default-features --features gix"
 
@@ -19,9 +19,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Clippy (core + state + backend)
-      run: cargo clippy -p gitgpui-core -p gitgpui-state -p gitgpui-git-gix -- -D warnings
+      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -- -D warnings
     - name: Clippy (app — headless)
-      run: cargo clippy -p gitgpui-app $APP_FEATURES -- -D warnings
+      run: cargo clippy -p gitcomet-app $APP_FEATURES -- -D warnings
 
   build:
     name: Build
@@ -29,9 +29,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build (core + state + backend)
-      run: cargo build -p gitgpui-core -p gitgpui-state -p gitgpui-git-gix --verbose
+      run: cargo build -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix --verbose
     - name: Build (app — headless)
-      run: cargo build -p gitgpui-app $APP_FEATURES --verbose
+      run: cargo build -p gitcomet-app $APP_FEATURES --verbose
 
   # Core merge algorithm correctness — Phase 1A/1B/1C portability tests
   merge-algorithm:
@@ -41,15 +41,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: t6403/t6427 merge algorithm portability
-      run: cargo test -p gitgpui-core --test merge_algorithm --verbose
+      run: cargo test -p gitcomet-core --test merge_algorithm --verbose
     - name: Conflict label formatting (Phase 1C)
-      run: cargo test -p gitgpui-core --test conflict_label_formatting --verbose
+      run: cargo test -p gitcomet-core --test conflict_label_formatting --verbose
     - name: Meld algorithm parity (Phase 5)
-      run: cargo test -p gitgpui-core --test meld_algorithm_tests --verbose
+      run: cargo test -p gitcomet-core --test meld_algorithm_tests --verbose
     - name: Core library unit tests
-      run: cargo test -p gitgpui-core --lib --verbose
+      run: cargo test -p gitcomet-core --lib --verbose
     - name: State management (conflict session, reducers, effects)
-      run: cargo test -p gitgpui-state --verbose
+      run: cargo test -p gitcomet-state --verbose
 
   # Fixture harness and corpus — Phase 2/3A regression gates
   merge-regression:
@@ -59,11 +59,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: KDiff3-style fixture harness (Phase 2)
-      run: cargo test -p gitgpui-core --test merge_fixture_harness --verbose
+      run: cargo test -p gitcomet-core --test merge_fixture_harness --verbose
     - name: Permutation corpus (Phase 3A — 243 sampled cases)
-      run: cargo test -p gitgpui-core --test merge_permutation_corpus --verbose
+      run: cargo test -p gitcomet-core --test merge_permutation_corpus --verbose
     - name: Real-world merge extraction (Phase 3C)
-      run: cargo test -p gitgpui-core --test merge_git_extraction --verbose
+      run: cargo test -p gitcomet-core --test merge_git_extraction --verbose
 
   # E2E integration with git mergetool/difftool — Phase 4A/4B
   tool-integration:
@@ -72,16 +72,16 @@ jobs:
     needs: build
     steps:
     - uses: actions/checkout@v4
-    - name: Build gitgpui-app binary (headless)
-      run: cargo build -p gitgpui-app $APP_FEATURES
+    - name: Build gitcomet-app binary (headless)
+      run: cargo build -p gitcomet-app $APP_FEATURES
     - name: Git mergetool E2E (Phase 4A — t7610 parity)
-      run: cargo test -p gitgpui-app $APP_FEATURES --test mergetool_git_integration --verbose
+      run: cargo test -p gitcomet-app $APP_FEATURES --test mergetool_git_integration --verbose
     - name: Git difftool E2E (Phase 4B — t7800 parity)
-      run: cargo test -p gitgpui-app $APP_FEATURES --test difftool_git_integration --verbose
+      run: cargo test -p gitcomet-app $APP_FEATURES --test difftool_git_integration --verbose
     - name: Standalone tool-mode E2E (exit codes + validation)
-      run: cargo test -p gitgpui-app $APP_FEATURES --test standalone_tool_mode_integration --verbose
+      run: cargo test -p gitcomet-app $APP_FEATURES --test standalone_tool_mode_integration --verbose
     - name: Mergetool/difftool runtime unit tests (bin target)
-      run: cargo test -p gitgpui-app $APP_FEATURES --bin gitgpui-app --verbose
+      run: cargo test -p gitcomet-app $APP_FEATURES --bin gitcomet-app --verbose
 
   # Backend integration — mergetool launcher, status, conflict checkout
   backend-integration:
@@ -91,7 +91,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Status and mergetool backend integration
-      run: cargo test -p gitgpui-git-gix --verbose
+      run: cargo test -p gitcomet-git-gix --verbose
 
   performance-budgets:
     name: Conflict performance budgets (alert-only)
@@ -101,9 +101,9 @@ jobs:
     - uses: actions/checkout@v4
     - name: Benchmark conflict scroll/search/resize hot paths
       run: |
-        cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_three_way_scroll/style_window
-        cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_two_way_split_scroll/window_200
-        cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_search_query_update/window/200
-        cargo bench -p gitgpui-ui-gpui --bench performance -- conflict_split_resize_step/window/200
+        cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_three_way_scroll/style_window
+        cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_two_way_split_scroll/window_200
+        cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_search_query_update/window/200
+        cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_split_resize_step/window/200
     - name: Emit budget report (alerting mode)
-      run: cargo run -p gitgpui-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion
+      run: cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion

@@ -1,4 +1,4 @@
-valgrind --tool=callgrind --callgrind-out-file=callgrind.out --dump-instr=yes --instr-atstart=no --collect-jumps=yes --sigill-diagnostics=no --error-limit=no ./target/release-with-debug/gitgpui-app
+valgrind --tool=callgrind --callgrind-out-file=callgrind.out --dump-instr=yes --instr-atstart=no --collect-jumps=yes --sigill-diagnostics=no --error-limit=no ./target/release-with-debug/gitcomet-app
 
 callgrind_control -i on
 

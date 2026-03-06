@@ -1,38 +1,38 @@
 [workspace]
 resolver = "3"
 members = [
-  "crates/gitgpui-app",
-  "crates/gitgpui-core",
-  "crates/gitgpui-git",
-  "crates/gitgpui-git-gix",
-  "crates/gitgpui-state",
-  "crates/gitgpui-ui",
-  "crates/gitgpui-ui-gpui",
+  "crates/gitcomet-app",
+  "crates/gitcomet-core",
+  "crates/gitcomet-git",
+  "crates/gitcomet-git-gix",
+  "crates/gitcomet-state",
+  "crates/gitcomet-ui",
+  "crates/gitcomet-ui-gpui",
 ]
 
 default-members = [
-  "crates/gitgpui-app",
-  "crates/gitgpui-core",
-  "crates/gitgpui-git",
-  "crates/gitgpui-git-gix",
-  "crates/gitgpui-state",
-  "crates/gitgpui-ui",
-  "crates/gitgpui-ui-gpui",
+  "crates/gitcomet-app",
+  "crates/gitcomet-core",
+  "crates/gitcomet-git",
+  "crates/gitcomet-git-gix",
+  "crates/gitcomet-state",
+  "crates/gitcomet-ui",
+  "crates/gitcomet-ui-gpui",
 ]
 
 [workspace.package]
 edition = "2024"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/GitGpui/gitgpui"
+repository = "https://github.com/GitComet/gitcomet"
 
 [workspace.dependencies]
 # Internal crates
-gitgpui-core = { path = "crates/gitgpui-core" }
-gitgpui-git = { path = "crates/gitgpui-git" }
-gitgpui-git-gix = { path = "crates/gitgpui-git-gix" }
-gitgpui-state = { path = "crates/gitgpui-state" }
-gitgpui-ui = { path = "crates/gitgpui-ui" }
-gitgpui-ui-gpui = { path = "crates/gitgpui-ui-gpui" }
+gitcomet-core = { path = "crates/gitcomet-core" }
+gitcomet-git = { path = "crates/gitcomet-git" }
+gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
+gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-ui = { path = "crates/gitcomet-ui" }
+gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui" }
 
 # External crates
 clap = { version = "4", features = ["derive"] }

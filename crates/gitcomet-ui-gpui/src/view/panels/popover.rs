@@ -1,0 +1,2607 @@
+use super::*;
+
+mod app_menu;
+mod blame;
+mod branch_picker;
+mod checkout_remote_branch_prompt;
+mod clone_repo;
+mod conflict_save_stage_confirm;
+mod context_menu;
+mod create_branch;
+mod create_tag_prompt;
+mod delete_remote_branch_confirm;
+mod diff_hunks;
+mod discard_changes_confirm;
+mod file_history;
+mod fingerprint;
+mod force_delete_branch_confirm;
+mod force_push_confirm;
+mod merge_abort_confirm;
+mod pull_reconcile_prompt;
+mod push_set_upstream_prompt;
+mod rebase_prompt;
+mod remote_add_prompt;
+mod remote_branch_delete_picker;
+mod remote_edit_url_prompt;
+mod remote_remove_confirm;
+mod remote_remove_picker;
+mod remote_url_picker;
+mod repo_picker;
+mod reset_prompt;
+mod search_inputs;
+mod settings;
+mod stash_prompt;
+mod submodule_add_prompt;
+mod submodule_open_picker;
+mod submodule_remove_confirm;
+mod submodule_remove_picker;
+mod worktree_add_prompt;
+mod worktree_open_picker;
+mod worktree_remove_confirm;
+mod worktree_remove_picker;
+
+#[derive(Clone, Debug)]
+enum PopoverAnchor {
+    Point(Point<Pixels>),
+    Bounds(Bounds<Pixels>),
+}
+
+pub(in super::super) struct PopoverHost {
+    store: Arc<AppStore>,
+    state: Arc<AppState>,
+    theme: AppTheme,
+    date_time_format: DateTimeFormat,
+    timezone: Timezone,
+    settings_date_format_open: bool,
+    settings_timezone_open: bool,
+    _ui_model_subscription: gpui::Subscription,
+    _create_branch_input_subscription: gpui::Subscription,
+    _stash_message_input_subscription: gpui::Subscription,
+    notify_fingerprint: u64,
+    root_view: WeakEntity<GitCometView>,
+    toast_host: WeakEntity<ToastHost>,
+    main_pane: Entity<MainPaneView>,
+    details_pane: Entity<DetailsPaneView>,
+
+    popover: Option<PopoverKind>,
+    popover_anchor: Option<PopoverAnchor>,
+    context_menu_focus_handle: FocusHandle,
+    context_menu_selected_ix: Option<usize>,
+
+    repo_picker_search_input: Option<Entity<components::TextInput>>,
+    branch_picker_search_input: Option<Entity<components::TextInput>>,
+    remote_picker_search_input: Option<Entity<components::TextInput>>,
+    file_history_search_input: Option<Entity<components::TextInput>>,
+    worktree_picker_search_input: Option<Entity<components::TextInput>>,
+    submodule_picker_search_input: Option<Entity<components::TextInput>>,
+    diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
+
+    clone_repo_url_input: Entity<components::TextInput>,
+    clone_repo_parent_dir_input: Entity<components::TextInput>,
+    rebase_onto_input: Entity<components::TextInput>,
+    create_tag_input: Entity<components::TextInput>,
+    remote_name_input: Entity<components::TextInput>,
+    remote_url_input: Entity<components::TextInput>,
+    remote_url_edit_input: Entity<components::TextInput>,
+    create_branch_input: Entity<components::TextInput>,
+    stash_message_input: Entity<components::TextInput>,
+    push_upstream_branch_input: Entity<components::TextInput>,
+    worktree_path_input: Entity<components::TextInput>,
+    worktree_ref_input: Entity<components::TextInput>,
+    submodule_url_input: Entity<components::TextInput>,
+    submodule_path_input: Entity<components::TextInput>,
+
+    blame_scroll: UniformListScrollHandle,
+}
+
+impl PopoverHost {
+    fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.title_bar.update(cx, |title_bar, cx| {
+                    title_bar.set_app_menu_open(app_menu_open, cx);
+                });
+            });
+        });
+    }
+
+    fn clear_active_context_menu_invoker(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_active_context_menu_invoker(None, cx);
+            });
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in super::super) fn new(
+        store: Arc<AppStore>,
+        ui_model: Entity<AppUiModel>,
+        theme: AppTheme,
+        date_time_format: DateTimeFormat,
+        timezone: Timezone,
+        root_view: WeakEntity<GitCometView>,
+        toast_host: WeakEntity<ToastHost>,
+        main_pane: Entity<MainPaneView>,
+        details_pane: Entity<DetailsPaneView>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        let state = Arc::clone(&ui_model.read(cx).state);
+        let subscription = cx.observe(&ui_model, |this, model, cx| {
+            this.state = Arc::clone(&model.read(cx).state);
+
+            let Some(popover) = this.popover.as_ref() else {
+                return;
+            };
+
+            let next_fingerprint = fingerprint::notify_fingerprint(&this.state, popover);
+            if next_fingerprint != this.notify_fingerprint {
+                this.notify_fingerprint = next_fingerprint;
+                cx.notify();
+            }
+        });
+
+        let clone_repo_url_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let clone_repo_parent_dir_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/parent/folder".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let rebase_onto_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "origin/main".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let create_tag_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "v1.0.0".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_name_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "origin".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_url_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_url_edit_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let create_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "branch-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let stash_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Stash message".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let create_branch_input_subscription = cx.observe(&create_branch_input, |this, _, cx| {
+            if matches!(this.popover, Some(PopoverKind::CreateBranch)) {
+                cx.notify();
+            }
+        });
+
+        let stash_message_input_subscription = cx.observe(&stash_message_input, |this, _, cx| {
+            if matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+                cx.notify();
+            }
+        });
+
+        let push_upstream_branch_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "branch-name".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let worktree_path_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/worktree".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let worktree_ref_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "branch-or-commit".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_url_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let submodule_path_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "path/in/repo".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+
+        Self {
+            store,
+            state,
+            theme,
+            date_time_format,
+            timezone,
+            settings_date_format_open: false,
+            settings_timezone_open: false,
+            _ui_model_subscription: subscription,
+            _create_branch_input_subscription: create_branch_input_subscription,
+            _stash_message_input_subscription: stash_message_input_subscription,
+            notify_fingerprint: 0,
+            root_view,
+            toast_host,
+            main_pane,
+            details_pane,
+            popover: None,
+            popover_anchor: None,
+            context_menu_focus_handle,
+            context_menu_selected_ix: None,
+            repo_picker_search_input: None,
+            branch_picker_search_input: None,
+            remote_picker_search_input: None,
+            file_history_search_input: None,
+            worktree_picker_search_input: None,
+            submodule_picker_search_input: None,
+            diff_hunk_picker_search_input: None,
+            clone_repo_url_input,
+            clone_repo_parent_dir_input,
+            rebase_onto_input,
+            create_tag_input,
+            remote_name_input,
+            remote_url_input,
+            remote_url_edit_input,
+            create_branch_input,
+            stash_message_input,
+            push_upstream_branch_input,
+            worktree_path_input,
+            worktree_ref_input,
+            submodule_url_input,
+            submodule_path_input,
+            blame_scroll: UniformListScrollHandle::default(),
+        }
+    }
+
+    pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+        self.theme = theme;
+
+        self.clone_repo_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.clone_repo_parent_dir_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.rebase_onto_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.create_tag_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_name_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.remote_url_edit_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.create_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.stash_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.push_upstream_branch_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.worktree_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.worktree_ref_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_url_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.submodule_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+
+        if let Some(input) = &self.repo_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.branch_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.remote_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.file_history_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.worktree_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.submodule_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+        if let Some(input) = &self.diff_hunk_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
+
+        cx.notify();
+    }
+
+    pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.popover = None;
+        self.popover_anchor = None;
+        self.context_menu_selected_ix = None;
+        self.notify_fingerprint = 0;
+        self.sync_titlebar_app_menu_state(cx);
+        self.clear_active_context_menu_invoker(cx);
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn is_open(&self) -> bool {
+        self.popover.is_some()
+    }
+
+    pub(in super::super) fn open_popover_at(
+        &mut self,
+        kind: PopoverKind,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover(kind, PopoverAnchor::Point(anchor), window, cx);
+    }
+
+    pub(in super::super) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover(kind, PopoverAnchor::Bounds(anchor_bounds), window, cx);
+    }
+
+    fn open_popover(
+        &mut self,
+        kind: PopoverKind,
+        anchor: PopoverAnchor,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let is_context_menu = matches!(
+            &kind,
+            PopoverKind::PullPicker
+                | PopoverKind::PushPicker
+                | PopoverKind::HistoryBranchFilter { .. }
+                | PopoverKind::HistoryColumnSettings
+                | PopoverKind::DiffHunkMenu { .. }
+                | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverChunkMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
+                | PopoverKind::CommitMenu { .. }
+                | PopoverKind::StatusFileMenu { .. }
+                | PopoverKind::BranchMenu { .. }
+                | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::WorktreeSectionMenu { .. }
+                | PopoverKind::WorktreeMenu { .. }
+                | PopoverKind::SubmoduleSectionMenu { .. }
+                | PopoverKind::SubmoduleMenu { .. }
+                | PopoverKind::CommitFileMenu { .. }
+                | PopoverKind::TagMenu { .. }
+        );
+        let keep_active_invoker = is_context_menu
+            || matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+        if !keep_active_invoker {
+            self.clear_active_context_menu_invoker(cx);
+        }
+
+        self.popover_anchor = Some(anchor);
+        self.context_menu_selected_ix = None;
+        if is_context_menu {
+            self.popover = Some(kind);
+            self.context_menu_selected_ix = self
+                .popover
+                .as_ref()
+                .and_then(|kind| self.context_menu_model(kind, cx))
+                .and_then(|m| m.first_selectable());
+            window.focus(&self.context_menu_focus_handle);
+        } else {
+            match &kind {
+                PopoverKind::RepoPicker => {
+                    let _ = self.ensure_repo_picker_search_input(window, cx);
+                }
+                PopoverKind::BranchPicker => {
+                    let _ = self.ensure_branch_picker_search_input(window, cx);
+                }
+                PopoverKind::CreateBranch => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(branch.clone(), cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::StashPrompt => {
+                    let theme = self.theme;
+                    self.stash_message_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .stash_message_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CloneRepo => {
+                    let theme = self.theme;
+                    let url_text = self
+                        .clone_repo_url_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    let parent_text = self
+                        .clone_repo_parent_dir_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    self.clone_repo_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(url_text, cx);
+                        cx.notify();
+                    });
+                    self.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(parent_text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .clone_repo_url_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RebasePrompt { .. } => {
+                    let theme = self.theme;
+                    self.rebase_onto_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .rebase_onto_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CreateTagPrompt { .. } => {
+                    let theme = self.theme;
+                    self.create_tag_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RemoteAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.remote_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.remote_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .remote_name_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RemoteEditUrlPrompt { repo_id, name, .. } => {
+                    let theme = self.theme;
+                    let text = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == *repo_id)
+                        .and_then(|r| match &r.remotes {
+                            Loadable::Ready(remotes) => remotes
+                                .iter()
+                                .find(|remote| remote.name.as_str() == name.as_str())
+                                .and_then(|remote| remote.url.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    self.remote_url_edit_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .remote_url_edit_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::RemoteUrlPicker { .. } | PopoverKind::RemoteRemovePicker { .. } => {
+                    let _ = self.ensure_remote_picker_search_input(window, cx);
+                }
+                PopoverKind::RemoteBranchDeletePicker { .. } => {
+                    let _ = self.ensure_branch_picker_search_input(window, cx);
+                }
+                PopoverKind::WorktreeAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.worktree_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.worktree_ref_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .worktree_path_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::WorktreeOpenPicker { repo_id }
+                | PopoverKind::WorktreeRemovePicker { repo_id } => {
+                    let _ = self.ensure_worktree_picker_search_input(window, cx);
+                    self.store
+                        .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
+                }
+                PopoverKind::SubmoduleAddPrompt { .. } => {
+                    let theme = self.theme;
+                    self.submodule_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.submodule_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .submodule_url_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::SubmoduleOpenPicker { repo_id }
+                | PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                    let _ = self.ensure_submodule_picker_search_input(window, cx);
+                    self.store
+                        .dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
+                }
+                PopoverKind::FileHistory { repo_id, path } => {
+                    self.ensure_file_history_search_input(window, cx);
+                    self.store.dispatch(Msg::LoadFileHistory {
+                        repo_id: *repo_id,
+                        path: path.clone(),
+                        limit: 200,
+                    });
+                }
+                PopoverKind::Blame { repo_id, path, rev } => {
+                    self.blame_scroll = UniformListScrollHandle::default();
+                    self.store.dispatch(Msg::LoadBlame {
+                        repo_id: *repo_id,
+                        path: path.clone(),
+                        rev: rev.clone(),
+                    });
+                }
+                PopoverKind::PushSetUpstreamPrompt { repo_id, .. } => {
+                    let theme = self.theme;
+                    let current_text = self
+                        .push_upstream_branch_input
+                        .read_with(cx, |i, _| i.text().to_string());
+                    let text = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == *repo_id)
+                        .and_then(|repo| match &repo.head_branch {
+                            Loadable::Ready(head) if !head.is_empty() => Some(head.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or(current_text);
+                    self.push_upstream_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(text, cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .push_upstream_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::DiffHunks => {
+                    let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
+                }
+                _ => {}
+            }
+            self.popover = Some(kind);
+        }
+        if let Some(popover) = self.popover.as_ref() {
+            self.notify_fingerprint = fingerprint::notify_fingerprint(&self.state, popover);
+        }
+        self.sync_titlebar_app_menu_state(cx);
+        cx.notify();
+    }
+
+    fn active_repo_id(&self) -> Option<RepoId> {
+        self.state.active_repo
+    }
+
+    fn active_repo(&self) -> Option<&RepoState> {
+        let repo_id = self.active_repo_id()?;
+        self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(super) fn set_date_time_format(
+        &mut self,
+        next: DateTimeFormat,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.date_time_format == next {
+            return;
+        }
+        self.date_time_format = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
+        if self.timezone == next {
+            return;
+        }
+        self.timezone = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_timezone(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_conflict_enable_whitespace_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_whitespace_autosolve(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_conflict_enable_regex_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_regex_autosolve(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(super) fn set_conflict_enable_history_autosolve(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_conflict_enable_history_autosolve(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        let fmt = self.date_time_format;
+        let tz = self.timezone;
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.date_time_format = fmt;
+            root.timezone = tz;
+            root.schedule_ui_settings_persist(cx);
+        });
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn install_linux_desktop_integration(&mut self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.install_linux_desktop_integration(cx);
+        });
+    }
+
+    fn push_toast(
+        &mut self,
+        kind: components::ToastKind,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self
+            .toast_host
+            .update(cx, |host, cx| host.push_toast(kind, message, cx));
+    }
+}
+
+impl Render for PopoverHost {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let Some(kind) = self.popover.clone() else {
+            return div().into_any_element();
+        };
+
+        let close = cx.listener(|this, _e: &MouseDownEvent, _w, cx| this.close_popover(cx));
+        let scrim = div()
+            .id("popover_scrim")
+            .debug_selector(|| "repo_popover_close".to_string())
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(gpui::rgba(0x00000000))
+            .occlude()
+            .on_any_mouse_down(close);
+
+        let popover = self.popover_view(kind, window, cx).into_any_element();
+
+        div()
+            .id("popover_layer")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(popover)
+            .into_any_element()
+    }
+}
+impl PopoverHost {
+    pub(in super::super) fn popover_view(
+        &mut self,
+        kind: PopoverKind,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let anchor_source = self
+            .popover_anchor
+            .clone()
+            .unwrap_or_else(|| PopoverAnchor::Point(point(px(64.0), px(64.0))));
+        let anchor_is_bounds = matches!(&anchor_source, PopoverAnchor::Bounds(_));
+        let window_bounds = window.window_bounds().get_bounds();
+        let window_w = window_bounds.size.width;
+        let window_h = window_bounds.size.height;
+        let margin_x = px(16.0);
+        let margin_y = px(16.0);
+
+        let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
+        let is_settings = matches!(&kind, PopoverKind::Settings);
+        let is_create_branch_or_stash_prompt =
+            matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+        let is_context_menu = matches!(
+            &kind,
+            PopoverKind::PullPicker
+                | PopoverKind::PushPicker
+                | PopoverKind::HistoryBranchFilter { .. }
+                | PopoverKind::HistoryColumnSettings
+                | PopoverKind::DiffHunkMenu { .. }
+                | PopoverKind::DiffEditorMenu { .. }
+                | PopoverKind::ConflictResolverInputRowMenu { .. }
+                | PopoverKind::ConflictResolverChunkMenu { .. }
+                | PopoverKind::ConflictResolverOutputMenu { .. }
+                | PopoverKind::CommitMenu { .. }
+                | PopoverKind::TagMenu { .. }
+                | PopoverKind::StatusFileMenu { .. }
+                | PopoverKind::BranchMenu { .. }
+                | PopoverKind::BranchSectionMenu { .. }
+                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::WorktreeSectionMenu { .. }
+                | PopoverKind::WorktreeMenu { .. }
+                | PopoverKind::SubmoduleSectionMenu { .. }
+                | PopoverKind::SubmoduleMenu { .. }
+                | PopoverKind::CommitFileMenu { .. }
+        );
+
+        let mut anchor_corner = match &kind {
+            PopoverKind::PullPicker
+            | PopoverKind::PushPicker
+            | PopoverKind::CreateBranch
+            | PopoverKind::StashPrompt
+            | PopoverKind::CloneRepo
+            | PopoverKind::ResetPrompt { .. }
+            | PopoverKind::RebasePrompt { .. }
+            | PopoverKind::CreateTagPrompt { .. }
+            | PopoverKind::RemoteAddPrompt { .. }
+            | PopoverKind::RemoteUrlPicker { .. }
+            | PopoverKind::RemoteRemovePicker { .. }
+            | PopoverKind::RemoteEditUrlPrompt { .. }
+            | PopoverKind::RemoteRemoveConfirm { .. }
+            | PopoverKind::WorktreeAddPrompt { .. }
+            | PopoverKind::WorktreeOpenPicker { .. }
+            | PopoverKind::WorktreeRemovePicker { .. }
+            | PopoverKind::WorktreeRemoveConfirm { .. }
+            | PopoverKind::SubmoduleAddPrompt { .. }
+            | PopoverKind::SubmoduleOpenPicker { .. }
+            | PopoverKind::SubmoduleRemovePicker { .. }
+            | PopoverKind::SubmoduleRemoveConfirm { .. }
+            | PopoverKind::PushSetUpstreamPrompt { .. }
+            | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::MergeAbortConfirm { .. }
+            | PopoverKind::ConflictSaveStageConfirm { .. }
+            | PopoverKind::ForceDeleteBranchConfirm { .. }
+            | PopoverKind::PullReconcilePrompt { .. }
+            | PopoverKind::HistoryBranchFilter { .. }
+            | PopoverKind::HistoryColumnSettings => Corner::TopRight,
+            _ => Corner::TopLeft,
+        };
+
+        let anchor_for_corner = |corner: Corner| match &anchor_source {
+            PopoverAnchor::Point(point) => *point,
+            PopoverAnchor::Bounds(bounds) => match corner {
+                Corner::TopLeft => bounds.bottom_left(),
+                Corner::TopRight => bounds.bottom_right(),
+                Corner::BottomLeft => bounds.origin,
+                Corner::BottomRight => bounds.top_right(),
+            },
+        };
+
+        // Some popovers have large minimum widths. If the anchor is close to the edge, the popover
+        // can end up constrained to a very narrow width (making inputs unusably small). Prefer the
+        // side with more horizontal space in those cases.
+        let mut anchor = anchor_for_corner(anchor_corner);
+        let min_preferred_w = px(640.0);
+        let space_left = (anchor.x - margin_x).max(px(0.0));
+        let space_right = (window_w - margin_x - anchor.x).max(px(0.0));
+        match anchor_corner {
+            Corner::TopRight if space_left < min_preferred_w && space_right > space_left => {
+                anchor_corner = Corner::TopLeft;
+            }
+            Corner::BottomRight if space_left < min_preferred_w && space_right > space_left => {
+                anchor_corner = Corner::BottomLeft;
+            }
+            Corner::TopLeft if space_right < min_preferred_w && space_left > space_right => {
+                anchor_corner = Corner::TopRight;
+            }
+            Corner::BottomLeft if space_right < min_preferred_w && space_left > space_right => {
+                anchor_corner = Corner::BottomRight;
+            }
+            _ => {}
+        }
+        anchor = anchor_for_corner(anchor_corner);
+
+        let panel = match kind {
+            PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::Settings => settings::panel(self, cx),
+            /* PopoverKind::ConflictResolver { repo_id, path } => {
+                if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                    let window_size = self.ui_window_size_last_seen;
+                    let max_w = (window_size.width - px(96.0)).max(px(320.0));
+                    let max_h = (window_size.height - px(120.0)).max(px(240.0));
+
+                    let title: SharedString =
+                        format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
+
+                    match &repo.conflict_file {
+                    Loadable::NotLoaded | Loadable::Loading => {
+                        components::empty_state(theme, title, "Loading…")
+                    }
+                    Loadable::Error(e) => components::empty_state(theme, title, e.clone()),
+                    Loadable::Ready(None) => components::empty_state(theme, title, "No conflict data."),
+                    Loadable::Ready(Some(file)) => {
+                        let ours = file.ours.clone().unwrap_or_default();
+                        let theirs = file.theirs.clone().unwrap_or_default();
+                        let has_current = file.current.is_some();
+
+                        let mode = self.conflict_resolver.diff_mode;
+                        let diff_len = match mode {
+                            ConflictDiffMode::Split => self.conflict_resolver.diff_rows.len(),
+                            ConflictDiffMode::Inline => self.conflict_resolver.inline_rows.len(),
+                        };
+
+                        let toggle_mode_split = |this: &mut GitCometView,
+                                                 _e: &ClickEvent,
+                                                 _w: &mut Window,
+                                                 cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
+                        };
+                        let toggle_mode_inline = |this: &mut GitCometView,
+                                                  _e: &ClickEvent,
+                                                  _w: &mut Window,
+                                                  cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
+                        };
+
+                        let ours_for_btn = ours.clone();
+                        let set_output_ours = move |this: &mut GitCometView,
+                                                    _e: &ClickEvent,
+                                                    _w: &mut Window,
+                                                    cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_output(ours_for_btn.clone(), cx);
+                        };
+                        let theirs_for_btn = theirs.clone();
+                        let set_output_theirs = move |this: &mut GitCometView,
+                                                      _e: &ClickEvent,
+                                                      _w: &mut Window,
+                                                      cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_set_output(theirs_for_btn.clone(), cx);
+                        };
+                        let reset_from_markers = |this: &mut GitCometView,
+                                                  _e: &ClickEvent,
+                                                  _w: &mut Window,
+                                                  cx: &mut gpui::Context<Self>| {
+                            this.conflict_resolver_reset_output_from_markers(cx);
+                        };
+
+                        let save_path = path.clone();
+                        let save_close = move |this: &mut GitCometView,
+                                               _e: &ClickEvent,
+                                               _w: &mut Window,
+                                               cx: &mut gpui::Context<Self>| {
+                            let text = this
+                                .conflict_resolver_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: save_path.clone(),
+                                contents: text,
+                                stage: false,
+                            });
+                            this.close_popover(cx);
+                        };
+                        let save_path = path.clone();
+                        let save_stage_close = move |this: &mut GitCometView,
+                                                     _e: &ClickEvent,
+                                                     _w: &mut Window,
+                                                     cx: &mut gpui::Context<Self>| {
+                            let text = this
+                                .conflict_resolver_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: save_path.clone(),
+                                contents: text,
+                                stage: true,
+                            });
+                            this.close_popover(cx);
+                        };
+
+                        let mode_controls = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                components::Button::new("conflict_mode_split", "Split")
+                                    .style(if mode == ConflictDiffMode::Split {
+                                        components::ButtonStyle::Filled
+                                    } else {
+                                        components::ButtonStyle::Outlined
+                                    })
+                                    .on_click(theme, cx, toggle_mode_split),
+                            )
+                            .child(
+                                components::Button::new("conflict_mode_inline", "Inline")
+                                    .style(if mode == ConflictDiffMode::Inline {
+                                        components::ButtonStyle::Filled
+                                    } else {
+                                        components::ButtonStyle::Outlined
+                                    })
+                                    .on_click(theme, cx, toggle_mode_inline),
+                            );
+
+                        let start_controls = div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                components::Button::new("conflict_use_ours", "Use ours")
+                                    .style(components::ButtonStyle::Transparent)
+                                    .disabled(file.ours.is_none())
+                                    .on_click(theme, cx, set_output_ours),
+                            )
+                            .child(
+                                components::Button::new("conflict_use_theirs", "Use theirs")
+                                    .style(components::ButtonStyle::Transparent)
+                                    .disabled(file.theirs.is_none())
+                                    .on_click(theme, cx, set_output_theirs),
+                            )
+                            .child(
+                                components::Button::new("conflict_reset_markers", "Reset from markers")
+                                    .style(components::ButtonStyle::Transparent)
+                                    .disabled(!has_current)
+                                    .on_click(theme, cx, reset_from_markers),
+                            );
+
+                        let diff_header = div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Diff (ours ↔ theirs)"),
+                            )
+                            .child(div().flex().items_center().gap_2().child(mode_controls));
+
+                        let diff_title_row = div()
+                            .h(px(22.0))
+                            .flex()
+                            .items_center()
+                            .when(mode == ConflictDiffMode::Split, |d| {
+                                d.child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Ours (index :2)"),
+                                )
+                                .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .px_2()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Theirs (index :3)"),
+                                )
+                            })
+                            .when(mode == ConflictDiffMode::Inline, |d| d);
+
+                        let diff_body: AnyElement = if diff_len == 0 {
+                            components::empty_state(theme, "Diff", "Ours/Theirs content not available.")
+                                .into_any_element()
+                        } else {
+                            let list = uniform_list(
+                                "conflict_resolver_diff_list",
+                                diff_len,
+                                cx.processor(Self::render_conflict_resolver_diff_rows),
+                            )
+                            .h_full()
+                            .min_h(px(0.0))
+                            .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+                            let scroll_handle = self
+                                .conflict_resolver_diff_scroll
+                                .0
+                                .borrow()
+                                .base_handle
+                                .clone();
+
+                            div()
+                                .id("conflict_resolver_diff_scroll")
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .child(list)
+                                .child(
+                                    components::Scrollbar::new(
+                                        "conflict_resolver_diff_scrollbar",
+                                        scroll_handle,
+                                    )
+                                    .always_visible()
+                                    .render(theme),
+                                )
+                                .into_any_element()
+                        };
+
+                        let output_header = div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Resolved output (editable)"),
+                            )
+                            .child(start_controls);
+
+                        div()
+                            .flex()
+                            .flex_col()
+                            .max_w(max_w)
+                            .max_h(max_h)
+                            .min_w(px(720.0))
+                            .min_h(px(520.0))
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(title.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                                .child(
+                                                    components::Button::new("conflict_save_close", "Save & close")
+                                                        .style(components::ButtonStyle::Outlined)
+                                                        .on_click(theme, cx, save_close),
+                                                )
+                                                .child(
+                                                    components::Button::new("conflict_save_stage_close", "Save & stage & close")
+                                                        .style(components::ButtonStyle::Filled)
+                                                        .on_click(theme, cx, save_stage_close),
+                                                ),
+                                    ),
+                            )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(diff_header)
+                            .child(
+                                div()
+                                    .h(px(240.0))
+                                    .min_h(px(0.0))
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .rounded(px(theme.radii.row))
+                                    .overflow_hidden()
+                                    .flex()
+                                    .flex_col()
+                                    .child(diff_title_row)
+                                    .child(div().border_t_1().border_color(theme.colors.border))
+                                    .child(diff_body),
+                            )
+                            .child(div().border_t_1().border_color(theme.colors.border))
+                            .child(output_header)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h(px(0.0))
+                                    .border_1()
+                                    .border_color(theme.colors.border)
+                                    .rounded(px(theme.radii.row))
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .id("conflict_resolver_output_scroll")
+                                            .font_family("monospace")
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .overflow_y_scroll()
+                                            .child(self.conflict_resolver_input.clone()),
+                                    ),
+                            )
+                    }
+                    }
+                } else {
+                    components::empty_state(theme, "Conflicts", "Repository not found.")
+                }
+            } */
+            PopoverKind::BranchPicker => branch_picker::panel(self, cx),
+            PopoverKind::CreateBranch => create_branch::panel(self, cx),
+            PopoverKind::CheckoutRemoteBranchPrompt {
+                repo_id,
+                remote,
+                branch,
+            } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
+            PopoverKind::CloneRepo => clone_repo::panel(self, cx),
+            PopoverKind::ResetPrompt {
+                repo_id,
+                target,
+                mode,
+            } => reset_prompt::panel(self, repo_id, target, mode, cx),
+            PopoverKind::RebasePrompt { repo_id } => rebase_prompt::panel(self, repo_id, cx),
+            PopoverKind::CreateTagPrompt { repo_id, target } => {
+                create_tag_prompt::panel(self, repo_id, target, cx)
+            }
+            PopoverKind::RemoteAddPrompt { repo_id } => remote_add_prompt::panel(self, repo_id, cx),
+            PopoverKind::RemoteUrlPicker { repo_id, kind } => {
+                remote_url_picker::panel(self, repo_id, kind, cx)
+            }
+            PopoverKind::RemoteEditUrlPrompt {
+                repo_id,
+                name,
+                kind,
+            } => remote_edit_url_prompt::panel(self, repo_id, name, kind, cx),
+            PopoverKind::RemoteRemovePicker { repo_id } => {
+                remote_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::RemoteBranchDeletePicker { repo_id, remote } => {
+                remote_branch_delete_picker::panel(self, repo_id, remote, cx)
+            }
+            PopoverKind::RemoteRemoveConfirm { repo_id, name } => {
+                remote_remove_confirm::panel(self, repo_id, name, cx)
+            }
+            PopoverKind::WorktreeAddPrompt { repo_id } => {
+                worktree_add_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeOpenPicker { repo_id } => {
+                worktree_open_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeRemovePicker { repo_id } => {
+                worktree_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::WorktreeRemoveConfirm { repo_id, path } => {
+                worktree_remove_confirm::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::SubmoduleAddPrompt { repo_id } => {
+                submodule_add_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleOpenPicker { repo_id } => {
+                submodule_open_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                submodule_remove_picker::panel(self, repo_id, cx)
+            }
+            PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => {
+                submodule_remove_confirm::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::FileHistory { repo_id, path } => {
+                file_history::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::Blame { repo_id, path, rev } => blame::panel(self, repo_id, path, rev, cx),
+            PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
+                push_set_upstream_prompt::panel(self, repo_id, remote, cx)
+            }
+            PopoverKind::ForcePushConfirm { repo_id } => {
+                force_push_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::MergeAbortConfirm { repo_id } => {
+                merge_abort_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::ConflictSaveStageConfirm {
+                repo_id,
+                path,
+                has_conflict_markers,
+                unresolved_blocks,
+            } => conflict_save_stage_confirm::panel(
+                self,
+                repo_id,
+                &path,
+                has_conflict_markers,
+                unresolved_blocks,
+                cx,
+            ),
+            PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
+                force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            }
+            PopoverKind::DeleteRemoteBranchConfirm {
+                repo_id,
+                remote,
+                branch,
+            } => delete_remote_branch_confirm::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::DiscardChangesConfirm {
+                repo_id,
+                area,
+                path,
+            } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::PullReconcilePrompt { repo_id } => {
+                pull_reconcile_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::HistoryBranchFilter { repo_id } => self
+                .context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(220.0)),
+            PopoverKind::HistoryColumnSettings => self
+                .context_menu_view(PopoverKind::HistoryColumnSettings, cx)
+                .min_w(px(160.0))
+                .max_w(px(220.0)),
+            PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
+            PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
+            PopoverKind::DiffHunks => diff_hunks::panel(self, cx),
+            PopoverKind::CommitMenu { repo_id, commit_id } => self
+                .context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::TagMenu { repo_id, commit_id } => self
+                .context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::DiffHunkMenu { repo_id, src_ix } => self
+                .context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
+                .min_w(px(160.0))
+                .max_w(px(220.0)),
+            PopoverKind::DiffEditorMenu {
+                repo_id,
+                area,
+                path,
+                hunk_patch,
+                hunks_count,
+                lines_patch,
+                discard_lines_patch,
+                lines_count,
+                copy_text,
+            } => self
+                .context_menu_view(
+                    PopoverKind::DiffEditorMenu {
+                        repo_id,
+                        area,
+                        path,
+                        hunk_patch,
+                        hunks_count,
+                        lines_patch,
+                        discard_lines_patch,
+                        lines_count,
+                        copy_text,
+                    },
+                    cx,
+                )
+                .w(px(220.0))
+                .min_w(px(160.0))
+                .max_w(px(260.0)),
+            PopoverKind::ConflictResolverInputRowMenu {
+                line_label,
+                line_target,
+                chunk_label,
+                chunk_target,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverInputRowMenu {
+                        line_label,
+                        line_target,
+                        chunk_label,
+                        chunk_target,
+                    },
+                    cx,
+                )
+                .min_w(px(180.0))
+                .max_w(px(280.0)),
+            PopoverKind::ConflictResolverChunkMenu {
+                conflict_ix,
+                has_base,
+                is_three_way,
+                selected_choices,
+                output_line_ix,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverChunkMenu {
+                        conflict_ix,
+                        has_base,
+                        is_three_way,
+                        selected_choices,
+                        output_line_ix,
+                    },
+                    cx,
+                )
+                .w(px(220.0))
+                .min_w(px(190.0))
+                .max_w(px(280.0)),
+            PopoverKind::ConflictResolverOutputMenu {
+                cursor_line,
+                selected_text,
+                has_source_a,
+                has_source_b,
+                has_source_c,
+                is_three_way,
+            } => self
+                .context_menu_view(
+                    PopoverKind::ConflictResolverOutputMenu {
+                        cursor_line,
+                        selected_text,
+                        has_source_a,
+                        has_source_b,
+                        has_source_c,
+                        is_three_way,
+                    },
+                    cx,
+                )
+                .w(px(240.0))
+                .min_w(px(200.0))
+                .max_w(px(300.0)),
+            PopoverKind::StatusFileMenu {
+                repo_id,
+                area,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::StatusFileMenu {
+                    repo_id,
+                    area,
+                    path,
+                },
+                cx,
+            ),
+            PopoverKind::BranchMenu {
+                repo_id,
+                section,
+                name,
+            } => self.context_menu_view(
+                PopoverKind::BranchMenu {
+                    repo_id,
+                    section,
+                    name,
+                },
+                cx,
+            ),
+            PopoverKind::BranchSectionMenu { repo_id, section } => {
+                self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
+            }
+            PopoverKind::RemoteMenu { repo_id, name } => self
+                .context_menu_view(PopoverKind::RemoteMenu { repo_id, name }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::WorktreeSectionMenu { repo_id } => self
+                .context_menu_view(PopoverKind::WorktreeSectionMenu { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::WorktreeMenu { repo_id, path } => self
+                .context_menu_view(PopoverKind::WorktreeMenu { repo_id, path }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::SubmoduleSectionMenu { repo_id } => self
+                .context_menu_view(PopoverKind::SubmoduleSectionMenu { repo_id }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::SubmoduleMenu { repo_id, path } => self
+                .context_menu_view(PopoverKind::SubmoduleMenu { repo_id, path }, cx)
+                .min_w(px(160.0))
+                .max_w(px(320.0)),
+            PopoverKind::CommitFileMenu {
+                repo_id,
+                commit_id,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::CommitFileMenu {
+                    repo_id,
+                    commit_id,
+                    path,
+                },
+                cx,
+            ),
+            PopoverKind::AppMenu => app_menu::panel(self, cx),
+        };
+
+        let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
+        let use_accent_border =
+            is_context_menu || is_app_menu || is_create_branch_or_stash_prompt || is_settings;
+        let popover_border_color = if use_accent_border {
+            with_alpha(theme.colors.accent, 0.90)
+        } else {
+            gpui::rgba(crate::view::chrome::WINDOW_OUTLINE_RGBA)
+        };
+        let gap_y = if is_app_menu || is_settings {
+            crate::view::chrome::TITLE_BAR_HEIGHT
+        } else if anchor_is_bounds {
+            px(1.0)
+        } else if is_right {
+            px(10.0)
+        } else {
+            px(8.0)
+        };
+
+        let mut context_menu_max_panel_h: Option<Pixels> = None;
+        if is_context_menu || is_settings {
+            let (below_anchor_y, above_anchor_y) = match &anchor_source {
+                PopoverAnchor::Point(_) => (anchor.y, anchor.y),
+                PopoverAnchor::Bounds(bounds) => (bounds.bottom_left().y, bounds.origin.y),
+            };
+            let below = (window_h - margin_y) - (below_anchor_y + gap_y);
+            let above = (above_anchor_y - gap_y) - margin_y;
+            if below < px(240.0) && above > below {
+                anchor_corner = match anchor_corner {
+                    Corner::TopLeft => Corner::BottomLeft,
+                    Corner::TopRight => Corner::BottomRight,
+                    corner => corner,
+                };
+            }
+            if anchor_is_bounds {
+                anchor = anchor_for_corner(anchor_corner);
+            }
+
+            let popover_edge_y = match anchor_corner {
+                Corner::TopLeft | Corner::TopRight => anchor.y + gap_y,
+                Corner::BottomLeft | Corner::BottomRight => anchor.y - gap_y,
+            };
+            let max_popover_h = match anchor_corner {
+                Corner::TopLeft | Corner::TopRight => (window_h - margin_y) - popover_edge_y,
+                Corner::BottomLeft | Corner::BottomRight => popover_edge_y - margin_y,
+            }
+            .max(px(0.0));
+            let max_panel_h = (max_popover_h - px(12.0)).max(px(0.0));
+            context_menu_max_panel_h = Some(max_panel_h);
+        }
+
+        let offset_y = match anchor_corner {
+            Corner::TopLeft | Corner::TopRight => gap_y,
+            Corner::BottomLeft | Corner::BottomRight => -gap_y,
+        };
+
+        let panel = if let Some(max_panel_h) = context_menu_max_panel_h {
+            div()
+                .id("context_menu_scroll")
+                .min_h(px(0.0))
+                .max_h(max_panel_h)
+                .overflow_y_scroll()
+                .child(panel)
+                .into_any_element()
+        } else {
+            panel.into_any_element()
+        };
+
+        anchored()
+            .position(anchor)
+            .anchor(anchor_corner)
+            .offset(point(px(0.0), offset_y))
+            .child(
+                div()
+                    .id("app_popover")
+                    .debug_selector(|| "app_popover".to_string())
+                    .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+                    .occlude()
+                    .bg(theme.colors.surface_bg_elevated)
+                    .border_1()
+                    .border_color(popover_border_color)
+                    .rounded(px(theme.radii.panel))
+                    .shadow_lg()
+                    .overflow_hidden()
+                    .p_1()
+                    .child(panel),
+            )
+    }
+}
+
+fn clone_repo_name_from_url(url: &str) -> String {
+    let trimmed = url.trim().trim_end_matches(['/', '\\']);
+    let last = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+    let name = last.strip_suffix(".git").unwrap_or(last).trim();
+    if name.is_empty() {
+        "repo".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    struct TestBackend;
+
+    impl GitBackend for TestBackend {
+        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+            Err(Error::new(ErrorKind::Unsupported(
+                "Test backend does not open repositories",
+            )))
+        }
+    }
+
+    #[gpui::test]
+    fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commit_id = CommitId("deadbeefdeadbeef".to_string());
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_commit_menu_tag",
+            std::process::id()
+        ));
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.log = Loadable::Ready(
+                    gitcomet_core::domain::LogPage {
+                        commits: vec![gitcomet_core::domain::Commit {
+                            id: commit_id.clone(),
+                            parent_ids: vec![],
+                            summary: "Hello".to_string(),
+                            author: "Alice".to_string(),
+                            time: SystemTime::UNIX_EPOCH,
+                        }],
+                        next_cursor: None,
+                    }
+                    .into(),
+                );
+                repo.tags = Loadable::Ready(Arc::new(vec![]));
+
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::CommitMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected commit context menu model");
+
+            let add_tag_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Add tag…" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+
+            let Some(ContextMenuAction::OpenPopover { kind }) = add_tag_action else {
+                panic!("expected Add tag… to open a popover");
+            };
+
+            let PopoverKind::CreateTagPrompt {
+                repo_id: rid,
+                target,
+            } = kind
+            else {
+                panic!("expected Add tag… to open CreateTagPrompt");
+            };
+
+            assert_eq!(rid, repo_id);
+            assert_eq!(target, commit_id.as_ref().to_string());
+        });
+    }
+
+    #[gpui::test]
+    fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(2);
+        let commit_id = CommitId("deadbeefdeadbeef".to_string());
+        let path = std::path::PathBuf::from("src/main.rs");
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::CommitFileMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected commit file context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(3);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu_open_file",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("a.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, _cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitcomet_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        }],
+                    }
+                    .into(),
+                );
+
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(4);
+        let path = std::path::PathBuf::from("a.txt");
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::DiffEditorMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: Some(path.clone()),
+                                hunk_patch: None,
+                                hunks_count: 0,
+                                lines_patch: None,
+                                discard_lines_patch: None,
+                                lines_count: 0,
+                                copy_text: Some("x".to_string()),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected diff editor context menu model");
+
+            let open_file_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Open file" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_file_action {
+                Some(ContextMenuAction::OpenFile {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file entry with OpenFile action"),
+            }
+
+            let open_location_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open file location" =>
+                {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+            match open_location_action {
+                Some(ContextMenuAction::OpenFileLocation {
+                    repo_id: rid,
+                    path: p,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(p, path);
+                }
+                _ => panic!("expected Open file location entry with OpenFileLocation action"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(2);
+        let commit_id = CommitId("0123456789abcdef".to_string());
+        let other_commit = CommitId("aaaaaaaaaaaaaaaa".to_string());
+        let workdir =
+            std::env::temp_dir().join(format!("gitcomet_ui_test_{}_tag_menu", std::process::id()));
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.log = Loadable::Ready(
+                    gitcomet_core::domain::LogPage {
+                        commits: vec![gitcomet_core::domain::Commit {
+                            id: commit_id.clone(),
+                            parent_ids: vec![],
+                            summary: "Hello".to_string(),
+                            author: "Alice".to_string(),
+                            time: SystemTime::UNIX_EPOCH,
+                        }],
+                        next_cursor: None,
+                    }
+                    .into(),
+                );
+                repo.tags = Loadable::Ready(Arc::new(vec![
+                    gitcomet_core::domain::Tag {
+                        name: "release".to_string(),
+                        target: commit_id.clone(),
+                    },
+                    gitcomet_core::domain::Tag {
+                        name: "v1.0.0".to_string(),
+                        target: commit_id.clone(),
+                    },
+                    gitcomet_core::domain::Tag {
+                        name: "other".to_string(),
+                        target: other_commit,
+                    },
+                ]));
+
+                let state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.state = Arc::clone(&state);
+                this._ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::TagMenu {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected tag context menu model");
+
+            for name in ["release", "v1.0.0"] {
+                let expected_label = format!("Delete tag {name}");
+                let delete_action = model.items.iter().find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. }
+                        if label.as_ref() == expected_label.as_str() =>
+                    {
+                        Some((**action).clone())
+                    }
+                    _ => None,
+                });
+                match delete_action {
+                    Some(ContextMenuAction::DeleteTag {
+                        repo_id: rid,
+                        name: n,
+                    }) => {
+                        assert_eq!(rid, repo_id);
+                        assert_eq!(n, name);
+                    }
+                    _ => panic!("expected Delete tag {name} action"),
+                }
+            }
+
+            let has_other = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, .. } => label.as_ref() == "Delete tag other",
+                _ => false,
+            });
+            assert!(
+                !has_other,
+                "tag menu should only show tags on the clicked commit"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_uses_multi_selection_for_stage(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(3);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu",
+            std::process::id()
+        ));
+
+        let a = std::path::PathBuf::from("a.txt");
+        let b = std::path::PathBuf::from("b.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![
+                            gitcomet_core::domain::FileStatus {
+                                path: a.clone(),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            },
+                            gitcomet_core::domain::FileStatus {
+                                path: b.clone(),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            },
+                        ],
+                    }
+                    .into(),
+                );
+
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.insert(
+                        repo_id,
+                        StatusMultiSelection {
+                            unstaged: vec![a.clone(), b.clone()],
+                            unstaged_anchor: Some(a.clone()),
+                            staged: vec![],
+                            staged_anchor: None,
+                        },
+                    );
+                    cx.notify();
+                });
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: a.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let stage_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Stage (2)" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+
+            match stage_action {
+                Some(ContextMenuAction::StageSelectionOrPath {
+                    repo_id: rid,
+                    area,
+                    path,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(area, DiffArea::Unstaged);
+                    assert_eq!(path, a);
+                }
+                _ => panic!("expected Stage (2) to stage selected paths"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_uses_multi_selection_for_unstage(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(4);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu_staged",
+            std::process::id()
+        ));
+
+        let a = std::path::PathBuf::from("a.txt");
+        let b = std::path::PathBuf::from("b.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![
+                            gitcomet_core::domain::FileStatus {
+                                path: a.clone(),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            },
+                            gitcomet_core::domain::FileStatus {
+                                path: b.clone(),
+                                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                                conflict: None,
+                            },
+                        ],
+                        unstaged: vec![],
+                    }
+                    .into(),
+                );
+
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.details_pane.update(cx, |pane, cx| {
+                    pane.status_multi_selection.insert(
+                        repo_id,
+                        StatusMultiSelection {
+                            unstaged: vec![],
+                            unstaged_anchor: None,
+                            staged: vec![a.clone(), b.clone()],
+                            staged_anchor: Some(a.clone()),
+                        },
+                    );
+                    cx.notify();
+                });
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Staged,
+                                path: a.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let unstage_action = model.items.iter().find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Unstage (2)" => {
+                    Some((**action).clone())
+                }
+                _ => None,
+            });
+
+            match unstage_action {
+                Some(ContextMenuAction::UnstageSelectionOrPath {
+                    repo_id: rid,
+                    area,
+                    path,
+                }) => {
+                    assert_eq!(rid, repo_id);
+                    assert_eq!(area, DiffArea::Staged);
+                    assert_eq!(path, a);
+                }
+                _ => panic!("expected Unstage (2) to unstage selected paths"),
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(5);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu_conflict",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("conflict.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitcomet_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Conflicted,
+                            conflict: None,
+                        }],
+                    }
+                    .into(),
+                );
+                let state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.state = Arc::clone(&state);
+                this._ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Unstaged,
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let has_ours = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve using ours" =>
+                {
+                    matches!(
+                        action.as_ref(),
+                        ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+                            repo_id: rid,
+                            area: DiffArea::Unstaged,
+                            path: p,
+                            side: gitcomet_core::services::ConflictSide::Ours
+                        } if *rid == repo_id && p.as_path() == path.as_path()
+                    )
+                }
+                _ => false,
+            });
+            let has_theirs = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve using theirs" =>
+                {
+                    matches!(
+                        action.as_ref(),
+                        ContextMenuAction::CheckoutConflictSideSelectionOrPath {
+                            repo_id: rid,
+                            area: DiffArea::Unstaged,
+                            path: p,
+                            side: gitcomet_core::services::ConflictSide::Theirs
+                        } if *rid == repo_id && p.as_path() == path.as_path()
+                    )
+                }
+                _ => false,
+            });
+            let has_manual = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Resolve manually…" =>
+                {
+                    matches!(
+                        action.as_ref(),
+                        ContextMenuAction::SelectDiff {
+                            repo_id: rid,
+                            target: DiffTarget::WorkingTree { path: p, area: DiffArea::Unstaged }
+                        } if *rid == repo_id && p.as_path() == path.as_path()
+                    )
+                }
+                _ => false,
+            });
+            let has_external_mergetool = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Open external mergetool" =>
+                {
+                    matches!(
+                        action.as_ref(),
+                        ContextMenuAction::LaunchMergetool {
+                            repo_id: rid,
+                            path: p
+                        } if *rid == repo_id && p.as_path() == path.as_path()
+                    )
+                }
+                _ => false,
+            });
+
+            assert!(has_ours);
+            assert!(has_theirs);
+            assert!(has_manual);
+            assert!(has_external_mergetool);
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_hides_external_mergetool_for_staged_conflicts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(7);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu_staged_conflict",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("conflict.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![gitcomet_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Conflicted,
+                            conflict: None,
+                        }],
+                        unstaged: vec![],
+                    }
+                    .into(),
+                );
+                let state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                this.state = Arc::clone(&state);
+                this._ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+
+        cx.update(|_window, app| {
+            let model = view
+                .update(app, |this, cx| {
+                    this.popover_host.update(cx, |host, cx| {
+                        host.context_menu_model(
+                            &PopoverKind::StatusFileMenu {
+                                repo_id,
+                                area: DiffArea::Staged,
+                                path: path.clone(),
+                            },
+                            cx,
+                        )
+                    })
+                })
+                .expect("expected status file context menu model");
+
+            let has_external_mergetool = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, .. } => {
+                    label.as_ref().starts_with("Open external mergetool")
+                }
+                _ => false,
+            });
+            let has_discard_changes = model.items.iter().any(|item| match item {
+                ContextMenuItem::Entry { label, .. } => label.as_ref() == "Discard changes",
+                _ => false,
+            });
+            assert!(!has_external_mergetool);
+            assert!(!has_discard_changes);
+        });
+    }
+
+    #[gpui::test]
+    fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(6);
+        let workdir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_status_menu_reentrant",
+            std::process::id()
+        ));
+        let path = std::path::PathBuf::from("conflict.txt");
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitcomet_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Conflicted,
+                            conflict: None,
+                        }],
+                    }
+                    .into(),
+                );
+                this.state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+                cx.notify();
+            });
+        });
+
+        cx.update(|window, app| {
+            let details_pane = view.read(app).details_pane.clone();
+            let anchor = point(px(0.0), px(0.0));
+            details_pane.update(app, |pane, cx| {
+                pane.open_popover_at(
+                    PopoverKind::StatusFileMenu {
+                        repo_id,
+                        area: DiffArea::Unstaged,
+                        path: path.clone(),
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+            });
+        });
+    }
+}

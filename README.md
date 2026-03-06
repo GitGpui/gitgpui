@@ -1,4 +1,4 @@
-## GitGpui
+## GitComet
 
 Fast, resource-efficient, fully open source Git GUI written in Rust, targeting GitKraken/SourceTree/GitHub Desktop-class workflows using `gpui` for the UI.
 
@@ -11,13 +11,13 @@ Fast, resource-efficient, fully open source Git GUI written in Rust, targeting G
 
 ### Workspace layout
 
-- `crates/gitgpui-core`: domain types, merge algorithm, conflict session, text utils.
-- `crates/gitgpui-git`: Git abstraction + no-op backend.
-- `crates/gitgpui-git-gix`: `gix`/gitoxide backend implementation.
-- `crates/gitgpui-state`: MVU state store, reducers, effects, conflict session management.
-- `crates/gitgpui-ui`: UI model/state (toolkit-independent).
-- `crates/gitgpui-ui-gpui`: gpui views/components (focused diff/merge windows, conflict resolver, word diff).
-- `crates/gitgpui-app`: binary entrypoint, CLI (clap), difftool/mergetool/setup modes.
+- `crates/gitcomet-core`: domain types, merge algorithm, conflict session, text utils.
+- `crates/gitcomet-git`: Git abstraction + no-op backend.
+- `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
+- `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
+- `crates/gitcomet-ui`: UI model/state (toolkit-independent).
+- `crates/gitcomet-ui-gpui`: gpui views/components (focused diff/merge windows, conflict resolver, word diff).
+- `crates/gitcomet-app`: binary entrypoint, CLI (clap), difftool/mergetool/setup modes.
 
 ### Getting started
 
@@ -30,31 +30,31 @@ cargo build
 To build the actual app you'll enable features (requires network for dependencies):
 
 ```bash
-cargo build -p gitgpui-app --features ui,gix
+cargo build -p gitcomet-app --features ui,gix
 ```
 
 To also compile the gpui-based UI crate:
 
 ```bash
-cargo build -p gitgpui-app --features ui-gpui,gix
+cargo build -p gitcomet-app --features ui-gpui,gix
 ```
 
 Run (opens the repo passed as the first arg, or falls back to the current directory):
 
 ```bash
-cargo run -p gitgpui-app --features ui-gpui,gix -- /path/to/repo
+cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
 ```
 
 ### Using as a Git difftool / mergetool
 
-GitGpui can be used as a standalone diff and merge tool invoked by `git difftool` and `git mergetool`. It supports both headless (algorithm-only) and GUI (interactive GPUI window) modes.
+GitComet can be used as a standalone diff and merge tool invoked by `git difftool` and `git mergetool`. It supports both headless (algorithm-only) and GUI (interactive GPUI window) modes.
 
 #### Automatic setup
 
 The built-in `setup` command configures Git globally:
 
 ```bash
-gitgpui-app setup
+gitcomet-app setup
 ```
 
 This registers both headless and GUI tool variants with `guiDefault=auto`, so Git automatically picks the GUI tool when a display is available and falls back to headless otherwise.
@@ -62,31 +62,31 @@ This registers both headless and GUI tool variants with `guiDefault=auto`, so Gi
 #### Manual setup
 
 ```bash
-GITGPUI_BIN="/absolute/path/to/gitgpui-app"
+GITGPUI_BIN="/absolute/path/to/gitcomet-app"
 
 # Headless tool — algorithm-only merge/diff for CI, scripts, and no-display environments
-git config --global merge.tool gitgpui
-git config --global mergetool.gitgpui.cmd \
+git config --global merge.tool gitcomet
+git config --global mergetool.gitcomet.cmd \
   "'$GITGPUI_BIN' mergetool --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
-git config --global mergetool.gitgpui.trustExitCode true
+git config --global mergetool.gitcomet.trustExitCode true
 git config --global mergetool.prompt false
 
-git config --global diff.tool gitgpui
-git config --global difftool.gitgpui.cmd \
+git config --global diff.tool gitcomet
+git config --global difftool.gitcomet.cmd \
   "'$GITGPUI_BIN' difftool --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
-git config --global difftool.gitgpui.trustExitCode true
+git config --global difftool.gitcomet.trustExitCode true
 git config --global difftool.prompt false
 
 # GUI tool — opens focused GPUI windows for interactive diff/merge
-git config --global merge.guitool gitgpui-gui
-git config --global mergetool.gitgpui-gui.cmd \
+git config --global merge.guitool gitcomet-gui
+git config --global mergetool.gitcomet-gui.cmd \
   "'$GITGPUI_BIN' mergetool --gui --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
-git config --global mergetool.gitgpui-gui.trustExitCode true
+git config --global mergetool.gitcomet-gui.trustExitCode true
 
-git config --global diff.guitool gitgpui-gui
-git config --global difftool.gitgpui-gui.cmd \
+git config --global diff.guitool gitcomet-gui
+git config --global difftool.gitcomet-gui.cmd \
   "'$GITGPUI_BIN' difftool --gui --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
-git config --global difftool.gitgpui-gui.trustExitCode true
+git config --global difftool.gitcomet-gui.trustExitCode true
 
 # Auto-select GUI tool when DISPLAY is available, headless otherwise
 git config --global mergetool.guiDefault auto
@@ -98,7 +98,7 @@ git config --global difftool.guiDefault auto
 **Difftool:**
 
 ```bash
-gitgpui-app difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
+gitcomet-app difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
@@ -106,14 +106,14 @@ Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
 **Mergetool:**
 
 ```bash
-gitgpui-app mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
+gitcomet-app mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional for add/add conflicts.
 
 #### Compatibility
 
-KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitGpui can be a drop-in replacement.
+KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitComet can be a drop-in replacement.
 
 #### Exit codes
 
@@ -157,11 +157,11 @@ bash scripts/profile-callgrind.sh --open -- /path/to/repo
 
 ### Crash logs
 
-If the app crashes due to a Rust panic, GitGpui writes a crash log to:
+If the app crashes due to a Rust panic, GitComet writes a crash log to:
 
-- Linux: `$XDG_STATE_HOME/gitgpui/crashes/` (fallback: `~/.local/state/gitgpui/crashes/`)
-- macOS: `~/Library/Logs/gitgpui/crashes/`
-- Windows: `%LOCALAPPDATA%\gitgpui\crashes\` (fallback: `%APPDATA%\gitgpui\crashes\`)
+- Linux: `$XDG_STATE_HOME/gitcomet/crashes/` (fallback: `~/.local/state/gitcomet/crashes/`)
+- macOS: `~/Library/Logs/gitcomet/crashes/`
+- Windows: `%LOCALAPPDATA%\gitcomet\crashes\` (fallback: `%APPDATA%\gitcomet\crashes\`)
 
 ### Roadmap (high level)
 
