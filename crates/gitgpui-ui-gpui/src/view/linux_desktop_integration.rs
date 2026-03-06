@@ -31,7 +31,7 @@ impl GitGpuiView {
         };
 
         let desktop_path = data_home.join("applications/gitgpui.desktop");
-        let icon_path = data_home.join("icons/hicolor/scalable/apps/gitgpui.svg");
+        let icon_path = data_home.join("icons/hicolor/scalable/apps/gitcomet-512.svg");
         if desktop_path.exists() && icon_path.exists() {
             return;
         }
@@ -58,7 +58,7 @@ impl GitGpuiView {
                         ));
                         const ICON_SVG: &[u8] = include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
-                            "/../../assets/gitgpui_logo.svg"
+                            "/../../assets/gitcomet-512.svg"
                         ));
 
                         let exe = std::env::current_exe().map_err(|_| {
@@ -76,7 +76,7 @@ impl GitGpuiView {
                         let applications_dir = data_home.join("applications");
                         let icons_dir = data_home.join("icons/hicolor/scalable/apps");
                         let desktop_path = applications_dir.join("gitgpui.desktop");
-                        let icon_path = icons_dir.join("gitgpui.svg");
+                        let icon_path = icons_dir.join("gitcomet-512.svg");
 
                         fs::create_dir_all(&applications_dir)
                             .and_then(|_| fs::create_dir_all(&icons_dir))

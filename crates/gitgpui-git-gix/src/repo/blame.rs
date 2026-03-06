@@ -255,3 +255,75 @@ fn parse_git_blame_porcelain(output: &str) -> Vec<BlameLine> {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    const GITPY_BLAME: &str = include_str!("../../tests/fixtures/gitpython/blame");
+    const GITPY_BLAME_COMPLEX_REVISION: &str =
+        include_str!("../../tests/fixtures/gitpython/blame_complex_revision");
+    const GITPY_BLAME_BINARY: &[u8] = include_bytes!("../../tests/fixtures/gitpython/blame_binary");
+
+    #[test]
+    fn parse_git_blame_porcelain_handles_gitpython_blame_fixture() {
+        let parsed = parse_git_blame_porcelain(GITPY_BLAME);
+        assert_eq!(parsed.len(), 25);
+
+        let first = parsed
+            .first()
+            .expect("fixture should parse at least one line");
+        assert_eq!(first.commit_id, "634396b2f541a9f2d58b00be1a07f0c358b999b3");
+        assert_eq!(first.author, "Tom Preston-Werner");
+        assert_eq!(first.author_time_unix, Some(1_191_997_100));
+        assert_eq!(first.summary, "initial grit setup");
+        assert_eq!(
+            first.line,
+            "$:.unshift File.dirname(__FILE__)     # For use/testing when no gem is installed"
+        );
+
+        let second = parsed.get(1).expect("fixture should parse second line");
+        assert_eq!(second.commit_id, first.commit_id);
+        assert_eq!(second.author, first.author);
+        assert_eq!(second.author_time_unix, first.author_time_unix);
+        assert_eq!(second.summary, first.summary);
+        assert!(second.line.is_empty());
+    }
+
+    #[test]
+    fn parse_git_blame_porcelain_handles_gitpython_complex_revision_fixture() {
+        let parsed = parse_git_blame_porcelain(GITPY_BLAME_COMPLEX_REVISION);
+        assert_eq!(parsed.len(), 83);
+
+        let unique_commits = parsed
+            .iter()
+            .map(|line| line.commit_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique_commits.len(), 1);
+
+        let first = parsed.first().expect("complex fixture should parse");
+        assert_eq!(first.commit_id, "e40ad6369bc74d01af4dc41d3a9b8e25ac2aa01e");
+        assert_eq!(first.author, "Sebastian Thiel");
+        assert_eq!(first.summary, "Fixed PY3 support.");
+        assert_eq!(first.line, "## GitPython");
+    }
+
+    #[test]
+    fn parse_git_blame_porcelain_handles_gitpython_binary_fixture() {
+        let raw = String::from_utf8_lossy(GITPY_BLAME_BINARY);
+        let parsed = parse_git_blame_porcelain(&raw);
+        assert_eq!(parsed.len(), 9);
+
+        let unique_commits = parsed
+            .iter()
+            .map(|line| line.commit_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(unique_commits.len(), 2);
+
+        let first = parsed.first().expect("binary fixture should parse");
+        assert_eq!(first.author, "Sebastian Thiel");
+        assert_eq!(first.summary, "binary");
+        assert!(parsed.iter().any(|line| line.line.contains("hi")));
+    }
+}

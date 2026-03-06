@@ -6,11 +6,11 @@ pub struct GitGpuiAssets;
 impl GitGpuiAssets {
     fn load_static(path: &str) -> Option<Cow<'static, [u8]>> {
         match path {
-            "gitgpui_logo.svg" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/gitgpui_logo.svg"
+            "gitcomet-512.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitcomet-512.svg"
             ))),
-            "gitgpui_logo_window.svg" => Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/gitgpui_logo_window.svg"
+            "gitcomet_logo_window.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../../../assets/gitcomet_logo_window.svg"
             ))),
             "icons/arrow_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_down.svg"
@@ -62,8 +62,8 @@ impl GitGpuiAssets {
     fn list_static(dir: &str) -> Vec<SharedString> {
         match dir.trim_end_matches('/') {
             "" => vec![
-                "gitgpui_logo.svg".into(),
-                "gitgpui_logo_window.svg".into(),
+                "gitcomet-512.svg".into(),
+                "gitcomet_logo_window.svg".into(),
                 "icons".into(),
             ],
             "icons" => vec![

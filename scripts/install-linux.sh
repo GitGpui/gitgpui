@@ -8,7 +8,7 @@ Usage: scripts/install-linux.sh [--release|--debug] [--prefix PATH] [--no-build]
 Installs:
   - binary to <prefix>/bin/gitgpui-app
   - desktop entry to ~/.local/share/applications/gitgpui.desktop
-  - icon to ~/.local/share/icons/hicolor/scalable/apps/gitgpui.svg
+  - icon to ~/.local/share/icons/hicolor/scalable/apps/gitcomet-512.svg
 
 Defaults:
   --release, --prefix ~/.local, build if needed
@@ -56,8 +56,8 @@ sed "s|^Exec=.*$|Exec=${bindir}/gitgpui-app|g" \
   "${repo_root}/assets/linux/gitgpui.desktop" >"$tmp_desktop"
 install -Dm644 "$tmp_desktop" "${appdir}/gitgpui.desktop"
 
-install -Dm644 "${repo_root}/assets/gitgpui_logo.svg" \
-  "${icondir}/gitgpui.svg"
+install -Dm644 "${repo_root}/assets/gitcomet-512.svg" \
+  "${icondir}/gitcomet-512.svg"
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1 || true
 command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
@@ -65,5 +65,5 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG
 echo "Installed GitGpui:"
 echo "  ${bindir}/gitgpui-app"
 echo "  ${appdir}/gitgpui.desktop"
-echo "  ${icondir}/gitgpui.svg"
+echo "  ${icondir}/gitcomet-512.svg"
 echo "If GNOME still shows a generic icon, log out/in (or restart GNOME Shell)."

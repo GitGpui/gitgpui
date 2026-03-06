@@ -34,13 +34,9 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
                 .id("titlebar_app_icon")
                 .size(px(16.0))
                 .rounded(px(4.0))
-                .bg(with_alpha(
-                    theme.colors.text,
-                    if theme.is_dark { 0.12 } else { 0.08 },
-                ))
                 .overflow_hidden()
                 .child(
-                    gpui::img("gitgpui_logo_window.svg")
+                    gpui::img("gitcomet_logo_window.svg")
                         .size(px(16.0))
                         .object_fit(ObjectFit::Contain)
                         .with_fallback(move || {

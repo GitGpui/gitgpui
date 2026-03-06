@@ -179,7 +179,7 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
 }
 
 pub(crate) fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
-    let line = line.trim();
+    let line = line.trim_end_matches(&['\n', '\r'][..]);
     if line.is_empty() {
         return None;
     }
@@ -206,7 +206,6 @@ pub(crate) fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
         }
         _ => parts.next().unwrap_or_default(),
     };
-    let path = path.trim();
     if path.is_empty() {
         return None;
     }
@@ -275,6 +274,133 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
 mod tests {
     use super::*;
 
+    const GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT: &[u8] =
+        include_bytes!("../tests/fixtures/gitpython/for_each_ref_with_path_component");
+    const GITPY_DIFF_FILE_WITH_COLON: &[u8] =
+        include_bytes!("../tests/fixtures/gitpython/diff_file_with_colon");
+    const GITPY_DIFF_FILE_WITH_SPACES: &str =
+        include_str!("../tests/fixtures/gitpython/diff_file_with_spaces");
+    const GITPY_DIFF_RENAME: &str = include_str!("../tests/fixtures/gitpython/diff_rename");
+    const GITPY_DIFF_CHANGE_IN_TYPE_RAW: &str =
+        include_str!("../tests/fixtures/gitpython/diff_change_in_type_raw");
+    const GITPY_DIFF_COPIED_MODE_RAW: &str =
+        include_str!("../tests/fixtures/gitpython/diff_copied_mode_raw");
+    const GITPY_DIFF_RENAME_RAW: &str = include_str!("../tests/fixtures/gitpython/diff_rename_raw");
+    const GITPY_DIFF_RAW_BINARY: &str = include_str!("../tests/fixtures/gitpython/diff_raw_binary");
+    const GITPY_DIFF_INDEX_RAW: &str = include_str!("../tests/fixtures/gitpython/diff_index_raw");
+    const GITPY_DIFF_PATCH_UNSAFE_PATHS: &[u8] =
+        include_bytes!("../tests/fixtures/gitpython/diff_patch_unsafe_paths");
+    const GITPY_UNCOMMON_BRANCH_PREFIX_FETCH_HEAD: &str =
+        include_str!("../tests/fixtures/gitpython/uncommon_branch_prefix_FETCH_HEAD");
+    const GITPY_REV_LIST_SINGLE: &str = include_str!("../tests/fixtures/gitpython/rev_list_single");
+    const GITPY_REV_LIST_COMMIT_STATS: &str =
+        include_str!("../tests/fixtures/gitpython/rev_list_commit_stats");
+
+    fn gitpython_raw_to_name_status_line(raw: &str) -> String {
+        let mut parts = raw.split_whitespace();
+        let _old_mode = parts.next().expect("raw fixture old mode");
+        let _new_mode = parts.next().expect("raw fixture new mode");
+        let _old_sha = parts.next().expect("raw fixture old sha");
+        let _new_sha = parts.next().expect("raw fixture new sha");
+        let status = parts.next().expect("raw fixture status");
+        let first_path = parts.next().expect("raw fixture path");
+
+        if status.starts_with('R') || status.starts_with('C') {
+            let second_path = parts.next().expect("raw fixture second path");
+            format!("{status}\t{first_path}\t{second_path}")
+        } else {
+            format!("{status}\t{first_path}")
+        }
+    }
+
+    fn gitpython_patch_b_paths(patch_bytes: &[u8]) -> Vec<String> {
+        let text = String::from_utf8_lossy(patch_bytes);
+        let mut out = Vec::new();
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("+++ ") else {
+                continue;
+            };
+            if rest == "/dev/null" {
+                continue;
+            }
+            if let Some(path) = rest.strip_prefix("b/") {
+                out.push(path.to_string());
+            } else if let Some(quoted) = rest.strip_prefix("\"b/") {
+                let path = quoted
+                    .strip_suffix('\"')
+                    .expect("quoted +++ line should have trailing quote");
+                out.push(path.to_string());
+            }
+        }
+        out
+    }
+
+    fn gitpython_fetch_head_to_remote_ref_output(fetch_head: &str, remote: &str) -> String {
+        let mut out = String::new();
+        for line in fetch_head.lines() {
+            let Some((sha, rest)) = line.split_once('\t') else {
+                continue;
+            };
+            let sha = sha.trim();
+            if sha.is_empty() {
+                continue;
+            }
+            let Some(start) = rest.find("'refs/") else {
+                continue;
+            };
+            let refs_and_after = &rest[start + 1..];
+            let Some((full_ref, _)) = refs_and_after.split_once('\'') else {
+                continue;
+            };
+            let short_ref = full_ref.strip_prefix("refs/").unwrap_or(full_ref);
+            out.push_str(remote);
+            out.push('/');
+            out.push_str(short_ref);
+            out.push('\t');
+            out.push_str(sha);
+            out.push('\n');
+        }
+        out
+    }
+
+    fn gitpython_rev_list_fixture_to_pretty_record(fixture: &str) -> String {
+        let id = fixture
+            .lines()
+            .find_map(|line| line.strip_prefix("commit "))
+            .expect("rev-list fixture should contain commit id")
+            .trim();
+
+        let parents = fixture
+            .lines()
+            .filter_map(|line| line.strip_prefix("parent "))
+            .map(str::trim)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let author_line = fixture
+            .lines()
+            .find(|line| line.starts_with("author "))
+            .expect("rev-list fixture should contain author line");
+        let author = author_line
+            .strip_prefix("author ")
+            .and_then(|line| line.split_once(" <").map(|(name, _)| name))
+            .expect("author line should include actor and email");
+        let time = author_line
+            .split_whitespace()
+            .rev()
+            .nth(1)
+            .expect("author line should contain unix timestamp")
+            .trim();
+
+        let summary = fixture
+            .lines()
+            .find_map(|line| line.strip_prefix("    "))
+            .unwrap_or_default()
+            .trim();
+
+        format!("{id}\x1f{parents}\x1f{author}\x1f{time}\x1f{summary}\x1e")
+    }
+
     #[test]
     fn parse_remote_branches_splits_and_skips_head() {
         let output =
@@ -307,5 +433,223 @@ mod tests {
             unix_seconds_to_system_time_or_epoch(1),
             SystemTime::UNIX_EPOCH + Duration::from_secs(1)
         );
+    }
+
+    #[test]
+    fn parse_remote_branches_handles_path_components_from_gitpython_fixture() {
+        let raw = std::str::from_utf8(GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT)
+            .expect("fixture should be valid UTF-8");
+        let mut fields = raw.trim().split('\0');
+        let full_ref = fields.next().expect("refname field");
+        let oid = fields.next().expect("object id field");
+        let short = full_ref
+            .strip_prefix("refs/heads/")
+            .expect("heads ref prefix in fixture");
+
+        let output = format!("origin/{short}\t{oid}\norigin/HEAD\tdeadbeef\n");
+        let branches = parse_remote_branches(&output);
+
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].remote, "origin");
+        assert_eq!(branches[0].name, "refactoring/feature1");
+        assert_eq!(branches[0].target, CommitId(oid.to_string()));
+    }
+
+    #[test]
+    fn parse_git_log_pretty_records_parses_single_commit_from_gitpython_fixture() {
+        let output = gitpython_rev_list_fixture_to_pretty_record(GITPY_REV_LIST_SINGLE);
+        let page = parse_git_log_pretty_records(&output);
+
+        assert_eq!(page.commits.len(), 1);
+        assert!(page.next_cursor.is_none());
+        let commit = &page.commits[0];
+        assert_eq!(
+            commit.id,
+            CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".to_string())
+        );
+        assert_eq!(
+            commit.parent_ids,
+            vec![CommitId(
+                "634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string()
+            )]
+        );
+        assert_eq!(commit.author, "Tom Preston-Werner");
+        assert_eq!(commit.summary, "implement Grit#heads");
+        assert_eq!(
+            commit.time,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_999_972)
+        );
+    }
+
+    #[test]
+    fn parse_git_log_pretty_records_parses_multiple_gitpython_fixtures() {
+        let output = format!(
+            "{}{}",
+            gitpython_rev_list_fixture_to_pretty_record(GITPY_REV_LIST_SINGLE),
+            gitpython_rev_list_fixture_to_pretty_record(GITPY_REV_LIST_COMMIT_STATS)
+        );
+        let page = parse_git_log_pretty_records(&output);
+
+        assert_eq!(page.commits.len(), 2);
+        assert!(page.next_cursor.is_none());
+
+        assert_eq!(
+            page.commits[1].id,
+            CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string())
+        );
+        assert!(page.commits[1].parent_ids.is_empty());
+        assert_eq!(page.commits[1].author, "Tom Preston-Werner");
+        assert_eq!(page.commits[1].summary, "initial grit setup");
+        assert_eq!(
+            page.commits[1].time,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_997_100)
+        );
+    }
+
+    #[test]
+    fn parse_remote_branches_handles_pull_ref_prefixes_from_gitpython_fixture() {
+        let mut output = gitpython_fetch_head_to_remote_ref_output(
+            GITPY_UNCOMMON_BRANCH_PREFIX_FETCH_HEAD,
+            "origin",
+        );
+        output.push_str("origin/HEAD\tdeadbeef\n");
+        let branches = parse_remote_branches(&output);
+
+        let names = branches.iter().map(|b| b.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "pull/1/head",
+                "pull/1/merge",
+                "pull/2/head",
+                "pull/2/merge",
+                "pull/3/head",
+                "pull/3/merge",
+            ]
+        );
+        assert_eq!(branches.len(), 6);
+        assert_eq!(
+            branches[0].target,
+            CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_colon_paths_from_gitpython_fixture() {
+        let raw = String::from_utf8_lossy(GITPY_DIFF_FILE_WITH_COLON);
+        let colon_path = raw
+            .split('\0')
+            .find(|segment| segment.contains("file with : colon.txt"))
+            .expect("fixture contains colon path")
+            .trim();
+
+        let parsed = parse_name_status_line(&format!("M\t{colon_path}"))
+            .expect("name-status line with colon path should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("file with : colon.txt"));
+        assert_eq!(parsed.kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_space_paths_from_gitpython_fixture() {
+        let added_path = GITPY_DIFF_FILE_WITH_SPACES
+            .lines()
+            .find_map(|line| line.strip_prefix("+++ b/"))
+            .expect("fixture contains +++ path line")
+            .trim();
+
+        let parsed = parse_name_status_line(&format!("A\t{added_path}"))
+            .expect("name-status line with spaces should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("file with spaces"));
+        assert_eq!(parsed.kind, FileStatusKind::Added);
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_unicode_rename_from_gitpython_fixture() {
+        let from = GITPY_DIFF_RENAME
+            .lines()
+            .find_map(|line| line.strip_prefix("rename from "))
+            .expect("fixture contains rename-from line")
+            .trim();
+        let to = GITPY_DIFF_RENAME
+            .lines()
+            .find_map(|line| line.strip_prefix("rename to "))
+            .expect("fixture contains rename-to line")
+            .trim();
+
+        let parsed = parse_name_status_line(&format!("R100\t{from}\t{to}"))
+            .expect("rename name-status line should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("müller"));
+        assert_eq!(parsed.kind, FileStatusKind::Renamed);
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_copy_status_from_gitpython_raw_fixture() {
+        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_COPIED_MODE_RAW.trim());
+        let parsed = parse_name_status_line(&line).expect("copied raw status should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("test2.txt"));
+        assert_eq!(parsed.kind, FileStatusKind::Added);
+    }
+
+    #[test]
+    fn parse_name_status_line_maps_type_change_to_modified_from_gitpython_raw_fixture() {
+        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_CHANGE_IN_TYPE_RAW.trim());
+        let parsed = parse_name_status_line(&line).expect("type-change raw status should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("this"));
+        assert_eq!(parsed.kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_raw_rename_from_gitpython_fixture() {
+        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_RENAME_RAW.trim());
+        let parsed = parse_name_status_line(&line).expect("rename raw status should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("that"));
+        assert_eq!(parsed.kind, FileStatusKind::Renamed);
+    }
+
+    #[test]
+    fn parse_name_status_line_handles_raw_binary_modified_from_gitpython_fixture() {
+        let line = gitpython_raw_to_name_status_line(GITPY_DIFF_RAW_BINARY.trim());
+        let parsed = parse_name_status_line(&line).expect("binary raw status should parse");
+
+        assert_eq!(parsed.path, PathBuf::from("rps"));
+        assert_eq!(parsed.kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn parse_name_status_line_preserves_single_space_path_from_gitpython_raw_fixture() {
+        let raw = GITPY_DIFF_INDEX_RAW.trim_end_matches('\n');
+        let status_start = raw
+            .find(" D\t")
+            .map(|ix| ix + 1)
+            .expect("fixture should contain deleted status with tab-separated path");
+        let line = &raw[status_start..];
+
+        let parsed = parse_name_status_line(line).expect("single-space path should parse");
+        assert_eq!(parsed.path, PathBuf::from(" "));
+        assert_eq!(parsed.kind, FileStatusKind::Deleted);
+    }
+
+    #[test]
+    fn parse_name_status_line_preserves_unsafe_paths_from_gitpython_patch_fixture() {
+        let paths = gitpython_patch_b_paths(GITPY_DIFF_PATCH_UNSAFE_PATHS);
+        assert!(paths.iter().any(|p| p == "path/ starting with a space"));
+        assert!(paths.iter().any(|p| p == "path/ending in a space "));
+        assert!(paths.iter().any(|p| p == r#"path/with\ttab"#));
+        assert!(paths.iter().any(|p| p == r#"path/with\nnewline"#));
+        assert!(paths.iter().any(|p| p == "path/with spaces"));
+        assert!(paths.iter().any(|p| p == "path/with-question-mark?"));
+
+        for path in paths {
+            let parsed = parse_name_status_line(&format!("A\t{path}"))
+                .expect("unsafe path from fixture should parse");
+            assert_eq!(parsed.path, PathBuf::from(&path));
+            assert_eq!(parsed.kind, FileStatusKind::Added);
+        }
     }
 }
