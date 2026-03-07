@@ -1882,10 +1882,12 @@ fn split_cell_bg(
             )
         }
         (gitcomet_core::file_diff::FileDiffRowKind::Remove, ConflictPickSide::Ours)
-        | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => with_alpha(
-            theme.colors.warning,
-            if theme.is_dark { 0.10 } else { 0.08 },
-        ),
+        | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => {
+            with_alpha(
+                theme.colors.warning,
+                if theme.is_dark { 0.10 } else { 0.08 },
+            )
+        }
         _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
     }
 }

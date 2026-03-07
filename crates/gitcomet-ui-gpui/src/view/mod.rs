@@ -611,6 +611,7 @@ enum PopoverKind {
     StashPrompt,
     CloneRepo,
     Settings,
+    OpenSourceLicenses,
     ResetPrompt {
         repo_id: RepoId,
         target: String,

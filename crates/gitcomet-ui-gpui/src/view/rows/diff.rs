@@ -65,7 +65,9 @@ impl MainPaneView {
 
                         let word_color = match line.kind {
                             gitcomet_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                            gitcomet_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                            gitcomet_core::domain::DiffLineKind::Remove => {
+                                Some(theme.colors.danger)
+                            }
                             _ => None,
                         };
 
@@ -178,7 +180,9 @@ impl MainPaneView {
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
                         let word_color = match line.kind {
                             gitcomet_core::domain::DiffLineKind::Add => Some(theme.colors.success),
-                            gitcomet_core::domain::DiffLineKind::Remove => Some(theme.colors.danger),
+                            gitcomet_core::domain::DiffLineKind::Remove => {
+                                Some(theme.colors.danger)
+                            }
                             _ => None,
                         };
 
@@ -997,7 +1001,9 @@ fn diff_row(
                 _ => gitcomet_core::domain::DiffLineKind::Context,
             };
             let right_kind = match line.kind {
-                gitcomet_core::domain::DiffLineKind::Add => gitcomet_core::domain::DiffLineKind::Add,
+                gitcomet_core::domain::DiffLineKind::Add => {
+                    gitcomet_core::domain::DiffLineKind::Add
+                }
                 gitcomet_core::domain::DiffLineKind::Remove => {
                     gitcomet_core::domain::DiffLineKind::Context
                 }

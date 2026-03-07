@@ -170,3 +170,11 @@ If the app crashes due to a Rust panic, GitComet writes a crash log to:
 - Stash create/apply/drop; discard changes; stage/unstage.
 - Visualize branch/merge topology from refs (commit graph lanes).
 - Benchmarks for log/graph/status/diff on large repos.
+
+### License
+
+GitComet is licensed under the GNU Affero General Public License Version 3
+(AGPL-3.0-only). See `LICENSE-AGPL-3.0`.
+
+Copyright (C) 2026 AutoExplore Oy  
+Contact: info@autoexplore.ai

@@ -17,6 +17,7 @@ mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod merge_abort_confirm;
+mod open_source_licenses;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_prompt;
@@ -92,6 +93,7 @@ pub(in super::super) struct PopoverHost {
     submodule_path_input: Entity<components::TextInput>,
 
     blame_scroll: UniformListScrollHandle,
+    open_source_licenses_scroll: ScrollHandle,
 }
 
 impl PopoverHost {
@@ -397,6 +399,7 @@ impl PopoverHost {
             submodule_url_input,
             submodule_path_input,
             blame_scroll: UniformListScrollHandle::default(),
+            open_source_licenses_scroll: ScrollHandle::new(),
         }
     }
 
@@ -765,6 +768,10 @@ impl PopoverHost {
                 PopoverKind::DiffHunks => {
                     let _ = self.ensure_diff_hunk_picker_search_input(window, cx);
                 }
+                PopoverKind::OpenSourceLicenses => {
+                    self.open_source_licenses_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
+                }
                 _ => {}
             }
             self.popover = Some(kind);
@@ -922,7 +929,10 @@ impl PopoverHost {
         let margin_y = px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
-        let is_settings = matches!(&kind, PopoverKind::Settings);
+        let is_settings = matches!(
+            &kind,
+            PopoverKind::Settings | PopoverKind::OpenSourceLicenses
+        );
         let is_create_branch_or_stash_prompt =
             matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
         let is_context_menu = matches!(
@@ -1019,6 +1029,7 @@ impl PopoverHost {
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::Settings => settings::panel(self, cx),
+            PopoverKind::OpenSourceLicenses => open_source_licenses::panel(self, cx),
             /* PopoverKind::ConflictResolver { repo_id, path } => {
                 if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
                     let window_size = self.ui_window_size_last_seen;

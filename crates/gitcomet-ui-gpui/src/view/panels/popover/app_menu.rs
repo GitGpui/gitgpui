@@ -95,6 +95,23 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 },
             )),
         )
+        .child(
+            entry(
+                "app_menu_open_source_licenses",
+                "Show Open Source Licenses".into(),
+                false,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                this.settings_date_format_open = false;
+                this.settings_timezone_open = false;
+                this.open_popover_at(
+                    PopoverKind::OpenSourceLicenses,
+                    crate::view::chrome::window_top_left_corner(window),
+                    window,
+                    cx,
+                );
+            })),
+        )
         .child(separator())
         .child(section_label("app_menu_repo_section", "Repository"))
         .child(

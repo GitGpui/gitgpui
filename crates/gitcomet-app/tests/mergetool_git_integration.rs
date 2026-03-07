@@ -135,7 +135,10 @@ fn configure_gitcomet_mergetool(repo: &Path) {
 
     run_git(repo, &["config", "merge.tool", "gitcomet"]);
     run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    run_git(repo, &["config", "mergetool.gitcomet.trustExitCode", "true"]);
+    run_git(
+        repo,
+        &["config", "mergetool.gitcomet.trustExitCode", "true"],
+    );
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     // Disable backup file creation for cleaner assertions.
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
@@ -150,7 +153,10 @@ fn configure_gitcomet_mergetool_with_alias_flags(repo: &Path) {
 
     run_git(repo, &["config", "merge.tool", "gitcomet"]);
     run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    run_git(repo, &["config", "mergetool.gitcomet.trustExitCode", "true"]);
+    run_git(
+        repo,
+        &["config", "mergetool.gitcomet.trustExitCode", "true"],
+    );
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 }
@@ -656,7 +662,10 @@ fn git_mergetool_with_trust_exit_code_marks_clean_merge_resolved() {
     );
     run_git(repo, &["config", "merge.tool", "gitcomet"]);
     run_git(repo, &["config", "mergetool.gitcomet.cmd", &cmd]);
-    run_git(repo, &["config", "mergetool.gitcomet.trustExitCode", "true"]);
+    run_git(
+        repo,
+        &["config", "mergetool.gitcomet.trustExitCode", "true"],
+    );
     run_git(repo, &["config", "mergetool.prompt", "false"]);
     run_git(repo, &["config", "mergetool.keepBackup", "false"]);
 

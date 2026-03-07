@@ -372,7 +372,10 @@ pub(super) fn repo_opened_err(
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
-    if matches!(error.kind(), gitcomet_core::error::ErrorKind::NotARepository) {
+    if matches!(
+        error.kind(),
+        gitcomet_core::error::ErrorKind::NotARepository
+    ) {
         push_notification(
             state,
             AppNotificationKind::Error,

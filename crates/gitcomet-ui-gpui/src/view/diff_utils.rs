@@ -110,7 +110,8 @@ pub(super) fn compute_diff_word_highlights(
         }
 
         let mut removed: Vec<(usize, &str)> = Vec::new();
-        while ix < diff.len() && matches!(diff[ix].kind, gitcomet_core::domain::DiffLineKind::Remove)
+        while ix < diff.len()
+            && matches!(diff[ix].kind, gitcomet_core::domain::DiffLineKind::Remove)
         {
             let text = diff_content_text(&diff[ix]);
             removed.push((ix, text));
