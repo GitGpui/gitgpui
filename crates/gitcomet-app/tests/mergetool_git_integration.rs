@@ -1135,7 +1135,12 @@ fn git_mergetool_no_trust_exit_code_changed_output_resolves_conflict() {
         "fake",
         // Use an explicit success exit so behavior does not depend on Git's
         // trustExitCode=false handling for non-zero tool exits.
-        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"; exit 0",
+        //
+        // With trustExitCode=false, upstream git-mergetool does not compare
+        // file contents. It checks whether MERGED is newer than BACKUP using
+        // `test -nt`. On some platforms/runners this can be same-tick and
+        // falsely report "seems unchanged" even after writing new content.
+        "echo TOOL=fake >&2; cat \"$REMOTE\" > \"$MERGED\"; sleep 1; touch \"$MERGED\"; exit 0",
     );
     configure_mergetool_trust_exit_code(repo, "fake", false);
 
