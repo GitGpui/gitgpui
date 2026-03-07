@@ -5,8 +5,8 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
-use rustc_hash::FxHashSet as HashSet;
-use std::path::PathBuf;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 impl GixRepo {
@@ -111,6 +111,22 @@ impl GixRepo {
             }
         }
 
+        // Some platforms may omit certain unmerged shapes (notably stage-1-only
+        // both-deleted conflicts) from gix status output. Supplement conflict
+        // entries from the index's unmerged stages for complete parity.
+        for (path, conflict_kind) in git_unmerged_conflicts(&self.spec.workdir)? {
+            if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
+                entry.kind = FileStatusKind::Conflicted;
+                entry.conflict = Some(conflict_kind);
+            } else {
+                unstaged.push(FileStatus {
+                    path,
+                    kind: FileStatusKind::Conflicted,
+                    conflict: Some(conflict_kind),
+                });
+            }
+        }
+
         fn kind_priority(kind: FileStatusKind) -> u8 {
             match kind {
                 FileStatusKind::Conflicted => 5,
@@ -175,6 +191,83 @@ impl GixRepo {
     }
 }
 
+fn git_unmerged_conflicts(workdir: &Path) -> Result<Vec<(PathBuf, FileConflictKind)>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .arg("ls-files")
+        .arg("-u")
+        .arg("-z")
+        .output()
+        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "git ls-files -u failed: {}",
+            stderr.trim()
+        ))));
+    }
+
+    Ok(parse_unmerged_conflicts(&output.stdout))
+}
+
+fn parse_unmerged_conflicts(stdout: &[u8]) -> Vec<(PathBuf, FileConflictKind)> {
+    let mut stage_masks: HashMap<PathBuf, u8> = HashMap::default();
+
+    for record in stdout
+        .split(|b| *b == b'\0')
+        .filter(|record| !record.is_empty())
+    {
+        let Some(tab_index) = record.iter().rposition(|b| *b == b'\t') else {
+            continue;
+        };
+        let metadata = &record[..tab_index];
+        let path_bytes = &record[tab_index + 1..];
+        if path_bytes.is_empty() {
+            continue;
+        }
+
+        let stage = metadata
+            .split(|b| *b == b' ')
+            .filter(|part| !part.is_empty())
+            .next_back()
+            .and_then(|part| std::str::from_utf8(part).ok())
+            .and_then(|part| part.parse::<u8>().ok());
+
+        let Some(stage @ 1..=3) = stage else {
+            continue;
+        };
+
+        let path = PathBuf::from(String::from_utf8_lossy(path_bytes).into_owned());
+        let bit = 1u8 << (stage - 1);
+        stage_masks
+            .entry(path)
+            .and_modify(|mask| *mask |= bit)
+            .or_insert(bit);
+    }
+
+    let mut conflicts = stage_masks
+        .into_iter()
+        .filter_map(|(path, mask)| conflict_kind_from_stage_mask(mask).map(|kind| (path, kind)))
+        .collect::<Vec<_>>();
+    conflicts.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    conflicts
+}
+
+fn conflict_kind_from_stage_mask(mask: u8) -> Option<FileConflictKind> {
+    Some(match mask {
+        0b001 => FileConflictKind::BothDeleted,
+        0b010 => FileConflictKind::AddedByUs,
+        0b011 => FileConflictKind::DeletedByThem,
+        0b100 => FileConflictKind::AddedByThem,
+        0b101 => FileConflictKind::DeletedByUs,
+        0b110 => FileConflictKind::BothAdded,
+        0b111 => FileConflictKind::BothModified,
+        _ => return None,
+    })
+}
+
 fn map_entry_status<T, U>(
     status: gix::status::plumbing::index_as_worktree::EntryStatus<T, U>,
 ) -> (FileStatusKind, Option<FileConflictKind>) {
@@ -204,5 +297,99 @@ fn map_entry_status<T, U>(
             },
             None,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{conflict_kind_from_stage_mask, parse_unmerged_conflicts};
+    use gitcomet_core::domain::FileConflictKind;
+    use rustc_hash::FxHashMap as HashMap;
+    use std::path::PathBuf;
+
+    #[test]
+    fn conflict_kind_from_stage_mask_covers_all_shapes() {
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b001),
+            Some(FileConflictKind::BothDeleted)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b010),
+            Some(FileConflictKind::AddedByUs)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b011),
+            Some(FileConflictKind::DeletedByThem)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b100),
+            Some(FileConflictKind::AddedByThem)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b101),
+            Some(FileConflictKind::DeletedByUs)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b110),
+            Some(FileConflictKind::BothAdded)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b111),
+            Some(FileConflictKind::BothModified)
+        );
+        assert_eq!(conflict_kind_from_stage_mask(0), None);
+    }
+
+    #[test]
+    fn parse_unmerged_conflicts_groups_stage_entries_by_path() {
+        let stdout = concat!(
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tdd.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tau.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tud.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tud.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tua.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tdu.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tdu.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\taa.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\taa.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tuu.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tuu.txt\0",
+            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tuu.txt\0"
+        )
+        .as_bytes();
+
+        let parsed = parse_unmerged_conflicts(stdout);
+        let by_path = parsed
+            .into_iter()
+            .collect::<HashMap<PathBuf, FileConflictKind>>();
+
+        assert_eq!(
+            by_path.get(&PathBuf::from("dd.txt")),
+            Some(&FileConflictKind::BothDeleted)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("au.txt")),
+            Some(&FileConflictKind::AddedByUs)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("ud.txt")),
+            Some(&FileConflictKind::DeletedByThem)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("ua.txt")),
+            Some(&FileConflictKind::AddedByThem)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("du.txt")),
+            Some(&FileConflictKind::DeletedByUs)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("aa.txt")),
+            Some(&FileConflictKind::BothAdded)
+        );
+        assert_eq!(
+            by_path.get(&PathBuf::from("uu.txt")),
+            Some(&FileConflictKind::BothModified)
+        );
     }
 }

@@ -233,9 +233,11 @@ fn set_fixed_mtime(path: &Path) {
 
 #[cfg(not(windows))]
 fn set_fixed_mtime(path: &Path) {
+    // `touch -d` is GNU-specific; `-t [[CC]YY]MMDDhhmm[.ss]` is supported on
+    // both GNU/Linux and BSD/macOS.
     let status = Command::new("touch")
-        .arg("-d")
-        .arg("@1700000000")
+        .arg("-t")
+        .arg("202311142213.20")
         .arg(path)
         .status()
         .expect("touch to run");
@@ -249,7 +251,7 @@ fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
 
 #[cfg(not(windows))]
 fn cmd_same_size_content_change_and_exit_failure() -> &'static str {
-    "len=$(wc -c < \"$MERGED\"); head -c \"$len\" /dev/zero | tr '\\0' 'R' > \"$MERGED\"; touch -d '@1700000000' \"$MERGED\"; exit 1"
+    "len=$(wc -c < \"$MERGED\"); head -c \"$len\" /dev/zero | tr '\\0' 'R' > \"$MERGED\"; touch -t 202311142213.20 \"$MERGED\"; exit 1"
 }
 
 #[cfg(windows)]
