@@ -20,9 +20,38 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
 }
 
 fn gitcomet_bin() -> PathBuf {
-    std::env::var_os("CARGO_BIN_EXE_gitcomet-app")
-        .map(PathBuf::from)
-        .expect("CARGO_BIN_EXE_gitcomet-app is not set for integration tests")
+    for env_key in ["CARGO_BIN_EXE_gitcomet-app", "CARGO_BIN_EXE_gitcomet_app"] {
+        if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
+            if path.is_file() {
+                return path;
+            }
+        }
+    }
+
+    if let Some(path) = gitcomet_bin_from_current_exe() {
+        return path;
+    }
+
+    panic!(
+        "gitcomet-app binary path was not found. Tried CARGO_BIN_EXE_gitcomet-app, \
+CARGO_BIN_EXE_gitcomet_app, and a fallback relative to current test executable"
+    );
+}
+
+fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
+    let test_exe = std::env::current_exe().ok()?;
+    let deps_dir = test_exe.parent()?;
+    let profile_dir = deps_dir.parent()?;
+    let exe_suffix = std::env::consts::EXE_SUFFIX;
+
+    for bin_name in ["gitcomet-app", "gitcomet_app"] {
+        let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 fn shell_quote(value: &str) -> String {
