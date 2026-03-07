@@ -360,13 +360,31 @@ impl GixRepo {
     }
 
     pub(super) fn commit_impl(&self, message: &str) -> Result<()> {
+        let merge_in_progress = self.merge_in_progress_for_commit()?;
         let mut cmd = Command::new("git");
-        cmd.arg("-C")
+        cmd.arg("-C").arg(&self.spec.workdir).arg("commit");
+        if merge_in_progress {
+            cmd.arg("--allow-empty");
+        }
+        cmd.arg("-m").arg(message);
+        let label = if merge_in_progress {
+            "git commit --allow-empty"
+        } else {
+            "git commit"
+        };
+        run_git_simple(cmd, label)
+    }
+
+    fn merge_in_progress_for_commit(&self) -> Result<bool> {
+        let output = Command::new("git")
+            .arg("-C")
             .arg(&self.spec.workdir)
-            .arg("commit")
-            .arg("-m")
-            .arg(message);
-        run_git_simple(cmd, "git commit")
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("MERGE_HEAD")
+            .output()
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        Ok(output.status.success())
     }
 
     pub(super) fn commit_amend_impl(&self, message: &str) -> Result<()> {

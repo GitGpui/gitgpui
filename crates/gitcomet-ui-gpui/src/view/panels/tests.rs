@@ -384,3 +384,66 @@ fn switching_active_repo_clears_commit_message_input(cx: &mut gpui::TestAppConte
         assert_eq!(pane.commit_message_input.read(app).text(), "");
     });
 }
+
+#[gpui::test]
+fn merge_start_prefills_default_commit_message(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(43);
+    let make_state = |merge_message: Option<&str>| {
+        let mut repo = gitcomet_state::model::RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-merge"),
+            },
+        );
+        repo.merge_commit_message = gitcomet_state::model::Loadable::Ready(
+            merge_message.map(std::string::ToString::to_string),
+        );
+        repo.merge_message_rev = u64::from(merge_message.is_some());
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        })
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(make_state(None), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("draft message".to_string(), cx)
+                });
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(make_state(Some("Merge branch 'feature'")), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        assert_eq!(
+            pane.commit_message_input.read(app).text(),
+            "Merge branch 'feature'"
+        );
+    });
+}

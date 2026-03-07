@@ -190,10 +190,24 @@ impl DetailsPaneView {
                 .find(|r| r.id == repo_id)
                 .and_then(|r| r.selected_commit.clone())
         });
+        let prev_merge_message = prev_active_repo_id.and_then(|repo_id| {
+            self.state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .and_then(|r| match &r.merge_commit_message {
+                    Loadable::Ready(Some(message)) => Some(message.clone()),
+                    _ => None,
+                })
+        });
 
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_selected_commit = next_repo.and_then(|r| r.selected_commit.clone());
+        let next_merge_message = next_repo.and_then(|r| match &r.merge_commit_message {
+            Loadable::Ready(Some(message)) => Some(message.clone()),
+            _ => None,
+        });
 
         self.state = next;
 
@@ -248,6 +262,20 @@ impl DetailsPaneView {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        }
+
+        let merge_started = match (prev_active_repo_id, next_repo_id) {
+            (Some(prev), Some(next)) if prev == next => {
+                prev_merge_message.is_none() && next_merge_message.is_some()
+            }
+            _ => next_merge_message.is_some(),
+        };
+        if merge_started && let Some(message) = next_merge_message {
+            self.commit_message_user_edited = false;
+            self.commit_message_programmatic_change = true;
+            self.commit_message_last_text = message.clone().into();
+            self.commit_message_input
+                .update(cx, |input, cx| input.set_text(message, cx));
         }
 
         self.update_commit_details_delay(cx);

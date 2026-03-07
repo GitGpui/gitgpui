@@ -2860,6 +2860,71 @@ fn merge_commit_message_is_available_during_conflict() {
 }
 
 #[test]
+fn commit_finishes_merge_when_resolved_tree_matches_head() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "a.txt", "feature\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+
+    run_git(repo, &["checkout", "-"]);
+    write(repo, "a.txt", "main\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    assert!(opened.merge_ref_with_output("feature").is_err());
+    run_git(repo, &["checkout", "--ours", "a.txt"]);
+    run_git(repo, &["add", "a.txt"]);
+
+    let status = opened.status().unwrap();
+    assert!(status.staged.is_empty(), "expected no staged changes");
+    assert!(status.unstaged.is_empty(), "expected no unstaged changes");
+
+    opened
+        .commit("Merge branch 'feature'")
+        .expect("merge commit should succeed even without tree changes");
+
+    assert!(opened.merge_commit_message().unwrap().is_none());
+
+    let parents = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-list", "--parents", "-n", "1", "HEAD"])
+        .output()
+        .expect("rev-list --parents");
+    assert!(parents.status.success());
+    let parent_count = String::from_utf8(parents.stdout)
+        .unwrap()
+        .split_whitespace()
+        .count()
+        .saturating_sub(1);
+    assert_eq!(parent_count, 2, "expected merge commit");
+}
+
+#[test]
 fn rebase_replays_commits_onto_target_branch() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

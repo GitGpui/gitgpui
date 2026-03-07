@@ -1,5 +1,13 @@
 use super::*;
 
+fn merge_active(repo: Option<&RepoState>) -> bool {
+    repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
+}
+
+fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
+    staged_count > 0 || is_merge_active
+}
+
 impl DetailsPaneView {
     pub(in super::super) fn commit_details_view(
         &mut self,
@@ -398,9 +406,13 @@ impl DetailsPaneView {
                 .into_any_element();
         }
 
-        let repo = self.active_repo();
-        let local_actions_in_flight = repo.map(|r| r.local_actions_in_flight > 0).unwrap_or(false);
-        let (staged_count, unstaged_count) = repo
+        let is_merge_active = merge_active(self.active_repo());
+        let local_actions_in_flight = self
+            .active_repo()
+            .map(|r| r.local_actions_in_flight > 0)
+            .unwrap_or(false);
+        let (staged_count, unstaged_count) = self
+            .active_repo()
             .and_then(|r| match &r.status {
                 Loadable::Ready(s) => Some((s.staged.len(), s.unstaged.len())),
                 _ => None,
@@ -681,7 +693,9 @@ impl DetailsPaneView {
                             .bg(theme.colors.surface_bg)
                             .px_2()
                             .py_2()
-                            .child(self.commit_box(staged_count > 0, cx)),
+                            .child(
+                                self.commit_box(commit_allowed(is_merge_active, staged_count), cx),
+                            ),
                     )
                     .into_any_element()
             } else {
@@ -768,7 +782,7 @@ impl DetailsPaneView {
                 })
         {
             let current = self.commit_message_input.read(cx).text();
-            if current.trim().is_empty() && !self.commit_message_user_edited {
+            if current.trim().is_empty() {
                 self.commit_message_programmatic_change = true;
                 self.commit_message_input
                     .update(cx, |i, cx| i.set_text(message, cx));
@@ -832,5 +846,39 @@ impl DetailsPaneView {
                         ),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_state::model::{Loadable, RepoId, RepoState};
+    use std::path::PathBuf;
+
+    fn test_repo() -> RepoState {
+        RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        )
+    }
+
+    #[test]
+    fn commit_allowed_when_staged_changes_exist() {
+        assert!(commit_allowed(false, 1));
+    }
+
+    #[test]
+    fn commit_allowed_when_merge_is_active_without_staged_changes() {
+        let mut repo = test_repo();
+        repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'feature'".to_string()));
+        assert!(commit_allowed(merge_active(Some(&repo)), 0));
+    }
+
+    #[test]
+    fn commit_not_allowed_without_staged_changes_or_merge() {
+        assert!(!commit_allowed(false, 0));
     }
 }
