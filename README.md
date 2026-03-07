@@ -163,6 +163,10 @@ If the app crashes due to a Rust panic, GitComet writes a crash log to:
 - macOS: `~/Library/Logs/gitcomet/crashes/`
 - Windows: `%LOCALAPPDATA%\gitcomet\crashes\` (fallback: `%APPDATA%\gitcomet\crashes\`)
 
+On next startup, GitComet can prompt you to report the crash as a prefilled
+GitHub issue in `Auto-Explore/GitComet`, including app version, platform,
+panic details, and a trimmed backtrace.
+
 ### Roadmap (high level)
 
 - Open repositories; show status + commit history timeline.

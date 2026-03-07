@@ -1,7 +1,7 @@
 use crate::assets::GitCometAssets;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode,
+    GitCometViewMode, StartupCrashReport,
 };
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
@@ -42,8 +42,18 @@ struct WindowLaunchConfig {
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) {
+    run_with_startup_crash_report(backend, None);
+}
+
+pub fn run_with_startup_crash_report(
+    backend: Arc<dyn GitBackend>,
+    startup_crash_report: Option<StartupCrashReport>,
+) {
     let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
-    run_windowed_app(backend, normal_launch_config(initial_path));
+    run_windowed_app(
+        backend,
+        normal_launch_config(initial_path, startup_crash_report),
+    );
 }
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
@@ -56,12 +66,15 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     exit_code.load(Ordering::SeqCst)
 }
 
-fn normal_launch_config(initial_path: Option<PathBuf>) -> WindowLaunchConfig {
+fn normal_launch_config(
+    initial_path: Option<PathBuf>,
+    startup_crash_report: Option<StartupCrashReport>,
+) -> WindowLaunchConfig {
     WindowLaunchConfig {
         title: "GitComet".to_string(),
         app_id: "gitcomet".to_string(),
-        view_config: GitCometViewConfig::normal(initial_path),
-        use_legacy_constructor: true,
+        view_config: GitCometViewConfig::normal(initial_path, startup_crash_report),
+        use_legacy_constructor: false,
     }
 }
 
@@ -85,6 +98,7 @@ fn focused_mergetool_launch_config(
                 },
             }),
             focused_mergetool_exit_code: exit_code,
+            startup_crash_report: None,
         },
         use_legacy_constructor: false,
     }

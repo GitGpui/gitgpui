@@ -95,6 +95,7 @@ fn main() {
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
+                let startup_crash_report = crashlog::take_startup_report();
                 let backend = build_backend();
 
                 // Pass path to the UI layer. The existing run() reads
@@ -105,14 +106,27 @@ fn main() {
                 if cfg!(feature = "ui-gpui") {
                     #[cfg(feature = "ui-gpui")]
                     {
-                        gitcomet_ui_gpui::run(backend);
+                        let startup_report = startup_crash_report.clone().map(|report| {
+                            gitcomet_ui_gpui::StartupCrashReport {
+                                issue_url: report.issue_url,
+                                summary: report.summary,
+                                crash_log_path: report.crash_log_path,
+                            }
+                        });
+                        gitcomet_ui_gpui::run_with_startup_crash_report(backend, startup_report);
                     }
 
                     #[cfg(not(feature = "ui-gpui"))]
                     {
+                        if let Some(report) = startup_crash_report.as_ref() {
+                            print_startup_crash_report_hint(report);
+                        }
                         gitcomet_ui::run(backend);
                     }
                 } else {
+                    if let Some(report) = startup_crash_report.as_ref() {
+                        print_startup_crash_report_hint(report);
+                    }
                     gitcomet_ui::run(backend);
                 }
             }
@@ -226,6 +240,16 @@ fn main() {
             }
         }
     }
+}
+
+#[cfg(feature = "ui")]
+fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
+    eprintln!("GitComet detected a crash from a previous run.");
+    eprintln!(
+        "Open this URL to file a prefilled crash report:\n{}",
+        report.issue_url
+    );
+    eprintln!("Crash log: {}", report.crash_log_path.display());
 }
 
 #[cfg(feature = "ui")]

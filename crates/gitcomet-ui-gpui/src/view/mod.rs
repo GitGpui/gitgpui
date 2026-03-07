@@ -850,17 +850,29 @@ pub struct GitCometViewConfig {
     pub view_mode: GitCometViewMode,
     pub focused_mergetool: Option<FocusedMergetoolViewConfig>,
     pub focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
+    pub startup_crash_report: Option<StartupCrashReport>,
 }
 
 impl GitCometViewConfig {
-    pub fn normal(initial_path: Option<std::path::PathBuf>) -> Self {
+    pub fn normal(
+        initial_path: Option<std::path::PathBuf>,
+        startup_crash_report: Option<StartupCrashReport>,
+    ) -> Self {
         Self {
             initial_path,
             view_mode: GitCometViewMode::Normal,
             focused_mergetool: None,
             focused_mergetool_exit_code: None,
+            startup_crash_report,
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StartupCrashReport {
+    pub issue_url: String,
+    pub summary: String,
+    pub crash_log_path: std::path::PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1029,6 +1041,7 @@ pub struct GitCometView {
     last_mouse_pos: Point<Pixels>,
     pending_pull_reconcile_prompt: Option<RepoId>,
     pending_force_delete_branch_prompt: Option<(RepoId, String)>,
+    startup_crash_report: Option<StartupCrashReport>,
 
     error_banner_input: Entity<components::TextInput>,
     active_context_menu_invoker: Option<SharedString>,
@@ -1105,7 +1118,7 @@ impl GitCometView {
         Self::new_with_config(
             store,
             events,
-            GitCometViewConfig::normal(initial_path),
+            GitCometViewConfig::normal(initial_path, None),
             window,
             cx,
         )
@@ -1123,6 +1136,7 @@ impl GitCometView {
             view_mode,
             focused_mergetool,
             focused_mergetool_exit_code,
+            startup_crash_report,
         } = config;
         if initial_path.is_none() {
             initial_path = focused_mergetool.as_ref().map(|cfg| cfg.repo_path.clone());
@@ -1403,6 +1417,7 @@ impl GitCometView {
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
+            startup_crash_report,
             error_banner_input,
             active_context_menu_invoker: None,
         };
@@ -1613,6 +1628,59 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
+    fn open_external_url(&mut self, url: &str) -> Result<(), std::io::Error> {
+        if url.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "URL is empty",
+            ));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open").arg(url).spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", ""])
+                .arg(url)
+                .spawn()?;
+            return Ok(());
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        {
+            match std::process::Command::new("xdg-open").arg(url).spawn() {
+                Ok(_) => Ok(()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    let _ = std::process::Command::new("gio")
+                        .args(["open"])
+                        .arg(url)
+                        .spawn()?;
+                    Ok(())
+                }
+                Err(err) => Err(err),
+            }
+        }
+
+        #[cfg(not(any(
+            target_os = "macos",
+            target_os = "windows",
+            target_os = "linux",
+            target_os = "freebsd"
+        )))]
+        {
+            let _ = url;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Opening URLs is not supported on this platform",
+            ))
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
         self.popover_host.read(app).is_open()
@@ -1748,6 +1816,90 @@ impl Render for GitCometView {
             .text_color(theme.colors.text)
             .child(self.title_bar.clone())
             .child(center_content);
+
+        if let Some(report) = self.startup_crash_report.clone()
+            && self.view_mode == GitCometViewMode::Normal
+        {
+            let issue_url = report.issue_url.clone();
+            let summary = report.summary.clone();
+
+            let report_button =
+                components::Button::new("startup_crash_report_open", "Report Issue")
+                    .style(components::ButtonStyle::Filled)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        match this.open_external_url(&issue_url) {
+                            Ok(()) => {
+                                this.push_toast(
+                                    components::ToastKind::Success,
+                                    "Opened crash report page in your browser.".to_string(),
+                                    cx,
+                                );
+                                this.startup_crash_report = None;
+                            }
+                            Err(err) => {
+                                this.push_toast(
+                                    components::ToastKind::Error,
+                                    format!("Failed to open browser: {err}"),
+                                    cx,
+                                );
+                            }
+                        }
+                        cx.notify();
+                    });
+
+            let dismiss_button = components::Button::new("startup_crash_report_dismiss", "Dismiss")
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, |this, _e, _w, cx| {
+                    this.startup_crash_report = None;
+                    cx.notify();
+                });
+
+            body = body.child(
+                div()
+                    .relative()
+                    .px_2()
+                    .py_1()
+                    .bg(with_alpha(theme.colors.warning, 0.13))
+                    .border_1()
+                    .border_color(with_alpha(theme.colors.warning, 0.30))
+                    .rounded(px(theme.radii.panel))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("GitComet recovered from program crash"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(
+                                        "Would you like to contribute by reporting issue to GitComet GitHub repository?",
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(format!("Summary: {summary}")),
+                            )
+                            .child(
+                                div()
+                                    .pt_1()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(report_button)
+                                    .child(dismiss_button),
+                            ),
+                    ),
+            );
+        }
 
         if let Some(repo_id) = self.active_repo_id()
             && let Some(repo) = self.active_repo()
