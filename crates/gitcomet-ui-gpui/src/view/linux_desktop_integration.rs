@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+const ICON_SIZES: &[u32] = &[32, 48, 128, 256, 512];
+
 impl GitCometView {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     pub(in crate::view) fn maybe_auto_install_linux_desktop_integration(
@@ -31,8 +34,12 @@ impl GitCometView {
         };
 
         let desktop_path = data_home.join("applications/gitcomet.desktop");
-        let icon_path = data_home.join("icons/hicolor/scalable/apps/gitcomet-512.svg");
-        if desktop_path.exists() && icon_path.exists() {
+        let all_icons_exist = ICON_SIZES.iter().all(|size| {
+            data_home
+                .join(format!("icons/hicolor/{size}x{size}/apps/gitcomet.png"))
+                .exists()
+        });
+        if desktop_path.exists() && all_icons_exist {
             return;
         }
 
@@ -56,10 +63,33 @@ impl GitCometView {
                             env!("CARGO_MANIFEST_DIR"),
                             "/../../assets/linux/gitcomet.desktop"
                         ));
-                        const ICON_SVG: &[u8] = include_bytes!(concat!(
+                        const ICON_32_PNG: &[u8] = include_bytes!(concat!(
                             env!("CARGO_MANIFEST_DIR"),
-                            "/../../assets/gitcomet-512.svg"
+                            "/../../assets/linux/hicolor/32x32/apps/gitcomet.png"
                         ));
+                        const ICON_48_PNG: &[u8] = include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../assets/linux/hicolor/48x48/apps/gitcomet.png"
+                        ));
+                        const ICON_128_PNG: &[u8] = include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../assets/linux/hicolor/128x128/apps/gitcomet.png"
+                        ));
+                        const ICON_256_PNG: &[u8] = include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../assets/linux/hicolor/256x256/apps/gitcomet.png"
+                        ));
+                        const ICON_512_PNG: &[u8] = include_bytes!(concat!(
+                            env!("CARGO_MANIFEST_DIR"),
+                            "/../../assets/linux/hicolor/512x512/apps/gitcomet.png"
+                        ));
+                        const ICON_ASSETS: &[(u32, &[u8])] = &[
+                            (32, ICON_32_PNG),
+                            (48, ICON_48_PNG),
+                            (128, ICON_128_PNG),
+                            (256, ICON_256_PNG),
+                            (512, ICON_512_PNG),
+                        ];
 
                         let exe = std::env::current_exe().map_err(|_| {
                             "Desktop install failed: could not resolve executable path".to_string()
@@ -74,12 +104,11 @@ impl GitCometView {
                         })?;
 
                         let applications_dir = data_home.join("applications");
-                        let icons_dir = data_home.join("icons/hicolor/scalable/apps");
+                        let icons_root = data_home.join("icons/hicolor");
                         let desktop_path = applications_dir.join("gitcomet.desktop");
-                        let icon_path = icons_dir.join("gitcomet-512.svg");
+                        let icon_path = icons_root.join("512x512/apps/gitcomet.png");
 
                         fs::create_dir_all(&applications_dir)
-                            .and_then(|_| fs::create_dir_all(&icons_dir))
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
 
                         use std::fmt::Write as _;
@@ -96,8 +125,15 @@ impl GitCometView {
                         }
 
                         fs::write(&desktop_path, desktop_out.as_bytes())
-                            .and_then(|_| fs::write(&icon_path, ICON_SVG))
                             .map_err(|e| format!("Desktop install failed: {e}"))?;
+
+                        for (size, icon_bytes) in ICON_ASSETS {
+                            let icon_dir = icons_root.join(format!("{size}x{size}/apps"));
+                            let icon_file = icon_dir.join("gitcomet.png");
+                            fs::create_dir_all(&icon_dir)
+                                .and_then(|_| fs::write(&icon_file, icon_bytes))
+                                .map_err(|e| format!("Desktop install failed: {e}"))?;
+                        }
 
                         let _ = Command::new("update-desktop-database")
                             .arg(&applications_dir)

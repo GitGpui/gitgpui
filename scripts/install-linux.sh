@@ -8,7 +8,8 @@ Usage: scripts/install-linux.sh [--release|--debug] [--prefix PATH] [--no-build]
 Installs:
   - binary to <prefix>/bin/gitcomet-app
   - desktop entry to ~/.local/share/applications/gitcomet.desktop
-  - icon to ~/.local/share/icons/hicolor/scalable/apps/gitcomet-512.svg
+  - icons to ~/.local/share/icons/hicolor/<size>x<size>/apps/gitcomet.png
+    sizes: 32, 48, 128, 256, 512
 
 Defaults:
   --release, --prefix ~/.local, build if needed
@@ -45,7 +46,8 @@ fi
 
 bindir="${prefix}/bin"
 appdir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
-icondir="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor/scalable/apps"
+iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
+icon_sizes=(32 48 128 256 512)
 
 install -Dm755 "$bin_src" "${bindir}/gitcomet-app"
 
@@ -56,14 +58,18 @@ sed "s|^Exec=.*$|Exec=${bindir}/gitcomet-app|g" \
   "${repo_root}/assets/linux/gitcomet.desktop" >"$tmp_desktop"
 install -Dm644 "$tmp_desktop" "${appdir}/gitcomet.desktop"
 
-install -Dm644 "${repo_root}/assets/gitcomet-512.svg" \
-  "${icondir}/gitcomet-512.svg"
+for size in "${icon_sizes[@]}"; do
+  install -Dm644 "${repo_root}/assets/linux/hicolor/${size}x${size}/apps/gitcomet.png" \
+    "${iconsroot}/${size}x${size}/apps/gitcomet.png"
+done
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$appdir" >/dev/null 2>&1 || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor" >/dev/null 2>&1 || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache "${iconsroot}" >/dev/null 2>&1 || true
 
 echo "Installed GitComet:"
 echo "  ${bindir}/gitcomet-app"
 echo "  ${appdir}/gitcomet.desktop"
-echo "  ${icondir}/gitcomet-512.svg"
+for size in "${icon_sizes[@]}"; do
+  echo "  ${iconsroot}/${size}x${size}/apps/gitcomet.png"
+done
 echo "If GNOME still shows a generic icon, log out/in (or restart GNOME Shell)."
