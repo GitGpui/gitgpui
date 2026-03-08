@@ -1,5 +1,8 @@
 ## GitComet
 
+[![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
+[![Coverage](https://codecov.io/gh/Auto-Explore/GitComet/branch/main/graph/badge.svg)](https://codecov.io/gh/Auto-Explore/GitComet)
+
 Fast, resource-efficient, fully open source Git GUI written in Rust, targeting GitKraken/SourceTree/GitHub Desktop-class workflows using `gpui` for the UI.
 
 ### Goals
@@ -159,6 +162,19 @@ Clippy (CI mode):
 ```bash
 cargo clippy --workspace --no-default-features --features gix -- -D warnings
 ```
+
+Coverage (local + CI-compatible):
+
+```bash
+rustup component add llvm-tools-preview
+cargo install --locked cargo-llvm-cov
+bash scripts/coverage.sh
+```
+
+This writes:
+
+- `target/llvm-cov/lcov.info` (used by CI upload)
+- `target/llvm-cov/html/index.html` (local detailed report)
 
 The test suite covers:
 

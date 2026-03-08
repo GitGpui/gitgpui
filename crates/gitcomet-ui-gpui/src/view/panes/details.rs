@@ -20,6 +20,9 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -103,6 +106,48 @@ impl DetailsPaneView {
             )
         });
 
+        let commit_details_sha_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: false,
+                    read_only: true,
+                    chromeless: true,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let commit_details_date_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: false,
+                    read_only: true,
+                    chromeless: true,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        let commit_details_parent_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "".into(),
+                    multiline: false,
+                    read_only: true,
+                    chromeless: true,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
             if this.commit_message_programmatic_change {
@@ -133,6 +178,9 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
+            commit_details_sha_input,
+            commit_details_date_input,
+            commit_details_parent_input,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -151,6 +199,12 @@ impl DetailsPaneView {
         self.commit_message_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.commit_details_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.commit_details_sha_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.commit_details_date_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.commit_details_parent_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         cx.notify();
     }

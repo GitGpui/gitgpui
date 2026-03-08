@@ -1,0 +1,59 @@
+name: Coverage
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_FEATURES: --no-default-features --features gix
+
+jobs:
+  coverage:
+    name: Coverage (llvm-cov + Codecov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run coverage
+        run: |
+          cargo llvm-cov --workspace \
+            --exclude gitcomet-ui \
+            --exclude gitcomet-ui-gpui \
+            $APP_FEATURES \
+            --lcov \
+            --output-path target/llvm-cov/lcov.info
+      - name: Upload coverage to Codecov (tokenless)
+        if: ${{ secrets.CODECOV_TOKEN == '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/llvm-cov/lcov.info
+          flags: unittests
+          name: gitcomet-linux
+          fail_ci_if_error: false
+      - name: Upload coverage to Codecov (with token)
+        if: ${{ secrets.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/llvm-cov/lcov.info
+          flags: unittests
+          name: gitcomet-linux
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

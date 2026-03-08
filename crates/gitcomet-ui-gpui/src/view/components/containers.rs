@@ -70,30 +70,6 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
-pub fn key_value_monospace_value(
-    theme: AppTheme,
-    key: impl Into<SharedString>,
-    value: impl Into<SharedString>,
-) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(key.into()),
-        )
-        .child(
-            div()
-                .text_sm()
-                .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                .child(value.into()),
-        )
-}
-
 pub fn empty_state(
     theme: AppTheme,
     title: impl Into<SharedString>,

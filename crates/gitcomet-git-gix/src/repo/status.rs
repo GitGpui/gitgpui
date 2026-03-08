@@ -44,11 +44,8 @@ impl GixRepo {
                         });
                     }
                     gix::status::index_worktree::Item::DirectoryContents { entry, .. } => {
-                        let kind = match entry.status {
-                            gix::dir::entry::Status::Untracked => FileStatusKind::Untracked,
-                            gix::dir::entry::Status::Ignored(_) => continue,
-                            gix::dir::entry::Status::Tracked => FileStatusKind::Modified,
-                            gix::dir::entry::Status::Pruned => continue,
+                        let Some(kind) = map_directory_entry_status(entry.status) else {
+                            continue;
                         };
 
                         let path = path_buf_from_git_bytes(
@@ -307,10 +304,24 @@ fn map_entry_status<T, U>(
     }
 }
 
+fn map_directory_entry_status(status: gix::dir::entry::Status) -> Option<FileStatusKind> {
+    match status {
+        // Directory-walk entries represent an unstaged change only when they are
+        // genuinely untracked. `Tracked` entries are traversal metadata and must
+        // not become synthetic "modified" files.
+        gix::dir::entry::Status::Untracked => Some(FileStatusKind::Untracked),
+        gix::dir::entry::Status::Ignored(_)
+        | gix::dir::entry::Status::Tracked
+        | gix::dir::entry::Status::Pruned => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect_unmerged_conflicts, conflict_kind_from_stage_mask};
-    use gitcomet_core::domain::FileConflictKind;
+    use super::{
+        collect_unmerged_conflicts, conflict_kind_from_stage_mask, map_directory_entry_status,
+    };
+    use gitcomet_core::domain::{FileConflictKind, FileStatusKind};
     use rustc_hash::FxHashMap as HashMap;
     use std::path::PathBuf;
 
@@ -413,5 +424,25 @@ mod tests {
             parsed,
             vec![(PathBuf::from("conflicted.txt"), FileConflictKind::BothAdded)]
         );
+    }
+
+    #[test]
+    fn map_directory_entry_status_only_reports_untracked_entries() {
+        use gix::dir::entry::Status;
+
+        assert_eq!(
+            map_directory_entry_status(Status::Untracked),
+            Some(FileStatusKind::Untracked)
+        );
+        assert_eq!(map_directory_entry_status(Status::Tracked), None);
+        assert_eq!(
+            map_directory_entry_status(Status::Ignored(gix::ignore::Kind::Expendable)),
+            None
+        );
+        assert_eq!(
+            map_directory_entry_status(Status::Ignored(gix::ignore::Kind::Precious)),
+            None
+        );
+        assert_eq!(map_directory_entry_status(Status::Pruned), None);
     }
 }

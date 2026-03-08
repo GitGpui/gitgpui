@@ -465,8 +465,7 @@ fn added_file_preview_ctrl_a_ctrl_c_copies_all_content(cx: &mut gpui::TestAppCon
         std::process::id()
     ));
     let file_rel = std::path::PathBuf::from("added.rs");
-    let lines: Arc<Vec<String>> =
-        Arc::new(vec!["alpha".into(), "beta".into(), "gamma".into()]);
+    let lines: Arc<Vec<String>> = Arc::new(vec!["alpha".into(), "beta".into(), "gamma".into()]);
     assert_file_preview_ctrl_a_ctrl_c_copies_all(
         cx,
         repo_id,
@@ -494,6 +493,94 @@ fn deleted_file_preview_ctrl_a_ctrl_c_copies_all_content(cx: &mut gpui::TestAppC
         gitcomet_core::domain::FileStatusKind::Deleted,
         lines,
     );
+}
+
+#[gpui::test]
+fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(33);
+    let commit_sha = "0123456789abcdef0123456789abcdef01234567".to_string();
+    let parent_sha = "89abcdef0123456789abcdef0123456789abcdef".to_string();
+    let commit_date = "2026-03-08 12:34:56 +0200".to_string();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::path::PathBuf::from("/tmp/repo-commit-metadata-copy"),
+                },
+            );
+            repo.selected_commit = Some(gitcomet_core::domain::CommitId(commit_sha.clone()));
+            repo.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(commit_sha.clone()),
+                    message: "subject".to_string(),
+                    committed_at: commit_date.clone(),
+                    parent_ids: vec![gitcomet_core::domain::CommitId(parent_sha.clone())],
+                    files: vec![],
+                },
+            ));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(next_state, cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        assert_eq!(pane.commit_details_sha_input.read(app).text(), commit_sha);
+        assert_eq!(pane.commit_details_date_input.read(app).text(), commit_date);
+        assert_eq!(
+            pane.commit_details_parent_input.read(app).text(),
+            parent_sha
+        );
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.commit_details_sha_input
+                .update(cx, |input, cx| input.select_all_text(cx));
+            pane.commit_details_date_input
+                .update(cx, |input, cx| input.select_all_text(cx));
+            pane.commit_details_parent_input
+                .update(cx, |input, cx| input.select_all_text(cx));
+        });
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        assert_eq!(
+            pane.commit_details_sha_input.read(app).selected_text(),
+            Some(commit_sha)
+        );
+        assert_eq!(
+            pane.commit_details_date_input.read(app).selected_text(),
+            Some(commit_date)
+        );
+        assert_eq!(
+            pane.commit_details_parent_input.read(app).selected_text(),
+            Some(parent_sha)
+        );
+    });
 }
 
 #[gpui::test]

@@ -10,7 +10,7 @@ mod toast;
 mod tokens;
 
 pub use button::{Button, ButtonStyle};
-pub use containers::{empty_state, key_value_monospace_value, split_columns_header};
+pub use containers::{empty_state, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};
 pub use context_menu::{

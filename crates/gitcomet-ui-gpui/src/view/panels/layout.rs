@@ -1,4 +1,5 @@
 use super::*;
+use gpui::Div;
 
 fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
@@ -8,7 +9,44 @@ fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
 
+fn commit_details_selectable_row(
+    theme: AppTheme,
+    key: &'static str,
+    input: Entity<components::TextInput>,
+) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(key),
+        )
+        .child(
+            div()
+                .w_full()
+                .min_w(px(0.0))
+                .text_sm()
+                .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                .child(input),
+        )
+}
+
 impl DetailsPaneView {
+    fn sync_commit_details_input_value(
+        input: &Entity<components::TextInput>,
+        value: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if input.read(cx).text() != value {
+            input.update(cx, |input, cx| {
+                input.set_text(value.to_string(), cx);
+            });
+        }
+    }
+
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -152,6 +190,21 @@ impl DetailsPaneView {
                                     input.set_text(details.message.clone(), cx);
                                 });
                             }
+                            Self::sync_commit_details_input_value(
+                                &self.commit_details_sha_input,
+                                details.id.as_ref(),
+                                cx,
+                            );
+                            Self::sync_commit_details_input_value(
+                                &self.commit_details_date_input,
+                                details.committed_at.as_str(),
+                                cx,
+                            );
+                            Self::sync_commit_details_input_value(
+                                &self.commit_details_parent_input,
+                                parent.as_str(),
+                                cx,
+                            );
 
                             let message = div()
                                 .id(("commit_details_message_container", repo_id.0))
@@ -192,36 +245,21 @@ impl DetailsPaneView {
                                         .w_full()
                                         .min_w(px(0.0))
                                         .child(message)
-                                        .child(components::key_value_monospace_value(
+                                        .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
-                                            details.id.as_ref().to_string(),
+                                            self.commit_details_sha_input.clone(),
                                         ))
-                                        .child(components::key_value_monospace_value(
+                                        .child(commit_details_selectable_row(
                                             theme,
                                             "Commit date",
-                                            details.committed_at.clone(),
+                                            self.commit_details_date_input.clone(),
                                         ))
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(theme.colors.text_muted)
-                                                        .child("Parent commit SHA"),
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_family("monospace")
-                                                        .whitespace_nowrap()
-                                                        .line_clamp(1)
-                                                        .child(parent),
-                                                ),
-                                        ),
+                                        .child(commit_details_selectable_row(
+                                            theme,
+                                            "Parent commit SHA",
+                                            self.commit_details_parent_input.clone(),
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -295,6 +333,21 @@ impl DetailsPaneView {
                                 input.set_text(details.message.clone(), cx);
                             });
                         }
+                        Self::sync_commit_details_input_value(
+                            &self.commit_details_sha_input,
+                            details.id.as_ref(),
+                            cx,
+                        );
+                        Self::sync_commit_details_input_value(
+                            &self.commit_details_date_input,
+                            details.committed_at.as_str(),
+                            cx,
+                        );
+                        Self::sync_commit_details_input_value(
+                            &self.commit_details_parent_input,
+                            parent.as_str(),
+                            cx,
+                        );
 
                         let message = div()
                             .id(("commit_details_message_container", repo_id.0))
@@ -335,36 +388,21 @@ impl DetailsPaneView {
                                     .w_full()
                                     .min_w(px(0.0))
                                     .child(message)
-                                    .child(components::key_value_monospace_value(
+                                    .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
-                                        details.id.as_ref().to_string(),
+                                        self.commit_details_sha_input.clone(),
                                     ))
-                                    .child(components::key_value_monospace_value(
+                                    .child(commit_details_selectable_row(
                                         theme,
                                         "Commit date",
-                                        details.committed_at.clone(),
+                                        self.commit_details_date_input.clone(),
                                     ))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(theme.colors.text_muted)
-                                                    .child("Parent commit SHA"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_family("monospace")
-                                                    .whitespace_nowrap()
-                                                    .line_clamp(1)
-                                                    .child(parent),
-                                            ),
-                                    ),
+                                    .child(commit_details_selectable_row(
+                                        theme,
+                                        "Parent commit SHA",
+                                        self.commit_details_parent_input.clone(),
+                                    )),
                             )
                             .child(
                                 div()

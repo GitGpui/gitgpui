@@ -324,6 +324,11 @@ impl TextInput {
         self.selected_range.clone()
     }
 
+    pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
+        self.move_to(0, cx);
+        self.select_to(self.content.len(), cx);
+    }
+
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.soft_wrap == soft_wrap {
             return;
@@ -452,8 +457,7 @@ impl TextInput {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(0, cx);
-        self.select_to(self.content.len(), cx)
+        self.select_all_text(cx);
     }
 
     fn row_start(&self, offset: usize) -> usize {
