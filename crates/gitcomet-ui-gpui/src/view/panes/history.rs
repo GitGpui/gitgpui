@@ -9,6 +9,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) theme: AppTheme,
     pub(in super::super) date_time_format: DateTimeFormat,
     pub(in super::super) timezone: Timezone,
+    pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -63,6 +64,7 @@ impl HistoryView {
         theme: AppTheme,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
+        show_timezone: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -95,6 +97,7 @@ impl HistoryView {
             theme,
             date_time_format,
             timezone,
+            show_timezone,
             _ui_model_subscription: subscription,
             root_view,
             tooltip_host,
@@ -234,6 +237,20 @@ impl HistoryView {
             return;
         }
         self.timezone = next;
+        self.history_cache = None;
+        self.history_cache_inflight = None;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_show_timezone(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.show_timezone == enabled {
+            return;
+        }
+        self.show_timezone = enabled;
         self.history_cache = None;
         self.history_cache_inflight = None;
         cx.notify();
@@ -501,6 +518,7 @@ impl HistoryView {
                     stashes_rev: repo.stashes_rev,
                     date_time_format: self.date_time_format,
                     timezone: self.timezone,
+                    show_timezone: self.show_timezone,
                 };
 
                 let cache_ok = self
@@ -780,6 +798,7 @@ impl HistoryView {
                                 commit.time,
                                 request_for_build.date_time_format,
                                 request_for_build.timezone,
+                                request_for_build.show_timezone,
                             )
                             .into();
 

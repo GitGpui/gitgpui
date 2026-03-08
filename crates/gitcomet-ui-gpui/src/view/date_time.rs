@@ -220,6 +220,7 @@ pub(super) fn format_datetime(
     time: std::time::SystemTime,
     format: DateTimeFormat,
     timezone: Timezone,
+    show_timezone: bool,
 ) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -270,25 +271,23 @@ pub(super) fn format_datetime(
 
     let (y, m, d) = civil_from_days(days);
 
-    let tz_label = timezone.label();
+    let tz_suffix = if show_timezone {
+        format!(" {}", timezone.label())
+    } else {
+        String::new()
+    };
     match format {
-        DateTimeFormat::YmdHm => {
-            format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02} {tz_label}")
-        }
+        DateTimeFormat::YmdHm => format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}{tz_suffix}"),
         DateTimeFormat::YmdHms => {
-            format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02} {tz_label}")
+            format!("{y:04}-{m:02}-{d:02} {hour:02}:{minute:02}:{second:02}{tz_suffix}")
         }
-        DateTimeFormat::DmyHm => {
-            format!("{d:02}.{m:02}.{y:04} {hour:02}:{minute:02} {tz_label}")
-        }
-        DateTimeFormat::MdyHm => {
-            format!("{m:02}/{d:02}/{y:04} {hour:02}:{minute:02} {tz_label}")
-        }
+        DateTimeFormat::DmyHm => format!("{d:02}.{m:02}.{y:04} {hour:02}:{minute:02}{tz_suffix}"),
+        DateTimeFormat::MdyHm => format!("{m:02}/{d:02}/{y:04} {hour:02}:{minute:02}{tz_suffix}"),
     }
 }
 
 /// Backward-compatible wrapper that formats in UTC.
 #[cfg(test)]
 pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
-    format_datetime(time, format, Timezone::Utc)
+    format_datetime(time, format, Timezone::Utc, true)
 }

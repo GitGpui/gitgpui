@@ -976,6 +976,67 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     });
 }
 
+#[gpui::test]
+fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let min_bounds = cx
+        .debug_bounds("titlebar_win_min")
+        .expect("expected titlebar min control bounds");
+    cx.simulate_mouse_move(min_bounds.center(), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).tooltip_text_for_test(app),
+            Some("Minimize window".into())
+        );
+    });
+
+    let max_bounds = cx
+        .debug_bounds("titlebar_win_max")
+        .expect("expected titlebar max control bounds");
+    let expected_max = cx.update(|window, _app| {
+        if window.is_maximized() {
+            "Restore window".into()
+        } else {
+            "Maximize window".into()
+        }
+    });
+    cx.simulate_mouse_move(max_bounds.center(), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).tooltip_text_for_test(app),
+            Some(expected_max)
+        );
+    });
+
+    let close_bounds = cx
+        .debug_bounds("titlebar_win_close")
+        .expect("expected titlebar close control bounds");
+    cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).tooltip_text_for_test(app),
+            Some("Close window".into())
+        );
+    });
+
+    cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert_eq!(view.read(app).tooltip_text_for_test(app), None);
+    });
+}
+
 struct ScrollbarTestView {
     theme: AppTheme,
     handle: ScrollHandle,

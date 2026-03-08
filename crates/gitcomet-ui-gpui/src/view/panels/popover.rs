@@ -54,6 +54,7 @@ pub(in super::super) struct PopoverHost {
     theme: AppTheme,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
+    show_timezone: bool,
     settings_runtime_info: settings::SettingsRuntimeInfo,
     settings_date_format_open: bool,
     settings_timezone_open: bool,
@@ -127,6 +128,7 @@ impl PopoverHost {
         theme: AppTheme,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
+        show_timezone: bool,
         root_view: WeakEntity<GitCometView>,
         toast_host: WeakEntity<ToastHost>,
         main_pane: Entity<MainPaneView>,
@@ -365,6 +367,7 @@ impl PopoverHost {
             theme,
             date_time_format,
             timezone,
+            show_timezone,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
             settings_date_format_open: false,
             settings_timezone_open: false,
@@ -820,6 +823,16 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(super) fn set_show_timezone(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.show_timezone == enabled {
+            return;
+        }
+        self.show_timezone = enabled;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_show_timezone(enabled, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
     pub(super) fn set_conflict_enable_whitespace_autosolve(
         &mut self,
         enabled: bool,
@@ -856,9 +869,11 @@ impl PopoverHost {
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
         let fmt = self.date_time_format;
         let tz = self.timezone;
+        let show_tz = self.show_timezone;
         let _ = self.root_view.update(cx, |root, cx| {
             root.date_time_format = fmt;
             root.timezone = tz;
+            root.show_timezone = show_tz;
             root.schedule_ui_settings_persist(cx);
         });
     }

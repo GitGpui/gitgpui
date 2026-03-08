@@ -19,6 +19,7 @@ pub(super) struct HistoryCacheRequest {
     pub(super) stashes_rev: u64,
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
+    pub(super) show_timezone: bool,
 }
 
 #[derive(Clone, Debug)]

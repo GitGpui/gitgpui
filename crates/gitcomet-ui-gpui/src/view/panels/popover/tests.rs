@@ -328,6 +328,162 @@ fn diff_editor_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(44);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_context_menu",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("added.txt");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Added,
+                        conflict: None,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: path.clone(),
+                area: DiffArea::Staged,
+            });
+            repo.diff_file = Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText {
+                path: path.clone(),
+                old: None,
+                new: Some("alpha\nbeta\n".to_string()),
+            })));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(next_state, cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.try_populate_worktree_preview_from_diff_file();
+            pane.open_diff_editor_context_menu(
+                1,
+                DiffTextRegion::Inline,
+                point(px(24.0), px(24.0)),
+                window,
+                cx,
+            );
+        });
+    });
+
+    // Flush deferred popover open from MainPaneView::open_popover_at.
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                let Some(popover_kind) = host.popover.clone() else {
+                    panic!("expected file preview right-click to open a context menu");
+                };
+
+                match &popover_kind {
+                    PopoverKind::DiffEditorMenu {
+                        repo_id: rid,
+                        area,
+                        path: menu_path,
+                        copy_text,
+                        ..
+                    } => {
+                        assert_eq!(*rid, repo_id);
+                        assert_eq!(*area, DiffArea::Staged);
+                        assert_eq!(menu_path, &Some(path.clone()));
+                        assert_eq!(copy_text, &Some("beta".to_string()));
+                    }
+                    _ => panic!("expected DiffEditorMenu popover for file preview"),
+                }
+
+                let model = host
+                    .context_menu_model(&popover_kind, cx)
+                    .expect("expected diff editor menu model");
+
+                let labels: Vec<String> = model
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                for expected in [
+                    "Unstage line",
+                    "Unstage hunk",
+                    "Open file",
+                    "Open file location",
+                    "Copy",
+                ] {
+                    assert!(
+                        labels.iter().any(|label| label == expected),
+                        "expected {expected} entry in preview context menu"
+                    );
+                }
+
+                let open_file_action = model.items.iter().find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. }
+                        if label.as_ref() == "Open file" =>
+                    {
+                        Some((**action).clone())
+                    }
+                    _ => None,
+                });
+                match open_file_action {
+                    Some(ContextMenuAction::OpenFile {
+                        repo_id: rid,
+                        path: p,
+                    }) => {
+                        assert_eq!(rid, repo_id);
+                        assert_eq!(p, path);
+                    }
+                    _ => panic!("expected Open file action in preview context menu"),
+                }
+
+                let copy_action = model.items.iter().find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Copy" => {
+                        Some((**action).clone())
+                    }
+                    _ => None,
+                });
+                match copy_action {
+                    Some(ContextMenuAction::CopyText { text }) => {
+                        assert_eq!(text, "beta");
+                    }
+                    _ => panic!("expected Copy action in preview context menu"),
+                }
+            });
+        });
+    });
+}
+
+#[gpui::test]
 fn tag_menu_lists_delete_entries_for_commit_tags(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

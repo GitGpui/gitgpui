@@ -485,23 +485,6 @@ impl MainPaneView {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
     }
 
-    pub(in super::super::super) fn copy_diff_text_selection_or_region_line_to_clipboard(
-        &mut self,
-        visible_ix: usize,
-        region: DiffTextRegion,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.diff_text_has_selection() {
-            self.copy_selected_diff_text_to_clipboard(cx);
-            return;
-        }
-        let text = self.diff_text_line_for_region(visible_ix, region);
-        if text.is_empty() {
-            return;
-        }
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
-    }
-
     pub(in super::super::super) fn open_diff_editor_context_menu(
         &mut self,
         visible_ix: usize,
@@ -520,13 +503,18 @@ impl MainPaneView {
             Some(DiffTarget::WorkingTree { area, .. }) => (*area, true),
             _ => (DiffArea::Unstaged, false),
         };
+        let is_file_preview = self.is_file_preview_active();
 
         let copy_text = self.selected_diff_text_string().or_else(|| {
             let text = self.diff_text_line_for_region(visible_ix, region);
             (!text.is_empty()).then_some(text.to_string())
         });
 
-        let list_len = self.diff_visible_indices.len();
+        let list_len = if is_file_preview {
+            self.worktree_preview_line_count().unwrap_or(0)
+        } else {
+            self.diff_visible_indices.len()
+        };
         let clicked_visible_ix = if list_len == 0 {
             visible_ix
         } else {
@@ -535,7 +523,11 @@ impl MainPaneView {
 
         let text_selection = context_menu_selection_range_from_diff_text(
             self.diff_text_normalized_selection(),
-            self.diff_view,
+            if is_file_preview {
+                DiffViewMode::Inline
+            } else {
+                self.diff_view
+            },
             clicked_visible_ix,
             region,
         );
@@ -697,9 +689,16 @@ impl MainPaneView {
             .and_then(|ix| self.diff_file_for_src_ix.get(ix))
             .and_then(|p| p.as_deref())
             .map(std::path::PathBuf::from);
-        let path = path.or_else(|| file_diff_lookup.as_ref().map(|l| l.file_rel.clone()));
+        let path = path
+            .or_else(|| file_diff_lookup.as_ref().map(|l| l.file_rel.clone()))
+            .or_else(|| {
+                self.worktree_preview_path.as_ref().map(|abs| {
+                    let rel = abs.strip_prefix(&workdir).unwrap_or(abs);
+                    rel.to_path_buf()
+                })
+            });
 
-        let allow_patch_actions = allow_apply && !self.is_file_preview_active();
+        let allow_patch_actions = allow_apply && !is_file_preview;
 
         let selection = text_selection
             .or_else(|| self.diff_selection_range.map(|(a, b)| (a.min(b), a.max(b))))

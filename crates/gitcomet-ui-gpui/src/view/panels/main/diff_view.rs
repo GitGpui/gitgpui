@@ -591,7 +591,10 @@ impl MainPaneView {
                         )
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(self.worktree_preview_scroll.clone());
+                        .track_scroll(self.worktree_preview_scroll.clone())
+                        .with_horizontal_sizing_behavior(
+                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                        );
 
                         let scroll_handle =
                             self.worktree_preview_scroll.0.borrow().base_handle.clone();
@@ -605,8 +608,16 @@ impl MainPaneView {
                             .child(
                                 components::Scrollbar::new(
                                     "worktree_preview_scrollbar",
+                                    scroll_handle.clone(),
+                                )
+                                .render(theme),
+                            )
+                            .child(
+                                components::Scrollbar::horizontal(
+                                    "worktree_preview_hscrollbar",
                                     scroll_handle,
                                 )
+                                .always_visible()
                                 .render(theme),
                             )
                             .into_any_element()

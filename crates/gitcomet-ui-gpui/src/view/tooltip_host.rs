@@ -175,6 +175,11 @@ impl TooltipHost {
         )
         .detach();
     }
+
+    #[cfg(test)]
+    pub(super) fn tooltip_text_for_test(&self) -> Option<SharedString> {
+        self.tooltip_text.clone()
+    }
 }
 
 impl Render for TooltipHost {

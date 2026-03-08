@@ -171,6 +171,7 @@ impl MainPaneView {
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
             self.worktree_preview_path = Some(path);
             self.worktree_preview = Loadable::Loading;
+            self.diff_horizontal_min_width = px(0.0);
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_segments_cache.clear();
         } else if matches!(
@@ -178,6 +179,7 @@ impl MainPaneView {
             Loadable::NotLoaded | Loadable::Error(_)
         ) {
             self.worktree_preview = Loadable::Loading;
+            self.diff_horizontal_min_width = px(0.0);
         }
     }
 
@@ -199,6 +201,7 @@ impl MainPaneView {
 
         self.worktree_preview_path = Some(path.clone());
         self.worktree_preview = Loadable::Loading;
+        self.diff_horizontal_min_width = px(0.0);
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.worktree_preview_scroll
@@ -361,6 +364,7 @@ impl MainPaneView {
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 self.worktree_preview_path = Some(abs_path);
                 self.worktree_preview = Loadable::Ready(lines);
+                self.diff_horizontal_min_width = px(0.0);
                 self.worktree_preview_segments_cache_path = None;
                 self.worktree_preview_segments_cache.clear();
             }
@@ -375,6 +379,7 @@ impl MainPaneView {
                         .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                     self.worktree_preview_path = Some(abs_path);
                     self.worktree_preview = Loadable::Error(e);
+                    self.diff_horizontal_min_width = px(0.0);
                     self.worktree_preview_segments_cache_path = None;
                     self.worktree_preview_segments_cache.clear();
                 }

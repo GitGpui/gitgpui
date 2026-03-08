@@ -456,7 +456,7 @@ pub(super) fn history_commit_row_canvas(
                     &when,
                     date_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
-                    Some("monospace"),
+                    Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x =
                     (date_text_bounds.right() - shaped.width).max(date_text_bounds.left());
@@ -490,7 +490,7 @@ pub(super) fn history_commit_row_canvas(
                     &short_sha,
                     sha_text_bounds.size.width.max(px(0.0)),
                     theme.colors.text_muted,
-                    Some("monospace"),
+                    Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
                 window.with_content_mask(

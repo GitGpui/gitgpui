@@ -201,6 +201,33 @@ impl TitleBarView {
             root.open_popover_at(kind, anchor, window, cx);
         });
     }
+
+    fn set_tooltip_text_if_changed(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.root_view
+            .update(cx, |root, cx| {
+                root.tooltip_host
+                    .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx))
+            })
+            .unwrap_or(false)
+    }
+
+    fn clear_tooltip_if_matches(
+        &mut self,
+        tooltip: &SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let tooltip = tooltip.clone();
+        self.root_view
+            .update(cx, |root, cx| {
+                root.tooltip_host
+                    .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx))
+            })
+            .unwrap_or(false)
+    }
 }
 
 impl Render for TitleBarView {
@@ -330,6 +357,7 @@ impl Render for TitleBarView {
 
         let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
+        let min_tooltip: SharedString = "Minimize window".into();
         let min = titlebar_control_button(
             theme,
             "win_min_btn",
@@ -338,16 +366,32 @@ impl Render for TitleBarView {
             min_active,
         )
         .id("win_min")
+        .debug_selector(|| "titlebar_win_min".to_string())
         .window_control_area(WindowControlArea::Min)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.minimize_window();
+        }))
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let changed = if *hovering {
+                this.set_tooltip_text_if_changed(Some(min_tooltip.clone()), cx)
+            } else {
+                this.clear_tooltip_if_matches(&min_tooltip, cx)
+            };
+            if changed {
+                cx.notify();
+            }
         }));
 
         let max_icon = if window.is_maximized() {
             "icons/generic_restore.svg"
         } else {
             "icons/generic_maximize.svg"
+        };
+        let max_tooltip: SharedString = if window.is_maximized() {
+            "Restore window".into()
+        } else {
+            "Maximize window".into()
         };
         let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
@@ -359,15 +403,27 @@ impl Render for TitleBarView {
             max_active,
         )
         .id("win_max")
+        .debug_selector(|| "titlebar_win_max".to_string())
         .window_control_area(WindowControlArea::Max)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.zoom_window();
             cx.notify();
+        }))
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let changed = if *hovering {
+                this.set_tooltip_text_if_changed(Some(max_tooltip.clone()), cx)
+            } else {
+                this.clear_tooltip_if_matches(&max_tooltip, cx)
+            };
+            if changed {
+                cx.notify();
+            }
         }));
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
+        let close_tooltip: SharedString = "Close window".into();
         let close = titlebar_control_button(
             theme,
             "win_close_btn",
@@ -376,10 +432,21 @@ impl Render for TitleBarView {
             close_active,
         )
         .id("win_close")
+        .debug_selector(|| "titlebar_win_close".to_string())
         .window_control_area(WindowControlArea::Close)
         .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
             cx.stop_propagation();
             cx.quit();
+        }))
+        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+            let changed = if *hovering {
+                this.set_tooltip_text_if_changed(Some(close_tooltip.clone()), cx)
+            } else {
+                this.clear_tooltip_if_matches(&close_tooltip, cx)
+            };
+            if changed {
+                cx.notify();
+            }
         }));
 
         div()

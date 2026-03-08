@@ -10,6 +10,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let min_width = this.diff_horizontal_min_width;
         let query = if this.diff_search_active {
             this.diff_search_query.as_ref()
         } else {
@@ -78,7 +79,7 @@ impl MainPaneView {
                     theme,
                     cx.entity(),
                     ix,
-                    px(0.0),
+                    min_width,
                     bar_color,
                     line_no,
                     styled,
@@ -490,6 +491,7 @@ fn working_tree_summary_history_row(
                     .justify_end()
                     .px(cell_pad_x)
                     .text_xs()
+                    .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .text_color(theme.colors.text_muted)
                     .whitespace_nowrap()
                     .child("Click to review"),
@@ -550,7 +552,7 @@ mod tests {
         // UTC+5:30 (19800 seconds)
         let tz = Timezone::Fixed(19800);
         assert_eq!(
-            format_datetime(UNIX_EPOCH, DateTimeFormat::YmdHm, tz,),
+            format_datetime(UNIX_EPOCH, DateTimeFormat::YmdHm, tz, true),
             "1970-01-01 05:30 UTC+5:30"
         );
 
@@ -561,8 +563,18 @@ mod tests {
                 UNIX_EPOCH + Duration::from_secs(86_400),
                 DateTimeFormat::YmdHm,
                 tz_neg,
+                true,
             ),
             "1970-01-01 19:00 UTC\u{2212}5"
+        );
+    }
+
+    #[test]
+    fn format_datetime_can_hide_timezone_label() {
+        let tz = Timezone::Fixed(7200);
+        assert_eq!(
+            format_datetime(UNIX_EPOCH, DateTimeFormat::YmdHm, tz, false),
+            "1970-01-01 02:00"
         );
     }
 

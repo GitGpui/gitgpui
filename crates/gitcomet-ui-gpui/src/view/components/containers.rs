@@ -86,7 +86,12 @@ pub fn key_value_monospace_value(
                 .text_color(theme.colors.text_muted)
                 .child(key.into()),
         )
-        .child(div().text_sm().font_family("monospace").child(value.into()))
+        .child(
+            div()
+                .text_sm()
+                .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                .child(value.into()),
+        )
 }
 
 pub fn empty_state(

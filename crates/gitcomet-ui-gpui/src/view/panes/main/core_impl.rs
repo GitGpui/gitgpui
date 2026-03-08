@@ -123,6 +123,7 @@ impl MainPaneView {
         theme: AppTheme,
         date_time_format: DateTimeFormat,
         timezone: Timezone,
+        show_timezone: bool,
         history_show_author: bool,
         history_show_date: bool,
         history_show_sha: bool,
@@ -238,6 +239,7 @@ impl MainPaneView {
                 theme,
                 date_time_format,
                 timezone,
+                show_timezone,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
@@ -605,6 +607,16 @@ impl MainPaneView {
     pub(in crate::view) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         self.history_view
             .update(cx, |view, cx| view.set_timezone(next, cx));
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_show_timezone(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_show_timezone(enabled, cx));
         cx.notify();
     }
 

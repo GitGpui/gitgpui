@@ -17,6 +17,7 @@ pub struct UiSession {
     pub details_width: Option<u32>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
+    pub show_timezone: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -68,6 +69,7 @@ struct UiSessionFileV2 {
     details_width: Option<u32>,
     date_time_format: Option<String>,
     timezone: Option<String>,
+    show_timezone: Option<bool>,
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
@@ -111,6 +113,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         details_width: file.details_width,
         date_time_format: file.date_time_format,
         timezone: file.timezone,
+        show_timezone: file.show_timezone,
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
@@ -159,6 +162,7 @@ pub struct UiSettings {
     pub details_width: Option<u32>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
+    pub show_timezone: Option<bool>,
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
@@ -192,6 +196,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(tz) = settings.timezone {
         file.timezone = Some(tz);
+    }
+    if let Some(value) = settings.show_timezone {
+        file.show_timezone = Some(value);
     }
     if let Some(value) = settings.history_show_author {
         file.history_show_author = Some(value);
@@ -790,6 +797,7 @@ mod tests {
                 details_width: None,
                 date_time_format: Some("ymd_hm_utc".to_string()),
                 timezone: None,
+                show_timezone: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,
@@ -803,6 +811,54 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.date_time_format.as_deref(), Some("ymd_hm_utc"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_show_timezone() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: Some(false),
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+                conflict_enable_whitespace_autosolve: None,
+                conflict_enable_regex_autosolve: None,
+                conflict_enable_history_autosolve: None,
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.show_timezone, Some(false));
     }
 
     #[test]
@@ -837,6 +893,7 @@ mod tests {
                 details_width: None,
                 date_time_format: None,
                 timezone: None,
+                show_timezone: None,
                 history_show_author: None,
                 history_show_date: None,
                 history_show_sha: None,

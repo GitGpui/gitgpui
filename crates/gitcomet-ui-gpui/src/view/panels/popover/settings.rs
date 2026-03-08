@@ -150,6 +150,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let current_format = this.date_time_format;
     let current_timezone = this.timezone;
+    let show_timezone = this.show_timezone;
     let runtime = &this.settings_runtime_info;
     let (
         conflict_enable_whitespace_autosolve,
@@ -242,7 +243,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             let selected = *fmt == current_format;
             let fmt_val = *fmt;
             let preview: SharedString =
-                format_datetime(preview_now, fmt_val, current_timezone).into();
+                format_datetime(preview_now, fmt_val, current_timezone, show_timezone).into();
             date_dropdown = date_dropdown.child(
                 div()
                     .id(("settings_date_format_item", *fmt as usize))
@@ -286,7 +287,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         for tz in Timezone::all() {
             let selected = *tz == current_timezone;
             let tz_val = *tz;
-            let preview: SharedString = format_datetime(preview_now, current_format, tz_val).into();
+            let preview: SharedString =
+                format_datetime(preview_now, current_format, tz_val, show_timezone).into();
             tz_dropdown = tz_dropdown.child(
                 div()
                     .id(SharedString::from(format!(
@@ -377,6 +379,12 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         cx.notify();
     }));
 
+    let show_timezone_row = toggle_row("settings_show_timezone", "Show timezone", show_timezone)
+        .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+            this.set_show_timezone(!this.show_timezone, cx);
+            cx.notify();
+        }));
+
     let mut content = div()
         .flex()
         .flex_col()
@@ -393,7 +401,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .flex_col()
                 .gap_1()
                 .child(date_row)
-                .child(tz_row),
+                .child(tz_row)
+                .child(show_timezone_row),
         );
 
     let conflict_section_label = div()
@@ -592,6 +601,39 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             cx.notify();
         }));
 
+    let open_source_licenses_row = div()
+        .id("settings_open_source_licenses")
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .justify_between()
+        .rounded(px(theme.radii.row))
+        .hover(move |s| s.bg(theme.colors.hover))
+        .active(move |s| s.bg(theme.colors.active))
+        .cursor(CursorStyle::PointingHand)
+        .child(div().text_sm().child("Open source licenses"))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_sm()
+                .text_color(theme.colors.accent)
+                .child("Show")
+                .child(div().font_family("monospace").child("↗")),
+        )
+        .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+            this.settings_date_format_open = false;
+            this.settings_timezone_open = false;
+            this.open_popover_at(
+                PopoverKind::OpenSourceLicenses,
+                crate::view::chrome::window_top_left_corner(window),
+                window,
+                cx,
+            );
+        }));
+
     content = content.child(environment_section_label).child(
         div()
             .px_2()
@@ -602,7 +644,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .child(git_row)
             .child(os_row)
             .child(github_row)
-            .child(license_row),
+            .child(license_row)
+            .child(open_source_licenses_row),
     );
 
     if let Some(detail) = runtime.git.detail.clone() {

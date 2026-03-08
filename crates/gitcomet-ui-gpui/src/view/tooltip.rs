@@ -44,6 +44,7 @@ impl GitCometView {
                                 .then_some(details_width as u32),
                             date_time_format: Some(this.date_time_format.key().to_string()),
                             timezone: Some(this.timezone.key()),
+                            show_timezone: Some(this.show_timezone),
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),

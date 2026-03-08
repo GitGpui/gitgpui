@@ -931,6 +931,7 @@ pub struct GitCometView {
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
+    pub(super) show_timezone: bool,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,

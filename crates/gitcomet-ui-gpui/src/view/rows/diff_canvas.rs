@@ -702,9 +702,11 @@ pub(super) fn worktree_preview_row_canvas(
                         });
                     } else if event.button == gpui::MouseButton::Right {
                         view.update(cx, |this, cx| {
-                            this.copy_diff_text_selection_or_region_line_to_clipboard(
+                            this.open_diff_editor_context_menu(
                                 ix,
                                 DiffTextRegion::Inline,
+                                event.position,
+                                window,
                                 cx,
                             );
                             cx.notify();

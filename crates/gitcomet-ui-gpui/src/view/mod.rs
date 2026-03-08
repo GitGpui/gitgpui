@@ -138,6 +138,20 @@ const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 
+#[cfg(target_os = "windows")]
+pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "Consolas";
+#[cfg(target_os = "macos")]
+pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "Menlo";
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "DejaVu Sans Mono";
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd"
+)))]
+pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "monospace";
+
 impl GitCometView {
     pub(in crate::view) fn open_popover_at(
         &mut self,
@@ -260,6 +274,7 @@ impl GitCometView {
             .as_deref()
             .and_then(Timezone::from_key)
             .unwrap_or_default();
+        let show_timezone = ui_session.show_timezone.unwrap_or(true);
 
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -362,6 +377,7 @@ impl GitCometView {
                 initial_theme,
                 date_time_format,
                 timezone,
+                show_timezone,
                 history_show_author,
                 history_show_date,
                 history_show_sha,
@@ -396,6 +412,7 @@ impl GitCometView {
                 initial_theme,
                 date_time_format,
                 timezone,
+                show_timezone,
                 weak_view.clone(),
                 toast_host.downgrade(),
                 main_pane.clone(),
@@ -488,6 +505,7 @@ impl GitCometView {
             ui_settings_persist_seq: 0,
             date_time_format,
             timezone,
+            show_timezone,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
@@ -721,6 +739,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
         self.popover_host.read(app).is_open()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
+        self.tooltip_host.read(app).tooltip_text_for_test()
     }
 }
 

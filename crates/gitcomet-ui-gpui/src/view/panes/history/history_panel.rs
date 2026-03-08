@@ -579,7 +579,7 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .font_family("monospace")
+                    .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .child("Commit date"),
             );
         }
@@ -594,7 +594,7 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .font_family("monospace")
+                    .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .child("SHA"),
             );
         }

@@ -135,7 +135,9 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
     let file_rel = std::path::PathBuf::from("preview.rs");
     let lines: Arc<Vec<String>> = Arc::new(
         (0..300)
-            .map(|_| "fn main() { let x = 1; }".to_string())
+            .map(|_| {
+                "fn main() { let x = 1; } // this line is intentionally long to force horizontal overflow in preview rows........................................".to_string()
+            })
             .collect(),
     );
 
@@ -200,11 +202,14 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
             .0
             .borrow()
             .base_handle
-            .max_offset()
-            .height;
+            .max_offset();
         assert!(
-            max_offset > px(0.0),
+            max_offset.height > px(0.0),
             "expected file preview to overflow and be scrollable"
+        );
+        assert!(
+            max_offset.width > px(0.0),
+            "expected file preview to overflow horizontally"
         );
 
         let Some(styled) = pane.worktree_preview_segments_cache.get(&0) else {
