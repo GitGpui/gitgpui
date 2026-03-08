@@ -939,7 +939,7 @@ fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf
     } else {
         path
     };
-    std::fs::canonicalize(&path).unwrap_or(path)
+    canonicalize_path(path)
 }
 
 fn focused_mergetool_target_path(
@@ -954,13 +954,33 @@ fn focused_mergetool_target_path(
         return relative.to_path_buf();
     }
 
-    let normalized_conflicted = std::fs::canonicalize(conflicted_file_path)
-        .unwrap_or_else(|_| conflicted_file_path.to_path_buf());
+    let normalized_conflicted = canonicalize_path(conflicted_file_path.to_path_buf());
     if let Ok(relative) = normalized_conflicted.strip_prefix(repo_path) {
         return relative.to_path_buf();
     }
 
     conflicted_file_path.to_path_buf()
+}
+
+fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    let path_text = path.to_string_lossy();
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = path_text.strip_prefix(r"\\?\") {
+        return std::path::PathBuf::from(stripped);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    path
 }
 
 fn focused_mergetool_bootstrap_action(
@@ -1704,7 +1724,7 @@ impl Render for GitCometView {
             self.view_mode,
             GitCometViewMode::Normal | GitCometViewMode::FocusedMergetool
         ));
-        self.last_window_size = window.window_bounds().get_bounds().size;
+        self.last_window_size = window.viewport_size();
         self.clamp_pane_widths_to_window();
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
@@ -1962,7 +1982,12 @@ impl Render for GitCometView {
                 input.set_read_only(true, cx);
             });
 
-            let dismiss = components::Button::new("repo_error_banner_close", "✕")
+            let dismiss = components::Button::new("repo_error_banner_close", "")
+                .start_slot(svg_icon(
+                    "icons/generic_close.svg",
+                    theme.colors.text_muted,
+                    px(12.0),
+                ))
                 .style(components::ButtonStyle::Transparent)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     this.store.dispatch(Msg::DismissRepoError { repo_id });
@@ -2032,7 +2057,7 @@ impl Render for GitCometView {
                 return;
             };
 
-            let size = window.window_bounds().get_bounds().size;
+            let size = window.viewport_size();
             let next = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
             if next != this.hover_resize_edge {
                 this.hover_resize_edge = next;
@@ -2047,7 +2072,7 @@ impl Render for GitCometView {
                         return;
                     };
 
-                    let size = window.window_bounds().get_bounds().size;
+                    let size = window.viewport_size();
                     let edge = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
                     let Some(edge) = edge else {
                         return;
