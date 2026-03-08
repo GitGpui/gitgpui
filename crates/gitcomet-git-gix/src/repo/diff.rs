@@ -76,28 +76,20 @@ impl GixRepo {
                     }
                 }
 
-                let path_str = path.to_string_lossy();
+                let repo = self._repo.to_thread_local();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = match git_show_path_utf8_optional(
-                            &self.spec.workdir,
-                            ":",
-                            path_str.as_ref(),
-                        ) {
-                            Ok(old) => old,
-                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
-                            {
-                                let ours = git_show_path_utf8_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":2:",
-                                    path_str.as_ref(),
-                                    2,
+                        let old = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                            IndexUnconflictedBlob::Present(bytes) => {
+                                Some(decode_utf8_bytes(bytes)?)
+                            }
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => {
+                                let ours = decode_utf8_bytes_optional(
+                                    gix_index_stage_blob_bytes_optional(&repo, path, 2)?,
                                 )?;
-                                let theirs = git_show_path_utf8_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":3:",
-                                    path_str.as_ref(),
-                                    3,
+                                let theirs = decode_utf8_bytes_optional(
+                                    gix_index_stage_blob_bytes_optional(&repo, path, 3)?,
                                 )?;
                                 return Ok(Some(FileDiffText {
                                     path: path.clone(),
@@ -105,42 +97,25 @@ impl GixRepo {
                                     new: theirs,
                                 }));
                             }
-                            Err(e) => return Err(e),
                         };
                         let new = read_worktree_file_utf8_optional(&self.spec.workdir, path)?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = git_show_path_utf8_optional(
-                            &self.spec.workdir,
-                            "HEAD:",
-                            path_str.as_ref(),
+                        let old = decode_utf8_bytes_optional(
+                            gix_revision_path_blob_bytes_optional(&repo, "HEAD", path)?,
                         )?;
-                        let new = match git_show_path_utf8_optional(
-                            &self.spec.workdir,
-                            ":",
-                            path_str.as_ref(),
-                        ) {
-                            Ok(new) => new,
-                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
-                                git_show_path_utf8_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":2:",
-                                    path_str.as_ref(),
-                                    2,
-                                )?
-                                .or_else(|| {
-                                    git_show_path_utf8_optional_unmerged_stage(
-                                        &self.spec.workdir,
-                                        ":3:",
-                                        path_str.as_ref(),
-                                        3,
-                                    )
-                                    .ok()
-                                    .flatten()
-                                })
+                        let new = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                            IndexUnconflictedBlob::Present(bytes) => {
+                                Some(decode_utf8_bytes(bytes)?)
                             }
-                            Err(e) => return Err(e),
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => decode_utf8_bytes_optional(
+                                gix_index_stage_blob_bytes_optional(&repo, path, 2)?,
+                            )?
+                            .or(decode_utf8_bytes_optional(
+                                gix_index_stage_blob_bytes_optional(&repo, path, 3)?,
+                            )?),
                         };
                         (old, new)
                     }
@@ -157,20 +132,20 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let path_str = path.to_string_lossy();
-                let parent = git_first_parent_optional(&self.spec.workdir, commit_id.as_ref())?;
+                let repo = self._repo.to_thread_local();
+                let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => {
-                        let spec = format!("{parent}:");
-                        git_show_path_utf8_optional(&self.spec.workdir, &spec, path_str.as_ref())?
-                    }
+                    Some(parent) => decode_utf8_bytes_optional(
+                        gix_revision_path_blob_bytes_optional(&repo, &parent, path)?,
+                    )?,
                     None => None,
                 };
-                let new = {
-                    let spec = format!("{}:", commit_id.as_ref());
-                    git_show_path_utf8_optional(&self.spec.workdir, &spec, path_str.as_ref())?
-                };
+                let new = decode_utf8_bytes_optional(gix_revision_path_blob_bytes_optional(
+                    &repo,
+                    commit_id.as_ref(),
+                    path,
+                )?)?;
 
                 Ok(Some(FileDiffText {
                     path: path.clone(),
@@ -198,71 +173,34 @@ impl GixRepo {
                     }
                 }
 
-                let path_str = path.to_string_lossy();
+                let repo = self._repo.to_thread_local();
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = match git_show_path_bytes_optional(
-                            &self.spec.workdir,
-                            ":",
-                            path_str.as_ref(),
-                        ) {
-                            Ok(old) => old,
-                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) =>
-                            {
-                                let ours = git_show_path_bytes_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":2:",
-                                    path_str.as_ref(),
-                                    2,
-                                )?;
-                                let theirs = git_show_path_bytes_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":3:",
-                                    path_str.as_ref(),
-                                    3,
-                                )?;
+                        let old = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => {
+                                let ours = gix_index_stage_blob_bytes_optional(&repo, path, 2)?;
+                                let theirs = gix_index_stage_blob_bytes_optional(&repo, path, 3)?;
                                 return Ok(Some(FileDiffImage {
                                     path: path.clone(),
                                     old: ours,
                                     new: theirs,
                                 }));
                             }
-                            Err(e) => return Err(e),
                         };
                         let new = read_worktree_file_bytes_optional(&self.spec.workdir, path)?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = git_show_path_bytes_optional(
-                            &self.spec.workdir,
-                            "HEAD:",
-                            path_str.as_ref(),
-                        )?;
-                        let new = match git_show_path_bytes_optional(
-                            &self.spec.workdir,
-                            ":",
-                            path_str.as_ref(),
-                        ) {
-                            Ok(new) => new,
-                            Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage0(s)) => {
-                                git_show_path_bytes_optional_unmerged_stage(
-                                    &self.spec.workdir,
-                                    ":2:",
-                                    path_str.as_ref(),
-                                    2,
-                                )?
-                                .or_else(|| {
-                                    git_show_path_bytes_optional_unmerged_stage(
-                                        &self.spec.workdir,
-                                        ":3:",
-                                        path_str.as_ref(),
-                                        3,
-                                    )
-                                    .ok()
-                                    .flatten()
-                                })
+                        let old = gix_revision_path_blob_bytes_optional(&repo, "HEAD", path)?;
+                        let new = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                            IndexUnconflictedBlob::Present(bytes) => Some(bytes),
+                            IndexUnconflictedBlob::Missing => None,
+                            IndexUnconflictedBlob::Unmerged => {
+                                gix_index_stage_blob_bytes_optional(&repo, path, 2)?
+                                    .or(gix_index_stage_blob_bytes_optional(&repo, path, 3)?)
                             }
-                            Err(e) => return Err(e),
                         };
                         (old, new)
                     }
@@ -279,20 +217,14 @@ impl GixRepo {
                     return Ok(None);
                 };
 
-                let path_str = path.to_string_lossy();
-                let parent = git_first_parent_optional(&self.spec.workdir, commit_id.as_ref())?;
+                let repo = self._repo.to_thread_local();
+                let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => {
-                        let spec = format!("{parent}:");
-                        git_show_path_bytes_optional(&self.spec.workdir, &spec, path_str.as_ref())?
-                    }
+                    Some(parent) => gix_revision_path_blob_bytes_optional(&repo, &parent, path)?,
                     None => None,
                 };
-                let new = {
-                    let spec = format!("{}:", commit_id.as_ref());
-                    git_show_path_bytes_optional(&self.spec.workdir, &spec, path_str.as_ref())?
-                };
+                let new = gix_revision_path_blob_bytes_optional(&repo, commit_id.as_ref(), path)?;
 
                 Ok(Some(FileDiffImage {
                     path: path.clone(),
@@ -316,25 +248,10 @@ impl GixRepo {
             return Ok(None);
         }
 
-        let path_str = path.to_string_lossy();
-        let base_bytes = git_show_path_bytes_optional_unmerged_stage(
-            &self.spec.workdir,
-            ":1:",
-            path_str.as_ref(),
-            1,
-        )?;
-        let ours_bytes = git_show_path_bytes_optional_unmerged_stage(
-            &self.spec.workdir,
-            ":2:",
-            path_str.as_ref(),
-            2,
-        )?;
-        let theirs_bytes = git_show_path_bytes_optional_unmerged_stage(
-            &self.spec.workdir,
-            ":3:",
-            path_str.as_ref(),
-            3,
-        )?;
+        let repo = self._repo.to_thread_local();
+        let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?;
+        let ours_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 2)?;
+        let theirs_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 3)?;
         let base = decode_utf8_optional(base_bytes.as_deref());
         let ours = decode_utf8_optional(ours_bytes.as_deref());
         let theirs = decode_utf8_optional(theirs_bytes.as_deref());
@@ -433,178 +350,168 @@ fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Opti
     }
 }
 
-fn git_show_path_utf8_optional(
-    workdir: &Path,
-    rev_prefix: &str,
-    path: &str,
-) -> Result<Option<String>> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(workdir)
-        .arg("-c")
-        .arg("color.ui=false")
-        .arg("--no-pager")
-        .arg("show")
-        .arg("--no-ext-diff")
-        .arg("--pretty=format:")
-        .arg(format!("{rev_prefix}{path}"));
+enum IndexUnconflictedBlob {
+    Present(Vec<u8>),
+    Missing,
+    Unmerged,
+}
 
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+fn decode_utf8_bytes(bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes)
+        .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")))
+}
 
-    if output.status.success() {
-        return String::from_utf8(output.stdout)
-            .map(Some)
-            .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")));
-    }
+fn decode_utf8_bytes_optional(bytes: Option<Vec<u8>>) -> Result<Option<String>> {
+    bytes.map(decode_utf8_bytes).transpose()
+}
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr = stderr.to_string();
-    if git_blob_missing_for_show(&stderr) {
+fn gix_blob_bytes_from_object_id_optional(
+    repo: &gix::Repository,
+    object_id: gix::ObjectId,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object) = repo
+        .try_find_object(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_object: {e}"))))?
+    else {
         return Ok(None);
+    };
+
+    Ok(match object.try_into_blob() {
+        Ok(mut blob) => Some(blob.take_data()),
+        Err(_) => None,
+    })
+}
+
+fn gix_revision_id_optional(
+    repo: &gix::Repository,
+    revision: &str,
+) -> Result<Option<gix::ObjectId>> {
+    if revision == "HEAD" {
+        return match repo.head_id() {
+            Ok(id) => Ok(Some(id.detach())),
+            Err(_) => Ok(None),
+        };
     }
 
-    Err(Error::new(ErrorKind::Backend(format!(
-        "git show failed: {}",
-        stderr.trim()
-    ))))
+    if let Ok(id) = gix::ObjectId::from_hex(revision.as_bytes()) {
+        return Ok(Some(id));
+    }
+
+    let Some(mut reference) = repo
+        .try_find_reference(revision)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_reference: {e}"))))?
+    else {
+        return Ok(None);
+    };
+
+    let id = match reference.try_id() {
+        Some(id) => id.detach(),
+        None => match reference.peel_to_id() {
+            Ok(id) => id.detach(),
+            Err(_) => return Ok(None),
+        },
+    };
+    Ok(Some(id))
 }
 
-fn git_show_unmerged_stage0(stderr: &str) -> bool {
-    let s = stderr;
-    s.contains("is in the index, but not at stage 0")
-        || (s.contains("Did you mean ':1:") && s.contains("is in the index"))
+fn gix_revision_path_blob_bytes_optional(
+    repo: &gix::Repository,
+    revision: &str,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object_id) = gix_revision_id_optional(repo, revision)? else {
+        return Ok(None);
+    };
+
+    let object = match repo.find_object(object_id) {
+        Ok(object) => object,
+        Err(_) => return Ok(None),
+    };
+    let tree = match object.peel_to_tree() {
+        Ok(tree) => tree,
+        Err(_) => return Ok(None),
+    };
+
+    let Some(entry) = tree
+        .lookup_entry_by_path(path)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix lookup_entry_by_path: {e}"))))?
+    else {
+        return Ok(None);
+    };
+
+    gix_blob_bytes_from_object_id_optional(repo, entry.object_id())
 }
 
-fn git_show_unmerged_stage_missing(stderr: &str, stage: u8) -> bool {
-    let s = stderr;
+fn gix_index_stage_from_u8(stage: u8) -> Option<gix::index::entry::Stage> {
     match stage {
-        1 => s.contains("is in the index, but not at stage 1"),
-        2 => s.contains("is in the index, but not at stage 2"),
-        3 => s.contains("is in the index, but not at stage 3"),
-        _ => false,
+        0 => Some(gix::index::entry::Stage::Unconflicted),
+        1 => Some(gix::index::entry::Stage::Base),
+        2 => Some(gix::index::entry::Stage::Ours),
+        3 => Some(gix::index::entry::Stage::Theirs),
+        _ => None,
     }
 }
 
-fn git_show_path_utf8_optional_unmerged_stage(
-    workdir: &Path,
-    rev_prefix: &str,
-    path: &str,
+fn gix_index_stage_blob_bytes_optional(
+    repo: &gix::Repository,
+    path: &Path,
     stage: u8,
-) -> Result<Option<String>> {
-    match git_show_path_utf8_optional(workdir, rev_prefix, path) {
-        Ok(value) => Ok(value),
-        Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) => {
-            Ok(None)
-        }
-        Err(e) => Err(e),
-    }
-}
-
-fn git_show_path_bytes_optional(
-    workdir: &Path,
-    rev_prefix: &str,
-    path: &str,
 ) -> Result<Option<Vec<u8>>> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(workdir)
-        .arg("-c")
-        .arg("color.ui=false")
-        .arg("--no-pager")
-        .arg("show")
-        .arg("--no-ext-diff")
-        .arg("--pretty=format:")
-        .arg(format!("{rev_prefix}{path}"));
+    let Some(stage) = gix_index_stage_from_u8(stage) else {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "invalid conflict stage: {stage}"
+        ))));
+    };
 
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
-    if output.status.success() {
-        return Ok(Some(output.stdout));
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr = stderr.to_string();
-    if git_blob_missing_for_show(&stderr) {
+    let path = gix::path::os_str_into_bstr(path.as_os_str())
+        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
+    let Some(entry) = index.entry_by_path_and_stage(path, stage) else {
         return Ok(None);
-    }
+    };
 
-    Err(Error::new(ErrorKind::Backend(format!(
-        "git show failed: {}",
-        stderr.trim()
-    ))))
+    gix_blob_bytes_from_object_id_optional(repo, entry.id)
 }
 
-fn git_show_path_bytes_optional_unmerged_stage(
-    workdir: &Path,
-    rev_prefix: &str,
-    path: &str,
-    stage: u8,
-) -> Result<Option<Vec<u8>>> {
-    match git_show_path_bytes_optional(workdir, rev_prefix, path) {
-        Ok(value) => Ok(value),
-        Err(e) if matches!(e.kind(), ErrorKind::Backend(s) if git_show_unmerged_stage_missing(s, stage)) => {
-            Ok(None)
-        }
-        Err(e) => Err(e),
-    }
-}
+fn gix_index_unconflicted_blob_bytes_optional(
+    repo: &gix::Repository,
+    path: &Path,
+) -> Result<IndexUnconflictedBlob> {
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
-fn git_first_parent_optional(workdir: &Path, commit: &str) -> Result<Option<String>> {
-    let mut cmd = Command::new("git");
-    cmd.arg("-C")
-        .arg(workdir)
-        .arg("--no-pager")
-        .arg("rev-parse")
-        .arg(format!("{commit}^"));
+    let path = gix::path::os_str_into_bstr(path.as_os_str())
+        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
 
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Ok(Some(stdout.trim().to_string()));
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stderr = stderr.to_string();
-    if stderr.contains("unknown revision")
-        || stderr.contains("bad revision")
-        || stderr.contains("bad object")
+    if let Some(entry) = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
     {
+        return Ok(
+            match gix_blob_bytes_from_object_id_optional(repo, entry.id)? {
+                Some(bytes) => IndexUnconflictedBlob::Present(bytes),
+                None => IndexUnconflictedBlob::Missing,
+            },
+        );
+    }
+
+    if index.entry_range(path).is_some() {
+        return Ok(IndexUnconflictedBlob::Unmerged);
+    }
+
+    Ok(IndexUnconflictedBlob::Missing)
+}
+
+fn gix_first_parent_optional(repo: &gix::Repository, commit: &str) -> Result<Option<String>> {
+    let Some(commit_id) = gix_revision_id_optional(repo, commit)? else {
         return Ok(None);
-    }
+    };
 
-    Err(Error::new(ErrorKind::Backend(format!(
-        "git rev-parse failed: {}",
-        stderr.trim()
-    ))))
-}
-
-fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
-    let needle = needle.as_bytes();
-    if needle.is_empty() {
-        return true;
-    }
-
-    haystack
-        .as_bytes()
-        .windows(needle.len())
-        .any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-fn git_blob_missing_for_show(stderr: &str) -> bool {
-    let has = |needle: &str| contains_ascii_case_insensitive(stderr, needle);
-    has("does not exist in") // `Path 'x' does not exist in 'REV'`
-        || has("exists on disk, but not in") // common suggestion text
-        || (has("path '") && has("' does not exist"))
-        || has("neither on disk nor in the index")
-        || has("fatal: invalid object name")
-        || has("bad object")
-        || has("unknown revision")
-        || has("bad revision")
+    let commit = match repo.find_commit(commit_id) {
+        Ok(commit) => commit,
+        Err(_) => return Ok(None),
+    };
+    Ok(commit.parent_ids().next().map(|id| id.detach().to_string()))
 }

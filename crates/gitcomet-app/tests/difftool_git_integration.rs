@@ -1291,4 +1291,3 @@ fn git_difftool_absent_tool_reports_cmd_not_set_error() {
         "expected missing-tool command error text\n{text}"
     );
 }
-

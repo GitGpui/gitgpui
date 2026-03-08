@@ -27,7 +27,10 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_status_integration_tests() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+        let output = match Command::new("git")
+            .args(["difftool", "--tool-help"])
+            .output()
+        {
             Ok(output) => output,
             Err(_) => return true,
         };
@@ -677,6 +680,45 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         .expect("file diff for commit");
     assert_eq!(commit.old.as_deref(), Some("one\n"));
     assert_eq!(commit.new.as_deref(), Some("one\ntwo\n"));
+}
+
+#[test]
+fn diff_file_text_root_commit_has_no_parent_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "root"],
+    );
+
+    let head = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("git rev-parse to run");
+    assert!(head.status.success());
+    let head = String::from_utf8(head.stdout).unwrap().trim().to_string();
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let commit = opened
+        .diff_file_text(&DiffTarget::Commit {
+            commit_id: gitcomet_core::domain::CommitId(head),
+            path: Some(PathBuf::from("a.txt")),
+        })
+        .unwrap()
+        .expect("file diff for root commit");
+    assert_eq!(commit.old.as_deref(), None);
+    assert_eq!(commit.new.as_deref(), Some("one\n"));
 }
 
 #[test]
@@ -5651,4 +5693,3 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
         "a.txt should no longer be conflicted after keeping ours"
     );
 }
-

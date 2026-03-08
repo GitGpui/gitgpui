@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 mod blame;
 mod diff;
 mod discard;
+mod git_ops;
 mod history;
 mod log;
 mod mergetool;

@@ -36,7 +36,10 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_integration_tests() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+        let output = match Command::new("git")
+            .args(["difftool", "--tool-help"])
+            .output()
+        {
             Ok(output) => output,
             Err(_) => return true,
         };
@@ -253,9 +256,31 @@ fn empty_repo_log_and_head_branch_do_not_error() {
 
     assert_eq!(opened.current_branch().unwrap(), "main");
     assert!(opened.log_head_page(200, None).unwrap().commits.is_empty());
-    assert!(opened
-        .log_all_branches_page(200, None)
-        .unwrap()
-        .commits
-        .is_empty());
+    assert!(
+        opened
+            .log_all_branches_page(200, None)
+            .unwrap()
+            .commits
+            .is_empty()
+    );
+}
+
+#[test]
+fn detached_head_reports_head_as_current_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "A"]);
+    run_git(repo, &["checkout", "--detach", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    assert_eq!(opened.current_branch().unwrap(), "HEAD");
 }

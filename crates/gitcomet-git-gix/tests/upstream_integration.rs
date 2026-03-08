@@ -41,7 +41,10 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_upstream_tests() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git").args(["difftool", "--tool-help"]).output() {
+        let output = match Command::new("git")
+            .args(["difftool", "--tool-help"])
+            .output()
+        {
             Ok(output) => output,
             Err(_) => return true,
         };

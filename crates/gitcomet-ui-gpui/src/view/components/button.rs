@@ -17,7 +17,6 @@ pub enum ButtonStyle {
     Subtle,
     Transparent,
     Danger,
-    DangerSolid,
 }
 
 pub struct Button {
@@ -240,21 +239,6 @@ impl Button {
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.52 } else { 0.42 }),
                 theme.colors.text,
             ),
-            ButtonStyle::DangerSolid => {
-                let bg = theme.colors.danger;
-                let black = gpui::rgba(0x000000ff);
-                let hover_bg = mix(bg, black, if theme.is_dark { 0.16 } else { 0.12 });
-                let active_bg = mix(bg, black, if theme.is_dark { 0.26 } else { 0.18 });
-                (
-                    bg,
-                    hover_bg,
-                    active_bg,
-                    mix(bg, black, if theme.is_dark { 0.34 } else { 0.26 }),
-                    mix(bg, black, if theme.is_dark { 0.40 } else { 0.32 }),
-                    mix(bg, black, if theme.is_dark { 0.48 } else { 0.40 }),
-                    gpui::rgba(0xffffffff),
-                )
-            }
         };
 
         let label = self.label.to_string();

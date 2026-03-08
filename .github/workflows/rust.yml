@@ -93,6 +93,8 @@ jobs:
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Git CLI migration scoreboard
+      run: cargo test -p gitcomet-git-gix --test git_cli_scoreboard -- --nocapture
     - name: Status and mergetool backend integration
       run: cargo test -p gitcomet-git-gix --verbose
 

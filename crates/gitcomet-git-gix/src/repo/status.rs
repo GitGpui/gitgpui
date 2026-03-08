@@ -6,7 +6,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 impl GixRepo {
@@ -114,7 +114,7 @@ impl GixRepo {
         // Some platforms may omit certain unmerged shapes (notably stage-1-only
         // both-deleted conflicts) from gix status output. Supplement conflict
         // entries from the index's unmerged stages for complete parity.
-        for (path, conflict_kind) in git_unmerged_conflicts(&self.spec.workdir)? {
+        for (path, conflict_kind) in gix_unmerged_conflicts(&repo)? {
             if let Some(entry) = unstaged.iter_mut().find(|entry| entry.path == path) {
                 entry.kind = FileStatusKind::Conflicted;
                 entry.conflict = Some(conflict_kind);
@@ -191,56 +191,37 @@ impl GixRepo {
     }
 }
 
-fn git_unmerged_conflicts(workdir: &Path) -> Result<Vec<(PathBuf, FileConflictKind)>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("ls-files")
-        .arg("-u")
-        .arg("-z")
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+fn gix_unmerged_conflicts(repo: &gix::Repository) -> Result<Vec<(PathBuf, FileConflictKind)>> {
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let path_backing = index.path_backing();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(Error::new(ErrorKind::Backend(format!(
-            "git ls-files -u failed: {}",
-            stderr.trim()
-        ))));
-    }
+    let stage_entries = index.entries().iter().filter_map(|entry| {
+        let stage = entry.stage_raw() as u8;
+        (1..=3).contains(&stage).then(|| {
+            let path = PathBuf::from(entry.path_in(path_backing).to_str_lossy().into_owned());
+            (path, stage)
+        })
+    });
 
-    Ok(parse_unmerged_conflicts(&output.stdout))
+    Ok(collect_unmerged_conflicts(stage_entries))
 }
 
-fn parse_unmerged_conflicts(stdout: &[u8]) -> Vec<(PathBuf, FileConflictKind)> {
+fn collect_unmerged_conflicts(
+    stage_entries: impl IntoIterator<Item = (PathBuf, u8)>,
+) -> Vec<(PathBuf, FileConflictKind)> {
     let mut stage_masks: HashMap<PathBuf, u8> = HashMap::default();
 
-    for record in stdout
-        .split(|b| *b == b'\0')
-        .filter(|record| !record.is_empty())
-    {
-        let Some(tab_index) = record.iter().rposition(|b| *b == b'\t') else {
+    for (path, stage) in stage_entries {
+        let Some(shift) = stage.checked_sub(1) else {
             continue;
         };
-        let metadata = &record[..tab_index];
-        let path_bytes = &record[tab_index + 1..];
-        if path_bytes.is_empty() {
+        if shift > 2 {
             continue;
         }
 
-        let stage = metadata
-            .split(|b| *b == b' ')
-            .filter(|part| !part.is_empty())
-            .next_back()
-            .and_then(|part| std::str::from_utf8(part).ok())
-            .and_then(|part| part.parse::<u8>().ok());
-
-        let Some(stage @ 1..=3) = stage else {
-            continue;
-        };
-
-        let path = PathBuf::from(String::from_utf8_lossy(path_bytes).into_owned());
-        let bit = 1u8 << (stage - 1);
+        let bit = 1u8 << shift;
         stage_masks
             .entry(path)
             .and_modify(|mask| *mask |= bit)
@@ -302,7 +283,7 @@ fn map_entry_status<T, U>(
 
 #[cfg(test)]
 mod tests {
-    use super::{conflict_kind_from_stage_mask, parse_unmerged_conflicts};
+    use super::{collect_unmerged_conflicts, conflict_kind_from_stage_mask};
     use gitcomet_core::domain::FileConflictKind;
     use rustc_hash::FxHashMap as HashMap;
     use std::path::PathBuf;
@@ -341,24 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_unmerged_conflicts_groups_stage_entries_by_path() {
-        let stdout = concat!(
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tdd.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tau.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tud.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tud.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tua.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tdu.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tdu.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\taa.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\taa.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 1\tuu.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 2\tuu.txt\0",
-            "100644 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3\tuu.txt\0"
-        )
-        .as_bytes();
+    fn collect_unmerged_conflicts_groups_stage_entries_by_path() {
+        let stages = vec![
+            (PathBuf::from("dd.txt"), 1),
+            (PathBuf::from("au.txt"), 2),
+            (PathBuf::from("ud.txt"), 1),
+            (PathBuf::from("ud.txt"), 2),
+            (PathBuf::from("ua.txt"), 3),
+            (PathBuf::from("du.txt"), 1),
+            (PathBuf::from("du.txt"), 3),
+            (PathBuf::from("aa.txt"), 2),
+            (PathBuf::from("aa.txt"), 3),
+            (PathBuf::from("uu.txt"), 1),
+            (PathBuf::from("uu.txt"), 2),
+            (PathBuf::from("uu.txt"), 3),
+        ];
 
-        let parsed = parse_unmerged_conflicts(stdout);
+        let parsed = collect_unmerged_conflicts(stages);
         let by_path = parsed
             .into_iter()
             .collect::<HashMap<PathBuf, FileConflictKind>>();
@@ -390,6 +370,22 @@ mod tests {
         assert_eq!(
             by_path.get(&PathBuf::from("uu.txt")),
             Some(&FileConflictKind::BothModified)
+        );
+    }
+
+    #[test]
+    fn collect_unmerged_conflicts_ignores_unconflicted_and_unknown_stages() {
+        let stages = vec![
+            (PathBuf::from("clean.txt"), 0),
+            (PathBuf::from("ignored.txt"), 4),
+            (PathBuf::from("conflicted.txt"), 2),
+            (PathBuf::from("conflicted.txt"), 3),
+        ];
+
+        let parsed = collect_unmerged_conflicts(stages);
+        assert_eq!(
+            parsed,
+            vec![(PathBuf::from("conflicted.txt"), FileConflictKind::BothAdded)]
         );
     }
 }

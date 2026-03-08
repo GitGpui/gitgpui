@@ -560,7 +560,10 @@ mod tests {
     fn git_shell_available_for_octopus_merge_tests() -> bool {
         static AVAILABLE: OnceLock<bool> = OnceLock::new();
         *AVAILABLE.get_or_init(|| {
-            let output = match Command::new("git").args(["mergetool", "--tool-help"]).output() {
+            let output = match Command::new("git")
+                .args(["mergetool", "--tool-help"])
+                .output()
+            {
                 Ok(output) => output,
                 Err(_) => return true,
             };

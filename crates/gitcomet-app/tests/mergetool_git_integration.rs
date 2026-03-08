@@ -4032,4 +4032,3 @@ fn git_mergetool_binary_conflict_alongside_text_conflict() {
         "expected binary conflict mention in output, got:\n{text}"
     );
 }
-
