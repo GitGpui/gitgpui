@@ -231,6 +231,17 @@ pub(super) fn reduce(
             };
             actions_emit_effects::remove_worktree(repo_id, normalized_path)
         }
+        Msg::ForceRemoveWorktree { repo_id, path } => {
+            let normalized_path = if let Some(repo_state) =
+                state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_add(1);
+                normalize_repo_relative_path(&repo_state.spec.workdir, path)
+            } else {
+                path
+            };
+            actions_emit_effects::force_remove_worktree(repo_id, normalized_path)
+        }
         Msg::AddSubmodule { repo_id, url, path } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::add_submodule(repo_id, url, path)
@@ -588,6 +599,7 @@ pub(super) fn reduce(
         }) => {
             let removed_worktree_path = match (&command, &result) {
                 (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
+                (RepoCommandKind::ForceRemoveWorktree { path }, Ok(_)) => Some(path.clone()),
                 _ => None,
             };
 

@@ -100,6 +100,10 @@ pub(super) fn remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::RemoveWorktree { repo_id, path }]
 }
 
+pub(super) fn force_remove_worktree(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
+    vec![Effect::ForceRemoveWorktree { repo_id, path }]
+}
+
 pub(super) fn add_submodule(repo_id: RepoId, url: String, path: PathBuf) -> Vec<Effect> {
     vec![Effect::AddSubmodule { repo_id, url, path }]
 }
@@ -536,7 +540,9 @@ pub(super) fn repo_command_finished(
 ) -> Vec<Effect> {
     let refresh_worktrees = matches!(
         &command,
-        RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. }
+        RepoCommandKind::AddWorktree { .. }
+            | RepoCommandKind::RemoveWorktree { .. }
+            | RepoCommandKind::ForceRemoveWorktree { .. }
     ) && result.is_ok();
     let refresh_submodules = matches!(
         &command,
@@ -569,7 +575,9 @@ pub(super) fn repo_command_finished(
             repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
             repo_state.bump_ops_rev();
         }
-        RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
+        RepoCommandKind::AddWorktree { .. }
+        | RepoCommandKind::RemoveWorktree { .. }
+        | RepoCommandKind::ForceRemoveWorktree { .. } => {
             repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_sub(1);
         }
         _ if tracks_local_actions_in_flight(&command) => {

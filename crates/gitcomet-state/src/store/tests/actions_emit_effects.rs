@@ -2173,7 +2173,10 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
 
     let repo_state = state.repos.first().expect("repo");
     assert!(repo_state.diff_state.diff.is_loading());
-    assert!(matches!(repo_state.diff_state.diff_file, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(effects.iter().any(|effect| matches!(
         effect,
@@ -2384,7 +2387,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
     assert!(repo.diff_state.diff_target.is_none());
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
+    assert!(matches!(
+        repo.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
     assert_eq!(
         repo.command_log.last().map(|entry| entry.summary.as_str()),
         Some("Commit: Completed")
@@ -2507,7 +2513,10 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     assert!(repo.diff_state.diff_target.is_none());
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
+    assert!(matches!(
+        repo.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
 
     let no_repo_effects = reduce(
         &mut repos,

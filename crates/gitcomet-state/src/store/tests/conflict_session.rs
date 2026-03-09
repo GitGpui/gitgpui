@@ -1765,7 +1765,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_rev;
+        .conflict_state
+        .conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
@@ -1786,7 +1787,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_state.conflict_rev,
+            .conflict_state
+            .conflict_rev,
         before_no_session_rev
     );
 
@@ -1809,7 +1811,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_rev;
+        .conflict_state
+        .conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
@@ -1830,7 +1833,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_state.conflict_rev,
+            .conflict_state
+            .conflict_rev,
         before_tracked_mismatch_rev
     );
 
@@ -1840,7 +1844,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter_mut()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_session
+        .conflict_state
+        .conflict_session
         .as_mut()
         .expect("session")
         .path = PathBuf::from("different-session-path.txt");
@@ -1849,7 +1854,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_rev;
+        .conflict_state
+        .conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
@@ -1870,7 +1876,8 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_state.conflict_rev,
+            .conflict_state
+            .conflict_rev,
         before_session_mismatch_rev
     );
 }
@@ -1921,7 +1928,8 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_session
+        .conflict_state
+        .conflict_session
         .as_ref()
         .expect("session");
     assert!(session.regions.iter().all(|region| matches!(
@@ -1985,7 +1993,8 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_session
+        .conflict_state
+        .conflict_session
         .as_ref()
         .expect("session exists");
     assert_eq!(
@@ -2037,7 +2046,8 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_session
+        .conflict_state
+        .conflict_session
         .as_ref()
         .expect("session exists");
     assert_eq!(
@@ -2087,7 +2097,8 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_state.conflict_rev;
+        .conflict_state
+        .conflict_rev;
 
     reduce(
         &mut repos,
@@ -2108,7 +2119,8 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
     assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
     assert_eq!(
         repo_state
-            .conflict_state.conflict_session
+            .conflict_state
+            .conflict_session
             .as_ref()
             .expect("session exists")
             .regions[0]

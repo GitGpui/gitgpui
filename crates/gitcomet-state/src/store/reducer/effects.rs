@@ -759,7 +759,9 @@ mod tests {
         let mut state = new_state_with_repo(repo_id);
         let tracked = PathBuf::from("tracked.txt");
 
-        repo_mut(&mut state, repo_id).history_state.file_history_path = Some(tracked.clone());
+        repo_mut(&mut state, repo_id)
+            .history_state
+            .file_history_path = Some(tracked.clone());
         file_history_loaded(
             &mut state,
             repo_id,
@@ -784,7 +786,10 @@ mod tests {
             Err(backend_error("file history failed")),
         );
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.history_state.file_history, Loadable::Error(_)));
+        assert!(matches!(
+            repo.history_state.file_history,
+            Loadable::Error(_)
+        ));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 
@@ -868,8 +873,15 @@ mod tests {
 
         conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(Some(file)), None);
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_))));
-        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
+        assert!(matches!(
+            repo.conflict_state.conflict_file,
+            Loadable::Ready(Some(_))
+        ));
+        let session = repo
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .expect("session");
         assert_eq!(session.path, path);
         assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
         assert!(!session.regions.is_empty());
@@ -904,7 +916,11 @@ mod tests {
 
         conflict_file_loaded(&mut state, repo_id, path, Ok(Some(file)), None);
         let repo = repo_mut(&mut state, repo_id);
-        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
+        let session = repo
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .expect("session");
         assert!(session.base.is_binary());
     }
 
@@ -933,8 +949,15 @@ mod tests {
         );
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert!(matches!(repo.conflict_state.conflict_file, Loadable::Error(_)));
-            let session = repo.conflict_state.conflict_session.as_ref().expect("session");
+            assert!(matches!(
+                repo.conflict_state.conflict_file,
+                Loadable::Error(_)
+            ));
+            let session = repo
+                .conflict_state
+                .conflict_session
+                .as_ref()
+                .expect("session");
             assert_eq!(session.path, provided.path);
             assert_eq!(session.conflict_kind, provided.conflict_kind);
             assert_eq!(session.strategy, provided.strategy);
@@ -951,8 +974,15 @@ mod tests {
             None,
         );
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.conflict_state.conflict_file, Loadable::Error(_)));
-        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
+        assert!(matches!(
+            repo.conflict_state.conflict_file,
+            Loadable::Error(_)
+        ));
+        let session = repo
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .expect("session");
         assert_eq!(session.path, provided.path);
         assert_eq!(session.conflict_kind, provided.conflict_kind);
         assert_eq!(session.strategy, provided.strategy);
@@ -987,7 +1017,10 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.conflict_state.conflict_file_path.as_ref(), Some(&conflict_path));
+            assert_eq!(
+                repo.conflict_state.conflict_file_path.as_ref(),
+                Some(&conflict_path)
+            );
             assert!(repo.conflict_state.conflict_file.is_loading());
             assert!(repo.conflict_state.conflict_session.is_none());
             assert!(!repo.conflict_state.conflict_hide_resolved);
@@ -1005,7 +1038,10 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.history_state.file_history_path.as_ref(), Some(&history_path));
+            assert_eq!(
+                repo.history_state.file_history_path.as_ref(),
+                Some(&history_path)
+            );
             assert!(repo.history_state.file_history.is_loading());
         }
 
@@ -1101,7 +1137,10 @@ mod tests {
         {
             let repo = repo_mut(&mut state, repo_id);
             assert_eq!(repo.history_state.selected_commit.as_ref(), Some(&commit_a));
-            assert!(matches!(repo.history_state.commit_details, Loadable::NotLoaded));
+            assert!(matches!(
+                repo.history_state.commit_details,
+                Loadable::NotLoaded
+            ));
         }
 
         assert!(select_commit(&mut state, repo_id, commit_a.clone()).is_empty());
@@ -1137,7 +1176,10 @@ mod tests {
         assert!(clear_commit_selection(&mut state, repo_id).is_empty());
         let repo = repo_mut(&mut state, repo_id);
         assert!(repo.history_state.selected_commit.is_none());
-        assert!(matches!(repo.history_state.commit_details, Loadable::NotLoaded));
+        assert!(matches!(
+            repo.history_state.commit_details,
+            Loadable::NotLoaded
+        ));
     }
 
     #[test]
@@ -1365,7 +1407,10 @@ mod tests {
             let repo = repo_mut(&mut state, repo_id);
             assert!(matches!(repo.status, Loadable::Ready(_)));
             assert!(repo.conflict_state.conflict_file_path.is_none());
-            assert!(matches!(repo.conflict_state.conflict_file, Loadable::NotLoaded));
+            assert!(matches!(
+                repo.conflict_state.conflict_file,
+                Loadable::NotLoaded
+            ));
             assert!(repo.conflict_state.conflict_session.is_none());
             assert!(!repo.conflict_state.conflict_hide_resolved);
         }
@@ -1467,7 +1512,10 @@ mod tests {
 
         commit_details_loaded(&mut state, repo_id, selected, Err(backend_error("details")));
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.history_state.commit_details, Loadable::Error(_)));
+        assert!(matches!(
+            repo.history_state.commit_details,
+            Loadable::Error(_)
+        ));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 }

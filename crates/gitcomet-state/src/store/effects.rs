@@ -184,6 +184,9 @@ pub(super) fn schedule_effect(
         Effect::RemoveWorktree { repo_id, path } => {
             repo_commands::schedule_remove_worktree(executor, repos, msg_tx, repo_id, path);
         }
+        Effect::ForceRemoveWorktree { repo_id, path } => {
+            repo_commands::schedule_force_remove_worktree(executor, repos, msg_tx, repo_id, path);
+        }
         Effect::AddSubmodule { repo_id, url, path } => {
             repo_commands::schedule_add_submodule(executor, repos, msg_tx, repo_id, url, path);
         }

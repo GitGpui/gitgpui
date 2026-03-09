@@ -95,6 +95,9 @@ pub enum RepoCommandKind {
     RemoveWorktree {
         path: PathBuf,
     },
+    ForceRemoveWorktree {
+        path: PathBuf,
+    },
     AddSubmodule {
         url: String,
         path: PathBuf,

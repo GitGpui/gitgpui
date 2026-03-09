@@ -621,7 +621,10 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             })),
         }),
     );
-    assert!(matches!(state.repos[0].diff_state.diff_file, Loadable::Ready(_)));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file,
+        Loadable::Ready(_)
+    ));
 
     reduce(
         &mut repos,
@@ -637,7 +640,10 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             })),
         }),
     );
-    assert!(matches!(state.repos[0].diff_state.diff_file_image, Loadable::Ready(_)));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file_image,
+        Loadable::Ready(_)
+    ));
 
     reduce(
         &mut repos,
@@ -651,7 +657,10 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             ))),
         }),
     );
-    assert!(matches!(state.repos[0].diff_state.diff_file, Loadable::Error(_)));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file,
+        Loadable::Error(_)
+    ));
 
     reduce(
         &mut repos,
@@ -665,7 +674,10 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
             ))),
         }),
     );
-    assert!(matches!(state.repos[0].diff_state.diff_file_image, Loadable::Error(_)));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file_image,
+        Loadable::Error(_)
+    ));
     assert!(
         state.repos[0]
             .diagnostics

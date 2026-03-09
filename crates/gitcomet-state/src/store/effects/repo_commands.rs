@@ -190,6 +190,24 @@ pub(super) fn schedule_remove_worktree(
     );
 }
 
+pub(super) fn schedule_force_remove_worktree(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: mpsc::Sender<Msg>,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    let command_path = path.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ForceRemoveWorktree { path: command_path },
+        move |repo| repo.force_remove_worktree_with_output(&path),
+    );
+}
+
 pub(super) fn schedule_add_submodule(
     executor: &TaskExecutor,
     repos: &RepoMap,

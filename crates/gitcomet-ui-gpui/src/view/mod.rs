@@ -522,6 +522,7 @@ impl GitCometView {
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
+            pending_force_remove_worktree_prompt: None,
             startup_crash_report,
             error_banner_input,
             active_context_menu_invoker: None,
@@ -793,6 +794,17 @@ impl Render for GitCometView {
         {
             self.open_popover_at(
                 PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some((repo_id, path)) = self.pending_force_remove_worktree_prompt.take()
+            && self.active_repo_id() == Some(repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path },
                 self.last_mouse_pos,
                 window,
                 cx,

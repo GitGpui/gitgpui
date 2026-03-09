@@ -485,6 +485,12 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn force_remove_worktree_with_output(&self, _path: &Path) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "worktree force remove is not implemented for this backend",
+        )))
+    }
+
     fn list_submodules(&self) -> Result<Vec<Submodule>> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule listing is not implemented for this backend",

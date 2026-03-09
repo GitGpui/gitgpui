@@ -569,6 +569,10 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         name: String,
     },
+    ForceRemoveWorktreeConfirm {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     DiscardChangesConfirm {
         repo_id: RepoId,
         area: DiffArea,
@@ -967,6 +971,7 @@ pub struct GitCometView {
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
+    pub(super) pending_force_remove_worktree_prompt: Option<(RepoId, std::path::PathBuf)>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
 
     pub(super) error_banner_input: Entity<components::TextInput>,

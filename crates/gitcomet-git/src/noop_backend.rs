@@ -286,6 +286,7 @@ mod tests {
         assert_unsupported(repo.list_worktrees());
         assert_unsupported(repo.add_worktree_with_output(path, Some("main")));
         assert_unsupported(repo.remove_worktree_with_output(path));
+        assert_unsupported(repo.force_remove_worktree_with_output(path));
         assert_unsupported(repo.list_submodules());
         assert_unsupported(repo.add_submodule_with_output("https://example.com/repo.git", path));
         assert_unsupported(repo.update_submodules_with_output());

@@ -375,6 +375,10 @@ impl GitRepository for GixRepo {
         self.remove_worktree_with_output_impl(path)
     }
 
+    fn force_remove_worktree_with_output(&self, path: &Path) -> Result<CommandOutput> {
+        self.force_remove_worktree_with_output_impl(path)
+    }
+
     fn list_submodules(&self) -> Result<Vec<Submodule>> {
         self.list_submodules_impl()
     }

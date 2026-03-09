@@ -64,6 +64,21 @@ impl GitCometView {
                 if entry.command.starts_with("telemetry.") {
                     continue;
                 }
+
+                let force_remove_worktree_path = if entry.ok {
+                    None
+                } else {
+                    parse_force_remove_worktree_path(&entry.command, &entry.stderr)
+                };
+                if self.pending_force_remove_worktree_prompt.is_none()
+                    && let Some(path) = force_remove_worktree_path.clone()
+                {
+                    self.pending_force_remove_worktree_prompt = Some((next_repo.id, path));
+                }
+                if force_remove_worktree_path.is_some() {
+                    continue;
+                }
+
                 self.push_toast(
                     if entry.ok {
                         components::ToastKind::Success
@@ -118,4 +133,79 @@ fn parse_force_delete_branch_name(message: &str) -> Option<String> {
     let end = rest.find('\'')?;
     let name = rest[..end].trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+fn parse_force_remove_worktree_path(command: &str, stderr: &str) -> Option<std::path::PathBuf> {
+    if !is_force_remove_worktree_required_error(command, stderr) {
+        return None;
+    }
+    parse_worktree_path_from_fatal(stderr).or_else(|| parse_worktree_path_from_command(command))
+}
+
+fn is_force_remove_worktree_required_error(command: &str, stderr: &str) -> bool {
+    let command = command.trim();
+    let is_worktree_remove = command.starts_with("git worktree remove ")
+        && !command.starts_with("git worktree remove --force ");
+    is_worktree_remove
+        && stderr.contains("contains modified or untracked files")
+        && stderr.contains("use --force to delete it")
+}
+
+fn parse_worktree_path_from_fatal(stderr: &str) -> Option<std::path::PathBuf> {
+    let needle = "fatal: '";
+    let start = stderr.find(needle)? + needle.len();
+    let rest = &stderr[start..];
+    let end = rest.find("' contains modified or untracked files")?;
+    let path = rest[..end].trim();
+    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+}
+
+fn parse_worktree_path_from_command(command: &str) -> Option<std::path::PathBuf> {
+    let command = command.trim();
+    let rest = command.strip_prefix("git worktree remove ")?;
+    let path = rest.trim();
+    if path.is_empty() || path.starts_with('-') {
+        return None;
+    }
+    Some(std::path::PathBuf::from(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_force_remove_worktree_path_prefers_fatal_path() {
+        let command = "git worktree remove /tmp/from-command";
+        let stderr = "git worktree remove /tmp/from-command failed: fatal: '/tmp/from-stderr' contains modified or untracked files, use --force to delete it.";
+        assert_eq!(
+            parse_force_remove_worktree_path(command, stderr),
+            Some(PathBuf::from("/tmp/from-stderr"))
+        );
+    }
+
+    #[test]
+    fn parse_force_remove_worktree_path_falls_back_to_command_path() {
+        let command = "git worktree remove /tmp/worktree";
+        let stderr = "contains modified or untracked files, use --force to delete it";
+        assert_eq!(
+            parse_force_remove_worktree_path(command, stderr),
+            Some(PathBuf::from("/tmp/worktree"))
+        );
+    }
+
+    #[test]
+    fn parse_force_remove_worktree_path_ignores_non_matching_errors() {
+        let command = "git worktree remove /tmp/worktree";
+        let stderr = "fatal: '/tmp/worktree' is not a working tree";
+        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
+    }
+
+    #[test]
+    fn parse_force_remove_worktree_path_ignores_already_forced_command() {
+        let command = "git worktree remove --force /tmp/worktree";
+        let stderr = "contains modified or untracked files, use --force to delete it";
+        assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
+    }
 }

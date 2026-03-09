@@ -218,6 +218,10 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
+    ForceRemoveWorktree {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     AddSubmodule {
         repo_id: RepoId,
         url: String,

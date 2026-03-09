@@ -88,6 +88,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::ConflictSaveStageConfirm { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
+        | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
@@ -212,6 +213,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::RebasePrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
+        | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -315,6 +317,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             32u8.hash(hasher);
             repo_id.hash(hasher);
             name.hash(hasher);
+        }
+        PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path } => {
+            61u8.hash(hasher);
+            repo_id.hash(hasher);
+            path.hash(hasher);
         }
         PopoverKind::DiscardChangesConfirm {
             repo_id,

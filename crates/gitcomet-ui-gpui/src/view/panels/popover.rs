@@ -16,6 +16,7 @@ mod file_history;
 mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
+mod force_remove_worktree_confirm;
 mod merge_abort_confirm;
 mod open_source_licenses;
 mod pull_reconcile_prompt;
@@ -1082,6 +1083,7 @@ impl PopoverHost {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::ConflictSaveStageConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
+            | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::HistoryColumnSettings => Corner::TopRight,
@@ -1566,6 +1568,9 @@ impl PopoverHost {
             ),
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
+            }
+            PopoverKind::ForceRemoveWorktreeConfirm { repo_id, path } => {
+                force_remove_worktree_confirm::panel(self, repo_id, path, cx)
             }
             PopoverKind::DiscardChangesConfirm {
                 repo_id,

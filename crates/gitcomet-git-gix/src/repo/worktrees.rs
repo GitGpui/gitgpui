@@ -46,6 +46,23 @@ impl GixRepo {
             .arg(path);
         run_git_with_output(cmd, &format!("git worktree remove {}", path.display()))
     }
+
+    pub(super) fn force_remove_worktree_with_output_impl(
+        &self,
+        path: &Path,
+    ) -> Result<CommandOutput> {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(&self.spec.workdir)
+            .arg("worktree")
+            .arg("remove")
+            .arg("--force")
+            .arg(path);
+        run_git_with_output(
+            cmd,
+            &format!("git worktree remove --force {}", path.display()),
+        )
+    }
 }
 
 fn parse_git_worktree_list_porcelain(output: &str) -> Vec<Worktree> {

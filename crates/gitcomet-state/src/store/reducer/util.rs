@@ -446,9 +446,9 @@ fn summarize_command(
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
-            RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
-                "Worktree"
-            }
+            RepoCommandKind::AddWorktree { .. }
+            | RepoCommandKind::RemoveWorktree { .. }
+            | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
             RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
@@ -615,6 +615,9 @@ fn summarize_command(
         }
         RepoCommandKind::RemoveWorktree { path } => {
             format!("Worktree removed → {}", path.display())
+        }
+        RepoCommandKind::ForceRemoveWorktree { path } => {
+            format!("Worktree force removed → {}", path.display())
         }
         RepoCommandKind::AddSubmodule { path, .. } => {
             format!("Submodule added → {}", path.display())
