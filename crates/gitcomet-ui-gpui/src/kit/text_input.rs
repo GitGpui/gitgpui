@@ -5,7 +5,7 @@ use gpui::{
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
     ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
-    actions, div, fill, hsla, point, px, relative, size,
+    actions, anchored, deferred, div, fill, hsla, point, px, relative, size,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -74,6 +74,7 @@ struct TextInputStyle {
 #[derive(Clone, Copy, Debug)]
 struct TextInputContextMenuState {
     can_paste: bool,
+    anchor: Point<Pixels>,
 }
 
 impl TextInputStyle {
@@ -1053,6 +1054,7 @@ impl TextInput {
                 .read_from_clipboard()
                 .and_then(|item| item.text())
                 .is_some(),
+            anchor: event.position,
         });
         cx.notify();
     }
@@ -1206,7 +1208,6 @@ impl TextInput {
         }
 
         div()
-            .mt_1()
             .w(px(188.0))
             .p_1()
             .flex()
@@ -2086,11 +2087,10 @@ impl Render for TextInput {
             self.cursor_blink_task = Some(task);
         }
 
-        let mut outer = div()
+        let mut input = div()
             .w_full()
             .min_w(px(0.0))
             .flex()
-            .relative()
             .track_focus(&focus)
             .key_context("TextInput")
             .cursor(CursorStyle::IBeam)
@@ -2142,25 +2142,35 @@ impl Render for TextInput {
                     .child(TextElement { input: cx.entity() }),
             );
 
-        if let Some(state) = self.context_menu {
-            outer = outer.child(self.render_context_menu(state, cx));
-        }
-
         if !chromeless {
-            outer = outer
+            input = input
                 .bg(style.background)
                 .border_1()
                 .rounded(px(style.radius));
 
             if is_focused {
-                outer = outer.border_color(style.focus_border);
+                input = input.border_color(style.focus_border);
             } else {
-                outer = outer
+                input = input
                     .border_color(style.border)
                     .hover(move |s| s.border_color(style.hover_border));
             }
 
-            outer = outer.focus(move |s| s.border_color(style.focus_border));
+            input = input.focus(move |s| s.border_color(style.focus_border));
+        }
+
+        let mut outer = div().w_full().min_w(px(0.0)).flex().flex_col().child(input);
+
+        if let Some(state) = self.context_menu {
+            outer = outer.child(
+                deferred(
+                    anchored()
+                        .position(state.anchor)
+                        .offset(point(px(4.0), px(4.0)))
+                        .child(self.render_context_menu(state, cx)),
+                )
+                .priority(10_000),
+            );
         }
 
         outer

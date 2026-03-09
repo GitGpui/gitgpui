@@ -190,6 +190,56 @@ impl gpui::Render for SmokeView {
     }
 }
 
+struct TextInputHostView {
+    theme: AppTheme,
+    input: gpui::Entity<components::TextInput>,
+}
+
+impl TextInputHostView {
+    fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+        let input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Enter".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        Self {
+            theme: AppTheme::zed_ayu_dark(),
+            input,
+        }
+    }
+}
+
+impl gpui::Render for TextInputHostView {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let content = div()
+            .flex()
+            .flex_col()
+            .p_2()
+            .child(
+                div()
+                    .id("smoke_input")
+                    .debug_selector(|| "smoke_input".to_string())
+                    .child(self.input.clone()),
+            )
+            .into_any_element();
+
+        view::window_frame(self.theme, window.window_decorations(), content)
+    }
+}
+
 #[gpui::test]
 fn smoke_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
@@ -417,6 +467,49 @@ fn text_input_right_click_context_menu_supports_copy(cx: &mut gpui::TestAppConte
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some("hello world".into())
+    );
+}
+
+#[gpui::test]
+fn text_input_context_menu_does_not_resize_input_container(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(TextInputHostView::new);
+
+    let before = cx
+        .debug_bounds("smoke_input")
+        .expect("expected smoke input bounds before opening context menu");
+    let click = before.center();
+
+    cx.simulate_mouse_move(click, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position: click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position: click,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+    });
+
+    let _ = cx
+        .debug_bounds("text_input_context_select_all")
+        .expect("expected text-input context menu to be open");
+
+    let after = cx
+        .debug_bounds("smoke_input")
+        .expect("expected smoke input bounds after opening context menu");
+    let width_delta = (f32::from(after.size.width) - f32::from(before.size.width)).abs();
+    let height_delta = (f32::from(after.size.height) - f32::from(before.size.height)).abs();
+    assert!(
+        width_delta <= 0.1 && height_delta <= 0.1,
+        "expected input bounds to stay stable when context menu opens; before=({}, {}) after=({}, {})",
+        f32::from(before.size.width),
+        f32::from(before.size.height),
+        f32::from(after.size.width),
+        f32::from(after.size.height)
     );
 }
 
