@@ -47,7 +47,10 @@ impl GixRepo {
             .arg("submodule")
             .arg("add")
             .arg(url)
-            .arg(path);
+            .arg(path)
+            // Local-path submodule URLs are used in tests and supported workflows.
+            // Explicitly allow `file` transport for this command.
+            .env("GIT_ALLOW_PROTOCOL", "file");
         run_git_with_output(cmd, &format!("git submodule add {url} {}", path.display()))
     }
 
@@ -58,7 +61,9 @@ impl GixRepo {
             .arg("submodule")
             .arg("update")
             .arg("--init")
-            .arg("--recursive");
+            .arg("--recursive")
+            // Keep behavior consistent with add: allow local-path submodule URLs.
+            .env("GIT_ALLOW_PROTOCOL", "file");
         run_git_with_output(cmd, "git submodule update --init --recursive")
     }
 

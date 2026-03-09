@@ -205,7 +205,7 @@ fn main() {
                             if let Some(report) = startup_crash_report.as_ref() {
                                 print_startup_crash_report_hint(report);
                             }
-                            gitcomet_ui::run(backend);
+                            std::process::exit(exit_code::ERROR);
                         }
                     }
 

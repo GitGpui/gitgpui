@@ -1,7 +1,7 @@
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(windows)]
@@ -24,6 +24,14 @@ fn run_git(repo: &Path, args: &[&str]) {
         .status()
         .expect("git command to run");
     assert!(status.success(), "git {:?} failed", args);
+}
+
+fn canonicalize_or_original(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn same_path(lhs: &Path, rhs: &Path) -> bool {
+    canonicalize_or_original(lhs) == canonicalize_or_original(rhs)
 }
 
 #[test]
@@ -53,7 +61,7 @@ fn worktree_add_list_remove_round_trip() {
     let before = opened.list_worktrees().expect("list initial worktrees");
     let primary = before
         .iter()
-        .find(|worktree| worktree.path == repo)
+        .find(|worktree| same_path(&worktree.path, &repo))
         .expect("primary worktree should be listed");
     assert!(primary.head.is_some());
     assert!(!primary.detached);
@@ -73,7 +81,7 @@ fn worktree_add_list_remove_round_trip() {
     let listed = opened.list_worktrees().expect("list worktrees after add");
     let linked = listed
         .iter()
-        .find(|worktree| worktree.path == linked_path)
+        .find(|worktree| same_path(&worktree.path, &linked_path))
         .expect("linked worktree should be listed");
     assert!(linked.detached);
     assert!(linked.branch.is_none());
@@ -88,7 +96,9 @@ fn worktree_add_list_remove_round_trip() {
         .list_worktrees()
         .expect("list worktrees after remove");
     assert!(
-        after.iter().all(|worktree| worktree.path != linked_path),
+        after
+            .iter()
+            .all(|worktree| !same_path(&worktree.path, &linked_path)),
         "linked worktree should be removed"
     );
 }

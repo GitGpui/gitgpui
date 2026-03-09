@@ -50,6 +50,7 @@ pub fn run_with_startup_crash_report(
     startup_crash_report: Option<StartupCrashReport>,
 ) -> Result<(), UiLaunchError> {
     let launch = normal_launch_config(initial_path, startup_crash_report);
+    ensure_graphics_device_available("main GPUI window launch")?;
     run_with_panic_guard("main GPUI window launch", move || {
         run_windowed_app(backend, launch)
     })
@@ -57,6 +58,11 @@ pub fn run_with_startup_crash_report(
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
 pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMergetoolConfig) -> i32 {
+    if let Err(err) = ensure_graphics_device_available("focused mergetool GPUI launch") {
+        eprintln!("Failed to launch focused mergetool window: {err}");
+        return FOCUSED_MERGETOOL_EXIT_ERROR;
+    }
+
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
@@ -174,6 +180,23 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
 
             cx.activate(true);
         });
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_graphics_device_available(context: &'static str) -> Result<(), UiLaunchError> {
+    if metal::Device::all().is_empty() {
+        return Err(UiLaunchError::from_launch_failure(
+            context,
+            "no compatible Metal graphics device is available in this macOS session. \
+             GPUI requires Metal to open windows; launch from an active local GUI session.",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_graphics_device_available(_context: &'static str) -> Result<(), UiLaunchError> {
+    Ok(())
 }
 
 fn bind_text_input_keys(cx: &mut App) {

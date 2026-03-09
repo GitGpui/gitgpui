@@ -247,6 +247,17 @@ fn render_diff_line(index: usize, line: &DiffLine, theme: &AppTheme) -> impl Int
 ///
 /// Returns process exit code (0 on success, 2 when the window fails to launch).
 pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
+    #[cfg(target_os = "macos")]
+    {
+        let count = metal::Device::all().len();
+        if count == 0 {
+            eprintln!(
+                "Failed to launch focused diff window: no compatible Metal graphics device is available in this macOS session."
+            );
+            return FOCUSED_DIFF_EXIT_ERROR;
+        }
+    }
+
     let exit_code = Arc::new(AtomicI32::new(0));
     let exit_code_for_app = exit_code.clone();
 

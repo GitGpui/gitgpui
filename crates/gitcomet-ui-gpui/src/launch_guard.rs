@@ -4,7 +4,8 @@ use std::fmt;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UiLaunchError {
     context: &'static str,
-    panic_message: String,
+    message: String,
+    is_panic: bool,
 }
 
 impl UiLaunchError {
@@ -13,20 +14,33 @@ impl UiLaunchError {
     }
 
     pub fn panic_message(&self) -> &str {
-        &self.panic_message
+        &self.message
     }
 
     pub(crate) fn from_panic(context: &'static str, payload: Box<dyn Any + Send>) -> Self {
         Self {
             context,
-            panic_message: panic_payload_to_string(payload.as_ref()),
+            message: panic_payload_to_string(payload.as_ref()),
+            is_panic: true,
+        }
+    }
+
+    pub(crate) fn from_launch_failure(context: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            context,
+            message: message.into(),
+            is_panic: false,
         }
     }
 }
 
 impl fmt::Display for UiLaunchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} panicked: {}", self.context, self.panic_message)
+        if self.is_panic {
+            write!(f, "{} panicked: {}", self.context, self.message)
+        } else {
+            write!(f, "{} failed: {}", self.context, self.message)
+        }
     }
 }
 
@@ -73,5 +87,14 @@ mod tests {
         let err = run_with_panic_guard("main window", || std::panic::panic_any(42_u8))
             .expect_err("launch should fail");
         assert_eq!(err.panic_message(), "<non-string panic payload>");
+    }
+
+    #[test]
+    fn launch_failure_error_uses_failed_display_variant() {
+        let err = UiLaunchError::from_launch_failure("main window", "window closed too quickly");
+        assert_eq!(
+            err.to_string(),
+            "main window failed: window closed too quickly"
+        );
     }
 }
