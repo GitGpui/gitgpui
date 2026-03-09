@@ -3,6 +3,7 @@ use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 fn run_git(repo: &Path, args: &[&str]) {

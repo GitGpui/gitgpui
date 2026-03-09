@@ -1,6 +1,7 @@
 use super::util::{
-    diff_target_is_svg, diff_target_wants_image_preview, format_failure_summary, push_action_log,
-    push_command_log, refresh_full_effects, refresh_primary_effects,
+    diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
+    format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
+    refresh_primary_effects,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
@@ -157,21 +158,45 @@ pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
     vec![Effect::CommitAmend { repo_id, message }]
 }
 
+enum InFlightKind {
+    Pull,
+    Push,
+}
+
+fn bump_in_flight(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    kind: InFlightKind,
+) {
+    if !repos.contains_key(&repo_id) {
+        return;
+    }
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        match kind {
+            InFlightKind::Pull => {
+                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
+            }
+            InFlightKind::Push => {
+                repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
+            }
+        }
+        repo_state.bump_ops_rev();
+    }
+}
+
 pub(super) fn fetch_all(
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
-    vec![Effect::FetchAll {
-        repo_id,
-        prune: false,
-    }]
+    let prune = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .is_some_and(|repo_state| repo_state.fetch_prune_deleted_remote_tracking_branches);
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
+    vec![Effect::FetchAll { repo_id, prune }]
 }
 
 pub(super) fn prune_merged_branches(
@@ -179,12 +204,7 @@ pub(super) fn prune_merged_branches(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::PruneMergedBranches { repo_id }]
 }
 
@@ -193,12 +213,7 @@ pub(super) fn prune_local_tags(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::PruneLocalTags { repo_id }]
 }
 
@@ -208,12 +223,7 @@ pub(super) fn pull(
     repo_id: RepoId,
     mode: PullMode,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::Pull { repo_id, mode }]
 }
 
@@ -224,12 +234,7 @@ pub(super) fn pull_branch(
     remote: String,
     branch: String,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Pull);
     vec![Effect::PullBranch {
         repo_id,
         remote,
@@ -246,12 +251,7 @@ pub(super) fn push(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::Push { repo_id }]
 }
 
@@ -260,12 +260,7 @@ pub(super) fn force_push(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::ForcePush { repo_id }]
 }
 
@@ -276,12 +271,7 @@ pub(super) fn push_set_upstream(
     remote: String,
     branch: String,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::PushSetUpstream {
         repo_id,
         remote,
@@ -296,12 +286,7 @@ pub(super) fn delete_remote_branch(
     remote: String,
     branch: String,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::DeleteRemoteBranch {
         repo_id,
         remote,
@@ -352,12 +337,7 @@ pub(super) fn push_tag(
     remote: String,
     name: String,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::PushTag {
         repo_id,
         remote,
@@ -372,12 +352,7 @@ pub(super) fn delete_remote_tag(
     remote: String,
     name: String,
 ) -> Vec<Effect> {
-    if repos.contains_key(&repo_id)
-        && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-    {
-        repo_state.push_in_flight = repo_state.push_in_flight.saturating_add(1);
-        repo_state.bump_ops_rev();
-    }
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::DeleteRemoteTag {
         repo_id,
         remote,
@@ -456,36 +431,34 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
-        repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
-        repo_state.bump_ops_rev();
-        match result {
-            Ok(()) => {
-                repo_state.last_error = None;
-                repo_state.diff_target = None;
-                repo_state.diff = Loadable::NotLoaded;
-                repo_state.diff_file = Loadable::NotLoaded;
-                repo_state.diff_file_image = Loadable::NotLoaded;
-                repo_state.bump_diff_state_rev();
-                push_action_log(
-                    repo_state,
-                    true,
-                    "Commit".to_string(),
-                    "Commit: Completed".to_string(),
-                    None,
-                );
-            }
-            Err(e) => {
-                let summary = format_failure_summary("Commit", &e);
-                repo_state.last_error = Some(summary.clone());
-                push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
-            }
-        }
-    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
+    repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
+    repo_state.bump_ops_rev();
+    match result {
+        Ok(()) => {
+            repo_state.last_error = None;
+            repo_state.diff_state.diff_target = None;
+            repo_state.diff_state.diff = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+            repo_state.bump_diff_state_rev();
+            push_action_log(
+                repo_state,
+                true,
+                "Commit".to_string(),
+                "Commit: Completed".to_string(),
+                None,
+            );
+        }
+        Err(e) => {
+            let summary = format_failure_summary("Commit", &e);
+            repo_state.last_error = Some(summary.clone());
+            push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
+        }
+    }
     refresh_primary_effects(repo_state)
 }
 
@@ -494,37 +467,65 @@ pub(super) fn commit_amend_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
-        repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
-        repo_state.bump_ops_rev();
-        match result {
-            Ok(()) => {
-                repo_state.last_error = None;
-                repo_state.diff_target = None;
-                repo_state.diff = Loadable::NotLoaded;
-                repo_state.diff_file = Loadable::NotLoaded;
-                repo_state.diff_file_image = Loadable::NotLoaded;
-                repo_state.bump_diff_state_rev();
-                push_action_log(
-                    repo_state,
-                    true,
-                    "Amend".to_string(),
-                    "Amend: Completed".to_string(),
-                    None,
-                );
-            }
-            Err(e) => {
-                let summary = format_failure_summary("Amend", &e);
-                repo_state.last_error = Some(summary.clone());
-                push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
-            }
-        }
-    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
+    repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
+    repo_state.bump_ops_rev();
+    match result {
+        Ok(()) => {
+            repo_state.last_error = None;
+            repo_state.diff_state.diff_target = None;
+            repo_state.diff_state.diff = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+            repo_state.bump_diff_state_rev();
+            push_action_log(
+                repo_state,
+                true,
+                "Amend".to_string(),
+                "Amend: Completed".to_string(),
+                None,
+            );
+        }
+        Err(e) => {
+            let summary = format_failure_summary("Amend", &e);
+            repo_state.last_error = Some(summary.clone());
+            push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
+        }
+    }
     refresh_primary_effects(repo_state)
+}
+
+fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::MergeAbort
+            | RepoCommandKind::CreateTag { .. }
+            | RepoCommandKind::DeleteTag { .. }
+            | RepoCommandKind::AddRemote { .. }
+            | RepoCommandKind::RemoveRemote { .. }
+            | RepoCommandKind::SetRemoteUrl { .. }
+            | RepoCommandKind::CheckoutConflict { .. }
+            | RepoCommandKind::AcceptConflictDeletion { .. }
+            | RepoCommandKind::CheckoutConflictBase { .. }
+            | RepoCommandKind::LaunchMergetool { .. }
+            | RepoCommandKind::SaveWorktreeFile { .. }
+            | RepoCommandKind::ExportPatch { .. }
+            | RepoCommandKind::ApplyPatch { .. }
+            | RepoCommandKind::AddSubmodule { .. }
+            | RepoCommandKind::UpdateSubmodules
+            | RepoCommandKind::RemoveSubmodule { .. }
+            | RepoCommandKind::StageHunk
+            | RepoCommandKind::UnstageHunk
+            | RepoCommandKind::ApplyWorktreePatch { .. }
+    )
 }
 
 pub(super) fn repo_command_finished(
@@ -545,126 +546,113 @@ pub(super) fn repo_command_finished(
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
 
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
     let mut extra_effects = Vec::new();
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        match command {
-            RepoCommandKind::FetchAll
-            | RepoCommandKind::PruneMergedBranches
-            | RepoCommandKind::PruneLocalTags
-            | RepoCommandKind::Pull { .. }
-            | RepoCommandKind::PullBranch { .. } => {
-                repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
-                repo_state.bump_ops_rev();
-            }
-            RepoCommandKind::Push
-            | RepoCommandKind::ForcePush
-            | RepoCommandKind::PushSetUpstream { .. }
-            | RepoCommandKind::DeleteRemoteBranch { .. }
-            | RepoCommandKind::PushTag { .. }
-            | RepoCommandKind::DeleteRemoteTag { .. } => {
-                repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
-                repo_state.bump_ops_rev();
-            }
-            RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
-                repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_sub(1);
-            }
-            _ => {}
+    match &command {
+        RepoCommandKind::FetchAll
+        | RepoCommandKind::PruneMergedBranches
+        | RepoCommandKind::PruneLocalTags
+        | RepoCommandKind::Pull { .. }
+        | RepoCommandKind::PullBranch { .. } => {
+            repo_state.pull_in_flight = repo_state.pull_in_flight.saturating_sub(1);
+            repo_state.bump_ops_rev();
         }
+        RepoCommandKind::Push
+        | RepoCommandKind::ForcePush
+        | RepoCommandKind::PushSetUpstream { .. }
+        | RepoCommandKind::DeleteRemoteBranch { .. }
+        | RepoCommandKind::PushTag { .. }
+        | RepoCommandKind::DeleteRemoteTag { .. } => {
+            repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);
+            repo_state.bump_ops_rev();
+        }
+        RepoCommandKind::AddWorktree { .. } | RepoCommandKind::RemoveWorktree { .. } => {
+            repo_state.worktrees_in_flight = repo_state.worktrees_in_flight.saturating_sub(1);
+        }
+        _ if tracks_local_actions_in_flight(&command) => {
+            repo_state.local_actions_in_flight =
+                repo_state.local_actions_in_flight.saturating_sub(1);
+            repo_state.bump_ops_rev();
+        }
+        _ => {}
+    }
 
-        match result {
-            Ok(output) => {
-                repo_state.last_error = None;
-                if matches!(
-                    &command,
-                    RepoCommandKind::Reset { .. }
-                        | RepoCommandKind::Rebase { .. }
-                        | RepoCommandKind::RebaseContinue
-                        | RepoCommandKind::RebaseAbort
-                        | RepoCommandKind::MergeAbort
-                ) {
-                    repo_state.diff_target = None;
-                    repo_state.diff = Loadable::NotLoaded;
-                    repo_state.diff_file = Loadable::NotLoaded;
-                    repo_state.diff_file_image = Loadable::NotLoaded;
-                    repo_state.bump_diff_state_rev();
-                }
-                push_command_log(repo_state, true, &command, &output, None);
+    match result {
+        Ok(output) => {
+            repo_state.last_error = None;
+            if matches!(
+                &command,
+                RepoCommandKind::Reset { .. }
+                    | RepoCommandKind::Rebase { .. }
+                    | RepoCommandKind::RebaseContinue
+                    | RepoCommandKind::RebaseAbort
+                    | RepoCommandKind::MergeAbort
+            ) {
+                repo_state.diff_state.diff_target = None;
+                repo_state.diff_state.diff = Loadable::NotLoaded;
+                repo_state.diff_state.diff_file = Loadable::NotLoaded;
+                repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+                repo_state.bump_diff_state_rev();
             }
-            Err(e) => {
-                push_command_log(
-                    repo_state,
-                    false,
-                    &command,
-                    &CommandOutput::default(),
-                    Some(&e),
-                );
-                repo_state.last_error = repo_state
-                    .command_log
-                    .last()
-                    .map(|entry| entry.summary.clone());
-            }
+            push_command_log(repo_state, true, &command, &output, None);
         }
-        if command_succeeded && sync_conflict_session_after_resolution_command(repo_state, &command)
-        {
-            repo_state.bump_conflict_rev();
+        Err(e) => {
+            push_command_log(
+                repo_state,
+                false,
+                &command,
+                &CommandOutput::default(),
+                Some(&e),
+            );
+            repo_state.last_error = repo_state
+                .command_log
+                .last()
+                .map(|entry| entry.summary.clone());
         }
+    }
+    if command_succeeded && sync_conflict_session_after_resolution_command(repo_state, &command) {
+        repo_state.bump_conflict_rev();
+    }
 
-        if refresh_worktrees {
-            repo_state.set_worktrees(Loadable::Loading);
-            extra_effects.push(Effect::LoadWorktrees { repo_id });
-        }
-        if refresh_submodules {
-            repo_state.set_submodules(Loadable::Loading);
-            extra_effects.push(Effect::LoadSubmodules { repo_id });
-        }
+    if refresh_worktrees {
+        repo_state.set_worktrees(Loadable::Loading);
+        extra_effects.push(Effect::LoadWorktrees { repo_id });
+    }
+    if refresh_submodules {
+        repo_state.set_submodules(Loadable::Loading);
+        extra_effects.push(Effect::LoadSubmodules { repo_id });
     }
     if matches!(
         &command,
         RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
-    ) && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && let Some(target) = repo_state.diff_target.clone()
+    ) && let Some(target) = repo_state.diff_state.diff_target.clone()
     {
-        repo_state.diff = Loadable::Loading;
+        repo_state.diff_state.diff = Loadable::Loading;
         let supports_file = matches!(
             &target,
             DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
         );
         let wants_image = diff_target_wants_image_preview(&target);
         let is_svg = diff_target_is_svg(&target);
-        repo_state.diff_file = if supports_file && (!wants_image || is_svg) {
+        repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
             Loadable::Loading
         } else {
             Loadable::NotLoaded
         };
-        repo_state.diff_file_image = if supports_file && wants_image {
+        repo_state.diff_state.diff_file_image = if supports_file && wants_image {
             Loadable::Loading
         } else {
             Loadable::NotLoaded
         };
         repo_state.bump_diff_state_rev();
-        extra_effects.push(Effect::LoadDiff {
-            repo_id,
-            target: target.clone(),
-        });
-        if supports_file {
-            if wants_image {
-                extra_effects.push(Effect::LoadDiffFileImage {
-                    repo_id,
-                    target: target.clone(),
-                });
-            }
-            if !wants_image || is_svg {
-                extra_effects.push(Effect::LoadDiffFile { repo_id, target });
-            }
-        }
+        extra_effects.extend(diff_reload_effects(repo_id, target));
     }
-    let mut effects = if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        refresh_full_effects(repo_state)
-    } else {
-        Vec::new()
-    };
+    let mut effects = refresh_full_effects(repo_state);
     effects.extend(extra_effects);
     effects
 }
@@ -678,6 +666,7 @@ fn sync_conflict_session_after_resolution_command(
     };
 
     let tracked_path_matches = repo_state
+        .conflict_state
         .conflict_file_path
         .as_ref()
         .is_some_and(|tracked| tracked.as_path() == path.as_path());
@@ -690,7 +679,7 @@ fn sync_conflict_session_after_resolution_command(
         return true;
     }
 
-    let Some(session_view) = repo_state.conflict_session.as_ref() else {
+    let Some(session_view) = repo_state.conflict_state.conflict_session.as_ref() else {
         return false;
     };
     if session_view.path.as_path() != path.as_path() {
@@ -716,7 +705,7 @@ fn sync_conflict_session_after_resolution_command(
         _ => return false,
     };
 
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return false;
     };
 
@@ -734,10 +723,10 @@ fn resolution_command_path(command: &RepoCommandKind) -> Option<&std::path::Path
 }
 
 fn clear_conflict_context(repo_state: &mut RepoState) {
-    repo_state.conflict_file_path = None;
-    repo_state.conflict_file = Loadable::NotLoaded;
-    repo_state.conflict_session = None;
-    repo_state.conflict_hide_resolved = false;
+    repo_state.conflict_state.conflict_file_path = None;
+    repo_state.conflict_state.conflict_file = Loadable::NotLoaded;
+    repo_state.conflict_state.conflict_session = None;
+    repo_state.conflict_state.conflict_hide_resolved = false;
 }
 
 fn deletion_resolution_for_kind(conflict_kind: FileConflictKind) -> ConflictRegionResolution {

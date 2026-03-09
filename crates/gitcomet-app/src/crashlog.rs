@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
-const CRASH_ISSUE_URL: &str = "https://github.com/Auto-Explore/GitComet/issues/new";
+const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
 const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
 const PENDING_REPORT_FILE: &str = "pending-report-path.txt";
 const MAX_TITLE_CHARS: usize = 96;
@@ -101,49 +101,62 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
 }
 
 fn crash_dir() -> Option<PathBuf> {
-    let base = if cfg!(target_os = "linux") {
-        if let Ok(state) = std::env::var("XDG_STATE_HOME")
-            && !state.trim().is_empty()
-        {
-            PathBuf::from(state)
-        } else if let Ok(home) = std::env::var("HOME")
-            && !home.trim().is_empty()
-        {
-            PathBuf::from(home).join(".local").join("state")
-        } else {
-            return None;
-        }
-    } else if cfg!(target_os = "macos") {
-        if let Ok(home) = std::env::var("HOME")
-            && !home.trim().is_empty()
-        {
-            PathBuf::from(home).join("Library").join("Logs")
-        } else {
-            return None;
-        }
-    } else if cfg!(target_os = "windows") {
-        if let Ok(local) = std::env::var("LOCALAPPDATA")
-            && !local.trim().is_empty()
-        {
-            PathBuf::from(local)
-        } else if let Ok(appdata) = std::env::var("APPDATA")
-            && !appdata.trim().is_empty()
-        {
-            PathBuf::from(appdata)
-        } else {
-            return None;
-        }
-    } else {
-        if let Ok(home) = std::env::var("HOME")
-            && !home.trim().is_empty()
-        {
-            PathBuf::from(home)
-        } else {
-            return None;
-        }
-    };
+    crash_dir_base().map(|base| base.join("gitcomet").join("crashes"))
+}
 
-    Some(base.join("gitcomet").join("crashes"))
+fn non_empty_path(value: Option<&str>) -> Option<PathBuf> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
+
+#[cfg(target_os = "linux")]
+fn crash_dir_base() -> Option<PathBuf> {
+    crash_dir_base_linux(
+        std::env::var("XDG_STATE_HOME").ok().as_deref(),
+        std::env::var("HOME").ok().as_deref(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn crash_dir_base_linux(xdg_state_home: Option<&str>, home: Option<&str>) -> Option<PathBuf> {
+    non_empty_path(xdg_state_home)
+        .or_else(|| non_empty_path(home).map(|home| home.join(".local").join("state")))
+}
+
+#[cfg(target_os = "macos")]
+fn crash_dir_base() -> Option<PathBuf> {
+    crash_dir_base_macos(std::env::var("HOME").ok().as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn crash_dir_base_macos(home: Option<&str>) -> Option<PathBuf> {
+    non_empty_path(home).map(|home| home.join("Library").join("Logs"))
+}
+
+#[cfg(target_os = "windows")]
+fn crash_dir_base() -> Option<PathBuf> {
+    crash_dir_base_windows(
+        std::env::var("LOCALAPPDATA").ok().as_deref(),
+        std::env::var("APPDATA").ok().as_deref(),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn crash_dir_base_windows(local_app_data: Option<&str>, app_data: Option<&str>) -> Option<PathBuf> {
+    non_empty_path(local_app_data).or_else(|| non_empty_path(app_data))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn crash_dir_base() -> Option<PathBuf> {
+    crash_dir_base_other(std::env::var("HOME").ok().as_deref())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn crash_dir_base_other(home: Option<&str>) -> Option<PathBuf> {
+    non_empty_path(home)
 }
 
 fn crash_log_path(dir: &Path) -> Option<PathBuf> {
@@ -547,6 +560,13 @@ mod tests {
     }
 
     #[test]
+    fn build_issue_url_uses_package_repository_issue_endpoint() {
+        let url = build_issue_url("Crash: boom", "details");
+        let expected_prefix = format!("{}/issues/new?", env!("CARGO_PKG_REPOSITORY"));
+        assert!(url.starts_with(&expected_prefix));
+    }
+
+    #[test]
     fn parse_crash_log_extracts_fields() {
         let log = r#"=== GitComet crash (panic) ===
 timestamp_unix_ms=123
@@ -677,5 +697,84 @@ frame 2
 
         assert_eq!(backtrace_text.chars().count(), MAX_BACKTRACE_CHARS);
         assert!(backtrace_text.ends_with("..."));
+    }
+
+    #[test]
+    fn non_empty_path_trims_and_rejects_empty_values() {
+        assert_eq!(non_empty_path(None), None);
+        assert_eq!(non_empty_path(Some("   ")), None);
+        assert_eq!(non_empty_path(Some(" /tmp ")), Some(PathBuf::from("/tmp")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn crash_dir_base_linux_prefers_xdg_state_home() {
+        let base = crash_dir_base_linux(Some("/state"), Some("/home/alice"));
+        assert_eq!(base, Some(PathBuf::from("/state")));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn crash_dir_base_linux_falls_back_to_home_state_dir() {
+        let base = crash_dir_base_linux(Some("   "), Some("/home/alice"));
+        assert_eq!(
+            base,
+            Some(PathBuf::from("/home/alice").join(".local").join("state"))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn crash_dir_base_linux_returns_none_when_no_usable_env() {
+        assert_eq!(crash_dir_base_linux(None, Some("  ")), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn crash_dir_base_macos_uses_home_logs_dir() {
+        let base = crash_dir_base_macos(Some("/Users/alice"));
+        assert_eq!(
+            base,
+            Some(PathBuf::from("/Users/alice").join("Library").join("Logs"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn crash_dir_base_macos_returns_none_without_home() {
+        assert_eq!(crash_dir_base_macos(Some("   ")), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn crash_dir_base_windows_prefers_local_app_data() {
+        let base = crash_dir_base_windows(Some(r"C:\Users\alice\AppData\Local"), Some("unused"));
+        assert_eq!(base, Some(PathBuf::from(r"C:\Users\alice\AppData\Local")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn crash_dir_base_windows_falls_back_to_app_data() {
+        let base = crash_dir_base_windows(Some("   "), Some(r"C:\Users\alice\AppData\Roaming"));
+        assert_eq!(base, Some(PathBuf::from(r"C:\Users\alice\AppData\Roaming")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn crash_dir_base_windows_returns_none_when_no_usable_env() {
+        assert_eq!(crash_dir_base_windows(None, Some("   ")), None);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn crash_dir_base_other_uses_home() {
+        let base = crash_dir_base_other(Some("/home/alice"));
+        assert_eq!(base, Some(PathBuf::from("/home/alice")));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn crash_dir_base_other_returns_none_without_home() {
+        assert_eq!(crash_dir_base_other(Some("   ")), None);
     }
 }

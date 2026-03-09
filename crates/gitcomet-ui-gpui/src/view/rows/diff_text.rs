@@ -8,6 +8,23 @@ pub(in crate::view) use syntax::{
     DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PreparedDiffSyntaxDocument {
+    inner: syntax::PreparedSyntaxDocument,
+}
+
+pub(super) fn prepare_diff_syntax_document<'a, I>(
+    language: DiffSyntaxLanguage,
+    syntax_mode: DiffSyntaxMode,
+    lines: I,
+) -> Option<PreparedDiffSyntaxDocument>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    syntax::prepare_treesitter_document(language, syntax_mode, lines)
+        .map(|inner| PreparedDiffSyntaxDocument { inner })
+}
+
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
         return s.to_string().into();
@@ -23,19 +40,40 @@ fn maybe_expand_tabs(s: &str) -> SharedString {
     out.into()
 }
 
+#[inline]
+fn segment_overlaps_sorted_ranges(
+    segment_start: usize,
+    segment_end: usize,
+    ranges: &[Range<usize>],
+    cursor: &mut usize,
+) -> bool {
+    while *cursor < ranges.len() && ranges[*cursor].end <= segment_start {
+        *cursor += 1;
+    }
+
+    ranges
+        .get(*cursor)
+        .is_some_and(|range| segment_start < range.end && segment_end > range.start)
+}
+
 fn build_diff_text_segments(
     text: &str,
     word_ranges: &[Range<usize>],
     query: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
+    syntax_tokens_override: Option<&[syntax::SyntaxToken]>,
 ) -> Vec<CachedDiffTextSegment> {
     if text.is_empty() {
         return Vec::new();
     }
 
     let query = query.trim();
-    if word_ranges.is_empty() && query.is_empty() && language.is_none() {
+    if word_ranges.is_empty()
+        && query.is_empty()
+        && language.is_none()
+        && syntax_tokens_override.is_none()
+    {
         return vec![CachedDiffTextSegment {
             text: maybe_expand_tabs(text),
             in_word: false,
@@ -44,7 +82,9 @@ fn build_diff_text_segments(
         }];
     }
 
-    let syntax_tokens = if let Some(language) = language {
+    let syntax_tokens = if let Some(tokens) = syntax_tokens_override {
+        tokens.to_vec()
+    } else if let Some(language) = language {
         let _syntax_scope = perf::span(ConflictPerfSpan::SyntaxHighlighting);
         syntax::syntax_tokens_for_line(text, language, syntax_mode)
     } else {
@@ -79,6 +119,8 @@ fn build_diff_text_segments(
     boundaries.dedup();
 
     let mut token_ix = 0usize;
+    let mut word_ix = 0usize;
+    let mut query_ix = 0usize;
     let mut segments = Vec::with_capacity(boundaries.len().saturating_sub(1));
     for w in boundaries.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -106,8 +148,8 @@ fn build_diff_text_segments(
             .map(|t| t.kind)
             .unwrap_or(SyntaxTokenKind::None);
 
-        let in_word = word_ranges.iter().any(|r| a < r.end && b > r.start);
-        let in_query = query_ranges.iter().any(|r| a < r.end && b > r.start);
+        let in_word = segment_overlaps_sorted_ranges(a, b, word_ranges, &mut word_ix);
+        let in_query = segment_overlaps_sorted_ranges(a, b, &query_ranges, &mut query_ix);
 
         segments.push(CachedDiffTextSegment {
             text: maybe_expand_tabs(seg),
@@ -259,7 +301,121 @@ pub(super) fn build_cached_diff_styled_text(
         };
     }
 
-    let segments = build_diff_text_segments(text, word_ranges, query, language, syntax_mode);
+    let segments = build_diff_text_segments(text, word_ranges, query, language, syntax_mode, None);
+    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
+
+    let mut hasher = DefaultHasher::new();
+    expanded_text.as_ref().hash(&mut hasher);
+    let text_hash = hasher.finish();
+
+    if highlights.is_empty() {
+        return CachedDiffStyledText {
+            text: expanded_text,
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash,
+        };
+    }
+
+    let highlights_hash = hash_highlights(&highlights);
+
+    CachedDiffStyledText {
+        text: expanded_text,
+        highlights: Arc::new(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+pub(super) fn build_cached_diff_styled_text_for_prepared_document_line(
+    theme: AppTheme,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+    syntax_document: Option<PreparedDiffSyntaxDocument>,
+    line_ix: usize,
+) -> CachedDiffStyledText {
+    if language.is_none() {
+        return build_cached_diff_styled_text(
+            theme,
+            text,
+            word_ranges,
+            query,
+            language,
+            syntax_mode,
+            word_color,
+        );
+    }
+
+    let Some(document) = syntax_document else {
+        return build_cached_diff_styled_text(
+            theme,
+            text,
+            word_ranges,
+            query,
+            language,
+            syntax_mode,
+            word_color,
+        );
+    };
+
+    let Some(tokens) = syntax::syntax_tokens_for_prepared_document_line(document.inner, line_ix)
+    else {
+        return build_cached_diff_styled_text(
+            theme,
+            text,
+            word_ranges,
+            query,
+            language,
+            syntax_mode,
+            word_color,
+        );
+    };
+
+    build_cached_diff_styled_text_with_syntax_tokens(
+        theme,
+        text,
+        word_ranges,
+        query,
+        Some(tokens.as_slice()),
+        word_color,
+    )
+}
+
+fn build_cached_diff_styled_text_with_syntax_tokens(
+    theme: AppTheme,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    query: &str,
+    syntax_tokens: Option<&[syntax::SyntaxToken]>,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    if text.is_empty() {
+        let mut hasher = DefaultHasher::new();
+        "".hash(&mut hasher);
+        let text_hash = hasher.finish();
+        return CachedDiffStyledText {
+            text: "".into(),
+            highlights: empty_highlights(),
+            highlights_hash: 0,
+            text_hash,
+        };
+    }
+
+    let segments = build_diff_text_segments(
+        text,
+        word_ranges,
+        query,
+        None,
+        DiffSyntaxMode::HeuristicOnly,
+        syntax_tokens,
+    );
     let (expanded_text, highlights) = styled_text_for_diff_segments(theme, &segments, word_color);
 
     let mut hasher = DefaultHasher::new();
@@ -582,8 +738,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sorted_range_cursor_advances_without_rescanning() {
+        let ranges = [2..4, 6..8];
+        let mut cursor = 0usize;
+
+        assert!(!segment_overlaps_sorted_ranges(0, 2, &ranges, &mut cursor));
+        assert_eq!(cursor, 0);
+
+        assert!(segment_overlaps_sorted_ranges(2, 3, &ranges, &mut cursor));
+        assert_eq!(cursor, 0);
+
+        assert!(!segment_overlaps_sorted_ranges(4, 6, &ranges, &mut cursor));
+        assert_eq!(cursor, 1);
+
+        assert!(segment_overlaps_sorted_ranges(6, 7, &ranges, &mut cursor));
+        assert_eq!(cursor, 1);
+
+        assert!(!segment_overlaps_sorted_ranges(8, 9, &ranges, &mut cursor));
+        assert_eq!(cursor, 2);
+    }
+
+    #[test]
     fn build_segments_fast_path_skips_syntax_work() {
-        let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto);
+        let segments = build_diff_text_segments("a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text.as_ref(), "a    b");
         assert!(!segments[0].in_word);
@@ -607,7 +784,8 @@ mod tests {
         // boundaries. We should never panic during diff rendering.
         let text = "aé"; // 'é' is 2 bytes in UTF-8
         let ranges = vec![Range { start: 1, end: 2 }];
-        let segments = build_diff_text_segments(text, &ranges, "", None, DiffSyntaxMode::Auto);
+        let segments =
+            build_diff_text_segments(text, &ranges, "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text.as_ref(), text);
     }

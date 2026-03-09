@@ -371,7 +371,7 @@ fn focused_mergetool_bootstrap_loads_conflict_file_after_diff_target() {
     let mut state = AppState::default();
     state.active_repo = Some(RepoId(1));
     let mut repo_state = open_repo_state_with_workdir(&repo.to_string_lossy());
-    repo_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         area: DiffArea::Unstaged,
         path: PathBuf::from("src/conflict.txt"),
     });
@@ -393,12 +393,12 @@ fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
     let mut state = AppState::default();
     state.active_repo = Some(RepoId(1));
     let mut repo_state = open_repo_state_with_workdir(&repo.to_string_lossy());
-    repo_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         area: DiffArea::Unstaged,
         path: PathBuf::from("src/conflict.txt"),
     });
-    repo_state.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
-    repo_state.conflict_file = Loadable::Loading;
+    repo_state.conflict_state.conflict_file_path = Some(PathBuf::from("src/conflict.txt"));
+    repo_state.conflict_state.conflict_file = Loadable::Loading;
     state.repos.push(repo_state);
 
     assert_eq!(

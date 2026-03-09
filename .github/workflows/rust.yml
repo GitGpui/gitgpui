@@ -5,9 +5,16 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: rust-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,21 +23,67 @@ env:
   APP_FEATURES: "--no-default-features --features gix"
 
 jobs:
+  fmt:
+    name: Rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+    - name: Check formatting
+      run: cargo fmt --all --check
+
+  audit:
+    name: Dependency audit (cargo-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+    - name: Install cargo-audit
+      run: cargo install cargo-audit --locked
+    - name: Run cargo-audit
+      run: cargo audit --deny warnings
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
-    - name: Clippy (core + state + backend)
-      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix -- -D warnings
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
+    - name: Clippy (core + state + git backends)
+      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git -p gitcomet-git-gix -- -D warnings
+    - name: Clippy (shared UI crate)
+      run: cargo clippy -p gitcomet-ui -- -D warnings
+    - name: Clippy (GPUI UI crate -- intentionally skipped on headless CI)
+      run: |
+        echo "Skipping cargo clippy -p gitcomet-ui-gpui in this job."
+        echo "Reason: GPUI requires native windowing/system dependencies that are not available in headless CI."
     - name: Clippy (app — headless)
       run: cargo clippy -p gitcomet-app $APP_FEATURES -- -D warnings
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: Build (core + state + backend)
       run: cargo build -p gitcomet-core -p gitcomet-state -p gitcomet-git-gix --verbose
     - name: Build (app — headless)
@@ -40,9 +93,14 @@ jobs:
   merge-algorithm:
     name: Merge algorithm parity (t6403/t6427)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: t6403/t6427 merge algorithm portability
       run: cargo test -p gitcomet-core --test merge_algorithm --verbose
     - name: Conflict label formatting (Phase 1C)
@@ -58,9 +116,14 @@ jobs:
   merge-regression:
     name: Merge regression suite (fixtures + corpus)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: KDiff3-style fixture harness (Phase 2)
       run: cargo test -p gitcomet-core --test merge_fixture_harness --verbose
     - name: Permutation corpus (Phase 3A — 243 sampled cases)
@@ -72,9 +135,14 @@ jobs:
   tool-integration:
     name: Git mergetool/difftool E2E parity
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: Build gitcomet-app binary (headless)
       run: cargo build -p gitcomet-app $APP_FEATURES
     - name: Git mergetool E2E (Phase 4A — t7610 parity)
@@ -90,9 +158,14 @@ jobs:
   backend-integration:
     name: Git backend integration
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: build
     steps:
     - uses: actions/checkout@v4
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: Git CLI migration scoreboard
       run: cargo test -p gitcomet-git-gix --test git_cli_scoreboard -- --nocapture
     - name: Status and mergetool backend integration
@@ -101,6 +174,9 @@ jobs:
   performance-budgets:
     name: Conflict performance budgets (alert-only)
     runs-on: ubuntu-latest
+    # Shared runners are noisy for performance numbers; treat this as signal/alerting only.
+    continue-on-error: true
+    timeout-minutes: 60
     needs: build
     steps:
     - uses: actions/checkout@v4
@@ -126,6 +202,10 @@ jobs:
           exit 1
         fi
         pkg-config --modversion xcb xkbcommon xkbcommon-x11
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust artifacts
+      uses: Swatinem/rust-cache@v2
     - name: Benchmark conflict scroll/search/resize hot paths
       run: |
         cargo bench -p gitcomet-ui-gpui --bench performance -- conflict_three_way_scroll/style_window

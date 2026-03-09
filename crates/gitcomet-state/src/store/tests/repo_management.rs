@@ -17,7 +17,16 @@ fn open_repo_sets_opening_and_emits_effect() {
     let repo_state = state.repos.first().expect("repo state to be set");
     assert_eq!(repo_state.id.0, 1);
     assert!(repo_state.open.is_loading());
-    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(1)))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistSession { .. }))
+    );
 }
 
 #[test]
@@ -101,7 +110,16 @@ fn open_repo_allows_same_basename_in_different_folders() {
         Msg::OpenRepo(repo_b.clone()),
     );
 
-    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(2)))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistSession { .. }))
+    );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(2)));
 
@@ -210,20 +228,20 @@ fn clone_repo_progress_trims_tail_and_skips_blank_lines() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoProgress {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
             dest: dest.clone(),
             line: "   ".to_string(),
-        },
+        }),
     );
     for i in 0..84 {
         reduce(
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::CloneRepoProgress {
+            Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
                 dest: dest.clone(),
                 line: format!("line-{i}"),
-            },
+            }),
         );
     }
 
@@ -255,10 +273,10 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoProgress {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
             dest: PathBuf::from("/tmp/other"),
             line: "ignored".to_string(),
-        },
+        }),
     );
     {
         let op = state.clone.as_ref().expect("clone op set");
@@ -273,10 +291,10 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoProgress {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
             dest: dest.clone(),
             line: "ignored-too".to_string(),
-        },
+        }),
     );
     {
         let op = state.clone.as_ref().expect("clone op set");
@@ -289,10 +307,10 @@ fn clone_repo_progress_ignores_mismatched_or_non_running_operation() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoProgress {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress {
             dest,
             line: "no-op".to_string(),
-        },
+        }),
     );
     assert!(state.clone.is_none());
 }
@@ -318,11 +336,11 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoFinished {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
             url: "file:///tmp/success.git".to_string(),
             dest: dest.clone(),
             result: Ok(CommandOutput::empty_success("git clone")),
-        },
+        }),
     );
     {
         let op = state.clone.as_ref().expect("clone op set");
@@ -336,11 +354,11 @@ fn clone_repo_finished_updates_existing_operation_for_success_and_error() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoFinished {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
             url: "file:///tmp/failure.git".to_string(),
             dest: PathBuf::from("/tmp/example"),
             result: Err(Error::new(ErrorKind::Backend("boom".to_string()))),
-        },
+        }),
     );
     let op = state.clone.as_ref().expect("clone op set");
     assert_eq!(op.url, "file:///tmp/failure.git");
@@ -374,11 +392,11 @@ fn clone_repo_finished_replaces_state_when_destination_differs() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CloneRepoFinished {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
             url: "file:///tmp/replacement.git".to_string(),
             dest: PathBuf::from("/tmp/replacement"),
             result: Ok(CommandOutput::empty_success("git clone")),
-        },
+        }),
     );
 
     let op = state.clone.as_ref().expect("clone op set");
@@ -420,7 +438,10 @@ fn close_repo_removes_and_moves_active() {
         },
     );
 
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(10)));
 }
@@ -466,7 +487,10 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
         },
     );
 
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![RepoId(3), RepoId(1), RepoId(2)]
@@ -483,7 +507,10 @@ fn reorder_repo_tabs_moves_repo_and_keeps_active() {
         },
     );
 
-    assert!(effects.is_empty());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
     assert_eq!(
         state.repos.iter().map(|r| r.id).collect::<Vec<_>>(),
         vec![RepoId(1), RepoId(2), RepoId(3)]
@@ -611,14 +638,14 @@ fn remote_branches_loaded_sets_state() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RemoteBranchesLoaded {
+        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
             repo_id: RepoId(1),
             result: Ok(vec![RemoteBranch {
                 remote: "origin".to_string(),
                 name: "main".to_string(),
                 target: CommitId("deadbeef".to_string()),
             }]),
-        },
+        }),
     );
 
     let repo = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
@@ -664,10 +691,20 @@ fn restore_session_opens_all_and_selects_active_repo() {
     );
 
     assert_eq!(state.repos.len(), 2);
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::OpenRepo { .. }, Effect::OpenRepo { .. }]
-    ));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::OpenRepo { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::PersistSession { .. }))
+            .count(),
+        1
+    );
 
     let active_repo_id = state.active_repo.expect("active repo is set");
     let active_workdir = state
@@ -710,7 +747,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     });
@@ -736,11 +773,78 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     let has_diff_file = effects
         .iter()
         .any(|e| matches!(e, Effect::LoadDiffFile { repo_id, target: _ } if *repo_id == repo1));
+    let has_persist = effects
+        .iter()
+        .any(|e| matches!(e, Effect::PersistSession { .. }));
 
     assert!(has_status, "expected status refresh on activation");
     assert!(has_log, "expected log refresh on activation");
     assert!(has_diff, "expected diff refresh on activation");
     assert!(has_diff_file, "expected diff-file refresh on activation");
+    assert!(
+        has_persist,
+        "expected session persist when active repo changes"
+    );
+}
+
+#[test]
+fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("icon.png"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiff {
+            repo_id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
+    )));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFileImage {
+            repo_id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
+    )));
+    assert!(!effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFile {
+            repo_id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *repo_id == repo1 && path == &PathBuf::from("icon.png")
+    )));
 }
 
 #[test]
@@ -768,7 +872,7 @@ fn set_active_repo_png_diff_enqueues_image_preview_only() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("image.png"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     });
@@ -825,7 +929,7 @@ fn set_active_repo_svg_diff_enqueues_image_and_text_previews() {
         .iter_mut()
         .find(|r| r.id == repo1)
         .expect("repo1 exists");
-    repo1_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo1_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("vector.svg"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     });
@@ -929,13 +1033,13 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             repo: Arc::new(DummyRepo::new("/tmp/repo")),
-        },
+        }),
     );
 
     let repo_state = state.repos.first().unwrap();
@@ -953,8 +1057,14 @@ fn repo_opened_ok_sets_loading_and_emits_refresh_effects() {
     assert!(repo_state.upstream_divergence.is_loading());
     assert!(repo_state.rebase_in_progress.is_loading());
     assert!(repo_state.merge_commit_message.is_loading());
-    assert!(matches!(repo_state.file_history, Loadable::NotLoaded));
-    assert!(matches!(repo_state.blame, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.history_state.file_history,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.history_state.blame,
+        Loadable::NotLoaded
+    ));
     assert!(matches!(
         effects.as_slice(),
         [
@@ -992,10 +1102,10 @@ fn repo_action_finished_clears_error_and_refreshes() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoActionFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
             repo_id: RepoId(1),
             result: Ok(()),
-        },
+        }),
     );
 
     assert!(state.repos[0].last_error.is_none());
@@ -1024,10 +1134,10 @@ fn repo_action_finished_err_records_diagnostic() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoActionFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
             repo_id: RepoId(1),
             result: Err(error),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
@@ -1063,13 +1173,13 @@ fn repo_opened_err_records_diagnostic() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedErr {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             error,
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
@@ -1105,13 +1215,13 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedErr {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/not-a-repo"),
             },
             error,
-        },
+        }),
     );
 
     assert!(state.repos.is_empty());
@@ -1140,13 +1250,13 @@ fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedErr {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/not-a-repo"),
             },
             error: Error::new(ErrorKind::NotARepository),
-        },
+        }),
     );
 
     let effects = reduce(
@@ -1164,7 +1274,16 @@ fn repo_opened_err_not_a_repository_allows_opening_another_repo_afterwards() {
     );
     assert!(state.repos[0].open.is_loading());
     assert_eq!(state.active_repo, Some(RepoId(2)));
-    assert!(matches!(effects.as_slice(), [Effect::OpenRepo { .. }]));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(2)))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::PersistSession { .. }))
+    );
 }
 
 #[test]
@@ -1274,4 +1393,48 @@ fn session_persist_error_without_repo_still_reports_notification() {
             .any(|n| n.message.contains("disk full"))
     );
     assert!(state.repos.is_empty());
+}
+
+#[test]
+fn session_persist_failed_msg_reports_notification_and_repo_diagnostic() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+            repo_id: Some(RepoId(1)),
+            action: "opening a repository",
+            error: "disk full".to_string(),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("Failed to persist session state"))
+    );
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|n| n.message.contains("disk full"))
+    );
+    assert!(
+        state.repos[0]
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("disk full"))
+    );
 }

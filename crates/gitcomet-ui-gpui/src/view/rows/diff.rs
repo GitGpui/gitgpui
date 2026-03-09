@@ -27,6 +27,24 @@ impl MainPaneView {
                     DiffSyntaxMode::HeuristicOnly
                 };
             let language = this.file_diff_cache_language;
+            let syntax_document = language.and_then(|language| {
+                prepare_diff_syntax_document(
+                    language,
+                    syntax_mode,
+                    this.file_diff_inline_cache.iter().map(|line| {
+                        if matches!(
+                            line.kind,
+                            gitcomet_core::domain::DiffLineKind::Add
+                                | gitcomet_core::domain::DiffLineKind::Remove
+                                | gitcomet_core::domain::DiffLineKind::Context
+                        ) {
+                            diff_content_text(line)
+                        } else {
+                            ""
+                        }
+                    }),
+                )
+            });
 
             return range
                 .map(|visible_ix| {
@@ -80,7 +98,7 @@ impl MainPaneView {
                         .then_some(language)
                         .flatten();
 
-                        let computed = build_cached_diff_styled_text(
+                        let computed = build_cached_diff_styled_text_for_prepared_document_line(
                             theme,
                             diff_content_text(line),
                             word_ranges,
@@ -88,6 +106,8 @@ impl MainPaneView {
                             language,
                             syntax_mode,
                             word_color,
+                            syntax_document,
+                            inline_ix,
                         );
                         this.diff_text_segments_cache_set(inline_ix, computed);
                     }
@@ -282,6 +302,15 @@ impl MainPaneView {
                     DiffSyntaxMode::HeuristicOnly
                 };
             let language = this.file_diff_cache_language;
+            let syntax_document = language.and_then(|language| {
+                prepare_diff_syntax_document(
+                    language,
+                    syntax_mode,
+                    this.file_diff_cache_rows
+                        .iter()
+                        .map(|row| row.old.as_deref().unwrap_or("")),
+                )
+            });
 
             return range
                 .map(|visible_ix| {
@@ -328,7 +357,7 @@ impl MainPaneView {
                                 .and_then(|r| r.as_ref().map(Vec::as_slice))
                                 .unwrap_or(empty_ranges);
 
-                            let computed = build_cached_diff_styled_text(
+                            let computed = build_cached_diff_styled_text_for_prepared_document_line(
                                 theme,
                                 text,
                                 word_ranges,
@@ -336,6 +365,8 @@ impl MainPaneView {
                                 language,
                                 syntax_mode,
                                 word_color,
+                                syntax_document,
+                                row_ix,
                             );
                             this.diff_text_segments_cache_set(key, computed);
                         }
@@ -576,6 +607,15 @@ impl MainPaneView {
                     DiffSyntaxMode::HeuristicOnly
                 };
             let language = this.file_diff_cache_language;
+            let syntax_document = language.and_then(|language| {
+                prepare_diff_syntax_document(
+                    language,
+                    syntax_mode,
+                    this.file_diff_cache_rows
+                        .iter()
+                        .map(|row| row.new.as_deref().unwrap_or("")),
+                )
+            });
 
             return range
                 .map(|visible_ix| {
@@ -622,7 +662,7 @@ impl MainPaneView {
                                 .and_then(|r| r.as_ref().map(Vec::as_slice))
                                 .unwrap_or(empty_ranges);
 
-                            let computed = build_cached_diff_styled_text(
+                            let computed = build_cached_diff_styled_text_for_prepared_document_line(
                                 theme,
                                 text,
                                 word_ranges,
@@ -630,6 +670,8 @@ impl MainPaneView {
                                 language,
                                 syntax_mode,
                                 word_color,
+                                syntax_document,
+                                row_ix,
                             );
                             this.diff_text_segments_cache_set(key, computed);
                         }

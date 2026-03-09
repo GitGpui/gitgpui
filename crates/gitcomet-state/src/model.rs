@@ -175,6 +175,89 @@ pub struct CommandLogEntry {
 }
 
 #[derive(Clone, Debug)]
+pub struct HistoryState {
+    pub history_scope: LogScope,
+    pub log: Loadable<Shared<LogPage>>,
+    pub log_loading_more: bool,
+    pub log_rev: u64,
+    pub file_history_path: Option<PathBuf>,
+    pub file_history: Loadable<Shared<LogPage>>,
+    pub blame_path: Option<PathBuf>,
+    pub blame_rev: Option<String>,
+    pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    pub selected_commit: Option<CommitId>,
+    pub selected_commit_rev: u64,
+    pub commit_details: Loadable<Shared<CommitDetails>>,
+    pub commit_details_rev: u64,
+}
+
+impl Default for HistoryState {
+    fn default() -> Self {
+        Self {
+            history_scope: LogScope::CurrentBranch,
+            log: Loadable::NotLoaded,
+            log_loading_more: false,
+            log_rev: 0,
+            file_history_path: None,
+            file_history: Loadable::NotLoaded,
+            blame_path: None,
+            blame_rev: None,
+            blame: Loadable::NotLoaded,
+            selected_commit: None,
+            selected_commit_rev: 0,
+            commit_details: Loadable::NotLoaded,
+            commit_details_rev: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DiffState {
+    pub diff_target: Option<DiffTarget>,
+    pub diff_state_rev: u64,
+    pub diff_rev: u64,
+    pub diff: Loadable<Shared<Diff>>,
+    pub diff_file_rev: u64,
+    pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
+}
+
+impl Default for DiffState {
+    fn default() -> Self {
+        Self {
+            diff_target: None,
+            diff_state_rev: 0,
+            diff_rev: 0,
+            diff: Loadable::NotLoaded,
+            diff_file_rev: 0,
+            diff_file: Loadable::NotLoaded,
+            diff_file_image: Loadable::NotLoaded,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConflictState {
+    pub conflict_file_path: Option<PathBuf>,
+    pub conflict_file: Loadable<Option<ConflictFile>>,
+    pub conflict_session: Option<ConflictSession>,
+    pub conflict_hide_resolved: bool,
+    pub conflict_rev: u64,
+}
+
+impl Default for ConflictState {
+    fn default() -> Self {
+        Self {
+            conflict_file_path: None,
+            conflict_file: Loadable::NotLoaded,
+            conflict_session: None,
+            conflict_hide_resolved: false,
+            conflict_rev: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -186,7 +269,7 @@ pub struct RepoState {
     pub commit_in_flight: u32,
 
     pub open: Loadable<()>,
-    pub history_scope: LogScope,
+    pub history_state: HistoryState,
     pub fetch_prune_deleted_remote_tracking_branches: bool,
     pub head_branch: Loadable<String>,
     pub head_branch_rev: u64,
@@ -213,33 +296,13 @@ pub struct RepoState {
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub merge_message_rev: u64,
-    pub file_history_path: Option<PathBuf>,
-    pub file_history: Loadable<Shared<LogPage>>,
-    pub blame_path: Option<PathBuf>,
-    pub blame_rev: Option<String>,
-    pub blame: Loadable<Shared<Vec<BlameLine>>>,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
 
-    pub selected_commit: Option<CommitId>,
-    pub selected_commit_rev: u64,
-    pub commit_details: Loadable<Shared<CommitDetails>>,
-    pub commit_details_rev: u64,
-    pub diff_target: Option<DiffTarget>,
-    pub diff_state_rev: u64,
-    pub diff_rev: u64,
-    pub diff: Loadable<Shared<Diff>>,
-    pub diff_file_rev: u64,
-    pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
-    pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
-
-    pub conflict_file_path: Option<PathBuf>,
-    pub conflict_file: Loadable<Option<ConflictFile>>,
-    pub conflict_session: Option<ConflictSession>,
-    pub conflict_hide_resolved: bool,
-    pub conflict_rev: u64,
+    pub diff_state: DiffState,
+    pub conflict_state: ConflictState,
 
     pub open_rev: u64,
     pub ops_rev: u64,
@@ -262,7 +325,7 @@ impl RepoState {
             local_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,
-            history_scope: LogScope::CurrentBranch,
+            history_state: HistoryState::default(),
             fetch_prune_deleted_remote_tracking_branches: true,
             head_branch: Loadable::NotLoaded,
             head_branch_rev: 0,
@@ -289,31 +352,12 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             merge_message_rev: 0,
-            file_history_path: None,
-            file_history: Loadable::NotLoaded,
-            blame_path: None,
-            blame_rev: None,
-            blame: Loadable::NotLoaded,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
-            selected_commit: None,
-            selected_commit_rev: 0,
-            commit_details: Loadable::NotLoaded,
-            commit_details_rev: 0,
-            diff_target: None,
-            diff_state_rev: 0,
-            diff_rev: 0,
-            diff: Loadable::NotLoaded,
-            diff_file_rev: 0,
-            diff_file: Loadable::NotLoaded,
-            diff_file_image: Loadable::NotLoaded,
-            conflict_file_path: None,
-            conflict_file: Loadable::NotLoaded,
-            conflict_session: None,
-            conflict_hide_resolved: false,
-            conflict_rev: 0,
+            diff_state: DiffState::default(),
+            conflict_state: ConflictState::default(),
             open_rev: 0,
             ops_rev: 0,
             last_error: None,
@@ -403,33 +447,49 @@ impl RepoState {
     }
 
     pub(crate) fn set_status(&mut self, status: Loadable<Shared<RepoStatus>>) {
+        if self.status == status {
+            return;
+        }
         self.status = status;
         self.status_rev = self.status_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {
+        if self.history_state.log == log && self.log == log {
+            return;
+        }
+        self.history_state.log = log.clone();
         self.log = log;
-        self.log_rev = self.log_rev.wrapping_add(1);
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {
+        if self.history_state.log_loading_more == v && self.log_loading_more == v {
+            return;
+        }
+        self.history_state.log_loading_more = v;
         self.log_loading_more = v;
-        self.log_rev = self.log_rev.wrapping_add(1);
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
-        self.history_scope = scope;
-        self.log_rev = self.log_rev.wrapping_add(1);
+        if self.history_state.history_scope == scope {
+            return;
+        }
+        self.history_state.history_scope = scope;
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
-        self.selected_commit = v;
-        self.selected_commit_rev = self.selected_commit_rev.wrapping_add(1);
+        self.history_state.selected_commit = v;
+        self.history_state.selected_commit_rev =
+            self.history_state.selected_commit_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_commit_details(&mut self, v: Loadable<Shared<CommitDetails>>) {
-        self.commit_details = v;
-        self.commit_details_rev = self.commit_details_rev.wrapping_add(1);
+        self.history_state.commit_details = v;
+        self.history_state.commit_details_rev =
+            self.history_state.commit_details_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_merge_commit_message(&mut self, v: Loadable<Option<String>>) {
@@ -453,34 +513,34 @@ impl RepoState {
     }
 
     pub(crate) fn set_conflict_file_path(&mut self, v: Option<PathBuf>) {
-        self.conflict_file_path = v;
-        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+        self.conflict_state.conflict_file_path = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_conflict_file(&mut self, v: Loadable<Option<ConflictFile>>) {
-        self.conflict_file = v;
-        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+        self.conflict_state.conflict_file = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_conflict_session(&mut self, v: Option<ConflictSession>) {
-        self.conflict_session = v;
-        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+        self.conflict_state.conflict_session = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_conflict_hide_resolved(&mut self, v: bool) {
-        if self.conflict_hide_resolved == v {
+        if self.conflict_state.conflict_hide_resolved == v {
             return;
         }
-        self.conflict_hide_resolved = v;
-        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+        self.conflict_state.conflict_hide_resolved = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
     pub(crate) fn bump_conflict_rev(&mut self) {
-        self.conflict_rev = self.conflict_rev.wrapping_add(1);
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
     pub(crate) fn bump_diff_state_rev(&mut self) {
-        self.diff_state_rev = self.diff_state_rev.wrapping_add(1);
+        self.diff_state.diff_state_rev = self.diff_state.diff_state_rev.wrapping_add(1);
     }
 
     pub(crate) fn bump_ops_rev(&mut self) {
@@ -545,7 +605,7 @@ mod tests {
 
         let repo = &mut state.repos[0];
         repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
-        repo.log = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![Commit {
                 id: CommitId("c1".to_string()),
                 parent_ids: Vec::new(),
@@ -555,25 +615,25 @@ mod tests {
             }],
             next_cursor: None,
         }));
-        repo.file_history = Loadable::Ready(Arc::new(LogPage {
+        repo.history_state.file_history = Loadable::Ready(Arc::new(LogPage {
             commits: Vec::new(),
             next_cursor: None,
         }));
-        repo.blame = Loadable::Ready(Arc::new(vec![BlameLine {
+        repo.history_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
             commit_id: "c1".to_string(),
             author: "a".to_string(),
             author_time_unix: None,
             summary: "s1".to_string(),
             line: "line".to_string(),
         }]));
-        repo.commit_details = Loadable::Ready(Arc::new(CommitDetails {
+        repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
             id: CommitId("c1".to_string()),
             message: "m".to_string(),
             committed_at: "t".to_string(),
             parent_ids: Vec::new(),
             files: Vec::new(),
         }));
-        repo.diff = Loadable::Ready(Arc::new(Diff {
+        repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
             target: DiffTarget::Commit {
                 commit_id: CommitId("c1".to_string()),
                 path: None,
@@ -595,19 +655,19 @@ mod tests {
         assert!(Arc::ptr_eq(status1, status2));
         assert_eq!(Arc::strong_count(status1), 2);
 
-        let Loadable::Ready(log1) = &repo1.log else {
+        let Loadable::Ready(log1) = &repo1.history_state.log else {
             panic!("expected log ready");
         };
-        let Loadable::Ready(log2) = &repo2.log else {
+        let Loadable::Ready(log2) = &repo2.history_state.log else {
             panic!("expected log ready");
         };
         assert!(Arc::ptr_eq(log1, log2));
         assert_eq!(Arc::strong_count(log1), 2);
 
-        let Loadable::Ready(diff1) = &repo1.diff else {
+        let Loadable::Ready(diff1) = &repo1.diff_state.diff else {
             panic!("expected diff ready");
         };
-        let Loadable::Ready(diff2) = &repo2.diff else {
+        let Loadable::Ready(diff2) = &repo2.diff_state.diff else {
             panic!("expected diff ready");
         };
         assert!(Arc::ptr_eq(diff1, diff2));
@@ -638,45 +698,45 @@ mod tests {
     #[test]
     fn set_log_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.log_rev;
+        let before = repo.history_state.log_rev;
         repo.set_log(Loadable::Loading);
-        assert_eq!(repo.log_rev, before + 1);
+        assert_eq!(repo.history_state.log_rev, before + 1);
     }
 
     #[test]
     fn set_log_loading_more_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.log_rev;
+        let before = repo.history_state.log_rev;
         repo.set_log_loading_more(true);
-        assert_eq!(repo.log_rev, before + 1);
+        assert_eq!(repo.history_state.log_rev, before + 1);
         repo.set_log_loading_more(false);
-        assert_eq!(repo.log_rev, before + 2);
+        assert_eq!(repo.history_state.log_rev, before + 2);
     }
 
     #[test]
     fn set_log_scope_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.log_rev;
+        let before = repo.history_state.log_rev;
         repo.set_log_scope(LogScope::AllBranches);
-        assert_eq!(repo.log_rev, before + 1);
+        assert_eq!(repo.history_state.log_rev, before + 1);
     }
 
     #[test]
     fn set_selected_commit_bumps_selected_commit_rev() {
         let mut repo = new_repo();
-        let before = repo.selected_commit_rev;
+        let before = repo.history_state.selected_commit_rev;
         repo.set_selected_commit(Some(CommitId("abc".to_string())));
-        assert_eq!(repo.selected_commit_rev, before + 1);
+        assert_eq!(repo.history_state.selected_commit_rev, before + 1);
         repo.set_selected_commit(None);
-        assert_eq!(repo.selected_commit_rev, before + 2);
+        assert_eq!(repo.history_state.selected_commit_rev, before + 2);
     }
 
     #[test]
     fn set_commit_details_bumps_commit_details_rev() {
         let mut repo = new_repo();
-        let before = repo.commit_details_rev;
+        let before = repo.history_state.commit_details_rev;
         repo.set_commit_details(Loadable::Loading);
-        assert_eq!(repo.commit_details_rev, before + 1);
+        assert_eq!(repo.history_state.commit_details_rev, before + 1);
     }
 
     #[test]
@@ -723,50 +783,50 @@ mod tests {
     #[test]
     fn set_conflict_file_path_bumps_conflict_rev() {
         let mut repo = new_repo();
-        let before = repo.conflict_rev;
+        let before = repo.conflict_state.conflict_rev;
         repo.set_conflict_file_path(Some(PathBuf::from("file.rs")));
-        assert_eq!(repo.conflict_rev, before + 1);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
     }
 
     #[test]
     fn set_conflict_file_bumps_conflict_rev() {
         let mut repo = new_repo();
-        let before = repo.conflict_rev;
+        let before = repo.conflict_state.conflict_rev;
         repo.set_conflict_file(Loadable::Loading);
-        assert_eq!(repo.conflict_rev, before + 1);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
     }
 
     #[test]
     fn conflict_file_path_and_file_share_same_rev_counter() {
         let mut repo = new_repo();
-        let before = repo.conflict_rev;
+        let before = repo.conflict_state.conflict_rev;
         repo.set_conflict_file_path(Some(PathBuf::from("a.rs")));
         repo.set_conflict_file(Loadable::Loading);
-        assert_eq!(repo.conflict_rev, before + 2);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 2);
     }
 
     #[test]
     fn set_conflict_hide_resolved_bumps_conflict_rev_only_on_change() {
         let mut repo = new_repo();
-        let before = repo.conflict_rev;
+        let before = repo.conflict_state.conflict_rev;
         repo.set_conflict_hide_resolved(true);
-        assert!(repo.conflict_hide_resolved);
-        assert_eq!(repo.conflict_rev, before + 1);
+        assert!(repo.conflict_state.conflict_hide_resolved);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
         repo.set_conflict_hide_resolved(true);
-        assert_eq!(repo.conflict_rev, before + 1);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
         repo.set_conflict_hide_resolved(false);
-        assert!(!repo.conflict_hide_resolved);
-        assert_eq!(repo.conflict_rev, before + 2);
+        assert!(!repo.conflict_state.conflict_hide_resolved);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 2);
     }
 
     #[test]
     fn bump_diff_state_rev_increments() {
         let mut repo = new_repo();
-        let before = repo.diff_state_rev;
+        let before = repo.diff_state.diff_state_rev;
         repo.bump_diff_state_rev();
-        assert_eq!(repo.diff_state_rev, before + 1);
+        assert_eq!(repo.diff_state.diff_state_rev, before + 1);
         repo.bump_diff_state_rev();
-        assert_eq!(repo.diff_state_rev, before + 2);
+        assert_eq!(repo.diff_state.diff_state_rev, before + 2);
     }
 
     #[test]
@@ -860,6 +920,42 @@ mod tests {
         assert_eq!(repo.submodules_rev, rev);
     }
 
+    #[test]
+    fn set_status_skips_rev_bump_when_unchanged() {
+        let mut repo = new_repo();
+        repo.set_status(Loadable::Loading);
+        let rev = repo.status_rev;
+        repo.set_status(Loadable::Loading);
+        assert_eq!(repo.status_rev, rev);
+    }
+
+    #[test]
+    fn set_log_skips_rev_bump_when_unchanged() {
+        let mut repo = new_repo();
+        repo.set_log(Loadable::Loading);
+        let rev = repo.history_state.log_rev;
+        repo.set_log(Loadable::Loading);
+        assert_eq!(repo.history_state.log_rev, rev);
+    }
+
+    #[test]
+    fn set_log_loading_more_skips_rev_bump_when_unchanged() {
+        let mut repo = new_repo();
+        repo.set_log_loading_more(true);
+        let rev = repo.history_state.log_rev;
+        repo.set_log_loading_more(true);
+        assert_eq!(repo.history_state.log_rev, rev);
+    }
+
+    #[test]
+    fn set_log_scope_skips_rev_bump_when_unchanged() {
+        let mut repo = new_repo();
+        repo.set_log_scope(LogScope::AllBranches);
+        let rev = repo.history_state.log_rev;
+        repo.set_log_scope(LogScope::AllBranches);
+        assert_eq!(repo.history_state.log_rev, rev);
+    }
+
     // --- Isolation tests: one setter does not bump another's rev ---
 
     #[test]
@@ -867,27 +963,27 @@ mod tests {
         let mut repo = new_repo();
         let snap = (
             repo.status_rev,
-            repo.log_rev,
-            repo.selected_commit_rev,
-            repo.commit_details_rev,
+            repo.history_state.log_rev,
+            repo.history_state.selected_commit_rev,
+            repo.history_state.commit_details_rev,
             repo.merge_message_rev,
             repo.upstream_divergence_rev,
             repo.open_rev,
-            repo.conflict_rev,
-            repo.diff_state_rev,
+            repo.conflict_state.conflict_rev,
+            repo.diff_state.diff_state_rev,
             repo.ops_rev,
         );
 
         repo.set_status(Loadable::Loading);
         assert_eq!(repo.status_rev, snap.0 + 1);
-        assert_eq!(repo.log_rev, snap.1);
-        assert_eq!(repo.selected_commit_rev, snap.2);
-        assert_eq!(repo.commit_details_rev, snap.3);
+        assert_eq!(repo.history_state.log_rev, snap.1);
+        assert_eq!(repo.history_state.selected_commit_rev, snap.2);
+        assert_eq!(repo.history_state.commit_details_rev, snap.3);
         assert_eq!(repo.merge_message_rev, snap.4);
         assert_eq!(repo.upstream_divergence_rev, snap.5);
         assert_eq!(repo.open_rev, snap.6);
-        assert_eq!(repo.conflict_rev, snap.7);
-        assert_eq!(repo.diff_state_rev, snap.8);
+        assert_eq!(repo.conflict_state.conflict_rev, snap.7);
+        assert_eq!(repo.diff_state.diff_state_rev, snap.8);
         assert_eq!(repo.ops_rev, snap.9);
     }
 
@@ -895,14 +991,14 @@ mod tests {
     fn all_rev_counters_start_at_zero() {
         let repo = new_repo();
         assert_eq!(repo.status_rev, 0);
-        assert_eq!(repo.log_rev, 0);
-        assert_eq!(repo.selected_commit_rev, 0);
-        assert_eq!(repo.commit_details_rev, 0);
+        assert_eq!(repo.history_state.log_rev, 0);
+        assert_eq!(repo.history_state.selected_commit_rev, 0);
+        assert_eq!(repo.history_state.commit_details_rev, 0);
         assert_eq!(repo.merge_message_rev, 0);
         assert_eq!(repo.upstream_divergence_rev, 0);
         assert_eq!(repo.open_rev, 0);
-        assert_eq!(repo.conflict_rev, 0);
-        assert_eq!(repo.diff_state_rev, 0);
+        assert_eq!(repo.conflict_state.conflict_rev, 0);
+        assert_eq!(repo.diff_state.diff_state_rev, 0);
         assert_eq!(repo.ops_rev, 0);
         assert_eq!(repo.head_branch_rev, 0);
         assert_eq!(repo.branches_rev, 0);
@@ -912,5 +1008,33 @@ mod tests {
         assert_eq!(repo.stashes_rev, 0);
         assert_eq!(repo.worktrees_rev, 0);
         assert_eq!(repo.submodules_rev, 0);
+    }
+
+    #[test]
+    fn grouped_state_defaults_are_initialized() {
+        let repo = new_repo();
+        assert_eq!(repo.history_state.history_scope, LogScope::CurrentBranch);
+        assert!(matches!(repo.history_state.log, Loadable::NotLoaded));
+        assert!(matches!(
+            repo.history_state.file_history,
+            Loadable::NotLoaded
+        ));
+        assert!(matches!(repo.history_state.blame, Loadable::NotLoaded));
+
+        assert!(repo.diff_state.diff_target.is_none());
+        assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
+        assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
+        assert!(matches!(
+            repo.diff_state.diff_file_image,
+            Loadable::NotLoaded
+        ));
+
+        assert!(repo.conflict_state.conflict_file_path.is_none());
+        assert!(matches!(
+            repo.conflict_state.conflict_file,
+            Loadable::NotLoaded
+        ));
+        assert!(repo.conflict_state.conflict_session.is_none());
+        assert!(!repo.conflict_state.conflict_hide_resolved);
     }
 }

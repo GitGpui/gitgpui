@@ -23,13 +23,13 @@ fn setup_repo_with_conflict(
         repos,
         id_alloc,
         state,
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id,
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             repo: Arc::new(DummyRepo::new("/tmp/repo")),
-        },
+        }),
     );
 
     // Inject a status with the conflict entry.
@@ -96,18 +96,19 @@ fn conflict_file_loaded_builds_session_with_regions() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
 
     // ConflictSession should be populated.
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("conflict_session should be built");
@@ -152,16 +153,17 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("deleted.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session should exist");
@@ -206,16 +208,17 @@ fn conflict_file_loaded_builds_binary_session() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session should exist");
@@ -247,16 +250,16 @@ fn conflict_file_loaded_clears_session_on_error() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Err(Error::new(ErrorKind::Backend("test error".into())))),
             conflict_session: None,
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert!(repo_state.conflict_session.is_none());
+    assert!(repo_state.conflict_state.conflict_session.is_none());
 }
 
 #[test]
@@ -290,12 +293,12 @@ fn load_conflict_file_clears_previous_session() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
     assert!(
         state
@@ -303,6 +306,7 @@ fn load_conflict_file_clears_previous_session() {
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
+            .conflict_state
             .conflict_session
             .is_some()
     );
@@ -328,6 +332,7 @@ fn load_conflict_file_clears_previous_session() {
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
+            .conflict_state
             .conflict_session
             .is_none()
     );
@@ -351,12 +356,12 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
     reduce(
         &mut repos,
@@ -374,27 +379,31 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id,
             result: Ok(RepoStatus {
                 unstaged: vec![],
                 staged: vec![],
             }),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_file_path, None);
-    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
-    assert!(repo_state.conflict_session.is_none());
-    assert!(!repo_state.conflict_hide_resolved);
-    assert!(repo_state.conflict_rev > before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_file_path, None);
+    assert!(matches!(
+        repo_state.conflict_state.conflict_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.conflict_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_state.conflict_rev > before_rev);
 }
 
 #[test]
@@ -415,12 +424,12 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -428,13 +437,14 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id,
             result: Ok(RepoStatus {
                 unstaged: vec![FileStatus {
@@ -444,17 +454,20 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
                 }],
                 staged: vec![],
             }),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     assert_eq!(
-        repo_state.conflict_file_path,
+        repo_state.conflict_state.conflict_file_path,
         Some(PathBuf::from("file.txt"))
     );
-    assert!(matches!(repo_state.conflict_file, Loadable::Ready(Some(_))));
-    assert!(repo_state.conflict_session.is_some());
-    assert_eq!(repo_state.conflict_rev, before_rev);
+    assert!(matches!(
+        repo_state.conflict_state.conflict_file,
+        Loadable::Ready(Some(_))
+    ));
+    assert!(repo_state.conflict_state.conflict_session.is_some());
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
 }
 
 #[test]
@@ -494,16 +507,17 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: Some(provided_session.clone()),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -531,6 +545,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -545,8 +560,8 @@ fn conflict_set_hide_resolved_updates_repo_state() {
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert!(repo_state.conflict_hide_resolved);
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert!(repo_state.conflict_state.conflict_hide_resolved);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -591,17 +606,18 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     {
         let repo_state = state.repos.iter_mut().find(|r| r.id == repo_id).unwrap();
         let session = repo_state
+            .conflict_state
             .conflict_session
             .as_mut()
             .expect("session exists");
@@ -613,6 +629,7 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -628,6 +645,7 @@ theirs two\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -639,7 +657,7 @@ theirs two\n\
         session.regions[1].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs
     );
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -684,12 +702,12 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -697,6 +715,7 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -713,6 +732,7 @@ theirs two\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -724,7 +744,7 @@ theirs two\n\
         session.regions[1].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickTheirs
     );
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -764,12 +784,12 @@ theirs only\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -777,6 +797,7 @@ theirs only\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -793,6 +814,7 @@ theirs only\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -800,7 +822,7 @@ theirs only\n\
         session.regions[0].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
     );
-    assert_eq!(repo_state.conflict_rev, before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
 }
 
 #[test]
@@ -845,12 +867,12 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
     reduce(
         &mut repos,
@@ -880,6 +902,7 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -894,6 +917,7 @@ theirs two\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -905,7 +929,7 @@ theirs two\n\
         session.regions[1].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
     );
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -944,12 +968,12 @@ theirs one\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -957,6 +981,7 @@ theirs one\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -971,6 +996,7 @@ theirs one\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -978,7 +1004,7 @@ theirs one\n\
         session.regions[0].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
     );
-    assert_eq!(repo_state.conflict_rev, before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
 }
 
 #[test]
@@ -1017,12 +1043,12 @@ same content\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1030,6 +1056,7 @@ same content\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -1046,6 +1073,7 @@ same content\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -1054,7 +1082,7 @@ same content\n\
         session.regions[0].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved { .. }
     ));
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -1099,12 +1127,12 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1112,6 +1140,7 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -1140,6 +1169,7 @@ theirs two\n\
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -1153,7 +1183,7 @@ theirs two\n\
         session.regions[1].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickTheirs
     );
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -1192,12 +1222,12 @@ theirs one\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1205,6 +1235,7 @@ theirs one\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
@@ -1222,9 +1253,10 @@ theirs one\n\
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_rev, before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
     assert_eq!(
         repo_state
+            .conflict_state
             .conflict_session
             .as_ref()
             .expect("session exists")
@@ -1276,12 +1308,12 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1289,13 +1321,14 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflict {
                 path: PathBuf::from("file.txt"),
@@ -1304,11 +1337,12 @@ theirs two\n\
             result: Ok(CommandOutput::empty_success(
                 "git checkout --theirs -- file.txt",
             )),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -1316,7 +1350,7 @@ theirs two\n\
         region.resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickTheirs
     )));
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -1365,12 +1399,12 @@ theirs two\n\
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1378,13 +1412,14 @@ theirs two\n\
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("file.txt"),
@@ -1392,11 +1427,12 @@ theirs two\n\
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:file.txt -- file.txt",
             )),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -1404,7 +1440,7 @@ theirs two\n\
         region.resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickBase
     )));
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -1436,12 +1472,12 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     let before_rev = state
@@ -1449,23 +1485,25 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::AcceptConflictDeletion {
                 path: PathBuf::from("file.txt"),
             },
             result: Ok(CommandOutput::empty_success("git rm -- file.txt")),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
+        .conflict_state
         .conflict_session
         .as_ref()
         .expect("session exists");
@@ -1473,7 +1511,7 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
         session.regions[0].resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::PickTheirs
     );
-    assert_eq!(repo_state.conflict_rev, before_rev + 1);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
 
 #[test]
@@ -1494,12 +1532,12 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
     reduce(
         &mut repos,
@@ -1517,27 +1555,31 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::LaunchMergetool {
                 path: PathBuf::from("file.txt"),
             },
             result: Ok(CommandOutput::empty_success("mergetool (dummy)")),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_file_path, None);
-    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
-    assert!(repo_state.conflict_session.is_none());
-    assert!(!repo_state.conflict_hide_resolved);
-    assert!(repo_state.conflict_rev > before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_file_path, None);
+    assert!(matches!(
+        repo_state.conflict_state.conflict_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.conflict_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_state.conflict_rev > before_rev);
 }
 
 #[test]
@@ -1569,12 +1611,12 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
     reduce(
         &mut repos,
@@ -1592,13 +1634,14 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflict {
                 path: PathBuf::from("image.png"),
@@ -1607,15 +1650,18 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
             result: Ok(CommandOutput::empty_success(
                 "git checkout --theirs -- image.png",
             )),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_file_path, None);
-    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
-    assert!(repo_state.conflict_session.is_none());
-    assert!(!repo_state.conflict_hide_resolved);
-    assert!(repo_state.conflict_rev > before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_file_path, None);
+    assert!(matches!(
+        repo_state.conflict_state.conflict_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.conflict_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_state.conflict_rev > before_rev);
 }
 
 #[test]
@@ -1647,12 +1693,12 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("image.png"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
     reduce(
         &mut repos,
@@ -1670,13 +1716,14 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
+        .conflict_state
         .conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("image.png"),
@@ -1684,15 +1731,18 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:image.png -- image.png",
             )),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_file_path, None);
-    assert!(matches!(repo_state.conflict_file, Loadable::NotLoaded));
-    assert!(repo_state.conflict_session.is_none());
-    assert!(!repo_state.conflict_hide_resolved);
-    assert!(repo_state.conflict_rev > before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_file_path, None);
+    assert!(matches!(
+        repo_state.conflict_state.conflict_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.conflict_state.conflict_session.is_none());
+    assert!(!repo_state.conflict_state.conflict_hide_resolved);
+    assert!(repo_state.conflict_state.conflict_rev > before_rev);
 }
 
 #[test]
@@ -1715,12 +1765,12 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_rev;
+        .conflict_state.conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("file.txt"),
@@ -1728,7 +1778,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:file.txt -- file.txt",
             )),
-        },
+        }),
     );
     assert_eq!(
         state
@@ -1736,7 +1786,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_rev,
+            .conflict_state.conflict_rev,
         before_no_session_rev
     );
 
@@ -1745,12 +1795,12 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
 
     // Tracked conflict path mismatch should no-op.
@@ -1759,12 +1809,12 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_rev;
+        .conflict_state.conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("other.txt"),
@@ -1772,7 +1822,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:other.txt -- other.txt",
             )),
-        },
+        }),
     );
     assert_eq!(
         state
@@ -1780,7 +1830,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_rev,
+            .conflict_state.conflict_rev,
         before_tracked_mismatch_rev
     );
 
@@ -1790,7 +1840,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter_mut()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_session
+        .conflict_state.conflict_session
         .as_mut()
         .expect("session")
         .path = PathBuf::from("different-session-path.txt");
@@ -1799,12 +1849,12 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_rev;
+        .conflict_state.conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("file.txt"),
@@ -1812,7 +1862,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:file.txt -- file.txt",
             )),
-        },
+        }),
     );
     assert_eq!(
         state
@@ -1820,7 +1870,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
             .iter()
             .find(|r| r.id == repo_id)
             .unwrap()
-            .conflict_rev,
+            .conflict_state.conflict_rev,
         before_session_mismatch_rev
     );
 }
@@ -1842,19 +1892,19 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflict {
                 path: PathBuf::from("file.txt"),
@@ -1863,7 +1913,7 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
             result: Ok(CommandOutput::empty_success(
                 "git checkout --ours -- file.txt",
             )),
-        },
+        }),
     );
 
     let session = state
@@ -1871,7 +1921,7 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_session
+        .conflict_state.conflict_session
         .as_ref()
         .expect("session");
     assert!(session.regions.iter().all(|region| matches!(
@@ -1909,25 +1959,25 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::AcceptConflictDeletion {
                 path: PathBuf::from("file.txt"),
             },
             result: Ok(CommandOutput::empty_success("git rm -- file.txt")),
-        },
+        }),
     );
 
     let session = state
@@ -1935,7 +1985,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_session
+        .conflict_state.conflict_session
         .as_ref()
         .expect("session exists");
     assert_eq!(
@@ -1961,25 +2011,25 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(sample_marker_conflict_file("file.txt")))),
             conflict_session: None,
-        },
+        }),
     );
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::AcceptConflictDeletion {
                 path: PathBuf::from("file.txt"),
             },
             result: Ok(CommandOutput::empty_success("git rm -- file.txt")),
-        },
+        }),
     );
 
     let session = state
@@ -1987,7 +2037,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_session
+        .conflict_state.conflict_session
         .as_ref()
         .expect("session exists");
     assert_eq!(
@@ -2025,25 +2075,25 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ConflictFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path: PathBuf::from("file.txt"),
             result: Box::new(Ok(Some(file))),
             conflict_session: None,
-        },
+        }),
     );
     let before_rev = state
         .repos
         .iter()
         .find(|r| r.id == repo_id)
         .unwrap()
-        .conflict_rev;
+        .conflict_state.conflict_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::CheckoutConflictBase {
                 path: PathBuf::from("file.txt"),
@@ -2051,14 +2101,14 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
             result: Ok(CommandOutput::empty_success(
                 "git checkout :1:file.txt -- file.txt",
             )),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
-    assert_eq!(repo_state.conflict_rev, before_rev);
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
     assert_eq!(
         repo_state
-            .conflict_session
+            .conflict_state.conflict_session
             .as_ref()
             .expect("session exists")
             .regions[0]

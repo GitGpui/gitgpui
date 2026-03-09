@@ -15,6 +15,31 @@ struct Token {
     kind: TokenKind,
 }
 
+#[derive(Clone, Debug)]
+struct MyersTraceRow {
+    min_k: isize,
+    max_k: isize,
+    values: Vec<isize>,
+}
+
+impl MyersTraceRow {
+    fn from_v(v: &[isize], min_k: isize, max_k: isize, offset: isize) -> Self {
+        debug_assert!(min_k <= max_k);
+        let start = (min_k + offset) as usize;
+        let end = (max_k + offset) as usize;
+        Self {
+            min_k,
+            max_k,
+            values: v[start..=end].to_vec(),
+        }
+    }
+
+    fn at(&self, k: isize) -> isize {
+        debug_assert!(k >= self.min_k && k <= self.max_k);
+        self.values[(k - self.min_k) as usize]
+    }
+}
+
 fn tokenize_for_word_diff(s: &str, max_tokens: usize) -> Vec<Token> {
     if max_tokens == 0 {
         return Vec::new();
@@ -110,7 +135,7 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
         return fallback_affix_diff_ranges(old, new);
     };
     let mut v: Vec<isize> = vec![0; v_size];
-    let mut trace: Vec<Vec<isize>> = Vec::with_capacity(max + 1);
+    let mut trace: Vec<MyersTraceRow> = Vec::with_capacity(max + 1);
 
     let mut done = false;
     for d in 0..=max {
@@ -138,7 +163,7 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
             }
         }
 
-        trace.push(v.clone());
+        trace.push(MyersTraceRow::from_v(&v, -(d as isize), d as isize, offset));
         if done {
             break;
         }
@@ -154,15 +179,13 @@ pub(super) fn word_diff_ranges(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<
         let d_isize = d as isize;
         let v = &trace[d - 1];
         let k = x - y;
-        let prev_k = if k == -d_isize
-            || (k != d_isize && v[(k - 1 + offset) as usize] < v[(k + 1 + offset) as usize])
-        {
+        let prev_k = if k == -d_isize || (k != d_isize && v.at(k - 1) < v.at(k + 1)) {
             k + 1
         } else {
             k - 1
         };
 
-        let prev_x = v[(prev_k + offset) as usize];
+        let prev_x = v.at(prev_k);
         let prev_y = prev_x - prev_k;
 
         while x > prev_x && y > prev_y {
@@ -363,6 +386,28 @@ mod tests {
         let (old_ranges, new_ranges) = word_diff_ranges("", "");
         assert!(old_ranges.is_empty());
         assert!(new_ranges.is_empty());
+    }
+
+    #[test]
+    fn word_diff_ranges_many_edits_near_token_limit() {
+        fn words(prefix: &str, count: usize) -> String {
+            (0..count)
+                .map(|ix| format!("{prefix}{ix}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+
+        // 64 words produce 127 tokens (words + spaces), staying below the 128-token limit.
+        let old = words("old", 64);
+        let new = words("new", 64);
+        let (old_ranges, new_ranges) = word_diff_ranges(&old, &new);
+
+        assert_eq!(old_ranges.len(), 64);
+        assert_eq!(new_ranges.len(), 64);
+        assert_eq!(&old[old_ranges[0].clone()], "old0");
+        assert_eq!(&old[old_ranges[63].clone()], "old63");
+        assert_eq!(&new[new_ranges[0].clone()], "new0");
+        assert_eq!(&new[new_ranges[63].clone()], "new63");
     }
 
     #[test]

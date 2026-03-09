@@ -55,7 +55,7 @@ impl DetailsPaneView {
         let active_repo_id = self.active_repo_id();
         let selected_id = self
             .active_repo()
-            .and_then(|repo| repo.selected_commit.clone());
+            .and_then(|repo| repo.history_state.selected_commit.clone());
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
             let show_delayed_loading = self.commit_details_delay.as_ref().is_some_and(|s| {
@@ -111,7 +111,8 @@ impl DetailsPaneView {
                         })),
                 );
 
-            let body: AnyElement = match self.active_repo().map(|r| &r.commit_details) {
+            let body: AnyElement = match self.active_repo().map(|r| &r.history_state.commit_details)
+            {
                 None => {
                     components::empty_state(theme, "Commit", "No repository.").into_any_element()
                 }

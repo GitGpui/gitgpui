@@ -37,7 +37,10 @@ pub(super) fn panel(
                                     return;
                                 };
                                 this.open_popover_at(
-                                    PopoverKind::WorktreeRemoveConfirm { repo_id, path },
+                                    PopoverKind::worktree(
+                                        repo_id,
+                                        WorktreePopoverKind::RemoveConfirm { path },
+                                    ),
                                     e.position(),
                                     window,
                                     cx,

@@ -7,7 +7,8 @@ use crate::view::conflict_resolver::{
 use crate::view::history_graph;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, FileStatusKind, Remote,
-    RemoteBranch, RepoSpec, StashEntry, Submodule, Upstream, UpstreamDivergence, Worktree,
+    RemoteBranch, RepoSpec, StashEntry, Submodule, SubmoduleStatus, Upstream, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_state::model::{Loadable, RepoId, RepoState};
 use std::collections::hash_map::DefaultHasher;
@@ -1115,7 +1116,11 @@ fn build_synthetic_repo_state(
         submodules_vec.push(Submodule {
             path: std::path::PathBuf::from(format!("deps/submodule_{ix}")),
             head: CommitId(format!("{:040x}", 200_000usize.saturating_add(ix))),
-            status: if ix % 5 == 0 { 'M' } else { ' ' },
+            status: if ix % 5 == 0 {
+                SubmoduleStatus::HeadMismatch
+            } else {
+                SubmoduleStatus::UpToDate
+            },
         });
     }
     repo.submodules = Loadable::Ready(Arc::new(submodules_vec));

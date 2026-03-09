@@ -1,12 +1,61 @@
 use super::GixRepo;
-use crate::util::{run_git_capture, run_git_with_output};
+use crate::util::{run_git_capture, run_git_with_output, validate_ref_like_arg};
 use gitcomet_core::domain::{CommitId, RemoteTag, Tag};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::process::Command;
 use std::str;
+use std::thread;
+
+fn parse_ls_remote_tag_names(output: &str) -> HashSet<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let (_object, reference) = line.split_once('\t')?;
+            reference.strip_prefix("refs/tags/").map(ToOwned::to_owned)
+        })
+        .collect()
+}
+
+fn parse_ls_remote_tags(output: &str, remote_name: &str) -> Vec<RemoteTag> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let (object, reference) = line.split_once('\t')?;
+            let name = reference.strip_prefix("refs/tags/")?;
+            Some(RemoteTag {
+                remote: remote_name.to_string(),
+                name: name.to_string(),
+                target: CommitId(object.to_string()),
+            })
+        })
+        .collect()
+}
+
+fn local_tags_to_prune(local_tags_output: &str, remote_tags: &HashSet<String>) -> Vec<String> {
+    local_tags_output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !remote_tags.contains(*line))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
+    let ref_name = format!("refs/tags/{name}");
+    let reference = repo
+        .find_reference(ref_name.as_str())
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix find tag reference: {e}"))))?;
+    reference
+        .delete()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix delete tag {name}: {e}"))))
+}
 
 impl GixRepo {
     pub(super) fn list_tags_impl(&self) -> Result<Vec<Tag>> {
@@ -37,41 +86,41 @@ impl GixRepo {
 
     pub(super) fn list_remote_tags_impl(&self) -> Result<Vec<RemoteTag>> {
         let remotes = self.list_remotes_impl()?;
-        let mut remote_tags = Vec::new();
+        let workdir = self.spec.workdir.clone();
+        let mut handles = Vec::new();
 
         for remote in remotes {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("ls-remote")
-                .arg("--tags")
-                .arg("--refs")
-                .arg(&remote.name);
-            let output =
-                match run_git_capture(cmd, &format!("git ls-remote --tags --refs {}", remote.name))
-                {
-                    Ok(output) => output,
+            if validate_ref_like_arg(&remote.name, "remote name").is_err() {
+                continue;
+            }
+
+            let workdir = workdir.clone();
+            let remote_name = remote.name;
+            handles.push(thread::spawn(move || {
+                let mut cmd = Command::new("git");
+                cmd.arg("-C")
+                    .arg(&workdir)
+                    .arg("ls-remote")
+                    .arg("--tags")
+                    .arg("--refs")
+                    .arg("--")
+                    .arg(&remote_name);
+                match run_git_capture(cmd, &format!("git ls-remote --tags --refs {remote_name}")) {
+                    Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
                     // Remote tag presence is best-effort metadata for UI menus.
                     // If one remote is unavailable, keep partial results from others.
-                    Err(_) => continue,
-                };
+                    Err(_) => None,
+                }
+            }));
+        }
 
-            for line in output
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                let Some((object, reference)) = line.split_once('\t') else {
-                    continue;
-                };
-                let Some(name) = reference.strip_prefix("refs/tags/") else {
-                    continue;
-                };
-                remote_tags.push(RemoteTag {
-                    remote: remote.name.clone(),
-                    name: name.to_string(),
-                    target: CommitId(object.to_string()),
-                });
+        let mut remote_tags = Vec::new();
+        for handle in handles {
+            let Ok(maybe_tags) = handle.join() else {
+                continue;
+            };
+            if let Some(mut tags) = maybe_tags {
+                remote_tags.append(&mut tags);
             }
         }
 
@@ -89,33 +138,29 @@ impl GixRepo {
         name: &str,
         target: &str,
     ) -> Result<CommandOutput> {
+        validate_ref_like_arg(name, "tag name")?;
+        validate_ref_like_arg(target, "tag target")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("-c")
             .arg("alias.tag=")
-            .arg("-c")
-            .arg("tag.gpgsign=false")
-            .arg("-c")
-            .arg("tag.forcesignannotated=false")
             .arg("tag")
             .arg("-m")
             .arg(name)
+            .arg("--")
             .arg(name)
             .arg(target);
-        run_git_with_output(cmd, &format!("git tag -m {name} {name} {target}"))
+        run_git_with_output(cmd, &format!("git tag -m {name} -- {name} {target}"))
     }
 
     pub(super) fn delete_tag_with_output_impl(&self, name: &str) -> Result<CommandOutput> {
-        let mut cmd = Command::new("git");
-        cmd.arg("-C")
-            .arg(&self.spec.workdir)
-            .arg("-c")
-            .arg("alias.tag=")
-            .arg("tag")
-            .arg("-d")
-            .arg(name);
-        run_git_with_output(cmd, &format!("git tag -d {name}"))
+        validate_ref_like_arg(name, "tag name")?;
+
+        let repo = self._repo.to_thread_local();
+        delete_local_tag(&repo, name)?;
+        Ok(CommandOutput::empty_success(format!("git tag -d {name}")))
     }
 
     pub(super) fn push_tag_with_output_impl(
@@ -123,10 +168,14 @@ impl GixRepo {
         remote: &str,
         name: &str,
     ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(name, "tag name")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("push")
+            .arg("--")
             .arg(remote)
             .arg(format!("refs/tags/{name}"));
         run_git_with_output(cmd, &format!("git push {remote} refs/tags/{name}"))
@@ -137,12 +186,16 @@ impl GixRepo {
         remote: &str,
         name: &str,
     ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(name, "tag name")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("push")
-            .arg(remote)
             .arg("--delete")
+            .arg("--")
+            .arg(remote)
             .arg(format!("refs/tags/{name}"));
         run_git_with_output(cmd, &format!("git push {remote} --delete refs/tags/{name}"))
     }
@@ -158,30 +211,21 @@ impl GixRepo {
             });
         }
 
-        let mut remote_tags: HashSet<String> = HashSet::new();
+        let mut remote_tags: HashSet<String> = HashSet::default();
         for remote in remotes {
+            validate_ref_like_arg(&remote.name, "remote name")?;
+
             let mut cmd = Command::new("git");
             cmd.arg("-C")
                 .arg(&self.spec.workdir)
                 .arg("ls-remote")
                 .arg("--tags")
                 .arg("--refs")
+                .arg("--")
                 .arg(&remote.name);
             let output =
                 run_git_capture(cmd, &format!("git ls-remote --tags --refs {}", remote.name))?;
-            for line in output
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-            {
-                let Some((_object, reference)) = line.split_once('\t') else {
-                    continue;
-                };
-                let Some(name) = reference.strip_prefix("refs/tags/") else {
-                    continue;
-                };
-                remote_tags.insert(name.to_string());
-            }
+            remote_tags.extend(parse_ls_remote_tag_names(&output));
         }
 
         let mut list_cmd = Command::new("git");
@@ -192,16 +236,11 @@ impl GixRepo {
             .arg("--list");
         let local_tags = run_git_capture(list_cmd, "git tag --list")?;
 
-        let mut deleted: Vec<String> = Vec::new();
-        let mut deleted_outputs: Vec<CommandOutput> = Vec::new();
-        for local_tag in local_tags
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
-            if remote_tags.contains(local_tag) {
-                continue;
-            }
+        let deleted = local_tags_to_prune(&local_tags, &remote_tags);
+
+        let mut stdout = String::new();
+        let mut stderr = String::new();
+        if !deleted.is_empty() {
             let mut delete_cmd = Command::new("git");
             delete_cmd
                 .arg("-C")
@@ -210,15 +249,13 @@ impl GixRepo {
                 .arg("alias.tag=")
                 .arg("tag")
                 .arg("-d")
-                .arg(local_tag);
-            let output = run_git_with_output(delete_cmd, &format!("git tag -d {local_tag}"))?;
-            deleted.push(local_tag.to_string());
-            deleted_outputs.push(output);
-        }
+                .arg("--");
+            for local_tag in &deleted {
+                delete_cmd.arg(local_tag);
+            }
 
-        let mut stdout = String::new();
-        let mut stderr = String::new();
-        for output in &deleted_outputs {
+            let output =
+                run_git_with_output(delete_cmd, &format!("git tag -d {}", deleted.join(" ")))?;
             if !output.stdout.is_empty() {
                 stdout.push_str(&output.stdout);
             }
@@ -246,5 +283,50 @@ impl GixRepo {
             stderr,
             exit_code: Some(0),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
+    use rustc_hash::FxHashSet as HashSet;
+
+    #[test]
+    fn parse_ls_remote_tag_names_skips_invalid_lines() {
+        let output = "\
+1111111111111111111111111111111111111111\trefs/tags/v1.0.0\n\
+bad-line\n\
+2222222222222222222222222222222222222222\trefs/heads/main\n\
+3333333333333333333333333333333333333333\trefs/tags/v2.0.0\n";
+        let names = parse_ls_remote_tag_names(output);
+        assert_eq!(names.len(), 2);
+        assert!(names.contains("v1.0.0"));
+        assert!(names.contains("v2.0.0"));
+    }
+
+    #[test]
+    fn parse_ls_remote_tags_assigns_remote_name() {
+        let output = "\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/tags/release\n\
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/hotfix\n";
+        let tags = parse_ls_remote_tags(output, "origin");
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0].remote, "origin");
+        assert_eq!(tags[0].name, "release");
+        assert_eq!(
+            tags[0].target.as_ref(),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(tags[1].name, "hotfix");
+    }
+
+    #[test]
+    fn local_tags_to_prune_only_returns_tags_missing_from_remotes() {
+        let local_output = "v1.0.0\nv1.1.0\nv2.0.0\n";
+        let remote_tags: HashSet<String> = ["v1.0.0".to_string(), "v2.0.0".to_string()]
+            .into_iter()
+            .collect();
+        let prune = local_tags_to_prune(local_output, &remote_tags);
+        assert_eq!(prune, vec!["v1.1.0".to_string()]);
     }
 }

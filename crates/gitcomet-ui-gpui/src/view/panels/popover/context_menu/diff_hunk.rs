@@ -9,7 +9,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-        .and_then(|r| r.diff_target.as_ref())
+        .and_then(|r| r.diff_state.diff_target.as_ref())
     {
         Some(DiffTarget::WorkingTree { area, .. }) => match area {
             DiffArea::Unstaged => (false, "Stage hunk", "+", Some("S")),
@@ -29,7 +29,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.diff_target.as_ref())
+                .and_then(|r| r.diff_state.diff_target.as_ref())
             {
                 Some(DiffTarget::WorkingTree {
                     area: DiffArea::Staged,
@@ -45,7 +45,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-        .and_then(|r| r.diff_target.as_ref())
+        .and_then(|r| r.diff_state.diff_target.as_ref())
         .is_some_and(|target| {
             matches!(
                 target,

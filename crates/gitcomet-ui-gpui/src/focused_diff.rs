@@ -5,7 +5,7 @@
 
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
-use crate::theme::AppTheme;
+use crate::theme::{AppTheme, with_alpha};
 use gpui::prelude::*;
 use gpui::{
     App, Application, Bounds, FocusHandle, Focusable, FontWeight, KeyBinding, Render, ScrollHandle,
@@ -241,15 +241,6 @@ fn render_diff_line(index: usize, line: &DiffLine, theme: &AppTheme) -> impl Int
     el
 }
 
-fn with_alpha(color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    gpui::Rgba {
-        r: color.r,
-        g: color.g,
-        b: color.b,
-        a: alpha,
-    }
-}
-
 // ── Public entry point ───────────────────────────────────────────────
 
 /// Launch a focused GPUI diff window.
@@ -303,7 +294,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                         })
                     },
                 )
-                .unwrap();
+                .expect("failed to open focused diff window");
 
                 cx.activate(true);
             });

@@ -82,7 +82,7 @@ impl GixRepo {
                 },
 
                 gix::status::Item::TreeIndex(change) => {
-                    use gix_diff::index::ChangeRef;
+                    use gix::diff::index::ChangeRef;
 
                     let (path, kind) = match change {
                         ChangeRef::Addition { location, .. } => (

@@ -18,3 +18,4 @@ smol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rustc-hash = { workspace = true }
+tempfile = { workspace = true }

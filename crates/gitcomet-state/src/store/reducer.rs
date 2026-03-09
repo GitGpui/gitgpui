@@ -88,6 +88,19 @@ pub(super) fn reduce(
             repo_id,
             insert_before,
         } => repo_management::reorder_repo_tabs(state, repo_id, insert_before),
+        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+            repo_id,
+            action,
+            error,
+        }) => {
+            util::handle_session_persist_result(
+                state,
+                repo_id,
+                action,
+                Err(std::io::Error::other(error)),
+            );
+            Vec::new()
+        }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(state, repo_id, change)
@@ -121,13 +134,22 @@ pub(super) fn reduce(
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
-        Msg::StageHunk { repo_id, patch } => diff_selection::stage_hunk(repo_id, patch),
-        Msg::UnstageHunk { repo_id, patch } => diff_selection::unstage_hunk(repo_id, patch),
+        Msg::StageHunk { repo_id, patch } => {
+            begin_local_action(state, repo_id);
+            diff_selection::stage_hunk(repo_id, patch)
+        }
+        Msg::UnstageHunk { repo_id, patch } => {
+            begin_local_action(state, repo_id);
+            diff_selection::unstage_hunk(repo_id, patch)
+        }
         Msg::ApplyWorktreePatch {
             repo_id,
             patch,
             reverse,
-        } => diff_selection::apply_worktree_patch(repo_id, patch, reverse),
+        } => {
+            begin_local_action(state, repo_id);
+            diff_selection::apply_worktree_patch(repo_id, patch, reverse)
+        }
         Msg::CheckoutBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::checkout_branch(repo_id, name)
@@ -170,18 +192,24 @@ pub(super) fn reduce(
             actions_emit_effects::force_delete_branch(repo_id, name)
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
-        Msg::CloneRepoProgress { dest, line } => {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoProgress { dest, line }) => {
             repo_management::clone_repo_progress(state, dest, line)
         }
-        Msg::CloneRepoFinished { url, dest, result } => {
+        Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished { url, dest, result }) => {
             repo_management::clone_repo_finished(state, url, dest, result)
         }
         Msg::ExportPatch {
             repo_id,
             commit_id,
             dest,
-        } => actions_emit_effects::export_patch(repo_id, commit_id, dest),
-        Msg::ApplyPatch { repo_id, patch } => actions_emit_effects::apply_patch(repo_id, patch),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::export_patch(repo_id, commit_id, dest)
+        }
+        Msg::ApplyPatch { repo_id, patch } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::apply_patch(repo_id, patch)
+        }
         Msg::AddWorktree {
             repo_id,
             path,
@@ -204,10 +232,15 @@ pub(super) fn reduce(
             actions_emit_effects::remove_worktree(repo_id, normalized_path)
         }
         Msg::AddSubmodule { repo_id, url, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::add_submodule(repo_id, url, path)
         }
-        Msg::UpdateSubmodules { repo_id } => actions_emit_effects::update_submodules(repo_id),
+        Msg::UpdateSubmodules { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::update_submodules(repo_id)
+        }
         Msg::RemoveSubmodule { repo_id, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::remove_submodule(repo_id, path)
         }
         Msg::StagePath { repo_id, path } => {
@@ -239,7 +272,10 @@ pub(super) fn reduce(
             path,
             contents,
             stage,
-        } => actions_emit_effects::save_worktree_file(repo_id, path, contents, stage),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+        }
         Msg::Commit { repo_id, message } => {
             begin_commit_action(state, repo_id);
             actions_emit_effects::commit(repo_id, message)
@@ -261,7 +297,10 @@ pub(super) fn reduce(
             remote,
             branch,
         } => actions_emit_effects::pull_branch(repos, state, repo_id, remote, branch),
-        Msg::MergeRef { repo_id, reference } => actions_emit_effects::merge_ref(repo_id, reference),
+        Msg::MergeRef { repo_id, reference } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::merge_ref(repo_id, reference)
+        }
         Msg::Push { repo_id } => actions_emit_effects::push(repos, state, repo_id),
         Msg::ForcePush { repo_id } => actions_emit_effects::force_push(repos, state, repo_id),
         Msg::PushSetUpstream {
@@ -278,17 +317,38 @@ pub(super) fn reduce(
             repo_id,
             target,
             mode,
-        } => actions_emit_effects::reset(repo_id, target, mode),
-        Msg::Rebase { repo_id, onto } => actions_emit_effects::rebase(repo_id, onto),
-        Msg::RebaseContinue { repo_id } => actions_emit_effects::rebase_continue(repo_id),
-        Msg::RebaseAbort { repo_id } => actions_emit_effects::rebase_abort(repo_id),
-        Msg::MergeAbort { repo_id } => actions_emit_effects::merge_abort(repo_id),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::reset(repo_id, target, mode)
+        }
+        Msg::Rebase { repo_id, onto } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::rebase(repo_id, onto)
+        }
+        Msg::RebaseContinue { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::rebase_continue(repo_id)
+        }
+        Msg::RebaseAbort { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::rebase_abort(repo_id)
+        }
+        Msg::MergeAbort { repo_id } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::merge_abort(repo_id)
+        }
         Msg::CreateTag {
             repo_id,
             name,
             target,
-        } => actions_emit_effects::create_tag(repo_id, name, target),
-        Msg::DeleteTag { repo_id, name } => actions_emit_effects::delete_tag(repo_id, name),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::create_tag(repo_id, name, target)
+        }
+        Msg::DeleteTag { repo_id, name } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::delete_tag(repo_id, name)
+        }
         Msg::PushTag {
             repo_id,
             remote,
@@ -300,27 +360,40 @@ pub(super) fn reduce(
             name,
         } => actions_emit_effects::delete_remote_tag(repos, state, repo_id, remote, name),
         Msg::AddRemote { repo_id, name, url } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::add_remote(repo_id, name, url)
         }
-        Msg::RemoveRemote { repo_id, name } => actions_emit_effects::remove_remote(repo_id, name),
+        Msg::RemoveRemote { repo_id, name } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::remove_remote(repo_id, name)
+        }
         Msg::SetRemoteUrl {
             repo_id,
             name,
             url,
             kind,
-        } => actions_emit_effects::set_remote_url(repo_id, name, url, kind),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::set_remote_url(repo_id, name, url, kind)
+        }
         Msg::CheckoutConflictSide {
             repo_id,
             path,
             side,
-        } => actions_emit_effects::checkout_conflict_side(repo_id, path, side),
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::checkout_conflict_side(repo_id, path, side)
+        }
         Msg::AcceptConflictDeletion { repo_id, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::accept_conflict_deletion(repo_id, path)
         }
         Msg::CheckoutConflictBase { repo_id, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::checkout_conflict_base(repo_id, path)
         }
         Msg::LaunchMergetool { repo_id, path } => {
+            begin_local_action(state, repo_id);
             actions_emit_effects::launch_mergetool(repo_id, path)
         }
         Msg::RecordConflictAutosolveTelemetry {
@@ -404,103 +477,115 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::drop_stash(repo_id, index)
         }
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id,
             spec,
             repo,
-        } => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo),
-        Msg::RepoOpenedErr {
+        }) => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo),
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id,
             spec,
             error,
-        } => repo_management::repo_opened_err(repos, state, repo_id, spec, error),
-        Msg::BranchesLoaded { repo_id, result } => effects::branches_loaded(state, repo_id, result),
-        Msg::RemotesLoaded { repo_id, result } => effects::remotes_loaded(state, repo_id, result),
-        Msg::RemoteBranchesLoaded { repo_id, result } => {
+        }) => repo_management::repo_opened_err(repos, state, repo_id, spec, error),
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded { repo_id, result }) => {
+            effects::branches_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RemotesLoaded { repo_id, result }) => {
+            effects::remotes_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded { repo_id, result }) => {
             effects::remote_branches_loaded(state, repo_id, result)
         }
-        Msg::StatusLoaded { repo_id, result } => effects::status_loaded(state, repo_id, result),
-        Msg::HeadBranchLoaded { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded { repo_id, result }) => {
+            effects::status_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded { repo_id, result }) => {
             effects::head_branch_loaded(state, repo_id, result)
         }
-        Msg::UpstreamDivergenceLoaded { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded { repo_id, result }) => {
             effects::upstream_divergence_loaded(state, repo_id, result)
         }
-        Msg::LogLoaded {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             scope,
             cursor,
             result,
-        } => external_and_history::log_loaded(state, repo_id, scope, cursor, result),
-        Msg::TagsLoaded { repo_id, result } => effects::tags_loaded(state, repo_id, result),
-        Msg::RemoteTagsLoaded { repo_id, result } => {
+        }) => external_and_history::log_loaded(state, repo_id, scope, cursor, result),
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
+            effects::tags_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded { repo_id, result }) => {
             effects::remote_tags_loaded(state, repo_id, result)
         }
-        Msg::StashesLoaded { repo_id, result } => effects::stashes_loaded(state, repo_id, result),
-        Msg::ReflogLoaded { repo_id, result } => effects::reflog_loaded(state, repo_id, result),
-        Msg::RebaseStateLoaded { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::StashesLoaded { repo_id, result }) => {
+            effects::stashes_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::ReflogLoaded { repo_id, result }) => {
+            effects::reflog_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
             external_and_history::rebase_state_loaded(state, repo_id, result)
         }
-        Msg::MergeCommitMessageLoaded { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }
-        Msg::FileHistoryLoaded {
+        Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
             repo_id,
             path,
             result,
-        } => effects::file_history_loaded(state, repo_id, path, result),
-        Msg::BlameLoaded {
+        }) => effects::file_history_loaded(state, repo_id, path, result),
+        Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
             rev,
             result,
-        } => effects::blame_loaded(state, repo_id, path, rev, result),
-        Msg::ConflictFileLoaded {
+        }) => effects::blame_loaded(state, repo_id, path, rev, result),
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path,
             result,
             conflict_session,
-        } => effects::conflict_file_loaded(state, repo_id, path, *result, conflict_session),
-        Msg::WorktreesLoaded { repo_id, result } => {
+        }) => effects::conflict_file_loaded(state, repo_id, path, *result, conflict_session),
+        Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
         }
-        Msg::SubmodulesLoaded { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)
         }
-        Msg::CommitDetailsLoaded {
+        Msg::Internal(crate::msg::InternalMsg::CommitDetailsLoaded {
             repo_id,
             commit_id,
             result,
-        } => effects::commit_details_loaded(state, repo_id, commit_id, result),
-        Msg::DiffLoaded {
+        }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id,
             target,
             result,
-        } => diff_selection::diff_loaded(state, repo_id, target, result),
-        Msg::DiffFileLoaded {
+        }) => diff_selection::diff_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id,
             target,
             result,
-        } => diff_selection::diff_file_loaded(state, repo_id, target, result),
-        Msg::DiffFileImageLoaded {
+        }) => diff_selection::diff_file_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id,
             target,
             result,
-        } => diff_selection::diff_file_image_loaded(state, repo_id, target, result),
-        Msg::RepoActionFinished { repo_id, result } => {
+        }) => diff_selection::diff_file_image_loaded(state, repo_id, target, result),
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }) => {
             external_and_history::repo_action_finished(state, repo_id, result)
         }
-        Msg::CommitFinished { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             actions_emit_effects::commit_finished(state, repo_id, result)
         }
-        Msg::CommitAmendFinished { repo_id, result } => {
+        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result }) => {
             actions_emit_effects::commit_amend_finished(state, repo_id, result)
         }
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command,
             result,
-        } => {
+        }) => {
             let removed_worktree_path = match (&command, &result) {
                 (RepoCommandKind::RemoveWorktree { path }, Ok(_)) => Some(path.clone()),
                 _ => None,

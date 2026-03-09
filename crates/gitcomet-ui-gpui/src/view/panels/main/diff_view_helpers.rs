@@ -3,7 +3,7 @@ use super::*;
 impl MainPaneView {
     pub(super) fn diff_panel_title(&self, theme: AppTheme) -> AnyElement {
         self.active_repo()
-            .and_then(|r| r.diff_target.as_ref())
+            .and_then(|r| r.diff_state.diff_target.as_ref())
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
                 {
@@ -99,7 +99,8 @@ impl MainPaneView {
         let buttons = (|| {
             let repo_id = repo_id?;
             let repo = self.active_repo()?;
-            let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+            let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
+            else {
                 return None;
             };
             let area = *area;

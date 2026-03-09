@@ -79,15 +79,15 @@ impl MainPaneView {
             for (col, highlights_vec) in [
                 (
                     ThreeWayColumn::Base,
-                    &this.conflict_resolver.three_way_word_highlights_base,
+                    &this.conflict_resolver.three_way_word_highlights.base,
                 ),
                 (
                     ThreeWayColumn::Ours,
-                    &this.conflict_resolver.three_way_word_highlights_ours,
+                    &this.conflict_resolver.three_way_word_highlights.ours,
                 ),
                 (
                     ThreeWayColumn::Theirs,
-                    &this.conflict_resolver.three_way_word_highlights_theirs,
+                    &this.conflict_resolver.three_way_word_highlights.theirs,
                 ),
             ] {
                 if this
@@ -104,19 +104,22 @@ impl MainPaneView {
                 let text = match col {
                     ThreeWayColumn::Base => this
                         .conflict_resolver
-                        .three_way_base_lines
+                        .three_way_lines
+                        .base
                         .get(ix)
                         .map(|s| s.as_ref())
                         .unwrap_or(""),
                     ThreeWayColumn::Ours => this
                         .conflict_resolver
-                        .three_way_ours_lines
+                        .three_way_lines
+                        .ours
                         .get(ix)
                         .map(|s| s.as_ref())
                         .unwrap_or(""),
                     ThreeWayColumn::Theirs => this
                         .conflict_resolver
-                        .three_way_theirs_lines
+                        .three_way_lines
+                        .theirs
                         .get(ix)
                         .map(|s| s.as_ref())
                         .unwrap_or(""),
@@ -237,26 +240,29 @@ impl MainPaneView {
                     elements.push(collapsed.into_any_element());
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-                    let base_line = this.conflict_resolver.three_way_base_lines.get(ix);
-                    let ours_line = this.conflict_resolver.three_way_ours_lines.get(ix);
-                    let theirs_line = this.conflict_resolver.three_way_theirs_lines.get(ix);
+                    let base_line = this.conflict_resolver.three_way_lines.base.get(ix);
+                    let ours_line = this.conflict_resolver.three_way_lines.ours.get(ix);
+                    let theirs_line = this.conflict_resolver.three_way_lines.theirs.get(ix);
                     let base_range_ix = this
                         .conflict_resolver
-                        .three_way_base_line_conflict_map
+                        .three_way_line_conflict_map
+                        .base
                         .get(ix)
                         .copied()
                         .flatten()
                         .filter(|_| base_line.is_some());
                     let ours_range_ix = this
                         .conflict_resolver
-                        .three_way_ours_line_conflict_map
+                        .three_way_line_conflict_map
+                        .ours
                         .get(ix)
                         .copied()
                         .flatten()
                         .filter(|_| ours_line.is_some());
                     let theirs_range_ix = this
                         .conflict_resolver
-                        .three_way_theirs_line_conflict_map
+                        .three_way_line_conflict_map
+                        .theirs
                         .get(ix)
                         .copied()
                         .flatten()
@@ -528,24 +534,46 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let context_menu_invoker: SharedString =
+                        let chunk_menu_invoker: SharedString =
                             format!("resolver_three_way_base_chunk_menu_{}_{}", conflict_ix, ix)
                                 .into();
+                        let input_menu_invoker: SharedString =
+                            format!("resolver_three_way_base_input_menu_{}_{}", conflict_ix, ix)
+                                .into();
+                        let (line_label, line_target, chunk_label, chunk_target) =
+                            three_way_input_row_menu_targets(
+                                ix,
+                                conflict_ix,
+                                conflict_resolver::ConflictChoice::Base,
+                            );
                         base = base.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.open_conflict_resolver_chunk_context_menu(
-                                    context_menu_invoker.clone(),
-                                    conflict_ix,
-                                    has_base,
-                                    true,
-                                    selected_choices.clone(),
-                                    None,
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
+                                if e.modifiers.shift {
+                                    this.open_conflict_resolver_input_row_context_menu(
+                                        input_menu_invoker.clone(),
+                                        line_label.clone(),
+                                        line_target.clone(),
+                                        chunk_label.clone(),
+                                        chunk_target.clone(),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    this.open_conflict_resolver_chunk_context_menu(
+                                        chunk_menu_invoker.clone(),
+                                        conflict_ix,
+                                        has_base,
+                                        true,
+                                        selected_choices.clone(),
+                                        None,
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             }),
                         );
                     }
@@ -558,24 +586,46 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let context_menu_invoker: SharedString =
+                        let chunk_menu_invoker: SharedString =
                             format!("resolver_three_way_ours_chunk_menu_{}_{}", conflict_ix, ix)
                                 .into();
+                        let input_menu_invoker: SharedString =
+                            format!("resolver_three_way_ours_input_menu_{}_{}", conflict_ix, ix)
+                                .into();
+                        let (line_label, line_target, chunk_label, chunk_target) =
+                            three_way_input_row_menu_targets(
+                                ix,
+                                conflict_ix,
+                                conflict_resolver::ConflictChoice::Ours,
+                            );
                         ours = ours.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.open_conflict_resolver_chunk_context_menu(
-                                    context_menu_invoker.clone(),
-                                    conflict_ix,
-                                    has_base,
-                                    true,
-                                    selected_choices.clone(),
-                                    None,
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
+                                if e.modifiers.shift {
+                                    this.open_conflict_resolver_input_row_context_menu(
+                                        input_menu_invoker.clone(),
+                                        line_label.clone(),
+                                        line_target.clone(),
+                                        chunk_label.clone(),
+                                        chunk_target.clone(),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    this.open_conflict_resolver_chunk_context_menu(
+                                        chunk_menu_invoker.clone(),
+                                        conflict_ix,
+                                        has_base,
+                                        true,
+                                        selected_choices.clone(),
+                                        None,
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             }),
                         );
                     }
@@ -588,26 +638,50 @@ impl MainPaneView {
                             .unwrap_or(false);
                         let selected_choices =
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-                        let context_menu_invoker: SharedString = format!(
+                        let chunk_menu_invoker: SharedString = format!(
                             "resolver_three_way_theirs_chunk_menu_{}_{}",
                             conflict_ix, ix
                         )
                         .into();
+                        let input_menu_invoker: SharedString = format!(
+                            "resolver_three_way_theirs_input_menu_{}_{}",
+                            conflict_ix, ix
+                        )
+                        .into();
+                        let (line_label, line_target, chunk_label, chunk_target) =
+                            three_way_input_row_menu_targets(
+                                ix,
+                                conflict_ix,
+                                conflict_resolver::ConflictChoice::Theirs,
+                            );
                         theirs = theirs.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.open_conflict_resolver_chunk_context_menu(
-                                    context_menu_invoker.clone(),
-                                    conflict_ix,
-                                    has_base,
-                                    true,
-                                    selected_choices.clone(),
-                                    None,
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
+                                if e.modifiers.shift {
+                                    this.open_conflict_resolver_input_row_context_menu(
+                                        input_menu_invoker.clone(),
+                                        line_label.clone(),
+                                        line_target.clone(),
+                                        chunk_label.clone(),
+                                        chunk_target.clone(),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    this.open_conflict_resolver_chunk_context_menu(
+                                        chunk_menu_invoker.clone(),
+                                        conflict_ix,
+                                        has_base,
+                                        true,
+                                        selected_choices.clone(),
+                                        None,
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             }),
                         );
                     }
@@ -1487,26 +1561,46 @@ impl MainPaneView {
                 .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-            let context_menu_invoker: SharedString = format!(
+            let chunk_menu_invoker: SharedString = format!(
                 "resolver_two_way_split_ours_chunk_menu_{}_{}",
                 conflict_ix, row_ix
             )
             .into();
+            let input_menu_invoker: SharedString = format!(
+                "resolver_two_way_split_ours_input_menu_{}_{}",
+                conflict_ix, row_ix
+            )
+            .into();
+            let (line_label, line_target, chunk_label, chunk_target) =
+                two_way_split_input_row_menu_targets(row_ix, conflict_ix, ConflictPickSide::Ours);
             left = left.on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    this.open_conflict_resolver_chunk_context_menu(
-                        context_menu_invoker.clone(),
-                        conflict_ix,
-                        has_base,
-                        false,
-                        selected_choices.clone(),
-                        None,
-                        e.position,
-                        window,
-                        cx,
-                    );
+                    if e.modifiers.shift {
+                        this.open_conflict_resolver_input_row_context_menu(
+                            input_menu_invoker.clone(),
+                            line_label.clone(),
+                            line_target.clone(),
+                            chunk_label.clone(),
+                            chunk_target.clone(),
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    } else {
+                        this.open_conflict_resolver_chunk_context_menu(
+                            chunk_menu_invoker.clone(),
+                            conflict_ix,
+                            has_base,
+                            false,
+                            selected_choices.clone(),
+                            None,
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    }
                 }),
             );
         }
@@ -1545,26 +1639,46 @@ impl MainPaneView {
                 .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-            let context_menu_invoker: SharedString = format!(
+            let chunk_menu_invoker: SharedString = format!(
                 "resolver_two_way_split_theirs_chunk_menu_{}_{}",
                 conflict_ix, row_ix
             )
             .into();
+            let input_menu_invoker: SharedString = format!(
+                "resolver_two_way_split_theirs_input_menu_{}_{}",
+                conflict_ix, row_ix
+            )
+            .into();
+            let (line_label, line_target, chunk_label, chunk_target) =
+                two_way_split_input_row_menu_targets(row_ix, conflict_ix, ConflictPickSide::Theirs);
             right = right.on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    this.open_conflict_resolver_chunk_context_menu(
-                        context_menu_invoker.clone(),
-                        conflict_ix,
-                        has_base,
-                        false,
-                        selected_choices.clone(),
-                        None,
-                        e.position,
-                        window,
-                        cx,
-                    );
+                    if e.modifiers.shift {
+                        this.open_conflict_resolver_input_row_context_menu(
+                            input_menu_invoker.clone(),
+                            line_label.clone(),
+                            line_target.clone(),
+                            chunk_label.clone(),
+                            chunk_target.clone(),
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    } else {
+                        this.open_conflict_resolver_chunk_context_menu(
+                            chunk_menu_invoker.clone(),
+                            conflict_ix,
+                            has_base,
+                            false,
+                            selected_choices.clone(),
+                            None,
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    }
                 }),
             );
         }
@@ -1705,23 +1819,40 @@ impl MainPaneView {
                 .unwrap_or(false);
             let selected_choices =
                 self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
-            let context_menu_invoker: SharedString =
+            let chunk_menu_invoker: SharedString =
                 format!("resolver_two_way_inline_chunk_menu_{}_{}", conflict_ix, ix).into();
+            let input_menu_invoker: SharedString =
+                format!("resolver_two_way_inline_input_menu_{}_{}", conflict_ix, ix).into();
+            let (line_label, line_target, chunk_label, chunk_target) =
+                two_way_inline_input_row_menu_targets(ix, conflict_ix, row.side);
             base = base.on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                     cx.stop_propagation();
-                    this.open_conflict_resolver_chunk_context_menu(
-                        context_menu_invoker.clone(),
-                        conflict_ix,
-                        has_base,
-                        false,
-                        selected_choices.clone(),
-                        None,
-                        e.position,
-                        window,
-                        cx,
-                    );
+                    if e.modifiers.shift {
+                        this.open_conflict_resolver_input_row_context_menu(
+                            input_menu_invoker.clone(),
+                            line_label.clone(),
+                            line_target.clone(),
+                            chunk_label.clone(),
+                            chunk_target.clone(),
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    } else {
+                        this.open_conflict_resolver_chunk_context_menu(
+                            chunk_menu_invoker.clone(),
+                            conflict_ix,
+                            has_base,
+                            false,
+                            selected_choices.clone(),
+                            None,
+                            e.position,
+                            window,
+                            cx,
+                        );
+                    }
                 }),
             );
         }
@@ -1868,6 +1999,100 @@ fn resolved_output_source_badge_colors(
     }
 }
 
+fn three_way_choice_short_label(choice: conflict_resolver::ConflictChoice) -> &'static str {
+    match choice {
+        conflict_resolver::ConflictChoice::Base => "A",
+        conflict_resolver::ConflictChoice::Ours => "B",
+        conflict_resolver::ConflictChoice::Theirs => "C",
+        conflict_resolver::ConflictChoice::Both => "B+C",
+    }
+}
+
+fn two_way_side_label(side: ConflictPickSide) -> &'static str {
+    match side {
+        ConflictPickSide::Ours => "local",
+        ConflictPickSide::Theirs => "remote",
+    }
+}
+
+fn two_way_choice_for_side(side: ConflictPickSide) -> conflict_resolver::ConflictChoice {
+    match side {
+        ConflictPickSide::Ours => conflict_resolver::ConflictChoice::Ours,
+        ConflictPickSide::Theirs => conflict_resolver::ConflictChoice::Theirs,
+    }
+}
+
+fn three_way_input_row_menu_targets(
+    line_ix: usize,
+    conflict_ix: usize,
+    choice: conflict_resolver::ConflictChoice,
+) -> (
+    SharedString,
+    ResolverPickTarget,
+    SharedString,
+    ResolverPickTarget,
+) {
+    let label = three_way_choice_short_label(choice);
+    (
+        format!("Pick this line ({label})").into(),
+        ResolverPickTarget::ThreeWayLine { line_ix, choice },
+        format!("Pick this chunk ({label})").into(),
+        ResolverPickTarget::Chunk {
+            conflict_ix,
+            choice,
+            output_line_ix: None,
+        },
+    )
+}
+
+fn two_way_split_input_row_menu_targets(
+    row_ix: usize,
+    conflict_ix: usize,
+    side: ConflictPickSide,
+) -> (
+    SharedString,
+    ResolverPickTarget,
+    SharedString,
+    ResolverPickTarget,
+) {
+    let side_label = two_way_side_label(side);
+    let choice = two_way_choice_for_side(side);
+    (
+        format!("Pick this line ({side_label})").into(),
+        ResolverPickTarget::TwoWaySplitLine { row_ix, side },
+        format!("Pick this chunk ({side_label})").into(),
+        ResolverPickTarget::Chunk {
+            conflict_ix,
+            choice,
+            output_line_ix: None,
+        },
+    )
+}
+
+fn two_way_inline_input_row_menu_targets(
+    row_ix: usize,
+    conflict_ix: usize,
+    side: ConflictPickSide,
+) -> (
+    SharedString,
+    ResolverPickTarget,
+    SharedString,
+    ResolverPickTarget,
+) {
+    let side_label = two_way_side_label(side);
+    let choice = two_way_choice_for_side(side);
+    (
+        format!("Pick this line ({side_label})").into(),
+        ResolverPickTarget::TwoWayInlineLine { row_ix },
+        format!("Pick this chunk ({side_label})").into(),
+        ResolverPickTarget::Chunk {
+            conflict_ix,
+            choice,
+            output_line_ix: None,
+        },
+    )
+}
+
 fn split_cell_bg(
     theme: AppTheme,
     kind: gitcomet_core::file_diff::FileDiffRowKind,
@@ -1947,5 +2172,74 @@ mod tests {
     fn whitespace_visible_text_marks_all_whitespace_kinds() {
         let display = whitespace_visible_text(" \t\r\n");
         assert_eq!(display.as_ref(), "·→␍↵");
+    }
+
+    #[test]
+    fn three_way_input_row_targets_include_line_and_chunk_picks() {
+        let (line_label, line_target, chunk_label, chunk_target) =
+            three_way_input_row_menu_targets(4, 2, conflict_resolver::ConflictChoice::Theirs);
+
+        assert_eq!(line_label.as_ref(), "Pick this line (C)");
+        assert_eq!(chunk_label.as_ref(), "Pick this chunk (C)");
+        assert_eq!(
+            line_target,
+            ResolverPickTarget::ThreeWayLine {
+                line_ix: 4,
+                choice: conflict_resolver::ConflictChoice::Theirs,
+            }
+        );
+        assert_eq!(
+            chunk_target,
+            ResolverPickTarget::Chunk {
+                conflict_ix: 2,
+                choice: conflict_resolver::ConflictChoice::Theirs,
+                output_line_ix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn two_way_split_input_row_targets_map_side_to_split_line_and_chunk_choice() {
+        let (line_label, line_target, chunk_label, chunk_target) =
+            two_way_split_input_row_menu_targets(9, 5, ConflictPickSide::Ours);
+
+        assert_eq!(line_label.as_ref(), "Pick this line (local)");
+        assert_eq!(chunk_label.as_ref(), "Pick this chunk (local)");
+        assert_eq!(
+            line_target,
+            ResolverPickTarget::TwoWaySplitLine {
+                row_ix: 9,
+                side: ConflictPickSide::Ours,
+            }
+        );
+        assert_eq!(
+            chunk_target,
+            ResolverPickTarget::Chunk {
+                conflict_ix: 5,
+                choice: conflict_resolver::ConflictChoice::Ours,
+                output_line_ix: None,
+            }
+        );
+    }
+
+    #[test]
+    fn two_way_inline_input_row_targets_map_side_to_inline_line_and_chunk_choice() {
+        let (line_label, line_target, chunk_label, chunk_target) =
+            two_way_inline_input_row_menu_targets(6, 3, ConflictPickSide::Theirs);
+
+        assert_eq!(line_label.as_ref(), "Pick this line (remote)");
+        assert_eq!(chunk_label.as_ref(), "Pick this chunk (remote)");
+        assert_eq!(
+            line_target,
+            ResolverPickTarget::TwoWayInlineLine { row_ix: 6 }
+        );
+        assert_eq!(
+            chunk_target,
+            ResolverPickTarget::Chunk {
+                conflict_ix: 3,
+                choice: conflict_resolver::ConflictChoice::Theirs,
+                output_line_ix: None,
+            }
+        );
     }
 }

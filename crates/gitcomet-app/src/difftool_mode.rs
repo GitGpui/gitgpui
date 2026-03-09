@@ -77,6 +77,94 @@ struct PreparedDiffInputs {
     _tempdir: Option<TempDir>,
 }
 
+const MAX_STAGED_ENTRY_COUNT: usize = 100_000;
+const MAX_STAGED_FILE_COUNT: usize = 50_000;
+const MAX_STAGED_BYTE_COUNT: u64 = 512 * 1024 * 1024;
+const MAX_STAGING_DEPTH: usize = 128;
+
+struct StagingCopyState {
+    allowed_roots: Vec<PathBuf>,
+    active_dirs: HashSet<PathBuf>,
+    staged_entries: usize,
+    staged_files: usize,
+    staged_bytes: u64,
+}
+
+impl StagingCopyState {
+    fn new(allowed_roots: Vec<PathBuf>) -> Self {
+        Self {
+            allowed_roots,
+            active_dirs: HashSet::new(),
+            staged_entries: 0,
+            staged_files: 0,
+            staged_bytes: 0,
+        }
+    }
+
+    fn ensure_within_allowed_roots(
+        &self,
+        canonical_path: &Path,
+        source_path: &Path,
+    ) -> Result<(), String> {
+        if self
+            .allowed_roots
+            .iter()
+            .any(|root| canonical_path.starts_with(root))
+        {
+            return Ok(());
+        }
+
+        let allowed_roots = self
+            .allowed_roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(format!(
+            "Refusing to dereference path outside allowed roots while staging directory diff inputs: {} resolved to {} (allowed roots: {allowed_roots})",
+            source_path.display(),
+            canonical_path.display()
+        ))
+    }
+
+    fn record_entry(&mut self, path: &Path) -> Result<(), String> {
+        self.staged_entries = self.staged_entries.checked_add(1).ok_or_else(|| {
+            "Entry counter overflow while staging directory diff inputs".to_string()
+        })?;
+        if self.staged_entries > MAX_STAGED_ENTRY_COUNT {
+            return Err(format!(
+                "Refusing to stage directory diff inputs: exceeded entry limit ({MAX_STAGED_ENTRY_COUNT}) at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn record_staged_file(&mut self, path: &Path, bytes: u64) -> Result<(), String> {
+        self.staged_files = self.staged_files.checked_add(1).ok_or_else(|| {
+            "File counter overflow while staging directory diff inputs".to_string()
+        })?;
+        if self.staged_files > MAX_STAGED_FILE_COUNT {
+            return Err(format!(
+                "Refusing to stage directory diff inputs: exceeded file limit ({MAX_STAGED_FILE_COUNT}) at {}",
+                path.display()
+            ));
+        }
+
+        self.staged_bytes = self.staged_bytes.checked_add(bytes).ok_or_else(|| {
+            "Byte counter overflow while staging directory diff inputs".to_string()
+        })?;
+        if self.staged_bytes > MAX_STAGED_BYTE_COUNT {
+            return Err(format!(
+                "Refusing to stage directory diff inputs: exceeded byte limit ({MAX_STAGED_BYTE_COUNT}) at {}",
+                path.display()
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, String> {
     let local_kind = classify_difftool_input(&config.local, "Local")?;
     let remote_kind = classify_difftool_input(&config.remote, "Remote")?;
@@ -84,12 +172,22 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
     if local_kind != remote_kind {
         return Err(format!(
             "Difftool input kind mismatch: local is a {} and remote is a {}. Use two files or two directories.",
-            display_input_kind(local_kind),
-            display_input_kind(remote_kind)
+            local_kind.display_name(),
+            remote_kind.display_name()
         ));
     }
 
     if local_kind != DifftoolInputKind::Directory {
+        return Ok(PreparedDiffInputs {
+            local: config.local.clone(),
+            remote: config.remote.clone(),
+            _tempdir: None,
+        });
+    }
+
+    let local_contains_symlink = directory_tree_contains_symlink(&config.local)?;
+    let remote_contains_symlink = directory_tree_contains_symlink(&config.remote)?;
+    if !local_contains_symlink && !remote_contains_symlink {
         return Ok(PreparedDiffInputs {
             local: config.local.clone(),
             remote: config.remote.clone(),
@@ -104,8 +202,10 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
 
     let staged_local = tempdir.path().join("left");
     let staged_remote = tempdir.path().join("right");
-    copy_tree_dereferencing_symlinks(&config.local, &staged_local)?;
-    copy_tree_dereferencing_symlinks(&config.remote, &staged_remote)?;
+    let allowed_roots = resolve_allowed_staging_roots(&config.local, &config.remote)?;
+    let mut staging_state = StagingCopyState::new(allowed_roots);
+    copy_tree_dereferencing_symlinks(&config.local, &staged_local, &mut staging_state)?;
+    copy_tree_dereferencing_symlinks(&config.remote, &staged_remote, &mut staging_state)?;
 
     Ok(PreparedDiffInputs {
         local: staged_local,
@@ -114,45 +214,143 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
     })
 }
 
-fn display_input_kind(kind: DifftoolInputKind) -> &'static str {
-    match kind {
-        DifftoolInputKind::Directory => "directory",
-        DifftoolInputKind::FileLike => "file",
+fn push_unique_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
+    if !roots.iter().any(|existing| existing == &root) {
+        roots.push(root);
     }
 }
 
-fn copy_tree_dereferencing_symlinks(src: &Path, dst: &Path) -> Result<(), String> {
-    let mut active_dirs = HashSet::new();
-    copy_tree_dereferencing_symlinks_inner(src, dst, &mut active_dirs)
+fn find_git_root(start: &Path) -> Option<PathBuf> {
+    let start_dir = if start.is_dir() {
+        start
+    } else {
+        start.parent()?
+    };
+    for candidate in start_dir.ancestors() {
+        if candidate.join(".git").exists() {
+            return Some(fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()));
+        }
+    }
+    None
+}
+
+fn resolve_allowed_staging_roots(local: &Path, remote: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut roots = Vec::new();
+
+    for (label, path) in [("local", local), ("remote", remote)] {
+        let canonical = fs::canonicalize(path).map_err(|e| {
+            format!(
+                "Failed to resolve {label} directory {} while preparing directory diff staging boundaries: {e}",
+                path.display()
+            )
+        })?;
+        push_unique_root(&mut roots, canonical.clone());
+        if let Some(repo_root) = find_git_root(&canonical) {
+            push_unique_root(&mut roots, repo_root);
+        }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(repo_root) = find_git_root(&cwd) {
+            push_unique_root(&mut roots, repo_root);
+        }
+    }
+
+    Ok(roots)
+}
+
+fn directory_tree_contains_symlink(path: &Path) -> Result<bool, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|e| {
+        format!(
+            "Failed to read metadata for directory diff input {}: {e}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Ok(true);
+    }
+    directory_tree_contains_symlink_inner(path, 0)
+}
+
+fn directory_tree_contains_symlink_inner(path: &Path, depth: usize) -> Result<bool, String> {
+    if depth > MAX_STAGING_DEPTH {
+        return Err(format!(
+            "Refusing to inspect directory diff input for symlinks: exceeded recursion depth limit ({MAX_STAGING_DEPTH}) at {}",
+            path.display()
+        ));
+    }
+
+    let entries = fs::read_dir(path).map_err(|e| {
+        format!(
+            "Failed to read directory {} while inspecting for symlinks: {e}",
+            path.display()
+        )
+    })?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("Failed to read entry in {}: {e}", path.display()))?;
+        let entry_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to read file type for {}: {e}", entry_path.display()))?;
+
+        if file_type.is_symlink() {
+            return Ok(true);
+        }
+
+        if file_type.is_dir() && directory_tree_contains_symlink_inner(&entry_path, depth + 1)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn copy_tree_dereferencing_symlinks(
+    src: &Path,
+    dst: &Path,
+    staging_state: &mut StagingCopyState,
+) -> Result<(), String> {
+    copy_tree_dereferencing_symlinks_inner(src, dst, staging_state, 0)
 }
 
 fn copy_tree_dereferencing_symlinks_inner(
     src: &Path,
     dst: &Path,
-    active_dirs: &mut HashSet<PathBuf>,
+    staging_state: &mut StagingCopyState,
+    depth: usize,
 ) -> Result<(), String> {
+    if depth > MAX_STAGING_DEPTH {
+        return Err(format!(
+            "Refusing to stage directory diff inputs: exceeded recursion depth limit ({MAX_STAGING_DEPTH}) at {}",
+            src.display()
+        ));
+    }
+
     let canonical_src = fs::canonicalize(src).map_err(|e| {
         format!(
             "Failed to resolve directory {} while staging directory diff inputs: {e}",
             src.display()
         )
     })?;
-    if !active_dirs.insert(canonical_src.clone()) {
+    staging_state.ensure_within_allowed_roots(&canonical_src, src)?;
+    if !staging_state.active_dirs.insert(canonical_src.clone()) {
         return Err(format!(
             "Detected symlink cycle while staging directory diff inputs at {}",
             src.display()
         ));
     }
 
-    let result = copy_tree_dereferencing_symlinks_impl(src, dst, active_dirs);
-    active_dirs.remove(&canonical_src);
+    let result = copy_tree_dereferencing_symlinks_impl(src, dst, staging_state, depth);
+    staging_state.active_dirs.remove(&canonical_src);
     result
 }
 
 fn copy_tree_dereferencing_symlinks_impl(
     src: &Path,
     dst: &Path,
-    active_dirs: &mut HashSet<PathBuf>,
+    staging_state: &mut StagingCopyState,
+    depth: usize,
 ) -> Result<(), String> {
     fs::create_dir_all(dst)
         .map_err(|e| format!("Failed to create staged directory {}: {e}", dst.display()))?;
@@ -163,21 +361,26 @@ fn copy_tree_dereferencing_symlinks_impl(
         let entry = entry.map_err(|e| format!("Failed to read entry in {}: {e}", src.display()))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
+        staging_state.record_entry(&src_path)?;
         let file_type = entry
             .file_type()
             .map_err(|e| format!("Failed to read file type for {}: {e}", src_path.display()))?;
 
         if file_type.is_dir() {
-            copy_tree_dereferencing_symlinks_inner(&src_path, &dst_path, active_dirs)?;
+            copy_tree_dereferencing_symlinks_inner(&src_path, &dst_path, staging_state, depth + 1)?;
             continue;
         }
 
         if file_type.is_symlink() {
-            copy_symlink_target_contents(&src_path, &dst_path, active_dirs)?;
+            copy_symlink_target_contents(&src_path, &dst_path, staging_state, depth + 1)?;
             continue;
         }
 
         if file_type.is_file() {
+            let metadata = entry
+                .metadata()
+                .map_err(|e| format!("Failed to read metadata for {}: {e}", src_path.display()))?;
+            staging_state.record_staged_file(&src_path, metadata.len())?;
             fs::copy(&src_path, &dst_path).map_err(|e| {
                 format!(
                     "Failed to stage file {} to {}: {e}",
@@ -200,7 +403,8 @@ fn copy_tree_dereferencing_symlinks_impl(
 fn copy_symlink_target_contents(
     link_path: &Path,
     dst_path: &Path,
-    active_dirs: &mut HashSet<PathBuf>,
+    staging_state: &mut StagingCopyState,
+    depth: usize,
 ) -> Result<(), String> {
     let target = fs::read_link(link_path)
         .map_err(|e| format!("Failed to read symlink target {}: {e}", link_path.display()))?;
@@ -213,20 +417,51 @@ fn copy_symlink_target_contents(
             .join(&target)
     };
 
-    match fs::metadata(&resolved_target) {
+    let canonical_target = match fs::canonicalize(&resolved_target) {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            staging_state
+                .record_staged_file(link_path, serialized_symlink_target_byte_len(&target))?;
+            write_symlink_target(dst_path, &target).map_err(|e| {
+                format!(
+                    "Failed to materialize unresolved symlink {} into {}: {e}",
+                    link_path.display(),
+                    dst_path.display()
+                )
+            })?;
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(format!(
+                "Failed to resolve symlink target {}: {e}",
+                link_path.display()
+            ));
+        }
+    };
+    staging_state.ensure_within_allowed_roots(&canonical_target, link_path)?;
+
+    match fs::metadata(&canonical_target) {
         Ok(meta) if meta.is_file() => {
-            fs::copy(&resolved_target, dst_path).map_err(|e| {
+            staging_state.record_staged_file(&canonical_target, meta.len())?;
+            fs::copy(&canonical_target, dst_path).map_err(|e| {
                 format!(
                     "Failed to stage symlink target file {} to {}: {e}",
-                    resolved_target.display(),
+                    canonical_target.display(),
                     dst_path.display()
                 )
             })?;
         }
         Ok(meta) if meta.is_dir() => {
-            copy_tree_dereferencing_symlinks_inner(&resolved_target, dst_path, active_dirs)?;
+            copy_tree_dereferencing_symlinks_inner(
+                &canonical_target,
+                dst_path,
+                staging_state,
+                depth,
+            )?;
         }
         _ => {
+            staging_state
+                .record_staged_file(link_path, serialized_symlink_target_byte_len(&target))?;
             write_symlink_target(dst_path, &target).map_err(|e| {
                 format!(
                     "Failed to materialize unresolved symlink {} into {}: {e}",
@@ -238,6 +473,18 @@ fn copy_symlink_target_contents(
     }
 
     Ok(())
+}
+
+fn serialized_symlink_target_byte_len(target: &Path) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        target.as_os_str().as_bytes().len() as u64
+    }
+    #[cfg(not(unix))]
+    {
+        target.to_string_lossy().as_bytes().len() as u64
+    }
 }
 
 /// Write symlink target path bytes to a file, preserving non-UTF-8 content on Unix.
@@ -468,6 +715,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn prepare_diff_inputs_directory_without_symlinks_skips_staging_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        write_file(&left.join("a.txt"), "left\n");
+        write_file(&right.join("a.txt"), "right\n");
+
+        let prepared =
+            prepare_diff_inputs(&config(left.clone(), right.clone())).expect("prepare inputs");
+        assert_eq!(prepared.local, left);
+        assert_eq!(prepared.remote, right);
+        assert!(prepared._tempdir.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepare_diff_inputs_directory_with_symlink_uses_staging_copy() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        write_file(&left.join("a.txt"), "before\n");
+        write_file(&right.join("target.txt"), "after\n");
+        unix_fs::symlink(right.join("target.txt"), right.join("a.txt"))
+            .expect("create symlink in right dir");
+
+        let prepared =
+            prepare_diff_inputs(&config(left.clone(), right.clone())).expect("prepare inputs");
+        assert_ne!(prepared.local, left);
+        assert_ne!(prepared.remote, right);
+        assert!(prepared._tempdir.is_some());
+
+        let tempdir = prepared._tempdir.as_ref().unwrap();
+        assert!(prepared.local.starts_with(tempdir.path()));
+        assert!(prepared.remote.starts_with(tempdir.path()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn run_difftool_directory_diff_dereferences_symlinked_files() {
@@ -549,6 +839,60 @@ mod tests {
         assert!(
             err.contains("symlink cycle"),
             "expected cycle-specific error, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_diff_rejects_symlink_target_outside_allowed_roots() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let left = tmp.path().join("left");
+        let right = tmp.path().join("right");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        write_file(&left.join("a.txt"), "left\n");
+        write_file(&outside.join("secret.txt"), "outside\n");
+        unix_fs::symlink(outside.join("secret.txt"), right.join("a.txt"))
+            .expect("create out-of-bound symlink");
+
+        let err = run_difftool(&config(left, right)).expect_err("expected allowed-root error");
+        assert!(
+            err.contains("outside allowed roots"),
+            "expected allowed-root-specific error, got: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn run_difftool_directory_diff_allows_symlink_target_within_detected_git_root() {
+        use std::os::unix::fs as unix_fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("repo");
+        let left = repo_root.join("left");
+        let right = repo_root.join("right");
+        let shared = repo_root.join("shared");
+        std::fs::create_dir_all(repo_root.join(".git")).unwrap();
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+
+        write_file(&left.join("a.txt"), "before\n");
+        write_file(&shared.join("target.txt"), "after\n");
+        unix_fs::symlink(shared.join("target.txt"), right.join("a.txt"))
+            .expect("create in-repo symlink");
+
+        let result = run_difftool(&config(left, right)).expect("difftool run");
+        assert_eq!(result.exit_code, exit_code::SUCCESS);
+        assert!(
+            result.stdout.contains("-before") && result.stdout.contains("+after"),
+            "expected dereferenced in-repo symlink content diff, got: {}",
+            result.stdout
         );
     }
 

@@ -35,7 +35,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin_src="${repo_root}/target/${mode}/gitcomet-app"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
-  (cd "$repo_root" && cargo build -p gitcomet-app --${mode})
+  cargo_mode_flag=()
+  if [[ "$mode" == "release" ]]; then
+    cargo_mode_flag=(--release)
+  fi
+  (cd "$repo_root" && cargo build -p gitcomet-app "${cargo_mode_flag[@]}")
 fi
 
 if [[ ! -x "$bin_src" ]]; then

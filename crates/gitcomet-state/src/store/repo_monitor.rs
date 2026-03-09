@@ -2,12 +2,13 @@ use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange};
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::any::Any;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -103,26 +104,6 @@ pub(super) fn join_monitor_for_test(
     context: &'static str,
 ) {
     join_monitor_or_log(join, repo_id, context);
-}
-
-fn canonicalize_path(path: PathBuf) -> PathBuf {
-    strip_windows_verbatim_prefix(path.canonicalize().unwrap_or(path))
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\UNC\")) {
-        return Path::new(r"\\").join(stripped);
-    }
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\")) {
-        return stripped.to_path_buf();
-    }
-    path
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -263,10 +244,21 @@ struct IgnoreCacheKey {
     is_dir_hint: Option<bool>,
 }
 
+const GITIGNORE_CACHE_MAX_ENTRIES: usize = 4_096;
+const GITIGNORE_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const GITIGNORE_CACHE_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+struct CachedIgnoreResult {
+    ignored: bool,
+    cached_at: Instant,
+}
+
 #[derive(Clone, Default)]
 struct GitignoreRules {
     workdir: Option<PathBuf>,
-    cache: HashMap<IgnoreCacheKey, bool>,
+    cache: HashMap<IgnoreCacheKey, CachedIgnoreResult>,
+    last_prune_at: Option<Instant>,
 }
 
 impl GitignoreRules {
@@ -274,25 +266,139 @@ impl GitignoreRules {
         Self {
             workdir: Some(workdir.to_path_buf()),
             cache: HashMap::default(),
+            last_prune_at: None,
         }
     }
 
+    fn is_cache_entry_fresh(now: Instant, entry: &CachedIgnoreResult) -> bool {
+        now.saturating_duration_since(entry.cached_at) <= GITIGNORE_CACHE_TTL
+    }
+
+    fn prune_cache_if_due(&mut self, now: Instant) {
+        let should_prune = match self.last_prune_at {
+            Some(last_prune_at) => {
+                now.saturating_duration_since(last_prune_at) >= GITIGNORE_CACHE_PRUNE_INTERVAL
+                    || self.cache.len() > GITIGNORE_CACHE_MAX_ENTRIES
+            }
+            None => true,
+        };
+
+        if should_prune {
+            self.prune_cache(now);
+        }
+    }
+
+    fn prune_cache(&mut self, now: Instant) {
+        self.cache
+            .retain(|_, entry| Self::is_cache_entry_fresh(now, entry));
+
+        if self.cache.len() > GITIGNORE_CACHE_MAX_ENTRIES {
+            let mut keys_by_age: Vec<(IgnoreCacheKey, Instant)> = self
+                .cache
+                .iter()
+                .map(|(key, entry)| (key.clone(), entry.cached_at))
+                .collect();
+            keys_by_age.sort_unstable_by_key(|(_, cached_at)| *cached_at);
+
+            let overflow = keys_by_age
+                .len()
+                .saturating_sub(GITIGNORE_CACHE_MAX_ENTRIES);
+            for (key, _) in keys_by_age.into_iter().take(overflow) {
+                self.cache.remove(&key);
+            }
+        }
+
+        self.last_prune_at = Some(now);
+    }
+
+    fn cache_get(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
+        let (ignored, fresh) = match self.cache.get(key) {
+            Some(entry) => (entry.ignored, Self::is_cache_entry_fresh(now, entry)),
+            None => return None,
+        };
+
+        if !fresh {
+            self.cache.remove(key);
+            return None;
+        }
+
+        Some(ignored)
+    }
+
+    fn cache_insert(&mut self, key: IgnoreCacheKey, ignored: bool, now: Instant) {
+        self.cache.insert(
+            key,
+            CachedIgnoreResult {
+                ignored,
+                cached_at: now,
+            },
+        );
+        self.prune_cache_if_due(now);
+    }
+
     fn is_ignored_rel(&mut self, rel: &Path, is_dir_hint: Option<bool>) -> bool {
-        let Some(workdir) = &self.workdir else {
+        let Some(workdir) = self.workdir.clone() else {
             return false;
         };
+
+        let now = Instant::now();
+        self.prune_cache_if_due(now);
 
         let key = IgnoreCacheKey {
             rel: rel.to_path_buf(),
             is_dir_hint,
         };
-        if let Some(ignored) = self.cache.get(&key) {
-            return *ignored;
+        if let Some(ignored) = self.cache_get(&key, now) {
+            return ignored;
         }
 
-        let ignored = query_git_check_ignore(workdir, rel, is_dir_hint).unwrap_or(false);
-        self.cache.insert(key, ignored);
+        let ignored = query_git_check_ignore(&workdir, rel, is_dir_hint).unwrap_or(false);
+        self.cache_insert(key, ignored, now);
         ignored
+    }
+
+    fn prefetch_ignored_rels(&mut self, rels: Vec<PathBuf>, is_dir_hint: Option<bool>) {
+        let Some(workdir) = self.workdir.clone() else {
+            return;
+        };
+        if rels.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        self.prune_cache_if_due(now);
+
+        let mut pending = Vec::new();
+        let mut seen = HashSet::default();
+        for rel in rels {
+            let key = IgnoreCacheKey {
+                rel: rel.clone(),
+                is_dir_hint,
+            };
+            if self.cache_get(&key, now).is_some() || !seen.insert(key.clone()) {
+                continue;
+            }
+            pending.push(key);
+        }
+        if pending.is_empty() {
+            return;
+        }
+
+        let lookup: Vec<PathBuf> = pending.iter().map(|key| key.rel.clone()).collect();
+        if let Some(results) = query_git_check_ignore_batch(&workdir, &lookup, is_dir_hint) {
+            for key in pending {
+                let ignored = results.get(&key.rel).copied().unwrap_or(false);
+                self.cache_insert(key, ignored, now);
+            }
+            return;
+        }
+
+        // Fallback keeps behavior stable if batched lookup fails unexpectedly.
+        for key in pending {
+            let ignored =
+                query_git_check_ignore(&workdir, &key.rel, key.is_dir_hint).unwrap_or(false);
+            self.cache_insert(key, ignored, now);
+        }
     }
 }
 
@@ -322,6 +428,79 @@ fn query_git_check_ignore(workdir: &Path, rel: &Path, is_dir_hint: Option<bool>)
     run_git_check_ignore(workdir, &rel_child)
 }
 
+fn query_git_check_ignore_batch(
+    workdir: &Path,
+    rels: &[PathBuf],
+    is_dir_hint: Option<bool>,
+) -> Option<HashMap<PathBuf, bool>> {
+    if rels.is_empty() {
+        return Some(HashMap::default());
+    }
+
+    let exact_ignored = run_git_check_ignore_batch(workdir, rels)?;
+    let mut results = HashMap::default();
+    let mut dir_probe_pending = Vec::new();
+
+    for rel in rels {
+        if exact_ignored.contains(rel) {
+            results.insert(rel.clone(), true);
+            continue;
+        }
+        if is_dir_hint != Some(true) {
+            results.insert(rel.clone(), false);
+            continue;
+        }
+        dir_probe_pending.push(rel.clone());
+    }
+
+    if dir_probe_pending.is_empty() {
+        return Some(results);
+    }
+
+    let mut rel_dir_probes = Vec::new();
+    let mut child_probes = Vec::new();
+
+    for rel in dir_probe_pending {
+        let rel_dir = rel_path_with_trailing_separator(&rel);
+        if rel_dir == rel {
+            child_probes.push((rel.clone(), rel.join(".gitcomet-ignore-probe")));
+        } else {
+            rel_dir_probes.push((rel, rel_dir));
+        }
+    }
+
+    if !rel_dir_probes.is_empty() {
+        let rel_dir_paths: Vec<PathBuf> = rel_dir_probes
+            .iter()
+            .map(|(_, rel_dir_probe)| rel_dir_probe.clone())
+            .collect();
+        let rel_dir_ignored = run_git_check_ignore_batch(workdir, &rel_dir_paths)?;
+
+        for (rel, rel_dir_probe) in rel_dir_probes {
+            if rel_dir_ignored.contains(&rel_dir_probe) {
+                results.insert(rel, true);
+            } else {
+                child_probes.push((rel.clone(), rel.join(".gitcomet-ignore-probe")));
+            }
+        }
+    }
+
+    if child_probes.is_empty() {
+        return Some(results);
+    }
+
+    let child_paths: Vec<PathBuf> = child_probes
+        .iter()
+        .map(|(_, child_probe)| child_probe.clone())
+        .collect();
+    let child_ignored = run_git_check_ignore_batch(workdir, &child_paths)?;
+    for (rel, child_probe) in child_probes {
+        results.insert(rel, child_ignored.contains(&child_probe));
+    }
+
+    Some(results)
+}
+
 fn run_git_check_ignore(workdir: &Path, rel: &Path) -> Option<bool> {
     let output = Command::new("git")
         .arg("-C")
@@ -338,6 +517,64 @@ fn run_git_check_ignore(workdir: &Path, rel: &Path) -> Option<bool> {
         Some(1) => Some(false),
         _ => None,
     }
+}
+
+fn run_git_check_ignore_batch(workdir: &Path, rels: &[PathBuf]) -> Option<HashSet<PathBuf>> {
+    if rels.is_empty() {
+        return Some(HashSet::default());
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(workdir)
+        .arg("check-ignore")
+        .arg("--stdin")
+        .arg("-z")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+
+    {
+        let mut stdin = child.stdin.take()?;
+        for rel in rels {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt as _;
+                stdin.write_all(rel.as_os_str().as_bytes()).ok()?;
+            }
+            #[cfg(not(unix))]
+            {
+                stdin.write_all(rel.to_string_lossy().as_bytes()).ok()?;
+            }
+            stdin.write_all(&[0]).ok()?;
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
+    match output.status.code() {
+        Some(0) | Some(1) => {}
+        _ => return None,
+    }
+
+    let mut ignored = HashSet::default();
+    for raw in output.stdout.split(|b| *b == 0) {
+        if raw.is_empty() {
+            continue;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt as _;
+            ignored.insert(PathBuf::from(OsString::from_vec(raw.to_vec())));
+        }
+        #[cfg(not(unix))]
+        {
+            ignored.insert(PathBuf::from(String::from_utf8_lossy(raw).into_owned()));
+        }
+    }
+    Some(ignored)
 }
 
 fn rel_path_with_trailing_separator(rel: &Path) -> PathBuf {
@@ -369,7 +606,7 @@ fn repo_monitor_thread(
     monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
 ) {
-    let workdir = canonicalize_path(workdir);
+    let workdir = super::canonicalize_path(workdir);
     let git_dir = resolve_git_dir(&workdir);
     let mut gitignore = GitignoreRules::load(&workdir, git_dir.as_deref());
 
@@ -561,6 +798,27 @@ fn classify_repo_event(
     let mut saw_worktree = false;
     let mut saw_git = false;
     let is_dir_hint = path_dir_hint(event);
+    let mut uncached_worktree_rels = Vec::new();
+
+    for path in &event.paths {
+        if is_git_related_path(workdir, git_dir, path) {
+            continue;
+        }
+
+        let Ok(rel) = path.strip_prefix(workdir) else {
+            continue;
+        };
+
+        let key = IgnoreCacheKey {
+            rel: rel.to_path_buf(),
+            is_dir_hint,
+        };
+        if gitignore.cache.contains_key(&key) {
+            continue;
+        }
+        uncached_worktree_rels.push(key.rel);
+    }
+    gitignore.prefetch_ignored_rels(uncached_worktree_rels, is_dir_hint);
 
     for path in &event.paths {
         if is_git_related_path(workdir, git_dir, path) {
@@ -705,6 +963,13 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheKey {
+        IgnoreCacheKey {
+            rel: rel.into(),
+            is_dir_hint,
+        }
     }
 
     #[test]
@@ -1112,6 +1377,34 @@ mod tests {
     }
 
     #[test]
+    fn gitignore_cache_enforces_max_size() {
+        let mut rules = GitignoreRules::default();
+        let now = Instant::now();
+        let total = GITIGNORE_CACHE_MAX_ENTRIES + 8;
+        for idx in 0..total {
+            rules.cache_insert(
+                cache_key(format!("path-{idx}.tmp"), Some(false)),
+                idx % 2 == 0,
+                now + Duration::from_millis(idx as u64),
+            );
+        }
+
+        assert_eq!(rules.cache.len(), GITIGNORE_CACHE_MAX_ENTRIES);
+        assert!(
+            !rules
+                .cache
+                .contains_key(&cache_key("path-0.tmp", Some(false))),
+            "oldest entries should be evicted first"
+        );
+        assert!(
+            rules
+                .cache
+                .contains_key(&cache_key(format!("path-{}.tmp", total - 1), Some(false))),
+            "newest entry should remain in cache"
+        );
+    }
+
+    #[test]
     fn helper_predicates_cover_git_dir_index_strip_prefix_and_remove_hints() {
         let dir = unique_temp_dir("gitcomet-monitor-test");
         let workdir = dir.join("repo");
@@ -1168,5 +1461,28 @@ mod tests {
             attrs: Default::default(),
         };
         assert_eq!(path_dir_hint(&remove_any), None);
+    }
+
+    #[test]
+    fn gitignore_cache_expires_entries_by_ttl() {
+        let mut rules = GitignoreRules::default();
+        let now = Instant::now();
+        let key = cache_key("stale.txt", Some(false));
+        rules.cache_insert(key.clone(), true, now);
+
+        assert_eq!(
+            rules.cache_get(&key, now + Duration::from_secs(1)),
+            Some(true),
+            "fresh cache entry should be returned"
+        );
+        assert_eq!(
+            rules.cache_get(&key, now + GITIGNORE_CACHE_TTL + Duration::from_secs(1)),
+            None,
+            "expired cache entry should miss"
+        );
+        assert!(
+            !rules.cache.contains_key(&key),
+            "expired cache entry should be removed"
+        );
     }
 }

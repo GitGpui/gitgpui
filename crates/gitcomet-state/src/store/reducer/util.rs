@@ -117,16 +117,17 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
     {
         effects.push(Effect::LoadStatus { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request_log(repo_state.history_scope, DEFAULT_LOG_PAGE_SIZE, None)
-    {
+    if repo_state.loads_in_flight.request_log(
+        repo_state.history_state.history_scope,
+        DEFAULT_LOG_PAGE_SIZE,
+        None,
+    ) {
         // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
         // merges with different cursors.
         repo_state.set_log_loading_more(false);
         effects.push(Effect::LoadLog {
             repo_id,
-            scope: repo_state.history_scope,
+            scope: repo_state.history_state.history_scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
@@ -159,14 +160,15 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     {
         effects.push(Effect::LoadStatus { repo_id });
     }
-    if repo_state
-        .loads_in_flight
-        .request_log(repo_state.history_scope, DEFAULT_LOG_PAGE_SIZE, None)
-    {
+    if repo_state.loads_in_flight.request_log(
+        repo_state.history_state.history_scope,
+        DEFAULT_LOG_PAGE_SIZE,
+        None,
+    ) {
         repo_state.set_log_loading_more(false);
         effects.push(Effect::LoadLog {
             repo_id,
-            scope: repo_state.history_scope,
+            scope: repo_state.history_state.history_scope,
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
@@ -245,23 +247,7 @@ pub(super) fn normalize_repo_path(path: PathBuf) -> PathBuf {
 }
 
 pub(super) fn canonicalize_path(path: PathBuf) -> PathBuf {
-    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
-}
-
-#[cfg(windows)]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\UNC\")) {
-        return Path::new(r"\\").join(stripped);
-    }
-    if let Ok(stripped) = path.strip_prefix(Path::new(r"\\?\")) {
-        return stripped.to_path_buf();
-    }
-    path
-}
-
-#[cfg(not(windows))]
-fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
-    path
+    super::super::canonicalize_path(path)
 }
 
 pub(super) fn push_notification(state: &mut AppState, kind: AppNotificationKind, message: String) {
@@ -1311,7 +1297,9 @@ mod tests {
         assert!(formatted.contains("fatal: network down"));
 
         let io_error = Error::new(ErrorKind::Io(io::ErrorKind::Other));
-        assert!(format_error_for_user(&io_error).contains("Io"));
+        let io_rendered = format_error_for_user(&io_error);
+        assert_eq!(io_rendered, io_error.to_string());
+        assert!(!io_rendered.is_empty());
         assert!(try_format_git_backend_error(&io_error).is_none());
         assert!(try_format_git_backend_error_message("curl failed: timeout").is_none());
         assert_eq!(

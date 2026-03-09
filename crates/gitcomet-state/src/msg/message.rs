@@ -64,6 +64,7 @@ impl ConflictAutosolveStats {
     }
 }
 
+#[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
     RestoreSession {
@@ -198,15 +199,6 @@ pub enum Msg {
     CloneRepo {
         url: String,
         dest: PathBuf,
-    },
-    CloneRepoProgress {
-        dest: PathBuf,
-        line: String,
-    },
-    CloneRepoFinished {
-        url: String,
-        dest: PathBuf,
-        result: Result<CommandOutput, Error>,
     },
     ExportPatch {
         repo_id: RepoId,
@@ -441,7 +433,24 @@ pub enum Msg {
         repo_id: RepoId,
         index: usize,
     },
+    Internal(InternalMsg),
+}
 
+pub enum InternalMsg {
+    SessionPersistFailed {
+        repo_id: Option<RepoId>,
+        action: &'static str,
+        error: String,
+    },
+    CloneRepoProgress {
+        dest: PathBuf,
+        line: String,
+    },
+    CloneRepoFinished {
+        url: String,
+        dest: PathBuf,
+        result: Result<CommandOutput, Error>,
+    },
     RepoOpenedOk {
         repo_id: RepoId,
         spec: RepoSpec,
@@ -452,7 +461,6 @@ pub enum Msg {
         spec: RepoSpec,
         error: Error,
     },
-
     BranchesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Branch>, Error>,
@@ -532,13 +540,11 @@ pub enum Msg {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
     },
-
     CommitDetailsLoaded {
         repo_id: RepoId,
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
     },
-
     DiffLoaded {
         repo_id: RepoId,
         target: DiffTarget,
@@ -554,7 +560,6 @@ pub enum Msg {
         target: DiffTarget,
         result: Result<Option<FileDiffImage>, Error>,
     },
-
     RepoActionFinished {
         repo_id: RepoId,
         result: Result<(), Error>,
@@ -567,7 +572,6 @@ pub enum Msg {
         repo_id: RepoId,
         result: Result<(), Error>,
     },
-
     RepoCommandFinished {
         repo_id: RepoId,
         command: RepoCommandKind,
@@ -575,874 +579,48 @@ pub enum Msg {
     },
 }
 
+impl From<InternalMsg> for Msg {
+    fn from(value: InternalMsg) -> Self {
+        Self::Internal(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use gitcomet_core::conflict_session::ConflictRegionResolution;
-    use gitcomet_core::error::ErrorKind;
+    use super::{InternalMsg, Msg};
+    use crate::model::RepoId;
+    use gitcomet_core::error::{Error, ErrorKind};
+    use std::path::PathBuf;
 
-    fn repo_id() -> RepoId {
-        RepoId(7)
-    }
-
-    fn path(value: &str) -> PathBuf {
-        PathBuf::from(value)
-    }
-
-    fn commit(value: &str) -> CommitId {
-        CommitId(value.to_string())
-    }
-
-    fn backend_error(value: &str) -> Error {
-        Error::new(ErrorKind::Backend(value.to_string()))
-    }
-
-    fn working_tree_target(path_value: &str) -> DiffTarget {
-        DiffTarget::WorkingTree {
-            path: path(path_value),
-            area: DiffArea::Unstaged,
+    #[test]
+    fn wraps_internal_messages() {
+        let msg: Msg = InternalMsg::RepoActionFinished {
+            repo_id: RepoId(7),
+            result: Ok(()),
         }
-    }
+        .into();
 
-    macro_rules! assert_msg_debug_contains {
-        ($msg:expr, $needle:expr) => {{
-            let rendered = format!("{:?}", $msg);
-            assert!(
-                rendered.contains($needle),
-                "expected {rendered:?} to contain {:?}",
-                $needle
-            );
-        }};
+        assert!(matches!(
+            msg,
+            Msg::Internal(InternalMsg::RepoActionFinished {
+                repo_id: RepoId(7),
+                result: Ok(())
+            })
+        ));
     }
 
     #[test]
-    fn msg_debug_formats_repo_command_and_ui_action_variants() {
-        let cases: Vec<(Msg, &str)> = vec![
-            (Msg::OpenRepo(path("repo")), "OpenRepo"),
-            (
-                Msg::RestoreSession {
-                    open_repos: vec![path("repo-a"), path("repo-b")],
-                    active_repo: Some(path("repo-b")),
-                },
-                "RestoreSession",
-            ),
-            (Msg::CloseRepo { repo_id: repo_id() }, "CloseRepo"),
-            (
-                Msg::DismissRepoError { repo_id: repo_id() },
-                "DismissRepoError",
-            ),
-            (Msg::SetActiveRepo { repo_id: repo_id() }, "SetActiveRepo"),
-            (
-                Msg::ReorderRepoTabs {
-                    repo_id: repo_id(),
-                    insert_before: Some(RepoId(9)),
-                },
-                "ReorderRepoTabs",
-            ),
-            (Msg::ReloadRepo { repo_id: repo_id() }, "ReloadRepo"),
-            (
-                Msg::RepoExternallyChanged {
-                    repo_id: repo_id(),
-                    change: RepoExternalChange::Both,
-                },
-                "RepoExternallyChanged",
-            ),
-            (
-                Msg::SetHistoryScope {
-                    repo_id: repo_id(),
-                    scope: LogScope::AllBranches,
-                },
-                "SetHistoryScope",
-            ),
-            (
-                Msg::SetFetchPruneDeletedRemoteTrackingBranches {
-                    repo_id: repo_id(),
-                    enabled: true,
-                },
-                "SetFetchPruneDeletedRemoteTrackingBranches",
-            ),
-            (
-                Msg::LoadMoreHistory { repo_id: repo_id() },
-                "LoadMoreHistory",
-            ),
-            (
-                Msg::SelectCommit {
-                    repo_id: repo_id(),
-                    commit_id: commit("abc123"),
-                },
-                "SelectCommit",
-            ),
-            (
-                Msg::ClearCommitSelection { repo_id: repo_id() },
-                "ClearCommitSelection",
-            ),
-            (
-                Msg::SelectDiff {
-                    repo_id: repo_id(),
-                    target: working_tree_target("src/lib.rs"),
-                },
-                "SelectDiff",
-            ),
-            (
-                Msg::ClearDiffSelection { repo_id: repo_id() },
-                "ClearDiffSelection",
-            ),
-            (Msg::LoadStashes { repo_id: repo_id() }, "LoadStashes"),
-            (
-                Msg::LoadConflictFile {
-                    repo_id: repo_id(),
-                    path: path("src/conflicted.rs"),
-                },
-                "LoadConflictFile",
-            ),
-            (Msg::LoadReflog { repo_id: repo_id() }, "LoadReflog"),
-            (
-                Msg::LoadFileHistory {
-                    repo_id: repo_id(),
-                    path: path("src/file.rs"),
-                    limit: 25,
-                },
-                "LoadFileHistory",
-            ),
-            (
-                Msg::LoadBlame {
-                    repo_id: repo_id(),
-                    path: path("src/file.rs"),
-                    rev: Some("HEAD~1".to_string()),
-                },
-                "LoadBlame",
-            ),
-            (Msg::LoadWorktrees { repo_id: repo_id() }, "LoadWorktrees"),
-            (Msg::LoadSubmodules { repo_id: repo_id() }, "LoadSubmodules"),
-            (
-                Msg::RefreshBranches { repo_id: repo_id() },
-                "RefreshBranches",
-            ),
-            (
-                Msg::StageHunk {
-                    repo_id: repo_id(),
-                    patch: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
-                },
-                "StageHunk",
-            ),
-            (
-                Msg::UnstageHunk {
-                    repo_id: repo_id(),
-                    patch: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
-                },
-                "UnstageHunk",
-            ),
-            (
-                Msg::ApplyWorktreePatch {
-                    repo_id: repo_id(),
-                    patch: "@@ -1 +1 @@\n-old\n+new\n".to_string(),
-                    reverse: true,
-                },
-                "ApplyWorktreePatch",
-            ),
-            (
-                Msg::CheckoutBranch {
-                    repo_id: repo_id(),
-                    name: "main".to_string(),
-                },
-                "CheckoutBranch",
-            ),
-            (
-                Msg::CheckoutRemoteBranch {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    branch: "feature".to_string(),
-                    local_branch: "feature".to_string(),
-                },
-                "CheckoutRemoteBranch",
-            ),
-            (
-                Msg::CheckoutCommit {
-                    repo_id: repo_id(),
-                    commit_id: commit("deadbeef"),
-                },
-                "CheckoutCommit",
-            ),
-            (
-                Msg::CherryPickCommit {
-                    repo_id: repo_id(),
-                    commit_id: commit("deadbeef"),
-                },
-                "CherryPickCommit",
-            ),
-            (
-                Msg::RevertCommit {
-                    repo_id: repo_id(),
-                    commit_id: commit("deadbeef"),
-                },
-                "RevertCommit",
-            ),
-            (
-                Msg::CreateBranch {
-                    repo_id: repo_id(),
-                    name: "topic".to_string(),
-                },
-                "CreateBranch",
-            ),
-            (
-                Msg::CreateBranchAndCheckout {
-                    repo_id: repo_id(),
-                    name: "topic".to_string(),
-                },
-                "CreateBranchAndCheckout",
-            ),
-            (
-                Msg::DeleteBranch {
-                    repo_id: repo_id(),
-                    name: "old-topic".to_string(),
-                },
-                "DeleteBranch",
-            ),
-            (
-                Msg::ForceDeleteBranch {
-                    repo_id: repo_id(),
-                    name: "old-topic".to_string(),
-                },
-                "ForceDeleteBranch",
-            ),
-            (
-                Msg::CloneRepo {
-                    url: "https://example.test/repo.git".to_string(),
-                    dest: path("/tmp/repo"),
-                },
-                "CloneRepo",
-            ),
-            (
-                Msg::CloneRepoProgress {
-                    dest: path("/tmp/repo"),
-                    line: "cloning".to_string(),
-                },
-                "CloneRepoProgress",
-            ),
-            (
-                Msg::CloneRepoFinished {
-                    url: "https://example.test/repo.git".to_string(),
-                    dest: path("/tmp/repo"),
-                    result: Ok(CommandOutput::empty_success("git clone")),
-                },
-                "CloneRepoFinished",
-            ),
-            (
-                Msg::ExportPatch {
-                    repo_id: repo_id(),
-                    commit_id: commit("beaded"),
-                    dest: path("/tmp/change.patch"),
-                },
-                "ExportPatch",
-            ),
-            (
-                Msg::ApplyPatch {
-                    repo_id: repo_id(),
-                    patch: path("/tmp/change.patch"),
-                },
-                "ApplyPatch",
-            ),
-            (
-                Msg::AddWorktree {
-                    repo_id: repo_id(),
-                    path: path("../worktree-topic"),
-                    reference: Some("topic".to_string()),
-                },
-                "AddWorktree",
-            ),
-            (
-                Msg::RemoveWorktree {
-                    repo_id: repo_id(),
-                    path: path("../worktree-topic"),
-                },
-                "RemoveWorktree",
-            ),
-            (
-                Msg::AddSubmodule {
-                    repo_id: repo_id(),
-                    url: "https://example.test/submodule.git".to_string(),
-                    path: path("vendor/submodule"),
-                },
-                "AddSubmodule",
-            ),
-            (
-                Msg::UpdateSubmodules { repo_id: repo_id() },
-                "UpdateSubmodules",
-            ),
-            (
-                Msg::RemoveSubmodule {
-                    repo_id: repo_id(),
-                    path: path("vendor/submodule"),
-                },
-                "RemoveSubmodule",
-            ),
-            (
-                Msg::StagePath {
-                    repo_id: repo_id(),
-                    path: path("src/a.rs"),
-                },
-                "StagePath",
-            ),
-            (
-                Msg::StagePaths {
-                    repo_id: repo_id(),
-                    paths: vec![path("src/a.rs"), path("src/b.rs")],
-                },
-                "StagePaths",
-            ),
-            (
-                Msg::UnstagePath {
-                    repo_id: repo_id(),
-                    path: path("src/a.rs"),
-                },
-                "UnstagePath",
-            ),
-            (
-                Msg::UnstagePaths {
-                    repo_id: repo_id(),
-                    paths: vec![path("src/a.rs"), path("src/b.rs")],
-                },
-                "UnstagePaths",
-            ),
-            (
-                Msg::DiscardWorktreeChangesPath {
-                    repo_id: repo_id(),
-                    path: path("src/a.rs"),
-                },
-                "DiscardWorktreeChangesPath",
-            ),
-            (
-                Msg::DiscardWorktreeChangesPaths {
-                    repo_id: repo_id(),
-                    paths: vec![path("src/a.rs"), path("src/b.rs")],
-                },
-                "DiscardWorktreeChangesPaths",
-            ),
-            (
-                Msg::SaveWorktreeFile {
-                    repo_id: repo_id(),
-                    path: path("src/a.rs"),
-                    contents: "new file contents".to_string(),
-                    stage: true,
-                },
-                "SaveWorktreeFile",
-            ),
-            (
-                Msg::Commit {
-                    repo_id: repo_id(),
-                    message: "feat: commit".to_string(),
-                },
-                "Commit",
-            ),
-            (
-                Msg::CommitAmend {
-                    repo_id: repo_id(),
-                    message: "fixup".to_string(),
-                },
-                "CommitAmend",
-            ),
-            (Msg::FetchAll { repo_id: repo_id() }, "FetchAll"),
-            (
-                Msg::PruneMergedBranches { repo_id: repo_id() },
-                "PruneMergedBranches",
-            ),
-            (Msg::PruneLocalTags { repo_id: repo_id() }, "PruneLocalTags"),
-            (
-                Msg::Pull {
-                    repo_id: repo_id(),
-                    mode: PullMode::Rebase,
-                },
-                "Pull",
-            ),
-            (
-                Msg::PullBranch {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    branch: "main".to_string(),
-                },
-                "PullBranch",
-            ),
-            (
-                Msg::MergeRef {
-                    repo_id: repo_id(),
-                    reference: "origin/main".to_string(),
-                },
-                "MergeRef",
-            ),
-            (Msg::Push { repo_id: repo_id() }, "Push"),
-            (Msg::ForcePush { repo_id: repo_id() }, "ForcePush"),
-            (
-                Msg::PushSetUpstream {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    branch: "topic".to_string(),
-                },
-                "PushSetUpstream",
-            ),
-            (
-                Msg::DeleteRemoteBranch {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    branch: "topic".to_string(),
-                },
-                "DeleteRemoteBranch",
-            ),
-            (
-                Msg::Reset {
-                    repo_id: repo_id(),
-                    target: "HEAD~1".to_string(),
-                    mode: ResetMode::Hard,
-                },
-                "Reset",
-            ),
-            (
-                Msg::Rebase {
-                    repo_id: repo_id(),
-                    onto: "origin/main".to_string(),
-                },
-                "Rebase",
-            ),
-            (Msg::RebaseContinue { repo_id: repo_id() }, "RebaseContinue"),
-            (Msg::RebaseAbort { repo_id: repo_id() }, "RebaseAbort"),
-            (Msg::MergeAbort { repo_id: repo_id() }, "MergeAbort"),
-            (
-                Msg::CreateTag {
-                    repo_id: repo_id(),
-                    name: "v1.0.0".to_string(),
-                    target: "HEAD".to_string(),
-                },
-                "CreateTag",
-            ),
-            (
-                Msg::DeleteTag {
-                    repo_id: repo_id(),
-                    name: "v1.0.0".to_string(),
-                },
-                "DeleteTag",
-            ),
-            (
-                Msg::PushTag {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    name: "v1.0.0".to_string(),
-                },
-                "PushTag",
-            ),
-            (
-                Msg::DeleteRemoteTag {
-                    repo_id: repo_id(),
-                    remote: "origin".to_string(),
-                    name: "v1.0.0".to_string(),
-                },
-                "DeleteRemoteTag",
-            ),
-            (
-                Msg::AddRemote {
-                    repo_id: repo_id(),
-                    name: "origin".to_string(),
-                    url: "https://example.test/repo.git".to_string(),
-                },
-                "AddRemote",
-            ),
-            (
-                Msg::RemoveRemote {
-                    repo_id: repo_id(),
-                    name: "origin".to_string(),
-                },
-                "RemoveRemote",
-            ),
-            (
-                Msg::SetRemoteUrl {
-                    repo_id: repo_id(),
-                    name: "origin".to_string(),
-                    url: "ssh://example.test/repo.git".to_string(),
-                    kind: RemoteUrlKind::Push,
-                },
-                "SetRemoteUrl",
-            ),
-            (
-                Msg::CheckoutConflictSide {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    side: ConflictSide::Ours,
-                },
-                "CheckoutConflictSide",
-            ),
-            (
-                Msg::AcceptConflictDeletion {
-                    repo_id: repo_id(),
-                    path: path("src/deleted.rs"),
-                },
-                "AcceptConflictDeletion",
-            ),
-            (
-                Msg::CheckoutConflictBase {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                },
-                "CheckoutConflictBase",
-            ),
-            (
-                Msg::LaunchMergetool {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                },
-                "LaunchMergetool",
-            ),
-            (
-                Msg::RecordConflictAutosolveTelemetry {
-                    repo_id: repo_id(),
-                    path: Some(path("src/conflict.rs")),
-                    mode: ConflictAutosolveMode::Safe,
-                    total_conflicts_before: 5,
-                    total_conflicts_after: 2,
-                    unresolved_before: 3,
-                    unresolved_after: 1,
-                    stats: ConflictAutosolveStats {
-                        pass1: 1,
-                        pass2_split: 2,
-                        pass1_after_split: 0,
-                        regex: 0,
-                        history: 0,
-                    },
-                },
-                "RecordConflictAutosolveTelemetry",
-            ),
-            (
-                Msg::ConflictSetHideResolved {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    hide_resolved: true,
-                },
-                "ConflictSetHideResolved",
-            ),
-            (
-                Msg::ConflictApplyBulkChoice {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    choice: ConflictBulkChoice::Theirs,
-                },
-                "ConflictApplyBulkChoice",
-            ),
-            (
-                Msg::ConflictSetRegionChoice {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    region_index: 2,
-                    choice: ConflictRegionChoice::Both,
-                },
-                "ConflictSetRegionChoice",
-            ),
-            (
-                Msg::ConflictSyncRegionResolutions {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    updates: vec![ConflictRegionResolutionUpdate {
-                        region_index: 2,
-                        resolution: ConflictRegionResolution::PickOurs,
-                    }],
-                },
-                "ConflictSyncRegionResolutions",
-            ),
-            (
-                Msg::ConflictApplyAutosolve {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    mode: ConflictAutosolveMode::Regex,
-                    whitespace_normalize: true,
-                },
-                "ConflictApplyAutosolve",
-            ),
-            (
-                Msg::ConflictResetResolutions {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                },
-                "ConflictResetResolutions",
-            ),
-            (
-                Msg::Stash {
-                    repo_id: repo_id(),
-                    message: "wip".to_string(),
-                    include_untracked: true,
-                },
-                "Stash",
-            ),
-            (
-                Msg::ApplyStash {
-                    repo_id: repo_id(),
-                    index: 1,
-                },
-                "ApplyStash",
-            ),
-            (
-                Msg::PopStash {
-                    repo_id: repo_id(),
-                    index: 2,
-                },
-                "PopStash",
-            ),
-            (
-                Msg::DropStash {
-                    repo_id: repo_id(),
-                    index: 3,
-                },
-                "DropStash",
-            ),
-        ];
-
-        for (msg, expected) in cases {
-            assert_msg_debug_contains!(msg, expected);
+    fn clone_repo_finished_debug_keeps_result_compact() {
+        let msg: Msg = InternalMsg::CloneRepoFinished {
+            url: "https://example.invalid/repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+            result: Err(Error::new(ErrorKind::Backend("clone failed".to_string()))),
         }
-    }
+        .into();
+        let debug = format!("{msg:?}");
 
-    #[test]
-    fn msg_debug_formats_loaded_and_finished_variants() {
-        let cases: Vec<(Msg, &str)> = vec![
-            (
-                Msg::RepoOpenedErr {
-                    repo_id: repo_id(),
-                    spec: RepoSpec {
-                        workdir: path("/tmp/repo"),
-                    },
-                    error: backend_error("open failed"),
-                },
-                "RepoOpenedErr",
-            ),
-            (
-                Msg::BranchesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("branches failed")),
-                },
-                "BranchesLoaded",
-            ),
-            (
-                Msg::RemotesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("remotes failed")),
-                },
-                "RemotesLoaded",
-            ),
-            (
-                Msg::RemoteBranchesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("remote branches failed")),
-                },
-                "RemoteBranchesLoaded",
-            ),
-            (
-                Msg::StatusLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("status failed")),
-                },
-                "StatusLoaded",
-            ),
-            (
-                Msg::HeadBranchLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("head branch failed")),
-                },
-                "HeadBranchLoaded",
-            ),
-            (
-                Msg::UpstreamDivergenceLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("divergence failed")),
-                },
-                "UpstreamDivergenceLoaded",
-            ),
-            (
-                Msg::LogLoaded {
-                    repo_id: repo_id(),
-                    scope: LogScope::CurrentBranch,
-                    cursor: None,
-                    result: Err(backend_error("log failed")),
-                },
-                "LogLoaded",
-            ),
-            (
-                Msg::TagsLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("tags failed")),
-                },
-                "TagsLoaded",
-            ),
-            (
-                Msg::RemoteTagsLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("remote tags failed")),
-                },
-                "RemoteTagsLoaded",
-            ),
-            (
-                Msg::StashesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("stashes failed")),
-                },
-                "StashesLoaded",
-            ),
-            (
-                Msg::ReflogLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("reflog failed")),
-                },
-                "ReflogLoaded",
-            ),
-            (
-                Msg::RebaseStateLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("rebase state failed")),
-                },
-                "RebaseStateLoaded",
-            ),
-            (
-                Msg::MergeCommitMessageLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("merge message failed")),
-                },
-                "MergeCommitMessageLoaded",
-            ),
-            (
-                Msg::FileHistoryLoaded {
-                    repo_id: repo_id(),
-                    path: path("src/history.rs"),
-                    result: Err(backend_error("file history failed")),
-                },
-                "FileHistoryLoaded",
-            ),
-            (
-                Msg::BlameLoaded {
-                    repo_id: repo_id(),
-                    path: path("src/blame.rs"),
-                    rev: Some("HEAD~2".to_string()),
-                    result: Err(backend_error("blame failed")),
-                },
-                "BlameLoaded",
-            ),
-            (
-                Msg::ConflictFileLoaded {
-                    repo_id: repo_id(),
-                    path: path("src/conflict.rs"),
-                    result: Box::new(Err(backend_error("conflict file failed"))),
-                    conflict_session: None,
-                },
-                "ConflictFileLoaded",
-            ),
-            (
-                Msg::WorktreesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("worktrees failed")),
-                },
-                "WorktreesLoaded",
-            ),
-            (
-                Msg::SubmodulesLoaded {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("submodules failed")),
-                },
-                "SubmodulesLoaded",
-            ),
-            (
-                Msg::CommitDetailsLoaded {
-                    repo_id: repo_id(),
-                    commit_id: commit("1234abcd"),
-                    result: Err(backend_error("commit details failed")),
-                },
-                "CommitDetailsLoaded",
-            ),
-            (
-                Msg::DiffLoaded {
-                    repo_id: repo_id(),
-                    target: working_tree_target("src/lib.rs"),
-                    result: Err(backend_error("diff failed")),
-                },
-                "DiffLoaded",
-            ),
-            (
-                Msg::DiffFileLoaded {
-                    repo_id: repo_id(),
-                    target: working_tree_target("src/lib.rs"),
-                    result: Err(backend_error("file diff failed")),
-                },
-                "DiffFileLoaded",
-            ),
-            (
-                Msg::DiffFileImageLoaded {
-                    repo_id: repo_id(),
-                    target: working_tree_target("assets/icon.png"),
-                    result: Err(backend_error("image diff failed")),
-                },
-                "DiffFileImageLoaded",
-            ),
-            (
-                Msg::RepoActionFinished {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("repo action failed")),
-                },
-                "RepoActionFinished",
-            ),
-            (
-                Msg::CommitFinished {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("commit failed")),
-                },
-                "CommitFinished",
-            ),
-            (
-                Msg::CommitAmendFinished {
-                    repo_id: repo_id(),
-                    result: Err(backend_error("amend failed")),
-                },
-                "CommitAmendFinished",
-            ),
-            (
-                Msg::RepoCommandFinished {
-                    repo_id: repo_id(),
-                    command: RepoCommandKind::FetchAll,
-                    result: Err(backend_error("command failed")),
-                },
-                "RepoCommandFinished",
-            ),
-        ];
-
-        for (msg, expected) in cases {
-            assert_msg_debug_contains!(msg, expected);
-        }
-    }
-
-    #[test]
-    fn msg_debug_redacts_large_text_fields_to_lengths() {
-        let stage = format!(
-            "{:?}",
-            Msg::StageHunk {
-                repo_id: repo_id(),
-                patch: "sensitive patch body".to_string(),
-            }
-        );
-        assert!(stage.contains("patch_len"));
-        assert!(!stage.contains("sensitive patch body"));
-
-        let save = format!(
-            "{:?}",
-            Msg::SaveWorktreeFile {
-                repo_id: repo_id(),
-                path: path("src/file.rs"),
-                contents: "secret data".to_string(),
-                stage: false,
-            }
-        );
-        assert!(save.contains("contents_len"));
-        assert!(!save.contains("secret data"));
-
-        let clone_finished = format!(
-            "{:?}",
-            Msg::CloneRepoFinished {
-                url: "https://example.test/repo.git".to_string(),
-                dest: path("/tmp/repo"),
-                result: Err(Error::new(ErrorKind::Backend("network down".to_string()))),
-            }
-        );
-        assert!(clone_finished.contains("ok: false"));
-        assert!(!clone_finished.contains("network down"));
+        assert!(debug.contains("CloneRepoFinished"));
+        assert!(debug.contains("ok: false"));
+        assert!(!debug.contains("clone failed"));
     }
 }

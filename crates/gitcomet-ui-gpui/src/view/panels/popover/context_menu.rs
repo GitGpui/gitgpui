@@ -126,20 +126,31 @@ impl PopoverHost {
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 Some(branch_section::model(self, *repo_id, *section))
             }
-            PopoverKind::RemoteMenu { repo_id, name } => Some(remote::model(self, *repo_id, name)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
+            } => Some(remote::model(self, *repo_id, name)),
             PopoverKind::StashMenu {
                 repo_id,
                 index,
                 message,
             } => Some(stash::model(*repo_id, *index, message)),
-            PopoverKind::WorktreeSectionMenu { repo_id } => Some(worktree_section::model(*repo_id)),
-            PopoverKind::WorktreeMenu { repo_id, path } => Some(worktree::model(*repo_id, path)),
-            PopoverKind::SubmoduleSectionMenu { repo_id } => {
-                Some(submodule_section::model(*repo_id))
-            }
-            PopoverKind::SubmoduleMenu { repo_id, path } => {
-                Some(submodule::model(self, *repo_id, path))
-            }
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::SectionMenu),
+            } => Some(worktree_section::model(*repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu { path }),
+            } => Some(worktree::model(*repo_id, path)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::SectionMenu),
+            } => Some(submodule_section::model(*repo_id)),
+            PopoverKind::Repo {
+                repo_id,
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::Menu { path }),
+            } => Some(submodule::model(self, *repo_id, path)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,
@@ -734,7 +745,7 @@ impl PopoverHost {
             let path_is_selected = self
                 .active_repo()
                 .filter(|r| r.id == repo_id)
-                .and_then(|r| r.diff_target.as_ref())
+                .and_then(|r| r.diff_state.diff_target.as_ref())
                 .is_some_and(|target| {
                     matches!(target, DiffTarget::WorkingTree { path: selected, .. } if *selected == path)
                 });
@@ -760,7 +771,7 @@ impl PopoverHost {
         hunk_src_ix: usize,
     ) -> Option<String> {
         let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
-        let Loadable::Ready(diff) = &repo.diff else {
+        let Loadable::Ready(diff) = &repo.diff_state.diff else {
             return None;
         };
         crate::view::diff_utils::build_unified_patch_for_hunk(diff.lines.as_slice(), hunk_src_ix)

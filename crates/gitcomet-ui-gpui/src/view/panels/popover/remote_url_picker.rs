@@ -46,11 +46,10 @@ pub(super) fn panel(
                     this.remote_url_edit_input
                         .update(cx, |i, cx| i.set_text(url, cx));
                     this.open_popover_at(
-                        PopoverKind::RemoteEditUrlPrompt {
+                        PopoverKind::remote(
                             repo_id,
-                            name,
-                            kind,
-                        },
+                            RemotePopoverKind::EditUrlPrompt { name, kind },
+                        ),
                         e.position(),
                         window,
                         cx,
@@ -84,11 +83,13 @@ pub(super) fn panel(
                         this.remote_url_edit_input
                             .update(cx, |i, cx| i.set_text(url, cx));
                         this.open_popover_at(
-                            PopoverKind::RemoteEditUrlPrompt {
+                            PopoverKind::remote(
                                 repo_id,
-                                name: name.clone(),
-                                kind,
-                            },
+                                RemotePopoverKind::EditUrlPrompt {
+                                    name: name.clone(),
+                                    kind,
+                                },
+                            ),
                             e.position(),
                             window,
                             cx,

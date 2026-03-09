@@ -1,4 +1,4 @@
-use super::util::{diff_target_is_svg, diff_target_wants_image_preview};
+use super::util::{diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview};
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
 use gitcomet_core::domain::{Diff, DiffTarget, FileDiffImage, FileDiffText};
@@ -14,42 +14,31 @@ pub(super) fn select_diff(
         return Vec::new();
     };
 
-    repo_state.diff_target = Some(target.clone());
-    repo_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Loading;
     let supports_file = matches!(
         &target,
         DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
     );
     let wants_image = diff_target_wants_image_preview(&target);
     let is_svg = diff_target_is_svg(&target);
-    repo_state.diff_file = if supports_file && (!wants_image || is_svg) {
+    repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
-    repo_state.diff_file_image = if supports_file && wants_image {
+    repo_state.diff_state.diff_file_image = if supports_file && wants_image {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
     repo_state.bump_diff_state_rev();
 
-    let mut effects = Vec::new();
-    if supports_file {
-        if wants_image {
-            effects.push(Effect::LoadDiffFileImage {
-                repo_id,
-                target: target.clone(),
-            });
-        }
-        if !wants_image || is_svg {
-            effects.push(Effect::LoadDiffFile {
-                repo_id,
-                target: target.clone(),
-            });
-        }
+    let mut effects = diff_reload_effects(repo_id, target);
+    // Keep selection-path ordering stable: file payload loads are queued before the main diff.
+    if effects.len() > 1 {
+        effects.rotate_left(1);
     }
-    effects.push(Effect::LoadDiff { repo_id, target });
     effects
 }
 
@@ -58,10 +47,10 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
         return Vec::new();
     };
 
-    repo_state.diff_target = None;
-    repo_state.diff = Loadable::NotLoaded;
-    repo_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.diff_target = None;
+    repo_state.diff_state.diff = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     repo_state.bump_diff_state_rev();
     Vec::new()
 }
@@ -89,10 +78,10 @@ pub(super) fn diff_loaded(
     result: std::result::Result<Diff, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.diff_target.as_ref() == Some(&target)
+        && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
-        repo_state.diff_rev = repo_state.diff_rev.wrapping_add(1);
-        repo_state.diff = match result {
+        repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
+        repo_state.diff_state.diff = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -111,10 +100,10 @@ pub(super) fn diff_file_loaded(
     result: std::result::Result<Option<FileDiffText>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.diff_target.as_ref() == Some(&target)
+        && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
-        repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
-        repo_state.diff_file = match result {
+        repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
+        repo_state.diff_state.diff_file = match result {
             Ok(v) => Loadable::Ready(v.map(Arc::new)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -133,10 +122,10 @@ pub(super) fn diff_file_image_loaded(
     result: std::result::Result<Option<FileDiffImage>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.diff_target.as_ref() == Some(&target)
+        && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
-        repo_state.diff_file_rev = repo_state.diff_file_rev.wrapping_add(1);
-        repo_state.diff_file_image = match result {
+        repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
+        repo_state.diff_state.diff_file_image = match result {
             Ok(v) => Loadable::Ready(v.map(Arc::new)),
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());

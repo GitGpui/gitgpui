@@ -101,7 +101,7 @@ pub fn compute_graph(
     };
 
     for commit in commits.iter() {
-        let incoming_ids = lanes.iter().map(|l| l.id).collect::<Vec<_>>();
+        let incoming_ids = lanes.iter().map(|l| l.id).collect::<HashSet<_>>();
 
         let mut hits = lanes
             .iter()
@@ -389,6 +389,7 @@ mod tests {
 
         let base_row = &graph[1];
         assert_eq!(base_row.lanes_now.len(), 2);
+        assert_eq!(base_row.incoming_mask, vec![true, false]);
         assert_eq!(base_row.joins_in.len(), 1);
         assert_eq!(base_row.node_col, 1);
         assert_ne!(base_row.lanes_now[0].color, base_row.lanes_now[1].color);

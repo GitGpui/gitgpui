@@ -64,10 +64,12 @@ fn shape_truncated_line_cached(
 
     HISTORY_TEXT_LAYOUT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.len() > HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, shaped.clone());
+        insert_with_partial_cache_eviction(
+            &mut cache,
+            key,
+            shaped.clone(),
+            HISTORY_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
+        );
     });
 
     shaped

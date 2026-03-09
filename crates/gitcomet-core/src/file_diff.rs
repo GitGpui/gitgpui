@@ -12,6 +12,8 @@ const REPLACEMENT_PAIR_BASE_COST: u32 = 80;
 const REPLACEMENT_PAIR_SCALE_COST: u32 = 120;
 const REPLACEMENT_DISSIMILAR_PENALTY_COST: u32 = 40;
 const REPLACEMENT_DISSIMILAR_PENALTY_MIN_LEN: usize = 4;
+const MYERS_MAX_LINES_PER_SIDE_DEFAULT: usize = 5_000;
+const MYERS_MAX_LINES_PER_SIDE_ENV: &str = "GITCOMET_MYERS_MAX_LINES_PER_SIDE";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -79,6 +81,93 @@ pub(crate) struct Edit<'a> {
     pub(crate) kind: EditKind,
     pub(crate) old: Option<&'a str>,
     pub(crate) new: Option<&'a str>,
+}
+
+/// A contiguous edit span relative to base lines.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DiffHunk<T> {
+    pub(crate) base_start: usize,
+    pub(crate) base_end: usize,
+    pub(crate) new_lines: Vec<T>,
+}
+
+/// Convert an edit script into base-relative change hunks.
+pub(crate) fn edits_to_hunks_with<'a, T, F>(
+    edits: &[Edit<'a>],
+    mut map_insert: F,
+) -> Vec<DiffHunk<T>>
+where
+    F: FnMut(&'a str) -> T,
+{
+    let mut hunks = Vec::new();
+    let mut base_ix = 0usize;
+    let mut i = 0usize;
+
+    while i < edits.len() {
+        if edits[i].kind == EditKind::Equal {
+            base_ix += 1;
+            i += 1;
+            continue;
+        }
+
+        let hunk_base_start = base_ix;
+        let mut new_lines = Vec::new();
+
+        while i < edits.len() && edits[i].kind != EditKind::Equal {
+            match edits[i].kind {
+                EditKind::Delete => {
+                    base_ix += 1;
+                }
+                EditKind::Insert => {
+                    new_lines.push(map_insert(edits[i].new.unwrap_or_default()));
+                }
+                EditKind::Equal => unreachable!(),
+            }
+            i += 1;
+        }
+
+        hunks.push(DiffHunk {
+            base_start: hunk_base_start,
+            base_end: base_ix,
+            new_lines,
+        });
+    }
+
+    hunks
+}
+
+/// Reconstruct one side's sequence for a base range by applying hunks.
+pub(crate) fn reconstruct_side_with<'a, H, T, FStart, FEnd, FBase, FHunk>(
+    base_lines: &'a [&'a str],
+    range_start: usize,
+    range_end: usize,
+    hunks: &[H],
+    output: &mut Vec<T>,
+    mut hunk_base_start: FStart,
+    mut hunk_base_end: FEnd,
+    mut map_base_line: FBase,
+    mut extend_hunk_lines: FHunk,
+) where
+    FStart: FnMut(&H) -> usize,
+    FEnd: FnMut(&H) -> usize,
+    FBase: FnMut(&'a str) -> T,
+    FHunk: FnMut(&H, &mut Vec<T>),
+{
+    let mut pos = range_start;
+
+    for hunk in hunks {
+        let base_limit = hunk_base_start(hunk).min(range_end).min(base_lines.len());
+        for &line in &base_lines[pos..base_limit] {
+            output.push(map_base_line(line));
+        }
+        extend_hunk_lines(hunk, output);
+        pos = hunk_base_end(hunk);
+    }
+
+    let tail_limit = range_end.min(base_lines.len());
+    for &line in &base_lines[pos..tail_limit] {
+        output.push(map_base_line(line));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -787,31 +876,77 @@ fn eof_newline_delta(old_text: &str, new_text: &str) -> Option<FileDiffEofNewlin
     }
 }
 
-/// Trivial fallback for inputs too large for Myers: emit all deletes then all inserts.
 fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
-    // Avoid unchecked capacity arithmetic here: this fallback is used when
-    // extremely large inputs would make the regular Myers bookkeeping unsafe.
+    // Keep fallback linear by only preserving common prefix/suffix and
+    // representing the interior as delete/insert spans.
+    let mut prefix = 0usize;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old.len()
+        && prefix + suffix < new.len()
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_mid_end = old.len().saturating_sub(suffix);
+    let new_mid_end = new.len().saturating_sub(suffix);
+
     let mut edits = Vec::new();
-    for &line in old {
+    for i in 0..prefix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[i]),
+            new: Some(new[i]),
+        });
+    }
+    for &line in &old[prefix..old_mid_end] {
         edits.push(Edit {
             kind: EditKind::Delete,
             old: Some(line),
             new: None,
         });
     }
-    for &line in new {
+    for &line in &new[prefix..new_mid_end] {
         edits.push(Edit {
             kind: EditKind::Insert,
             old: None,
             new: Some(line),
         });
     }
+    for i in 0..suffix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[old_mid_end + i]),
+            new: Some(new[new_mid_end + i]),
+        });
+    }
     edits
 }
 
+fn should_use_myers_size_fallback(
+    old_len: usize,
+    new_len: usize,
+    max_lines_per_side: usize,
+) -> bool {
+    old_len >= max_lines_per_side || new_len >= max_lines_per_side
+}
+
 pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
-    // Guard against overflow: if n + m exceeds isize::MAX, fall back to a
-    // simple delete-all / insert-all edit sequence.
+    // Configurable guardrail for the O((n+m)^2) trace storage in Myers.
+    let myers_max_lines_per_side = std::env::var(MYERS_MAX_LINES_PER_SIDE_ENV)
+        .ok()
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .filter(|&limit| limit > 0)
+        .unwrap_or(MYERS_MAX_LINES_PER_SIDE_DEFAULT);
+    if should_use_myers_size_fallback(old.len(), new.len(), myers_max_lines_per_side) {
+        return myers_fallback_edits(old, new);
+    }
+
+    // Guard against overflow: if n + m exceeds isize::MAX, use linear fallback.
     let Some(sum) = old.len().checked_add(new.len()) else {
         return myers_fallback_edits(old, new);
     };
@@ -996,6 +1131,83 @@ mod tests {
             new: Some(new.to_string()),
             eof_newline: None,
         }
+    }
+
+    #[test]
+    fn edits_to_hunks_with_builds_base_relative_hunks() {
+        let inserted = String::from("inserted");
+        let edits = vec![
+            Edit {
+                kind: EditKind::Equal,
+                old: Some("ctx"),
+                new: Some("ctx"),
+            },
+            Edit {
+                kind: EditKind::Delete,
+                old: Some("old"),
+                new: None,
+            },
+            Edit {
+                kind: EditKind::Insert,
+                old: None,
+                new: Some(inserted.as_str()),
+            },
+            Edit {
+                kind: EditKind::Equal,
+                old: Some("tail"),
+                new: Some("tail"),
+            },
+        ];
+
+        let hunks = edits_to_hunks_with(&edits, |line| line.to_string());
+        assert_eq!(
+            hunks,
+            vec![DiffHunk {
+                base_start: 1,
+                base_end: 2,
+                new_lines: vec!["inserted".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn reconstruct_side_with_applies_hunks_and_preserves_context() {
+        let base_lines = split_lines("a\nb\nc\n");
+        let hunks = vec![
+            DiffHunk {
+                base_start: 1,
+                base_end: 1,
+                new_lines: vec!["ins".to_string()],
+            },
+            DiffHunk {
+                base_start: 2,
+                base_end: 3,
+                new_lines: vec!["c2".to_string()],
+            },
+        ];
+        let mut output: Vec<String> = Vec::new();
+
+        reconstruct_side_with(
+            &base_lines,
+            0,
+            3,
+            &hunks,
+            &mut output,
+            |h| h.base_start,
+            |h| h.base_end,
+            |line| line.to_string(),
+            |h, out| out.extend(h.new_lines.iter().cloned()),
+        );
+
+        assert_eq!(
+            output,
+            vec![
+                "a".to_string(),
+                "ins".to_string(),
+                "b".to_string(),
+                "c2".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -1249,5 +1461,30 @@ mod tests {
         let second = side_by_side_rows_with_anchors(old, new);
         assert_eq!(first, second);
         assert_eq!(first.rows.len(), first.anchors.row_anchors.len());
+    }
+
+    #[test]
+    fn myers_fallback_preserves_common_prefix_and_suffix() {
+        let old = ["keep-1", "keep-2", "old-middle", "keep-3"];
+        let new = ["keep-1", "keep-2", "new-middle", "keep-3"];
+        let edits = myers_fallback_edits(&old, &new);
+
+        assert_eq!(
+            edits.iter().map(|edit| edit.kind).collect::<Vec<_>>(),
+            vec![
+                EditKind::Equal,
+                EditKind::Equal,
+                EditKind::Delete,
+                EditKind::Insert,
+                EditKind::Equal
+            ]
+        );
+    }
+
+    #[test]
+    fn myers_size_fallback_threshold_is_per_side_and_inclusive() {
+        assert!(!should_use_myers_size_fallback(4, 4, 5));
+        assert!(should_use_myers_size_fallback(5, 1, 5));
+        assert!(should_use_myers_size_fallback(1, 5, 5));
     }
 }

@@ -22,16 +22,16 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_remote_branches(Loadable::Loading);
     repo_state.set_status(Loadable::Loading);
     repo_state.set_log(Loadable::Loading);
-    repo_state.log_loading_more = false;
+    repo_state.set_log_loading_more(false);
     repo_state.set_stashes(Loadable::Loading);
     repo_state.reflog = Loadable::NotLoaded;
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
-    repo_state.file_history_path = None;
-    repo_state.file_history = Loadable::NotLoaded;
-    repo_state.blame_path = None;
-    repo_state.blame_rev = None;
-    repo_state.blame = Loadable::NotLoaded;
+    repo_state.history_state.file_history_path = None;
+    repo_state.history_state.file_history = Loadable::NotLoaded;
+    repo_state.history_state.blame_path = None;
+    repo_state.history_state.blame_rev = None;
+    repo_state.history_state.blame = Loadable::NotLoaded;
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
     repo_state.set_selected_commit(None);
@@ -79,7 +79,7 @@ pub(super) fn repo_externally_changed(
         }
     };
 
-    if let Some(target) = repo_state.diff_target.clone()
+    if let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
         effects.extend(diff_reload_effects(repo_id, target));
@@ -99,13 +99,13 @@ pub(super) fn set_history_scope(
 
     let workdir = {
         let repo_state = &mut state.repos[repo_ix];
-        if repo_state.history_scope == scope {
+        if repo_state.history_state.history_scope == scope {
             return Vec::new();
         }
 
         repo_state.set_log_scope(scope);
         repo_state.set_log(Loadable::Loading);
-        repo_state.log_loading_more = false;
+        repo_state.set_log_loading_more(false);
         repo_state.spec.workdir.clone()
     };
     let persist_result = session::persist_repo_history_scope(&workdir, scope);
@@ -140,7 +140,7 @@ pub(super) fn load_more_history(
         return Vec::new();
     };
 
-    if repo_state.log_loading_more {
+    if repo_state.history_state.log_loading_more {
         return Vec::new();
     }
 
@@ -153,13 +153,13 @@ pub(super) fn load_more_history(
 
     repo_state.set_log_loading_more(true);
     if repo_state.loads_in_flight.request_log(
-        repo_state.history_scope,
+        repo_state.history_state.history_scope,
         super::util::DEFAULT_LOG_PAGE_SIZE,
         Some(cursor.clone()),
     ) {
         vec![Effect::LoadLog {
             repo_id,
-            scope: repo_state.history_scope,
+            scope: repo_state.history_state.history_scope,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: Some(cursor),
         }]
@@ -229,7 +229,7 @@ pub(super) fn log_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
 
-        if repo_state.history_scope != scope {
+        if repo_state.history_state.history_scope != scope {
             if is_load_more {
                 repo_state.set_log_loading_more(false);
             }
@@ -251,7 +251,8 @@ pub(super) fn log_loaded(
                     let existing = Arc::make_mut(existing);
                     existing.commits.append(&mut page.commits);
                     existing.next_cursor = page.next_cursor;
-                    repo_state.log_rev = repo_state.log_rev.wrapping_add(1);
+                    repo_state.history_state.log_rev =
+                        repo_state.history_state.log_rev.wrapping_add(1);
                 } else {
                     repo_state.set_log(Loadable::Ready(Arc::new(page)));
                 }
@@ -302,7 +303,7 @@ pub(super) fn repo_action_finished(
     };
 
     let mut effects = refresh_primary_effects(repo_state);
-    if let Some(target) = repo_state.diff_target.clone()
+    if let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
         effects.extend(diff_reload_effects(repo_id, target));

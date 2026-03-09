@@ -1,10 +1,16 @@
 use crate::model::RepoId;
+use crate::session::SessionReposSnapshot;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub enum Effect {
+    PersistSession {
+        snapshot: SessionReposSnapshot,
+        repo_id: Option<RepoId>,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,

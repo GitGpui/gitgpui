@@ -485,6 +485,21 @@ impl MainPaneView {
         cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
     }
 
+    pub(in super::super::super) fn copy_diff_text_selection_or_region_line_to_clipboard(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let text = self.selected_diff_text_string().or_else(|| {
+            let line = self.diff_text_line_for_region(visible_ix, region);
+            (!line.is_empty()).then_some(line.to_string())
+        });
+        if let Some(text) = text {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        }
+    }
+
     pub(in super::super::super) fn open_diff_editor_context_menu(
         &mut self,
         visible_ix: usize,
@@ -499,7 +514,7 @@ impl MainPaneView {
         let repo_id = repo.id;
         let workdir = repo.spec.workdir.clone();
 
-        let (area, allow_apply) = match repo.diff_target.as_ref() {
+        let (area, allow_apply) = match repo.diff_state.diff_target.as_ref() {
             Some(DiffTarget::WorkingTree { area, .. }) => (*area, true),
             _ => (DiffArea::Unstaged, false),
         };
@@ -866,7 +881,8 @@ impl MainPaneView {
         let Some(repo) = self.active_repo() else {
             return false;
         };
-        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
+        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
+        else {
             return false;
         };
         if *area != DiffArea::Unstaged {

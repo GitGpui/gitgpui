@@ -20,10 +20,12 @@ pub(super) fn model(repo_id: RepoId, path: &std::path::Path) -> ContextMenuModel
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::WorktreeRemoveConfirm {
+            kind: PopoverKind::worktree(
                 repo_id,
-                path: path.to_path_buf(),
-            },
+                WorktreePopoverKind::RemoveConfirm {
+                    path: path.to_path_buf(),
+                },
+            ),
         }),
     });
 

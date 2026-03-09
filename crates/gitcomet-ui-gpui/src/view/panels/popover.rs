@@ -523,12 +523,23 @@ impl PopoverHost {
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
                 | PopoverKind::BranchSectionMenu { .. }
-                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
+                    ..
+                }
                 | PopoverKind::StashMenu { .. }
-                | PopoverKind::WorktreeSectionMenu { .. }
-                | PopoverKind::WorktreeMenu { .. }
-                | PopoverKind::SubmoduleSectionMenu { .. }
-                | PopoverKind::SubmoduleMenu { .. }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(
+                        WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    ),
+                    ..
+                }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(
+                        SubmodulePopoverKind::SectionMenu | SubmodulePopoverKind::Menu { .. },
+                    ),
+                    ..
+                }
                 | PopoverKind::CommitFileMenu { .. }
                 | PopoverKind::TagMenu { .. }
         );
@@ -637,7 +648,10 @@ impl PopoverHost {
                     let focus = self.create_tag_input.read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::RemoteAddPrompt { .. } => {
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                    ..
+                } => {
                     let theme = self.theme;
                     self.remote_name_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
@@ -654,7 +668,10 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::RemoteEditUrlPrompt { repo_id, name, .. } => {
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { name, .. }),
+                } => {
                     let theme = self.theme;
                     let text = self
                         .state
@@ -679,13 +696,25 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::RemoteUrlPicker { .. } | PopoverKind::RemoteRemovePicker { .. } => {
+                PopoverKind::Repo {
+                    kind:
+                        RepoPopoverKind::Remote(
+                            RemotePopoverKind::UrlPicker { .. } | RemotePopoverKind::RemovePicker,
+                        ),
+                    ..
+                } => {
                     let _ = self.ensure_remote_picker_search_input(window, cx);
                 }
-                PopoverKind::RemoteBranchDeletePicker { .. } => {
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::BranchDeletePicker { .. }),
+                    ..
+                } => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
                 }
-                PopoverKind::WorktreeAddPrompt { .. } => {
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    ..
+                } => {
                     let theme = self.theme;
                     self.worktree_path_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
@@ -702,13 +731,21 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::WorktreeOpenPicker { repo_id }
-                | PopoverKind::WorktreeRemovePicker { repo_id } => {
+                PopoverKind::Repo {
+                    repo_id,
+                    kind:
+                        RepoPopoverKind::Worktree(
+                            WorktreePopoverKind::OpenPicker | WorktreePopoverKind::RemovePicker,
+                        ),
+                } => {
                     let _ = self.ensure_worktree_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
                 }
-                PopoverKind::SubmoduleAddPrompt { .. } => {
+                PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                    ..
+                } => {
                     let theme = self.theme;
                     self.submodule_url_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
@@ -725,8 +762,13 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus);
                 }
-                PopoverKind::SubmoduleOpenPicker { repo_id }
-                | PopoverKind::SubmoduleRemovePicker { repo_id } => {
+                PopoverKind::Repo {
+                    repo_id,
+                    kind:
+                        RepoPopoverKind::Submodule(
+                            SubmodulePopoverKind::OpenPicker | SubmodulePopoverKind::RemovePicker,
+                        ),
+                } => {
                     let _ = self.ensure_submodule_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadSubmodules { repo_id: *repo_id });
@@ -974,12 +1016,23 @@ impl PopoverHost {
                 | PopoverKind::StatusFileMenu { .. }
                 | PopoverKind::BranchMenu { .. }
                 | PopoverKind::BranchSectionMenu { .. }
-                | PopoverKind::RemoteMenu { .. }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { .. }),
+                    ..
+                }
                 | PopoverKind::StashMenu { .. }
-                | PopoverKind::WorktreeSectionMenu { .. }
-                | PopoverKind::WorktreeMenu { .. }
-                | PopoverKind::SubmoduleSectionMenu { .. }
-                | PopoverKind::SubmoduleMenu { .. }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(
+                        WorktreePopoverKind::SectionMenu | WorktreePopoverKind::Menu { .. },
+                    ),
+                    ..
+                }
+                | PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(
+                        SubmodulePopoverKind::SectionMenu | SubmodulePopoverKind::Menu { .. },
+                    ),
+                    ..
+                }
                 | PopoverKind::CommitFileMenu { .. }
         );
 
@@ -993,19 +1046,37 @@ impl PopoverHost {
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::RebasePrompt { .. }
             | PopoverKind::CreateTagPrompt { .. }
-            | PopoverKind::RemoteAddPrompt { .. }
-            | PopoverKind::RemoteUrlPicker { .. }
-            | PopoverKind::RemoteRemovePicker { .. }
-            | PopoverKind::RemoteEditUrlPrompt { .. }
-            | PopoverKind::RemoteRemoveConfirm { .. }
-            | PopoverKind::WorktreeAddPrompt { .. }
-            | PopoverKind::WorktreeOpenPicker { .. }
-            | PopoverKind::WorktreeRemovePicker { .. }
-            | PopoverKind::WorktreeRemoveConfirm { .. }
-            | PopoverKind::SubmoduleAddPrompt { .. }
-            | PopoverKind::SubmoduleOpenPicker { .. }
-            | PopoverKind::SubmoduleRemovePicker { .. }
-            | PopoverKind::SubmoduleRemoveConfirm { .. }
+            | PopoverKind::Repo {
+                kind:
+                    RepoPopoverKind::Remote(
+                        RemotePopoverKind::AddPrompt
+                        | RemotePopoverKind::UrlPicker { .. }
+                        | RemotePopoverKind::RemovePicker
+                        | RemotePopoverKind::EditUrlPrompt { .. }
+                        | RemotePopoverKind::RemoveConfirm { .. },
+                    ),
+                ..
+            }
+            | PopoverKind::Repo {
+                kind:
+                    RepoPopoverKind::Worktree(
+                        WorktreePopoverKind::AddPrompt
+                        | WorktreePopoverKind::OpenPicker
+                        | WorktreePopoverKind::RemovePicker
+                        | WorktreePopoverKind::RemoveConfirm { .. },
+                    ),
+                ..
+            }
+            | PopoverKind::Repo {
+                kind:
+                    RepoPopoverKind::Submodule(
+                        SubmodulePopoverKind::AddPrompt
+                        | SubmodulePopoverKind::OpenPicker
+                        | SubmodulePopoverKind::RemovePicker
+                        | SubmodulePopoverKind::RemoveConfirm { .. },
+                    ),
+                ..
+            }
             | PopoverKind::PushSetUpstreamPrompt { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
@@ -1064,7 +1135,7 @@ impl PopoverHost {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
 
-                    match &repo.conflict_file {
+                    match &repo.conflict_state.conflict_file {
                     Loadable::NotLoaded | Loadable::Loading => {
                         components::empty_state(theme, title, "Loading…")
                     }
@@ -1383,48 +1454,90 @@ impl PopoverHost {
             PopoverKind::CreateTagPrompt { repo_id, target } => {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
-            PopoverKind::RemoteAddPrompt { repo_id } => remote_add_prompt::panel(self, repo_id, cx),
-            PopoverKind::RemoteUrlPicker { repo_id, kind } => {
-                remote_url_picker::panel(self, repo_id, kind, cx)
-            }
-            PopoverKind::RemoteEditUrlPrompt {
-                repo_id,
-                name,
-                kind,
-            } => remote_edit_url_prompt::panel(self, repo_id, name, kind, cx),
-            PopoverKind::RemoteRemovePicker { repo_id } => {
-                remote_remove_picker::panel(self, repo_id, cx)
-            }
-            PopoverKind::RemoteBranchDeletePicker { repo_id, remote } => {
-                remote_branch_delete_picker::panel(self, repo_id, remote, cx)
-            }
-            PopoverKind::RemoteRemoveConfirm { repo_id, name } => {
-                remote_remove_confirm::panel(self, repo_id, name, cx)
-            }
-            PopoverKind::WorktreeAddPrompt { repo_id } => {
-                worktree_add_prompt::panel(self, repo_id, cx)
-            }
-            PopoverKind::WorktreeOpenPicker { repo_id } => {
-                worktree_open_picker::panel(self, repo_id, cx)
-            }
-            PopoverKind::WorktreeRemovePicker { repo_id } => {
-                worktree_remove_picker::panel(self, repo_id, cx)
-            }
-            PopoverKind::WorktreeRemoveConfirm { repo_id, path } => {
-                worktree_remove_confirm::panel(self, repo_id, path, cx)
-            }
-            PopoverKind::SubmoduleAddPrompt { repo_id } => {
-                submodule_add_prompt::panel(self, repo_id, cx)
-            }
-            PopoverKind::SubmoduleOpenPicker { repo_id } => {
-                submodule_open_picker::panel(self, repo_id, cx)
-            }
-            PopoverKind::SubmoduleRemovePicker { repo_id } => {
-                submodule_remove_picker::panel(self, repo_id, cx)
-            }
-            PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => {
-                submodule_remove_confirm::panel(self, repo_id, path, cx)
-            }
+            PopoverKind::Repo { repo_id, kind } => match kind {
+                RepoPopoverKind::Remote(remote_kind) => match remote_kind {
+                    RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
+                    RemotePopoverKind::UrlPicker { kind } => {
+                        remote_url_picker::panel(self, repo_id, kind, cx)
+                    }
+                    RemotePopoverKind::RemovePicker => {
+                        remote_remove_picker::panel(self, repo_id, cx)
+                    }
+                    RemotePopoverKind::BranchDeletePicker { remote } => {
+                        remote_branch_delete_picker::panel(self, repo_id, remote, cx)
+                    }
+                    RemotePopoverKind::EditUrlPrompt { name, kind } => {
+                        remote_edit_url_prompt::panel(self, repo_id, name, kind, cx)
+                    }
+                    RemotePopoverKind::RemoveConfirm { name } => {
+                        remote_remove_confirm::panel(self, repo_id, name, cx)
+                    }
+                    RemotePopoverKind::DeleteBranchConfirm { remote, branch } => {
+                        delete_remote_branch_confirm::panel(self, repo_id, remote, branch, cx)
+                    }
+                    RemotePopoverKind::Menu { name } => self
+                        .context_menu_view(
+                            PopoverKind::remote(repo_id, RemotePopoverKind::Menu { name }),
+                            cx,
+                        )
+                        .min_w(px(160.0))
+                        .max_w(px(320.0)),
+                },
+                RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
+                    WorktreePopoverKind::SectionMenu => self
+                        .context_menu_view(
+                            PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
+                            cx,
+                        )
+                        .min_w(px(160.0))
+                        .max_w(px(320.0)),
+                    WorktreePopoverKind::Menu { path } => self
+                        .context_menu_view(
+                            PopoverKind::worktree(repo_id, WorktreePopoverKind::Menu { path }),
+                            cx,
+                        )
+                        .min_w(px(160.0))
+                        .max_w(px(320.0)),
+                    WorktreePopoverKind::AddPrompt => worktree_add_prompt::panel(self, repo_id, cx),
+                    WorktreePopoverKind::OpenPicker => {
+                        worktree_open_picker::panel(self, repo_id, cx)
+                    }
+                    WorktreePopoverKind::RemovePicker => {
+                        worktree_remove_picker::panel(self, repo_id, cx)
+                    }
+                    WorktreePopoverKind::RemoveConfirm { path } => {
+                        worktree_remove_confirm::panel(self, repo_id, path, cx)
+                    }
+                },
+                RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
+                    SubmodulePopoverKind::SectionMenu => self
+                        .context_menu_view(
+                            PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
+                            cx,
+                        )
+                        .min_w(px(160.0))
+                        .max_w(px(320.0)),
+                    SubmodulePopoverKind::Menu { path } => self
+                        .context_menu_view(
+                            PopoverKind::submodule(repo_id, SubmodulePopoverKind::Menu { path }),
+                            cx,
+                        )
+                        .min_w(px(160.0))
+                        .max_w(px(320.0)),
+                    SubmodulePopoverKind::AddPrompt => {
+                        submodule_add_prompt::panel(self, repo_id, cx)
+                    }
+                    SubmodulePopoverKind::OpenPicker => {
+                        submodule_open_picker::panel(self, repo_id, cx)
+                    }
+                    SubmodulePopoverKind::RemovePicker => {
+                        submodule_remove_picker::panel(self, repo_id, cx)
+                    }
+                    SubmodulePopoverKind::RemoveConfirm { path } => {
+                        submodule_remove_confirm::panel(self, repo_id, path, cx)
+                    }
+                },
+            },
             PopoverKind::FileHistory { repo_id, path } => {
                 file_history::panel(self, repo_id, path, cx)
             }
@@ -1454,11 +1567,6 @@ impl PopoverHost {
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }
-            PopoverKind::DeleteRemoteBranchConfirm {
-                repo_id,
-                remote,
-                branch,
-            } => delete_remote_branch_confirm::panel(self, repo_id, remote, branch, cx),
             PopoverKind::DiscardChangesConfirm {
                 repo_id,
                 area,
@@ -1604,10 +1712,6 @@ impl PopoverHost {
             PopoverKind::BranchSectionMenu { repo_id, section } => {
                 self.context_menu_view(PopoverKind::BranchSectionMenu { repo_id, section }, cx)
             }
-            PopoverKind::RemoteMenu { repo_id, name } => self
-                .context_menu_view(PopoverKind::RemoteMenu { repo_id, name }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
             PopoverKind::StashMenu {
                 repo_id,
                 index,
@@ -1623,22 +1727,6 @@ impl PopoverHost {
                 )
                 .min_w(px(180.0))
                 .max_w(px(360.0)),
-            PopoverKind::WorktreeSectionMenu { repo_id } => self
-                .context_menu_view(PopoverKind::WorktreeSectionMenu { repo_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
-            PopoverKind::WorktreeMenu { repo_id, path } => self
-                .context_menu_view(PopoverKind::WorktreeMenu { repo_id, path }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
-            PopoverKind::SubmoduleSectionMenu { repo_id } => self
-                .context_menu_view(PopoverKind::SubmoduleSectionMenu { repo_id }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
-            PopoverKind::SubmoduleMenu { repo_id, path } => self
-                .context_menu_view(PopoverKind::SubmoduleMenu { repo_id, path }, cx)
-                .min_w(px(160.0))
-                .max_w(px(320.0)),
             PopoverKind::CommitFileMenu {
                 repo_id,
                 commit_id,

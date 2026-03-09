@@ -93,11 +93,42 @@ pub struct Worktree {
     pub detached: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleStatus {
+    UpToDate,
+    NotInitialized,
+    HeadMismatch,
+    MergeConflict,
+    Unknown(char),
+}
+
+impl SubmoduleStatus {
+    pub fn from_git_status_marker(marker: char) -> Self {
+        match marker {
+            ' ' => Self::UpToDate,
+            '-' => Self::NotInitialized,
+            '+' => Self::HeadMismatch,
+            'U' => Self::MergeConflict,
+            other => Self::Unknown(other),
+        }
+    }
+
+    pub fn git_status_marker(self) -> char {
+        match self {
+            Self::UpToDate => ' ',
+            Self::NotInitialized => '-',
+            Self::HeadMismatch => '+',
+            Self::MergeConflict => 'U',
+            Self::Unknown(marker) => marker,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Submodule {
     pub path: PathBuf,
     pub head: CommitId,
-    pub status: char,
+    pub status: SubmoduleStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -219,7 +250,7 @@ impl Diff {
                 || raw.starts_with("Binary files ")
             {
                 DiffLineKind::Header
-            } else if raw.starts_with('+') && !raw.starts_with("+++") {
+            } else if raw.starts_with('+') && !raw.starts_with("+++ ") {
                 DiffLineKind::Add
             } else if raw.starts_with('-') && !raw.starts_with("---") {
                 DiffLineKind::Remove
@@ -263,4 +294,36 @@ pub struct LogPage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LogCursor {
     pub last_seen: CommitId,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SubmoduleStatus;
+
+    #[test]
+    fn submodule_status_maps_known_git_markers() {
+        assert_eq!(
+            SubmoduleStatus::from_git_status_marker(' '),
+            SubmoduleStatus::UpToDate
+        );
+        assert_eq!(
+            SubmoduleStatus::from_git_status_marker('-'),
+            SubmoduleStatus::NotInitialized
+        );
+        assert_eq!(
+            SubmoduleStatus::from_git_status_marker('+'),
+            SubmoduleStatus::HeadMismatch
+        );
+        assert_eq!(
+            SubmoduleStatus::from_git_status_marker('U'),
+            SubmoduleStatus::MergeConflict
+        );
+    }
+
+    #[test]
+    fn submodule_status_round_trips_unknown_git_marker() {
+        let status = SubmoduleStatus::from_git_status_marker('M');
+        assert_eq!(status, SubmoduleStatus::Unknown('M'));
+        assert_eq!(status.git_status_marker(), 'M');
+    }
 }

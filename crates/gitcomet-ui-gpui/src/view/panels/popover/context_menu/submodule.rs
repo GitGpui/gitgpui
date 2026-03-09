@@ -33,10 +33,10 @@ pub(super) fn model(
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::SubmoduleRemoveConfirm {
+            kind: PopoverKind::submodule(
                 repo_id,
-                path: path.clone(),
-            },
+                SubmodulePopoverKind::RemoveConfirm { path: path.clone() },
+            ),
         }),
     });
 

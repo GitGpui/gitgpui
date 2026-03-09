@@ -448,7 +448,7 @@ fn apply_region_resolution_to_block(
 /// Apply state-layer region resolutions to parsed UI marker segments.
 ///
 /// This allows resolver rebuilds to preserve choices tracked in
-/// `RepoState.conflict_session`, and materializes manual/auto-resolved
+/// `RepoState.conflict_state.conflict_session`, and materializes manual/auto-resolved
 /// non-side-pick text into plain `Text` segments when needed.
 ///
 /// Returns how many conflict regions were applied.

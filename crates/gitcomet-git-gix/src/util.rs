@@ -1,18 +1,102 @@
-use gitcomet_core::domain::{
-    Commit, CommitFileChange, CommitId, FileStatusKind, LogPage, RemoteBranch,
-};
+use gitcomet_core::domain::{Commit, CommitFileChange, CommitId, FileStatusKind, LogPage};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::ffi::OsString;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 use std::str;
-use std::time::{Duration, SystemTime};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
-pub(crate) fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
-    let output = cmd
-        .output()
+#[cfg(test)]
+use gitcomet_core::domain::RemoteBranch;
+
+const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
+const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
+const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
+
+fn git_command_timeout() -> Duration {
+    std::env::var(GIT_COMMAND_TIMEOUT_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(GIT_COMMAND_TIMEOUT_DEFAULT_SECS))
+}
+
+fn configure_non_interactive_git(cmd: &mut Command) {
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdin(Stdio::null());
+}
+
+fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> {
+    configure_non_interactive_git(&mut cmd);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
         .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+    let stdout = child.stdout.take();
+    let stdout_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let stderr = child.stderr.take();
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut stderr) = stderr {
+            let _ = stderr.read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let timeout = git_command_timeout();
+    let start = Instant::now();
+    let mut timed_out = false;
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    timed_out = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+                    }
+                }
+                thread::sleep(GIT_COMMAND_WAIT_POLL);
+            }
+            Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+        }
+    };
+
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+
+    if timed_out {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "{label} timed out after {} seconds (set {GIT_COMMAND_TIMEOUT_ENV} to override)",
+            timeout.as_secs()
+        ))));
+    }
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+pub(crate) fn run_git_simple(cmd: Command, label: &str) -> Result<()> {
+    let output = run_git_output_with_timeout(cmd, label)?;
 
     if !output.status.success() {
         let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
@@ -21,6 +105,30 @@ pub(crate) fn run_git_simple(mut cmd: Command, label: &str) -> Result<()> {
         ))));
     }
 
+    Ok(())
+}
+
+pub(crate) fn validate_ref_like_arg(value: &str, kind: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "invalid {kind}: value is empty"
+        ))));
+    }
+    if value.starts_with('-') {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "invalid {kind}: values starting with '-' are not allowed"
+        ))));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_hex_commit_id(id: &CommitId) -> Result<()> {
+    let value = id.as_ref();
+    if value.is_empty() || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::new(ErrorKind::Backend(
+            "invalid commit id: must contain only hexadecimal characters".to_string(),
+        )));
+    }
     Ok(())
 }
 
@@ -159,10 +267,8 @@ pub(crate) fn run_git_simple_with_paths(
     Ok(())
 }
 
-pub(crate) fn run_git_with_output(mut cmd: Command, label: &str) -> Result<CommandOutput> {
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+pub(crate) fn run_git_with_output(cmd: Command, label: &str) -> Result<CommandOutput> {
+    let output = run_git_output_with_timeout(cmd, label)?;
 
     let exit_code = output.status.code();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -188,10 +294,8 @@ pub(crate) fn run_git_with_output(mut cmd: Command, label: &str) -> Result<Comma
     })
 }
 
-pub(crate) fn run_git_capture(mut cmd: Command, label: &str) -> Result<String> {
-    let output = cmd
-        .output()
-        .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+pub(crate) fn run_git_capture(cmd: Command, label: &str) -> Result<String> {
+    let output = run_git_output_with_timeout(cmd, label)?;
 
     if !output.status.success() {
         let stderr = str::from_utf8(&output.stderr).unwrap_or("<non-utf8 stderr>");
@@ -259,6 +363,17 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
     }
 }
 
+fn pathbuf_from_git_output_path(path: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(path.replace('/', "\\"))
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from(path)
+    }
+}
+
 pub(crate) fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
     let line = line.trim_end_matches(&['\n', '\r'][..]);
     if line.is_empty() {
@@ -296,7 +411,7 @@ pub(crate) fn parse_name_status_line(line: &str) -> Option<CommitFileChange> {
     }
 
     Some(CommitFileChange {
-        path: PathBuf::from(path),
+        path: pathbuf_from_git_output_path(path),
         kind,
     })
 }
@@ -319,6 +434,7 @@ pub(crate) fn parse_reflog_index(selector: &str) -> Option<usize> {
     selector[start..end].parse::<usize>().ok()
 }
 
+#[cfg(test)]
 pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
     let approx_branches = output
         .as_bytes()
@@ -685,6 +801,18 @@ mod tests {
 
         assert_eq!(parsed.path, PathBuf::from("file with spaces"));
         assert_eq!(parsed.kind, FileStatusKind::Added);
+    }
+
+    #[test]
+    fn parse_name_status_line_normalizes_git_separators_to_platform_path() {
+        let parsed = parse_name_status_line("M\tnested/file.txt")
+            .expect("name-status line with nested path should parse");
+
+        assert_eq!(parsed.path, Path::new("nested").join("file.txt"));
+        assert_eq!(parsed.kind, FileStatusKind::Modified);
+
+        #[cfg(windows)]
+        assert_eq!(parsed.path.to_string_lossy(), r"nested\file.txt");
     }
 
     #[test]

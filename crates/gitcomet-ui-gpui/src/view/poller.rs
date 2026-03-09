@@ -19,17 +19,14 @@ impl Poller {
                 }
                 while events.try_recv().is_ok() {}
 
-                // Avoid blocking the UI thread on cloning large state.
-                // This still does a full snapshot clone today, but now it happens only when the
-                // store reports state changes (no 10ms polling loop), and coalescing ensures
-                // we do at most one pending update.
+                // Keep the store lock/read work off the UI thread.
                 let snapshot = smol::unblock({
                     let store = Arc::clone(&store);
                     move || store.snapshot()
                 })
                 .await;
 
-                let _ = model.update(cx, |model, cx| model.set_state(Arc::new(snapshot), cx));
+                let _ = model.update(cx, |model, cx| model.set_state(snapshot, cx));
             }
         });
 

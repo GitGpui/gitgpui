@@ -163,7 +163,7 @@ impl DetailsPaneView {
             return Vec::new();
         };
         let unstaged = &status.unstaged;
-        let selected = repo.diff_target.as_ref();
+        let selected = repo.diff_state.diff_target.as_ref();
         let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Unstaged);
         let multi_select_active = !selected_paths.is_empty();
         let theme = this.theme;
@@ -209,7 +209,7 @@ impl DetailsPaneView {
             return Vec::new();
         };
         let staged = &status.staged;
-        let selected = repo.diff_target.as_ref();
+        let selected = repo.diff_state.diff_target.as_ref();
         let selected_paths = this.status_selected_paths_for_area(repo.id, DiffArea::Staged);
         let multi_select_active = !selected_paths.is_empty();
         let theme = this.theme;

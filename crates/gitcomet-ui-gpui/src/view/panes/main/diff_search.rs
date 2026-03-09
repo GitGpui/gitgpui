@@ -8,7 +8,7 @@ impl MainPaneView {
         Option<gitcomet_core::domain::FileConflictKind>,
     )> {
         let repo = self.active_repo()?;
-        let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
         };
         if *area != DiffArea::Unstaged {
@@ -68,9 +68,9 @@ impl MainPaneView {
                         diff_mode: self.conflict_resolver.diff_mode,
                         marker_segments: &self.conflict_resolver.marker_segments,
                         three_way_visible_map: &self.conflict_resolver.three_way_visible_map,
-                        three_way_base_lines: &self.conflict_resolver.three_way_base_lines,
-                        three_way_ours_lines: &self.conflict_resolver.three_way_ours_lines,
-                        three_way_theirs_lines: &self.conflict_resolver.three_way_theirs_lines,
+                        three_way_base_lines: &self.conflict_resolver.three_way_lines.base,
+                        three_way_ours_lines: &self.conflict_resolver.three_way_lines.ours,
+                        three_way_theirs_lines: &self.conflict_resolver.three_way_lines.theirs,
                         diff_visible_row_indices: &self.conflict_resolver.diff_visible_row_indices,
                         inline_visible_row_indices: &self
                             .conflict_resolver

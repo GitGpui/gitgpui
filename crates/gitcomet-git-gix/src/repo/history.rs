@@ -1,5 +1,5 @@
 use super::GixRepo;
-use crate::util::run_git_with_output;
+use crate::util::{run_git_with_output, validate_ref_like_arg};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, ResetMode, Result};
 use std::process::Command;
@@ -11,6 +11,8 @@ impl GixRepo {
         target: &str,
         mode: ResetMode,
     ) -> Result<CommandOutput> {
+        validate_ref_like_arg(target, "reset target")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C").arg(&self.spec.workdir).arg("reset");
         let mode_flag = match mode {
@@ -24,10 +26,13 @@ impl GixRepo {
     }
 
     pub(super) fn rebase_with_output_impl(&self, onto: &str) -> Result<CommandOutput> {
+        validate_ref_like_arg(onto, "rebase target")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("rebase")
+            .arg("--")
             .arg(onto);
         run_git_with_output(cmd, &format!("git rebase {onto}"))
     }
@@ -137,7 +142,7 @@ impl GixRepo {
             .iter()
             .rposition(|l| !l.trim().is_empty())
             .map(|ix| ix + 1)
-            .unwrap_or(start);
+            .unwrap_or(start + 1);
 
         let message = lines[start..end].join("\n");
         if message.trim().is_empty() {

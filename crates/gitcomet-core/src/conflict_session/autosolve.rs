@@ -4,7 +4,10 @@ use super::{
     AutosolvePickSide, AutosolveRule, ConflictRegion, ConflictRegionResolution,
     RegexAutosolveOptions,
 };
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
+
+const USER_REGEX_SIZE_LIMIT: usize = 1_048_576; // 1 MiB
+const USER_REGEX_DFA_SIZE_LIMIT: usize = 1_048_576; // 1 MiB
 
 #[derive(Clone)]
 pub(super) struct CompiledRegexAutosolvePattern {
@@ -194,7 +197,11 @@ pub(super) fn compile_regex_patterns(
     }
     let mut compiled = Vec::with_capacity(options.patterns.len());
     for pattern in &options.patterns {
-        let regex = Regex::new(&pattern.pattern).ok()?;
+        let regex = RegexBuilder::new(&pattern.pattern)
+            .size_limit(USER_REGEX_SIZE_LIMIT)
+            .dfa_size_limit(USER_REGEX_DFA_SIZE_LIMIT)
+            .build()
+            .ok()?;
         compiled.push(CompiledRegexAutosolvePattern {
             regex,
             replacement: pattern.replacement.clone(),

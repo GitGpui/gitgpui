@@ -1,7 +1,34 @@
 use super::*;
 
-#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 const ICON_SIZES: &[u32] = &[32, 48, 128, 256, 512];
+
+fn desktop_entry_exec_path_arg(exe: &std::path::Path) -> String {
+    let exe = exe.as_os_str().to_string_lossy();
+    let mut escaped = String::with_capacity(exe.len() + 16);
+    escaped.push('"');
+    for ch in exe.chars() {
+        match ch {
+            // Desktop entry field code escape.
+            '%' => escaped.push_str("%%"),
+            // Exec strings are unescaped once as generic strings, then again as command args.
+            '\\' => escaped.push_str("\\\\\\\\"),
+            '$' => escaped.push_str("\\\\$"),
+            '"' => escaped.push_str("\\\""),
+            '`' => escaped.push_str("\\`"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push('"');
+    escaped
+}
+
+fn should_auto_install_linux_desktop_integration(
+    no_desktop_install_flag_present: bool,
+    _xdg_current_desktop: Option<&str>,
+) -> bool {
+    // `.desktop` entries follow the FreeDesktop spec, so installation is not GNOME-specific.
+    !no_desktop_install_flag_present
+}
 
 impl GitCometView {
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -11,17 +38,11 @@ impl GitCometView {
     ) {
         use std::path::PathBuf;
 
-        if std::env::var_os("GITCOMET_NO_DESKTOP_INSTALL").is_some() {
-            return;
-        }
-
-        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-        const GNOME: &[u8] = b"gnome";
-        if !desktop
-            .as_bytes()
-            .windows(GNOME.len())
-            .any(|window| window.eq_ignore_ascii_case(GNOME))
-        {
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+        if !should_auto_install_linux_desktop_integration(
+            std::env::var_os("GITCOMET_NO_DESKTOP_INSTALL").is_some(),
+            desktop.as_deref(),
+        ) {
             return;
         }
 
@@ -117,7 +138,11 @@ impl GitCometView {
                         for line in DESKTOP_TEMPLATE.lines() {
                             if line.starts_with("Exec=") {
                                 desktop_out.push_str("Exec=");
-                                let _ = writeln!(&mut desktop_out, "{}", exe.display());
+                                let _ = writeln!(
+                                    &mut desktop_out,
+                                    "{}",
+                                    desktop_entry_exec_path_arg(&exe)
+                                );
                             } else {
                                 desktop_out.push_str(line);
                                 desktop_out.push('\n');
@@ -165,5 +190,52 @@ impl GitCometView {
             },
         )
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{desktop_entry_exec_path_arg, should_auto_install_linux_desktop_integration};
+    use std::path::Path;
+
+    #[test]
+    fn desktop_exec_path_is_quoted() {
+        let escaped = desktop_entry_exec_path_arg(Path::new("/usr/local/bin/gitcomet"));
+        assert_eq!(escaped, "\"/usr/local/bin/gitcomet\"");
+    }
+
+    #[test]
+    fn desktop_exec_path_escapes_percent_and_spaces() {
+        let escaped = desktop_entry_exec_path_arg(Path::new("/opt/Git Comet/git%f"));
+        assert_eq!(escaped, "\"/opt/Git Comet/git%%f\"");
+    }
+
+    #[test]
+    fn desktop_exec_path_escapes_special_exec_chars() {
+        let escaped = desktop_entry_exec_path_arg(Path::new("/tmp/a\"b\\c$d`e"));
+        assert_eq!(escaped, "\"/tmp/a\\\"b\\\\\\\\c\\\\$d\\`e\"");
+    }
+
+    #[test]
+    fn auto_install_is_not_limited_to_gnome() {
+        for desktop in ["GNOME", "KDE", "XFCE", "sway", ""] {
+            assert!(
+                should_auto_install_linux_desktop_integration(false, Some(desktop)),
+                "expected desktop '{desktop}' to allow auto install"
+            );
+        }
+        assert!(should_auto_install_linux_desktop_integration(false, None));
+    }
+
+    #[test]
+    fn auto_install_respects_opt_out_flag() {
+        assert!(!should_auto_install_linux_desktop_integration(
+            true,
+            Some("GNOME")
+        ));
+        assert!(!should_auto_install_linux_desktop_integration(
+            true,
+            Some("KDE")
+        ));
     }
 }

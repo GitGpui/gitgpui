@@ -1,7 +1,7 @@
 use super::GixRepo;
 use crate::util::run_git_capture;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
-use gitcomet_core::domain::{DiffArea, DiffTarget, FileDiffImage, FileDiffText, FileStatusKind};
+use gitcomet_core::domain::{DiffArea, DiffTarget, FileConflictKind, FileDiffImage, FileDiffText};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result, decode_utf8_optional};
 use std::path::Path;
@@ -269,13 +269,8 @@ impl GixRepo {
 
     pub(super) fn conflict_session_impl(&self, path: &Path) -> Result<Option<ConflictSession>> {
         let repo_path = to_repo_path(path, &self.spec.workdir)?;
-        let status = self.status_impl()?;
-        let Some(conflict_kind) = status
-            .unstaged
-            .iter()
-            .find(|entry| entry.path == repo_path && entry.kind == FileStatusKind::Conflicted)
-            .and_then(|entry| entry.conflict)
-        else {
+        let repo = self._repo.to_thread_local();
+        let Some(conflict_kind) = gix_index_conflict_kind_optional(&repo, &repo_path)? else {
             return Ok(None);
         };
 
@@ -452,6 +447,53 @@ fn gix_index_stage_from_u8(stage: u8) -> Option<gix::index::entry::Stage> {
     }
 }
 
+fn conflict_kind_from_stage_mask(mask: u8) -> Option<FileConflictKind> {
+    Some(match mask {
+        0b001 => FileConflictKind::BothDeleted,
+        0b010 => FileConflictKind::AddedByUs,
+        0b011 => FileConflictKind::DeletedByThem,
+        0b100 => FileConflictKind::AddedByThem,
+        0b101 => FileConflictKind::DeletedByUs,
+        0b110 => FileConflictKind::BothAdded,
+        0b111 => FileConflictKind::BothModified,
+        _ => return None,
+    })
+}
+
+fn gix_index_conflict_kind_optional(
+    repo: &gix::Repository,
+    path: &Path,
+) -> Result<Option<FileConflictKind>> {
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+
+    let path = gix::path::os_str_into_bstr(path.as_os_str())
+        .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
+
+    let mut stage_mask = 0u8;
+    if index
+        .entry_by_path_and_stage(path, gix::index::entry::Stage::Base)
+        .is_some()
+    {
+        stage_mask |= 0b001;
+    }
+    if index
+        .entry_by_path_and_stage(path, gix::index::entry::Stage::Ours)
+        .is_some()
+    {
+        stage_mask |= 0b010;
+    }
+    if index
+        .entry_by_path_and_stage(path, gix::index::entry::Stage::Theirs)
+        .is_some()
+    {
+        stage_mask |= 0b100;
+    }
+
+    Ok(conflict_kind_from_stage_mask(stage_mask))
+}
+
 fn gix_index_stage_blob_bytes_optional(
     repo: &gix::Repository,
     path: &Path,
@@ -514,4 +556,43 @@ fn gix_first_parent_optional(repo: &gix::Repository, commit: &str) -> Result<Opt
         Err(_) => return Ok(None),
     };
     Ok(commit.parent_ids().next().map(|id| id.detach().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::conflict_kind_from_stage_mask;
+    use gitcomet_core::domain::FileConflictKind;
+
+    #[test]
+    fn conflict_kind_from_stage_mask_covers_all_shapes() {
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b001),
+            Some(FileConflictKind::BothDeleted)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b010),
+            Some(FileConflictKind::AddedByUs)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b011),
+            Some(FileConflictKind::DeletedByThem)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b100),
+            Some(FileConflictKind::AddedByThem)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b101),
+            Some(FileConflictKind::DeletedByUs)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b110),
+            Some(FileConflictKind::BothAdded)
+        );
+        assert_eq!(
+            conflict_kind_from_stage_mask(0b111),
+            Some(FileConflictKind::BothModified)
+        );
+        assert_eq!(conflict_kind_from_stage_mask(0), None);
+    }
 }

@@ -3,7 +3,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
 };
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, mpsc};
 
 use super::super::{RepoId, executor::TaskExecutor};
@@ -23,13 +23,42 @@ fn schedule_repo_command<F>(
         let result = run(repo);
         send_or_log(
             &msg_tx,
-            Msg::RepoCommandFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command,
                 result,
-            },
+            }),
         );
     });
+}
+
+fn normalize_worktree_relative_path(path: &Path) -> Result<PathBuf, Error> {
+    const OUTSIDE_WORKDIR_ERROR: &str = "refusing to write outside repository workdir";
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => normalized.push(part),
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(Error::new(ErrorKind::Backend(
+                        OUTSIDE_WORKDIR_ERROR.to_string(),
+                    )));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::new(ErrorKind::Backend(
+                    OUTSIDE_WORKDIR_ERROR.to_string(),
+                )));
+            }
+        }
+    }
+    if normalized.as_os_str().is_empty() {
+        return Err(Error::new(ErrorKind::Backend(
+            "worktree file path must not be empty".to_string(),
+        )));
+    }
+    Ok(normalized)
 }
 
 pub(super) fn schedule_save_worktree_file(
@@ -52,20 +81,21 @@ pub(super) fn schedule_save_worktree_file(
             stage,
         },
         move |repo| {
-            let full = repo.spec().workdir.join(&path);
+            let relative_path = normalize_worktree_relative_path(&path)?;
+            let full = repo.spec().workdir.join(&relative_path);
             if let Some(parent) = full.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             }
             std::fs::write(&full, contents.as_bytes())
                 .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
             if stage {
-                let path_ref: &Path = &path;
+                let path_ref: &Path = &relative_path;
                 repo.stage(&[path_ref])?;
             }
             Ok(CommandOutput {
                 command: format!(
                     "Save {}{}",
-                    path.display(),
+                    relative_path.display(),
                     if stage { " (staged)" } else { "" }
                 ),
                 stdout: String::new(),

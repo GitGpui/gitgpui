@@ -47,6 +47,19 @@ fn parse_mode_for_test(args: Vec<OsString>, env: &dyn EnvLookup) -> Result<AppMo
 }
 
 #[test]
+fn install_linux_script_does_not_use_invalid_debug_flag() {
+    let script_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install-linux.sh");
+    let script = std::fs::read_to_string(&script_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", script_path.display()));
+
+    assert!(
+        !script.contains("cargo build -p gitcomet-app --${mode}"),
+        "install script should not forward mode directly as a cargo flag"
+    );
+}
+
+#[test]
 fn parse_mode_mergetool_drops_empty_base_value_before_clap() {
     let dir = tempfile::tempdir().unwrap();
     let merged = tmp_file(&dir, "merged.txt", "conflict");
@@ -1645,6 +1658,34 @@ fn compat_parses_kdiff3_style_difftool_labels() {
             OsString::from("LEFT_LABEL"),
             OsString::from("--L2"),
             OsString::from("RIGHT_LABEL"),
+            local.into_os_string(),
+            remote.into_os_string(),
+        ],
+        &env,
+    )
+    .unwrap();
+
+    match mode {
+        AppMode::Difftool(config) => {
+            assert_eq!(config.label_left.as_deref(), Some("LEFT_LABEL"));
+            assert_eq!(config.label_right.as_deref(), Some("RIGHT_LABEL"));
+        }
+        _ => panic!("expected Difftool mode"),
+    }
+}
+
+#[test]
+fn compat_parses_kdiff3_style_difftool_short_numbered_equals_labels() {
+    let dir = tempfile::tempdir().unwrap();
+    let local = tmp_file(&dir, "left.txt", "left\n");
+    let remote = tmp_file(&dir, "right.txt", "right\n");
+    let env = TestEnv::new();
+
+    let mode = parse_mode_for_test(
+        vec![
+            OsString::from("gitcomet-app"),
+            OsString::from("-L1=LEFT_LABEL"),
+            OsString::from("-L2=RIGHT_LABEL"),
             local.into_os_string(),
             remote.into_os_string(),
         ],

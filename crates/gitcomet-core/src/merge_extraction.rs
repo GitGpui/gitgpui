@@ -548,6 +548,7 @@ fn sanitize_fixture_component(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::sync::OnceLock;
 
     #[cfg(windows)]

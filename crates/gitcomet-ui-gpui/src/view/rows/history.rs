@@ -42,6 +42,9 @@ impl MainPaneView {
             DiffSyntaxMode::HeuristicOnly
         };
         let language = this.worktree_preview_syntax_language;
+        let syntax_document = language.and_then(|language| {
+            prepare_diff_syntax_document(language, syntax_mode, lines.iter().map(String::as_str))
+        });
 
         let highlight_deleted_file = this.deleted_file_preview_abs_path().is_some();
         let highlight_new_file = this.untracked_worktree_preview_path().is_some()
@@ -63,7 +66,7 @@ impl MainPaneView {
                     .worktree_preview_segments_cache
                     .entry(ix)
                     .or_insert_with(|| {
-                        build_cached_diff_styled_text(
+                        build_cached_diff_styled_text_for_prepared_document_line(
                             theme,
                             line,
                             &[],
@@ -71,6 +74,8 @@ impl MainPaneView {
                             language,
                             syntax_mode,
                             None,
+                            syntax_document,
+                            ix,
                         )
                     });
 
@@ -128,7 +133,7 @@ impl HistoryView {
         range
             .filter_map(|list_ix| {
                 if show_working_tree_summary_row && list_ix == 0 {
-                    let selected = repo.selected_commit.is_none();
+                    let selected = repo.history_state.selected_commit.is_none();
                     return Some(working_tree_summary_history_row(
                         theme,
                         col_branch,
@@ -158,9 +163,9 @@ impl HistoryView {
                 let graph_row = cache.graph_rows.get(visible_ix)?;
                 let row_vm = cache.commit_row_vms.get(visible_ix)?;
                 let connect_incoming_node = show_working_tree_summary_row && visible_ix == 0;
-                let selected = repo.selected_commit.as_ref() == Some(&commit.id);
-                let show_graph_color_marker =
-                    repo.history_scope == gitcomet_core::domain::LogScope::AllBranches;
+                let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
+                let show_graph_color_marker = repo.history_state.history_scope
+                    == gitcomet_core::domain::LogScope::AllBranches;
                 let is_stash_node = row_vm.is_stash
                     || stash_ids
                         .as_ref()

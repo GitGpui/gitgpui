@@ -3,9 +3,10 @@ use crate::util::{run_git_capture, run_git_with_output};
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::time::SystemTime;
+use tempfile::NamedTempFile;
 
 impl GixRepo {
     pub(super) fn export_patch_with_output_impl(
@@ -48,16 +49,11 @@ impl GixRepo {
         patch: &str,
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let tmp_path = std::env::temp_dir().join(format!(
-            "gitcomet-index-patch-{}-{nanos}.patch",
-            std::process::id()
-        ));
-        std::fs::write(&tmp_path, patch.as_bytes())
+        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        tmp_file
+            .write_all(patch.as_bytes())
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_path = tmp_file.path();
 
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -77,9 +73,7 @@ impl GixRepo {
             format!("git apply --cached {}", tmp_path.display())
         };
 
-        let result = run_git_with_output(cmd, &label);
-        let _ = std::fs::remove_file(&tmp_path);
-        result
+        run_git_with_output(cmd, &label)
     }
 
     pub(super) fn apply_unified_patch_to_worktree_with_output_impl(
@@ -87,16 +81,11 @@ impl GixRepo {
         patch: &str,
         reverse: bool,
     ) -> Result<CommandOutput> {
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let tmp_path = std::env::temp_dir().join(format!(
-            "gitcomet-worktree-patch-{}-{nanos}.patch",
-            std::process::id()
-        ));
-        std::fs::write(&tmp_path, patch.as_bytes())
+        let mut tmp_file = NamedTempFile::new().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        tmp_file
+            .write_all(patch.as_bytes())
             .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_path = tmp_file.path();
 
         let mut cmd = Command::new("git");
         cmd.arg("-C")
@@ -115,8 +104,6 @@ impl GixRepo {
             format!("git apply {}", tmp_path.display())
         };
 
-        let result = run_git_with_output(cmd, &label);
-        let _ = std::fs::remove_file(&tmp_path);
-        result
+        run_git_with_output(cmd, &label)
     }
 }

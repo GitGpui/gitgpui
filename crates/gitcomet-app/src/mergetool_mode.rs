@@ -156,14 +156,6 @@ fn default_path_label(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-fn merged_filename(config: &MergetoolConfig) -> String {
-    config
-        .merged
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| config.merged.display().to_string())
-}
-
 /// Handle binary files with conservative 3-way heuristics:
 /// - clean when both sides are identical
 /// - clean when exactly one side changed from BASE (if BASE exists)
@@ -175,7 +167,7 @@ fn handle_binary_merge(
     local_bytes: &[u8],
     remote_bytes: &[u8],
 ) -> Result<MergetoolRunResult, String> {
-    let filename = merged_filename(config);
+    let filename = merged_display_name(config);
 
     if local_bytes == remote_bytes {
         write_merged_output(config, local_bytes)?;

@@ -13,6 +13,106 @@ use std::io::{self, Write};
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+trait AppRunResult {
+    fn stdout(&self) -> &str;
+    fn stderr(&self) -> &str {
+        ""
+    }
+    fn exit_code(&self) -> i32;
+}
+
+impl AppRunResult for difftool_mode::DifftoolRunResult {
+    fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    fn stderr(&self) -> &str {
+        &self.stderr
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+impl AppRunResult for mergetool_mode::MergetoolRunResult {
+    fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    fn stderr(&self) -> &str {
+        &self.stderr
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+impl AppRunResult for extract_fixtures_mode::ExtractMergeFixturesRunResult {
+    fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    fn stderr(&self) -> &str {
+        &self.stderr
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+impl AppRunResult for setup_mode::SetupResult {
+    fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+impl AppRunResult for setup_mode::UninstallResult {
+    fn stdout(&self) -> &str {
+        &self.stdout
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.exit_code
+    }
+}
+
+fn emit_result<R: AppRunResult, O: Write, E: Write>(
+    result: Result<R, String>,
+    stdout: &mut O,
+    stderr: &mut E,
+) -> i32 {
+    match result {
+        Ok(result) => {
+            if !result.stdout().is_empty() {
+                let _ = write!(stdout, "{}", result.stdout());
+            }
+            if !result.stderr().is_empty() {
+                let _ = write!(stderr, "{}", result.stderr());
+            }
+            let _ = stdout.flush();
+            let _ = stderr.flush();
+            result.exit_code()
+        }
+        Err(msg) => {
+            let _ = writeln!(stderr, "{msg}");
+            exit_code::ERROR
+        }
+    }
+}
+
+fn run_and_exit<R: AppRunResult>(result: Result<R, String>) -> ! {
+    let mut stdout = io::stdout();
+    let mut stderr = io::stderr();
+    std::process::exit(emit_result(result, &mut stdout, &mut stderr));
+}
+
 #[cfg(any(feature = "ui-gpui", test))]
 fn should_launch_focused_diff_gui(
     config: &cli::DifftoolConfig,
@@ -51,57 +151,40 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
 
-            match difftool_mode::run_difftool(&config) {
-                Ok(result) => {
-                    // When UI is available and --gui was requested, open a focused
-                    // GPUI diff window instead of printing raw text to stdout.
-                    #[cfg(feature = "ui-gpui")]
-                    if should_launch_focused_diff_gui(&config, &result) {
-                        let label_left = config
-                            .label_left
-                            .clone()
-                            .unwrap_or_else(|| path_label(&config.local));
-                        let label_right = config
-                            .label_right
-                            .clone()
-                            .unwrap_or_else(|| path_label(&config.remote));
+            let result = difftool_mode::run_difftool(&config);
 
-                        let gui_config = gitcomet_ui_gpui::FocusedDiffConfig {
-                            label_left,
-                            label_right,
-                            display_path: config.display_path.clone(),
-                            diff_text: result.stdout.clone(),
-                        };
-                        let code = gitcomet_ui_gpui::run_focused_diff(gui_config);
-                        std::process::exit(code);
-                    }
+            // When UI is available and --gui was requested, open a focused
+            // GPUI diff window instead of printing raw text to stdout.
+            #[cfg(feature = "ui-gpui")]
+            if let Ok(result) = &result {
+                if should_launch_focused_diff_gui(&config, result) {
+                    let label_left = config
+                        .label_left
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.local));
+                    let label_right = config
+                        .label_right
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.remote));
 
-                    if !result.stdout.is_empty() {
-                        print!("{}", result.stdout);
-                    }
-                    if !result.stderr.is_empty() {
-                        eprint!("{}", result.stderr);
-                    }
-                    let _ = io::stdout().flush();
-                    let _ = io::stderr().flush();
-                    std::process::exit(result.exit_code);
-                }
-                Err(msg) => {
-                    eprintln!("{msg}");
-                    std::process::exit(exit_code::ERROR);
+                    let gui_config = gitcomet_ui_gpui::FocusedDiffConfig {
+                        label_left,
+                        label_right,
+                        display_path: config.display_path.clone(),
+                        diff_text: result.stdout.clone(),
+                    };
+                    let code = gitcomet_ui_gpui::run_focused_diff(gui_config);
+                    std::process::exit(code);
                 }
             }
+
+            run_and_exit(result);
         }
         AppMode::Browser { path } => {
             #[cfg(feature = "ui")]
             {
                 let startup_crash_report = crashlog::take_startup_report();
                 let backend = build_backend();
-
-                // Pass path to the UI layer. The existing run() reads
-                // std::env::args_os().nth(1) internally, so for now we
-                // ignore `path` here — it is parsed for future use.
-                let _ = path;
 
                 if cfg!(feature = "ui-gpui") {
                     #[cfg(feature = "ui-gpui")]
@@ -115,6 +198,7 @@ fn main() {
                         });
                         if let Err(err) = gitcomet_ui_gpui::run_with_startup_crash_report(
                             backend.clone(),
+                            path.clone(),
                             startup_report,
                         ) {
                             eprintln!("Failed to launch GPUI browser UI: {err}");
@@ -156,110 +240,60 @@ fn main() {
                 std::process::exit(exit_code::ERROR);
             }
 
-            match mergetool_mode::run_mergetool(&config) {
-                Ok(result) => {
-                    // When UI is available, --gui was requested, and text
-                    // conflicts remain unresolved, open the focused GPUI merge
-                    // window for interactive resolution.
-                    #[cfg(feature = "ui-gpui")]
-                    if should_launch_focused_merge_gui(&config, &result) {
-                        let Some(repo_path) = resolve_mergetool_repo_path(&config.merged) else {
-                            eprintln!(
-                                "Failed to locate repository root for merged path {}",
-                                config.merged.display()
-                            );
-                            std::process::exit(exit_code::ERROR);
-                        };
+            let result = mergetool_mode::run_mergetool(&config);
 
-                        // Determine labels for display.
-                        let label_local = config
-                            .label_local
-                            .clone()
-                            .unwrap_or_else(|| path_label(&config.local));
-                        let label_remote = config
-                            .label_remote
-                            .clone()
-                            .unwrap_or_else(|| path_label(&config.remote));
-                        let label_base = config.label_base.clone().unwrap_or_else(|| {
-                            config
-                                .base
-                                .as_ref()
-                                .map(|p| path_label(p))
-                                .unwrap_or_else(|| "empty tree".to_string())
-                        });
+            // When UI is available, --gui was requested, and text
+            // conflicts remain unresolved, open the focused GPUI merge
+            // window for interactive resolution.
+            #[cfg(feature = "ui-gpui")]
+            if let Ok(result) = &result {
+                if should_launch_focused_merge_gui(&config, result) {
+                    let Some(repo_path) = resolve_mergetool_repo_path(&config.merged) else {
+                        eprintln!(
+                            "Failed to locate repository root for merged path {}",
+                            config.merged.display()
+                        );
+                        std::process::exit(exit_code::ERROR);
+                    };
 
-                        let gui_config = gitcomet_ui_gpui::FocusedMergetoolConfig {
-                            repo_path,
-                            conflicted_file_path: config.merged.clone(),
-                            label_local,
-                            label_remote,
-                            label_base,
-                        };
-                        let backend = build_backend();
-                        let code = gitcomet_ui_gpui::run_focused_mergetool(backend, gui_config);
-                        std::process::exit(code);
-                    }
+                    // Determine labels for display.
+                    let label_local = config
+                        .label_local
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.local));
+                    let label_remote = config
+                        .label_remote
+                        .clone()
+                        .unwrap_or_else(|| path_label(&config.remote));
+                    let label_base = config.label_base.clone().unwrap_or_else(|| {
+                        config
+                            .base
+                            .as_ref()
+                            .map(|p| path_label(p))
+                            .unwrap_or_else(|| "empty tree".to_string())
+                    });
 
-                    if !result.stdout.is_empty() {
-                        print!("{}", result.stdout);
-                    }
-                    if !result.stderr.is_empty() {
-                        eprint!("{}", result.stderr);
-                    }
-                    let _ = io::stdout().flush();
-                    let _ = io::stderr().flush();
-                    std::process::exit(result.exit_code);
-                }
-                Err(msg) => {
-                    eprintln!("{msg}");
-                    std::process::exit(exit_code::ERROR);
+                    let gui_config = gitcomet_ui_gpui::FocusedMergetoolConfig {
+                        repo_path,
+                        conflicted_file_path: config.merged.clone(),
+                        label_local,
+                        label_remote,
+                        label_base,
+                    };
+                    let backend = build_backend();
+                    let code = gitcomet_ui_gpui::run_focused_mergetool(backend, gui_config);
+                    std::process::exit(code);
                 }
             }
+
+            run_and_exit(result);
         }
-        AppMode::Setup { dry_run, local } => match setup_mode::run_setup(dry_run, local) {
-            Ok(result) => {
-                if !result.stdout.is_empty() {
-                    print!("{}", result.stdout);
-                }
-                let _ = io::stdout().flush();
-                std::process::exit(result.exit_code);
-            }
-            Err(msg) => {
-                eprintln!("{msg}");
-                std::process::exit(exit_code::ERROR);
-            }
-        },
-        AppMode::Uninstall { dry_run, local } => match setup_mode::run_uninstall(dry_run, local) {
-            Ok(result) => {
-                if !result.stdout.is_empty() {
-                    print!("{}", result.stdout);
-                }
-                let _ = io::stdout().flush();
-                std::process::exit(result.exit_code);
-            }
-            Err(msg) => {
-                eprintln!("{msg}");
-                std::process::exit(exit_code::ERROR);
-            }
-        },
+        AppMode::Setup { dry_run, local } => run_and_exit(setup_mode::run_setup(dry_run, local)),
+        AppMode::Uninstall { dry_run, local } => {
+            run_and_exit(setup_mode::run_uninstall(dry_run, local))
+        }
         AppMode::ExtractMergeFixtures(config) => {
-            match extract_fixtures_mode::run_extract_merge_fixtures(&config) {
-                Ok(result) => {
-                    if !result.stdout.is_empty() {
-                        print!("{}", result.stdout);
-                    }
-                    if !result.stderr.is_empty() {
-                        eprint!("{}", result.stderr);
-                    }
-                    let _ = io::stdout().flush();
-                    let _ = io::stderr().flush();
-                    std::process::exit(result.exit_code);
-                }
-                Err(msg) => {
-                    eprintln!("{msg}");
-                    std::process::exit(exit_code::ERROR);
-                }
-            }
+            run_and_exit(extract_fixtures_mode::run_extract_merge_fixtures(&config))
         }
     }
 }
@@ -330,6 +364,52 @@ fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::pat
 mod tests {
     use super::*;
     use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm, MergeResult};
+    use std::io::{self, Write};
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        bytes: Vec<u8>,
+        flush_count: usize,
+    }
+
+    impl RecordingWriter {
+        fn as_text(&self) -> &str {
+            std::str::from_utf8(&self.bytes).expect("writer should contain valid utf-8 in tests")
+        }
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.flush_count += 1;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestRunResult {
+        stdout: String,
+        stderr: String,
+        exit_code: i32,
+    }
+
+    impl AppRunResult for TestRunResult {
+        fn stdout(&self) -> &str {
+            &self.stdout
+        }
+
+        fn stderr(&self) -> &str {
+            &self.stderr
+        }
+
+        fn exit_code(&self) -> i32 {
+            self.exit_code
+        }
+    }
 
     fn mergetool_config(gui: bool, auto: bool) -> cli::MergetoolConfig {
         cli::MergetoolConfig {
@@ -478,5 +558,39 @@ mod tests {
         };
 
         assert!(!should_launch_focused_merge_gui(&config, &result));
+    }
+
+    #[test]
+    fn emit_result_writes_stdout_stderr_and_flushes() {
+        let result = Ok(TestRunResult {
+            stdout: "out".to_string(),
+            stderr: "err".to_string(),
+            exit_code: 7,
+        });
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let code = emit_result(result, &mut stdout, &mut stderr);
+
+        assert_eq!(code, 7);
+        assert_eq!(stdout.as_text(), "out");
+        assert_eq!(stderr.as_text(), "err");
+        assert_eq!(stdout.flush_count, 1);
+        assert_eq!(stderr.flush_count, 1);
+    }
+
+    #[test]
+    fn emit_result_writes_error_message_to_stderr() {
+        let mut stdout = RecordingWriter::default();
+        let mut stderr = RecordingWriter::default();
+
+        let code =
+            emit_result::<TestRunResult, _, _>(Err("boom".to_string()), &mut stdout, &mut stderr);
+
+        assert_eq!(code, exit_code::ERROR);
+        assert_eq!(stdout.as_text(), "");
+        assert_eq!(stderr.as_text(), "boom\n");
+        assert_eq!(stdout.flush_count, 0);
+        assert_eq!(stderr.flush_count, 0);
     }
 }

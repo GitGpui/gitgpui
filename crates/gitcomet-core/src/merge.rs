@@ -6,7 +6,11 @@
 //!
 //! Compatible with `git merge-file` marker format.
 
-use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
+use crate::file_diff::{
+    DiffHunk, Edit, edits_to_hunks_with, histogram_edits, myers_edits, reconstruct_side_with,
+    split_lines,
+};
+use std::borrow::Cow;
 use std::fmt;
 
 /// Default conflict marker width (matches git's default).
@@ -169,35 +173,27 @@ pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) 
 // ---------------------------------------------------------------------------
 
 /// A contiguous change from one side's diff against the base.
-#[derive(Clone, Debug)]
-struct Hunk {
-    /// Start index in base lines (inclusive).
-    base_start: usize,
-    /// End index in base lines (exclusive). Equals `base_start` for pure insertions.
-    base_end: usize,
-    /// The replacement lines.
-    new_lines: Vec<String>,
-}
+type Hunk<'a> = DiffHunk<Cow<'a, str>>;
 
 /// A merged hunk — either cleanly resolved or a conflict.
 #[derive(Clone, Debug)]
-enum MergedHunk {
+enum MergedHunk<'a> {
     /// Resolved: output these lines.
     Resolved {
         base_start: usize,
         base_end: usize,
-        lines: Vec<String>,
+        lines: Vec<Cow<'a, str>>,
     },
     /// Conflict: both sides changed the same base region differently.
     Conflict {
         base_start: usize,
         base_end: usize,
-        ours_lines: Vec<String>,
-        theirs_lines: Vec<String>,
+        ours_lines: Vec<Cow<'a, str>>,
+        theirs_lines: Vec<Cow<'a, str>>,
     },
 }
 
-impl MergedHunk {
+impl MergedHunk<'_> {
     fn base_start(&self) -> usize {
         match self {
             MergedHunk::Resolved { base_start, .. } => *base_start,
@@ -217,40 +213,8 @@ impl MergedHunk {
 // Diff → Hunk conversion
 // ---------------------------------------------------------------------------
 
-fn edits_to_hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
-    let mut hunks = Vec::new();
-    let mut base_ix = 0usize;
-    let mut i = 0;
-
-    while i < edits.len() {
-        if edits[i].kind == EditKind::Equal {
-            base_ix += 1;
-            i += 1;
-            continue;
-        }
-
-        let hunk_base_start = base_ix;
-        let mut new_lines = Vec::new();
-
-        while i < edits.len() && edits[i].kind != EditKind::Equal {
-            match edits[i].kind {
-                EditKind::Delete => base_ix += 1,
-                EditKind::Insert => {
-                    new_lines.push(edits[i].new.unwrap_or("").to_string());
-                }
-                EditKind::Equal => unreachable!(),
-            }
-            i += 1;
-        }
-
-        hunks.push(Hunk {
-            base_start: hunk_base_start,
-            base_end: base_ix,
-            new_lines,
-        });
-    }
-
-    hunks
+fn edits_to_hunks<'a>(edits: &[Edit<'a>]) -> Vec<Hunk<'a>> {
+    edits_to_hunks_with(edits, Cow::Borrowed)
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +222,11 @@ fn edits_to_hunks(edits: &[Edit<'_>]) -> Vec<Hunk> {
 // ---------------------------------------------------------------------------
 
 /// Merge two hunk lists into a sequence of resolved/conflict hunks.
-fn merge_hunks(base_lines: &[&str], ours: &[Hunk], theirs: &[Hunk]) -> Vec<MergedHunk> {
+fn merge_hunks<'a>(
+    base_lines: &'a [&'a str],
+    ours: &[Hunk<'a>],
+    theirs: &[Hunk<'a>],
+) -> Vec<MergedHunk<'a>> {
     let mut result = Vec::new();
     let mut oi = 0;
     let mut ti = 0;
@@ -373,7 +341,10 @@ fn merge_hunks(base_lines: &[&str], ours: &[Hunk], theirs: &[Hunk]) -> Vec<Merge
 /// Coalesce consecutive conflict hunks when the unchanged base context between
 /// them is adjacent or blank-only. This mirrors git's "zealous" behavior for
 /// reducing noisy back-to-back conflict markers.
-fn coalesce_zealous_conflicts(base_lines: &[&str], hunks: Vec<MergedHunk>) -> Vec<MergedHunk> {
+fn coalesce_zealous_conflicts<'a>(
+    base_lines: &'a [&'a str],
+    hunks: Vec<MergedHunk<'a>>,
+) -> Vec<MergedHunk<'a>> {
     let mut out = Vec::with_capacity(hunks.len());
 
     for hunk in hunks {
@@ -399,14 +370,11 @@ fn coalesce_zealous_conflicts(base_lines: &[&str], hunks: Vec<MergedHunk>) -> Ve
         {
             let start = (*last_base_end).min(base_lines.len());
             let end = (*next_base_start).min(base_lines.len());
-            let separator_lines: Vec<String> = base_lines[start..end]
-                .iter()
-                .map(|line| (*line).to_string())
-                .collect();
-
-            last_ours.extend(separator_lines.iter().cloned());
+            for &line in &base_lines[start..end] {
+                last_ours.push(Cow::Borrowed(line));
+                last_theirs.push(Cow::Borrowed(line));
+            }
             last_ours.extend(next_ours.iter().cloned());
-            last_theirs.extend(separator_lines);
             last_theirs.extend(next_theirs.iter().cloned());
             *last_base_end = *next_base_end;
             merged_into_previous = true;
@@ -433,29 +401,24 @@ fn blank_only_or_adjacent_separator(base_lines: &[&str], from: usize, to: usize)
 }
 
 /// Reconstruct the content of one side for a base line range, applying hunks.
-fn reconstruct_side(
-    base_lines: &[&str],
+fn reconstruct_side<'a>(
+    base_lines: &'a [&'a str],
     range_start: usize,
     range_end: usize,
-    hunks: &[Hunk],
-) -> Vec<String> {
-    let mut lines: Vec<String> = Vec::new();
-    let mut pos = range_start;
-
-    for hunk in hunks {
-        let base_limit = hunk.base_start.min(range_end).min(base_lines.len());
-        for &line in &base_lines[pos..base_limit] {
-            lines.push(line.to_string());
-        }
-        lines.extend(hunk.new_lines.iter().cloned());
-        pos = hunk.base_end;
-    }
-
-    let tail_limit = range_end.min(base_lines.len());
-    for &line in &base_lines[pos..tail_limit] {
-        lines.push(line.to_string());
-    }
-
+    hunks: &[Hunk<'a>],
+) -> Vec<Cow<'a, str>> {
+    let mut lines = Vec::new();
+    reconstruct_side_with(
+        base_lines,
+        range_start,
+        range_end,
+        hunks,
+        &mut lines,
+        |h| h.base_start,
+        |h| h.base_end,
+        Cow::Borrowed,
+        |h, out| out.extend(h.new_lines.iter().cloned()),
+    );
     lines
 }
 
@@ -466,7 +429,7 @@ fn reconstruct_side(
 /// Render merged hunks into final output text.
 fn render_merged(
     base_lines: &[&str],
-    merged_hunks: &[MergedHunk],
+    merged_hunks: &[MergedHunk<'_>],
     base_text: &str,
     ours_text: &str,
     theirs_text: &str,
@@ -486,7 +449,7 @@ fn render_merged(
         match hunk {
             MergedHunk::Resolved { lines, .. } => {
                 for line in lines {
-                    output.push_str(line);
+                    output.push_str(line.as_ref());
                     output.push_str(line_ending);
                 }
             }
@@ -496,32 +459,29 @@ fn render_merged(
                 ours_lines,
                 theirs_lines,
             } => {
-                let base_conflict_lines: Vec<String> = base_lines
-                    [*base_start..(*base_end).min(base_lines.len())]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
+                let base_conflict_lines =
+                    &base_lines[*base_start..(*base_end).min(base_lines.len())];
 
                 match options.strategy {
                     MergeStrategy::Ours => {
                         for line in ours_lines {
-                            output.push_str(line);
+                            output.push_str(line.as_ref());
                             output.push_str(line_ending);
                         }
                     }
                     MergeStrategy::Theirs => {
                         for line in theirs_lines {
-                            output.push_str(line);
+                            output.push_str(line.as_ref());
                             output.push_str(line_ending);
                         }
                     }
                     MergeStrategy::Union => {
                         for line in ours_lines {
-                            output.push_str(line);
+                            output.push_str(line.as_ref());
                             output.push_str(line_ending);
                         }
                         for line in theirs_lines {
-                            output.push_str(line);
+                            output.push_str(line.as_ref());
                             output.push_str(line_ending);
                         }
                     }
@@ -530,7 +490,7 @@ fn render_merged(
                             &mut output,
                             ours_lines,
                             theirs_lines,
-                            &base_conflict_lines,
+                            base_conflict_lines,
                             options,
                             line_ending,
                         );
@@ -627,9 +587,9 @@ fn emit_context_lines(
 
 fn emit_conflict_markers(
     output: &mut String,
-    ours_lines: &[String],
-    theirs_lines: &[String],
-    base_lines: &[String],
+    ours_lines: &[Cow<'_, str>],
+    theirs_lines: &[Cow<'_, str>],
+    base_lines: &[&str],
     options: &MergeOptions,
     line_ending: &str,
 ) {
@@ -642,7 +602,7 @@ fn emit_conflict_markers(
 
             // Emit common prefix as resolved.
             for line in &ours_lines[..prefix_len] {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
 
@@ -657,7 +617,7 @@ fn emit_conflict_markers(
             // Emit conflict markers for the remaining inner region.
             emit_marker(output, '<', ms, options.labels.ours.as_deref(), line_ending);
             for line in ours_conflict {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(output, '|', ms, options.labels.base.as_deref(), line_ending);
@@ -665,7 +625,7 @@ fn emit_conflict_markers(
             let base_conflict = if base_lines.len() > prefix_len + suffix_len {
                 &base_lines[prefix_len..base_lines.len() - suffix_len]
             } else {
-                &[] as &[String]
+                &[] as &[&str]
             };
             for line in base_conflict {
                 output.push_str(line);
@@ -673,7 +633,7 @@ fn emit_conflict_markers(
             }
             emit_marker(output, '=', ms, None, line_ending);
             for line in theirs_conflict {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(
@@ -686,14 +646,14 @@ fn emit_conflict_markers(
 
             // Emit common suffix as resolved.
             for line in &ours_lines[ours_lines.len() - suffix_len..] {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
         }
         ConflictStyle::Diff3 => {
             emit_marker(output, '<', ms, options.labels.ours.as_deref(), line_ending);
             for line in ours_lines {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(output, '|', ms, options.labels.base.as_deref(), line_ending);
@@ -703,7 +663,7 @@ fn emit_conflict_markers(
             }
             emit_marker(output, '=', ms, None, line_ending);
             for line in theirs_lines {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(
@@ -717,12 +677,12 @@ fn emit_conflict_markers(
         ConflictStyle::Merge => {
             emit_marker(output, '<', ms, options.labels.ours.as_deref(), line_ending);
             for line in ours_lines {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(output, '=', ms, None, line_ending);
             for line in theirs_lines {
-                output.push_str(line);
+                output.push_str(line.as_ref());
                 output.push_str(line_ending);
             }
             emit_marker(
@@ -748,7 +708,7 @@ fn emit_marker(output: &mut String, ch: char, size: usize, label: Option<&str>, 
 }
 
 /// Find common prefix and suffix lines between two line sequences.
-fn common_prefix_suffix_lines(a: &[String], b: &[String]) -> (usize, usize) {
+fn common_prefix_suffix_lines<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize) {
     let max = a.len().min(b.len());
     let mut prefix = 0;
     while prefix < max && a[prefix] == b[prefix] {
@@ -785,6 +745,8 @@ fn detect_line_ending(ours: &str, theirs: &str, base: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::file_diff::EditKind;
+    use std::borrow::Cow;
 
     fn default_opts() -> MergeOptions {
         MergeOptions::default()
@@ -813,6 +775,77 @@ mod tests {
             style,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn edits_to_hunks_inserts_use_borrowed_cow() {
+        let inserted_line = String::from("inserted");
+        let edits = vec![Edit {
+            kind: EditKind::Insert,
+            old: None,
+            new: Some(inserted_line.as_str()),
+        }];
+
+        let hunks = edits_to_hunks(&edits);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].new_lines.len(), 1);
+        assert!(matches!(
+            &hunks[0].new_lines[0],
+            Cow::Borrowed(line) if *line == "inserted"
+        ));
+    }
+
+    #[test]
+    fn reconstruct_side_uses_borrowed_base_and_insert_lines() {
+        let base_lines = split_lines("base-1\nbase-2\n");
+        let inserted_lines = split_lines("inserted\n");
+        let hunks = vec![Hunk {
+            base_start: 1,
+            base_end: 1,
+            new_lines: vec![Cow::Borrowed(inserted_lines[0])],
+        }];
+
+        let lines = reconstruct_side(&base_lines, 0, 2, &hunks);
+        assert_eq!(lines.len(), 3);
+        assert!(matches!(&lines[0], Cow::Borrowed(line) if *line == "base-1"));
+        assert!(matches!(&lines[1], Cow::Borrowed(line) if *line == "inserted"));
+        assert!(matches!(&lines[2], Cow::Borrowed(line) if *line == "base-2"));
+    }
+
+    #[test]
+    fn coalesce_zealous_conflicts_reuses_borrowed_separator_lines() {
+        let base_lines = split_lines("top\n\nbottom\n");
+        let hunks = vec![
+            MergedHunk::Conflict {
+                base_start: 0,
+                base_end: 1,
+                ours_lines: vec![Cow::Borrowed("ours-1")],
+                theirs_lines: vec![Cow::Borrowed("theirs-1")],
+            },
+            MergedHunk::Conflict {
+                base_start: 2,
+                base_end: 3,
+                ours_lines: vec![Cow::Borrowed("ours-2")],
+                theirs_lines: vec![Cow::Borrowed("theirs-2")],
+            },
+        ];
+
+        let coalesced = coalesce_zealous_conflicts(&base_lines, hunks);
+        assert_eq!(coalesced.len(), 1);
+
+        let MergedHunk::Conflict {
+            ours_lines,
+            theirs_lines,
+            ..
+        } = &coalesced[0]
+        else {
+            panic!("expected coalesced conflict hunk");
+        };
+
+        assert_eq!(ours_lines.len(), 3);
+        assert_eq!(theirs_lines.len(), 3);
+        assert!(matches!(&ours_lines[1], Cow::Borrowed(line) if line.is_empty()));
+        assert!(matches!(&theirs_lines[1], Cow::Borrowed(line) if line.is_empty()));
     }
 
     // -----------------------------------------------------------------------

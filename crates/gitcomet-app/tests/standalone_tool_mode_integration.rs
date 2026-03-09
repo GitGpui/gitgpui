@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 fn gitcomet_bin() -> PathBuf {

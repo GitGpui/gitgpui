@@ -278,7 +278,7 @@ pub(crate) enum DifftoolInputKind {
 }
 
 impl DifftoolInputKind {
-    fn display_name(self) -> &'static str {
+    pub(crate) fn display_name(self) -> &'static str {
         match self {
             DifftoolInputKind::Directory => "directory",
             DifftoolInputKind::FileLike => "file",
@@ -296,51 +296,49 @@ pub(crate) fn classify_difftool_input(
     path: &Path,
     role_name: &str,
 ) -> Result<DifftoolInputKind, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!("{role_name} path does not exist: {}", path.display())
-        } else {
-            format!(
-                "Failed to read metadata for {role_name} path {}: {e}",
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(DifftoolInputKind::Directory),
+        Ok(metadata) if metadata.is_file() => Ok(DifftoolInputKind::FileLike),
+        Ok(_) => {
+            if let Ok(link_meta) = std::fs::symlink_metadata(path) {
+                if link_meta.file_type().is_symlink() {
+                    return Err(format!(
+                        "{role_name} path symlink target must resolve to a regular file or directory: {}",
+                        path.display()
+                    ));
+                }
+            }
+            Err(format!(
+                "{role_name} path must be a regular file or directory: {}",
                 path.display()
-            )
+            ))
         }
-    })?;
-
-    if metadata.is_dir() {
-        return Ok(DifftoolInputKind::Directory);
-    }
-
-    if metadata.file_type().is_symlink() {
-        match std::fs::metadata(path) {
-            Ok(target_meta) if target_meta.is_dir() => return Ok(DifftoolInputKind::Directory),
-            Ok(target_meta) if target_meta.is_file() => return Ok(DifftoolInputKind::FileLike),
-            Ok(_) => {
-                return Err(format!(
-                    "{role_name} path symlink target must resolve to a regular file or directory: {}",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Ok(link_meta) if link_meta.file_type().is_symlink() => {
+                    Ok(DifftoolInputKind::FileLike)
+                }
+                Ok(link_meta) if link_meta.is_dir() => Ok(DifftoolInputKind::Directory),
+                Ok(link_meta) if link_meta.is_file() => Ok(DifftoolInputKind::FileLike),
+                Ok(_) => Err(format!(
+                    "{role_name} path must be a regular file or directory: {}",
                     path.display()
-                ));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(DifftoolInputKind::FileLike);
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to resolve {role_name} path {}: {e}",
+                )),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(format!(
+                    "{role_name} path does not exist: {}",
                     path.display()
-                ));
+                )),
+                Err(e) => Err(format!(
+                    "Failed to read metadata for {role_name} path {}: {e}",
+                    path.display()
+                )),
             }
         }
+        Err(e) => Err(format!(
+            "Failed to read metadata for {role_name} path {}: {e}",
+            path.display()
+        )),
     }
-
-    if metadata.is_file() {
-        return Ok(DifftoolInputKind::FileLike);
-    }
-
-    Err(format!(
-        "{role_name} path must be a regular file or directory: {}",
-        path.display()
-    ))
 }
 
 fn resolve_regular_file_metadata(
@@ -374,50 +372,42 @@ fn resolve_regular_file_metadata(
 }
 
 fn validate_existing_merged_output_path(path: &Path) -> Result<(), String> {
-    let symlink_meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(format!(
-                "Failed to read metadata for merged path {}: {e}",
-                path.display()
-            ));
-        }
-    };
-
-    if symlink_meta.is_dir() {
-        return Err(format!(
+    match std::fs::metadata(path) {
+        Ok(followed) if followed.is_dir() => Err(format!(
             "Merged path must be a file path, not a directory: {}",
             path.display()
-        ));
-    }
-
-    let followed = std::fs::metadata(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!(
-                "Merged path must resolve to an existing file target: {}",
-                path.display()
-            )
-        } else {
-            format!("Failed to resolve merged path {}: {e}", path.display())
-        }
-    })?;
-
-    if followed.is_dir() {
-        return Err(format!(
-            "Merged path must be a file path, not a directory: {}",
-            path.display()
-        ));
-    }
-
-    if !followed.is_file() {
-        return Err(format!(
+        )),
+        Ok(followed) if followed.is_file() => Ok(()),
+        Ok(_) => Err(format!(
             "Merged path must be a regular file path: {}",
             path.display()
-        ));
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::symlink_metadata(path) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Ok(link_meta) if link_meta.file_type().is_symlink() => Err(format!(
+                    "Merged path must resolve to an existing file target: {}",
+                    path.display()
+                )),
+                Ok(link_meta) if link_meta.is_dir() => Err(format!(
+                    "Merged path must be a file path, not a directory: {}",
+                    path.display()
+                )),
+                Ok(_) => Err(format!(
+                    "Merged path must be a regular file path: {}",
+                    path.display()
+                )),
+                Err(e) => Err(format!(
+                    "Failed to read metadata for merged path {}: {e}",
+                    path.display()
+                )),
+            }
+        }
+        Err(e) => Err(format!(
+            "Failed to read metadata for merged path {}: {e}",
+            path.display()
+        )),
     }
-
-    Ok(())
 }
 
 /// Resolve and validate difftool arguments.

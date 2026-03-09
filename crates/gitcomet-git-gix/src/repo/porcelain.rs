@@ -1,48 +1,61 @@
 use super::GixRepo;
 use crate::util::{
     git_stash_untracked_blob_spec, parse_reflog_index, run_git_capture, run_git_simple,
-    run_git_simple_with_paths, unix_seconds_to_system_time,
+    run_git_simple_with_paths, unix_seconds_to_system_time, validate_hex_commit_id,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 impl GixRepo {
     pub(super) fn create_branch_impl(&self, name: &str, target: &CommitId) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+        validate_hex_commit_id(target)?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("branch")
+            .arg("--")
             .arg(name)
             .arg(target.as_ref());
         run_git_simple(cmd, "git branch")
     }
 
     pub(super) fn delete_branch_impl(&self, name: &str) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("branch")
             .arg("-d")
+            .arg("--")
             .arg(name);
         run_git_simple(cmd, "git branch -d")
     }
 
     pub(super) fn delete_branch_force_impl(&self, name: &str) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("branch")
             .arg("-D")
+            .arg("--")
             .arg(name);
         run_git_simple(cmd, "git branch -D")
     }
 
     pub(super) fn checkout_branch_impl(&self, name: &str) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
@@ -57,6 +70,10 @@ impl GixRepo {
         branch: &str,
         local_branch: &str,
     ) -> Result<()> {
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(branch, "branch name")?;
+        validate_ref_like_arg(local_branch, "branch name")?;
+
         let upstream = format!("{remote}/{branch}");
 
         let output = Command::new("git")
@@ -99,12 +116,16 @@ impl GixRepo {
             .arg("-C")
             .arg(&self.spec.workdir)
             .arg("branch")
-            .arg(format!("--set-upstream-to={upstream}"))
+            .arg("--set-upstream-to")
+            .arg(&upstream)
+            .arg("--")
             .arg(local_branch);
         run_git_simple(set_upstream, "git branch --set-upstream-to")
     }
 
     pub(super) fn checkout_commit_impl(&self, id: &CommitId) -> Result<()> {
+        validate_hex_commit_id(id)?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
@@ -114,20 +135,26 @@ impl GixRepo {
     }
 
     pub(super) fn cherry_pick_impl(&self, id: &CommitId) -> Result<()> {
+        validate_hex_commit_id(id)?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("cherry-pick")
+            .arg("--")
             .arg(id.as_ref());
         run_git_simple(cmd, "git cherry-pick")
     }
 
     pub(super) fn revert_impl(&self, id: &CommitId) -> Result<()> {
+        validate_hex_commit_id(id)?;
+
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("revert")
             .arg("--no-edit")
+            .arg("--")
             .arg(id.as_ref());
         run_git_simple(cmd, "git revert")
     }
@@ -413,7 +440,7 @@ fn stash_apply_blocked_before_merge(stdout: &str, stderr: &str) -> bool {
 
 fn untracked_restore_conflict_paths(stdout: &str, stderr: &str) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let suffix = " already exists, no checkout";
     for line in stderr.lines().chain(stdout.lines()) {
         let Some(mut path) = line.trim().strip_suffix(suffix) else {

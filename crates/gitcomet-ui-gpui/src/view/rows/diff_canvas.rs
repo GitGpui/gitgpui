@@ -106,75 +106,20 @@ pub(super) fn inline_diff_line_row_canvas(
             let clip_bounds = window.content_mask().bounds;
             let visible_row_bounds = row_bounds.intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-
-                    if event.button == gpui::MouseButton::Left {
-                        window.focus(&view.read(cx).diff_panel_focus_handle);
-                        if visible_text_bounds.contains(&event.position) {
-                            let click_count = event.click_count;
-                            let position = event.position;
-                            view.update(cx, |this, cx| {
-                                if click_count >= 2 {
-                                    this.double_click_select_diff_text(
-                                        visible_ix,
-                                        DiffTextRegion::Inline,
-                                        DiffClickKind::Line,
-                                    );
-                                } else {
-                                    this.begin_diff_text_selection(
-                                        visible_ix,
-                                        DiffTextRegion::Inline,
-                                        position,
-                                    );
-                                    this.begin_diff_text_scroll_tracking(position, cx);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    } else if event.button == gpui::MouseButton::Right
-                        && visible_text_bounds.contains(&event.position)
-                    {
-                        view.update(cx, |this, cx| {
-                            this.open_diff_editor_context_menu(
-                                visible_ix,
-                                DiffTextRegion::Inline,
-                                event.position,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                }
-            });
-
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseUpEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || event.button != gpui::MouseButton::Left
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-                    let shift = event.modifiers.shift;
-                    view.update(cx, |this, cx| {
-                        if this.consume_suppress_click_after_drag() {
-                            cx.notify();
-                            return;
-                        }
-                        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
-                        cx.notify();
-                    });
-                }
-            });
+            install_diff_row_mouse_handlers(
+                window,
+                &view,
+                visible_ix,
+                DiffRowMouseHandlers {
+                    row_bounds: visible_row_bounds,
+                    regions: DiffRowTextRegions::single(
+                        DiffTextRegion::Inline,
+                        visible_text_bounds,
+                    ),
+                    right_click: DiffRowRightClickBehavior::OpenContextMenu,
+                    mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                },
+            );
 
             if selected {
                 window.paint_quad(gpui::outline(
@@ -322,79 +267,20 @@ pub(super) fn split_diff_line_row_canvas(
             let visible_row_bounds = row_bounds.intersect(&clip_bounds);
             let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-
-                    let region = if visible_left_text_bounds.contains(&event.position) {
-                        Some(DiffTextRegion::SplitLeft)
-                    } else if visible_right_text_bounds.contains(&event.position) {
-                        Some(DiffTextRegion::SplitRight)
-                    } else {
-                        None
-                    };
-
-                    if event.button == gpui::MouseButton::Left {
-                        window.focus(&view.read(cx).diff_panel_focus_handle);
-                        if let Some(region) = region {
-                            let click_count = event.click_count;
-                            let position = event.position;
-                            view.update(cx, |this, cx| {
-                                if click_count >= 2 {
-                                    this.double_click_select_diff_text(
-                                        visible_ix,
-                                        region,
-                                        DiffClickKind::Line,
-                                    );
-                                } else {
-                                    this.begin_diff_text_selection(visible_ix, region, position);
-                                    this.begin_diff_text_scroll_tracking(position, cx);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    } else if event.button == gpui::MouseButton::Right
-                        && let Some(region) = region
-                    {
-                        view.update(cx, |this, cx| {
-                            this.open_diff_editor_context_menu(
-                                visible_ix,
-                                region,
-                                event.position,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                }
-            });
-
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseUpEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || event.button != gpui::MouseButton::Left
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-                    let shift = event.modifiers.shift;
-                    view.update(cx, |this, cx| {
-                        if this.consume_suppress_click_after_drag() {
-                            cx.notify();
-                            return;
-                        }
-                        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
-                        cx.notify();
-                    });
-                }
-            });
+            install_diff_row_mouse_handlers(
+                window,
+                &view,
+                visible_ix,
+                DiffRowMouseHandlers {
+                    row_bounds: visible_row_bounds,
+                    regions: DiffRowTextRegions::split(
+                        visible_left_text_bounds,
+                        visible_right_text_bounds,
+                    ),
+                    right_click: DiffRowRightClickBehavior::OpenContextMenu,
+                    mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                },
+            );
 
             if selected {
                 window.paint_quad(gpui::outline(
@@ -499,71 +385,17 @@ pub(super) fn patch_split_column_row_canvas(
             let clip_bounds = window.content_mask().bounds;
             let visible_row_bounds = row_bounds.intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-
-                    if event.button == gpui::MouseButton::Left {
-                        window.focus(&view.read(cx).diff_panel_focus_handle);
-                        if visible_text_bounds.contains(&event.position) {
-                            let click_count = event.click_count;
-                            let position = event.position;
-                            view.update(cx, |this, cx| {
-                                if click_count >= 2 {
-                                    this.double_click_select_diff_text(
-                                        visible_ix,
-                                        region,
-                                        DiffClickKind::Line,
-                                    );
-                                } else {
-                                    this.begin_diff_text_selection(visible_ix, region, position);
-                                    this.begin_diff_text_scroll_tracking(position, cx);
-                                }
-                                cx.notify();
-                            });
-                        }
-                    } else if event.button == gpui::MouseButton::Right
-                        && visible_text_bounds.contains(&event.position)
-                    {
-                        view.update(cx, |this, cx| {
-                            this.open_diff_editor_context_menu(
-                                visible_ix,
-                                region,
-                                event.position,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                }
-            });
-
-            window.on_mouse_event({
-                let view = view.clone();
-                move |event: &gpui::MouseUpEvent, phase, _window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || event.button != gpui::MouseButton::Left
-                        || !visible_row_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-                    let shift = event.modifiers.shift;
-                    view.update(cx, |this, cx| {
-                        if this.consume_suppress_click_after_drag() {
-                            cx.notify();
-                            return;
-                        }
-                        this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
-                        cx.notify();
-                    });
-                }
-            });
+            install_diff_row_mouse_handlers(
+                window,
+                &view,
+                visible_ix,
+                DiffRowMouseHandlers {
+                    row_bounds: visible_row_bounds,
+                    regions: DiffRowTextRegions::single(region, visible_text_bounds),
+                    right_click: DiffRowRightClickBehavior::OpenContextMenu,
+                    mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                },
+            );
 
             if selected {
                 window.paint_quad(gpui::outline(
@@ -763,6 +595,175 @@ struct WorktreePreviewRowPrepaintState {
     text_hitbox: Hitbox,
 }
 
+#[derive(Clone, Debug)]
+enum DiffRowTextRegions {
+    Single {
+        region: DiffTextRegion,
+        bounds: Bounds<Pixels>,
+    },
+    Split {
+        left_bounds: Bounds<Pixels>,
+        right_bounds: Bounds<Pixels>,
+    },
+}
+
+impl DiffRowTextRegions {
+    fn single(region: DiffTextRegion, bounds: Bounds<Pixels>) -> Self {
+        Self::Single { region, bounds }
+    }
+
+    fn split(left_bounds: Bounds<Pixels>, right_bounds: Bounds<Pixels>) -> Self {
+        Self::Split {
+            left_bounds,
+            right_bounds,
+        }
+    }
+
+    fn region_at(&self, position: gpui::Point<Pixels>) -> Option<DiffTextRegion> {
+        match self {
+            Self::Single { region, bounds } => bounds.contains(&position).then_some(*region),
+            Self::Split {
+                left_bounds,
+                right_bounds,
+            } => {
+                if left_bounds.contains(&position) {
+                    Some(DiffTextRegion::SplitLeft)
+                } else if right_bounds.contains(&position) {
+                    Some(DiffTextRegion::SplitRight)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffRowRightClickBehavior {
+    OpenContextMenu,
+    CopySelectionOrRegionLine,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffRowMouseUpBehavior {
+    None,
+    HandlePatchRowClick,
+}
+
+#[derive(Clone, Debug)]
+struct DiffRowMouseHandlers {
+    row_bounds: Bounds<Pixels>,
+    regions: DiffRowTextRegions,
+    right_click: DiffRowRightClickBehavior,
+    mouse_up: DiffRowMouseUpBehavior,
+}
+
+fn should_handle_row_mouse_event(
+    phase: DispatchPhase,
+    row_bounds: &Bounds<Pixels>,
+    position: gpui::Point<Pixels>,
+) -> bool {
+    phase == DispatchPhase::Bubble && row_bounds.contains(&position)
+}
+
+fn install_diff_row_mouse_handlers(
+    window: &mut Window,
+    view: &Entity<MainPaneView>,
+    visible_ix: usize,
+    handlers: DiffRowMouseHandlers,
+) {
+    let DiffRowMouseHandlers {
+        row_bounds,
+        regions,
+        right_click,
+        mouse_up,
+    } = handlers;
+    let row_bounds_for_down = row_bounds.clone();
+    let regions = regions.clone();
+    window.on_mouse_event({
+        let view = view.clone();
+        move |event: &gpui::MouseDownEvent, phase, window, cx| {
+            if !should_handle_row_mouse_event(phase, &row_bounds_for_down, event.position) {
+                return;
+            }
+
+            let region = regions.region_at(event.position);
+
+            if event.button == gpui::MouseButton::Left {
+                window.focus(&view.read(cx).diff_panel_focus_handle);
+                if let Some(region) = region {
+                    let click_count = event.click_count;
+                    let position = event.position;
+                    view.update(cx, |this, cx| {
+                        if click_count >= 2 {
+                            this.double_click_select_diff_text(
+                                visible_ix,
+                                region,
+                                DiffClickKind::Line,
+                            );
+                        } else {
+                            this.begin_diff_text_selection(visible_ix, region, position);
+                            this.begin_diff_text_scroll_tracking(position, cx);
+                        }
+                        cx.notify();
+                    });
+                }
+            } else if event.button == gpui::MouseButton::Right
+                && let Some(region) = region
+            {
+                match right_click {
+                    DiffRowRightClickBehavior::OpenContextMenu => {
+                        view.update(cx, |this, cx| {
+                            this.open_diff_editor_context_menu(
+                                visible_ix,
+                                region,
+                                event.position,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        });
+                    }
+                    DiffRowRightClickBehavior::CopySelectionOrRegionLine => {
+                        view.update(cx, |this, cx| {
+                            this.copy_diff_text_selection_or_region_line_to_clipboard(
+                                visible_ix, region, cx,
+                            );
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+        }
+    });
+
+    if mouse_up == DiffRowMouseUpBehavior::None {
+        return;
+    }
+
+    let row_bounds_for_up = row_bounds;
+    window.on_mouse_event({
+        let view = view.clone();
+        move |event: &gpui::MouseUpEvent, phase, _window, cx| {
+            if event.button != gpui::MouseButton::Left
+                || !should_handle_row_mouse_event(phase, &row_bounds_for_up, event.position)
+            {
+                return;
+            }
+
+            let shift = event.modifiers.shift;
+            view.update(cx, |this, cx| {
+                if this.consume_suppress_click_after_drag() {
+                    cx.notify();
+                    return;
+                }
+                this.handle_patch_row_click(visible_ix, DiffClickKind::Line, shift);
+                cx.notify();
+            });
+        }
+    });
+}
+
 #[derive(Clone, Copy, Debug)]
 struct LineMetrics {
     font_size: Pixels,
@@ -876,10 +877,12 @@ fn paint_gutter_text(
 
         GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            if cache.len() > GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-                cache.clear();
-            }
-            cache.insert(key, shaped.clone());
+            insert_with_partial_cache_eviction(
+                &mut cache,
+                key,
+                shaped.clone(),
+                GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
+            );
         });
 
         shaped
@@ -1069,4 +1072,66 @@ fn compute_runs(
 fn empty_highlights() -> HighlightSpans {
     static EMPTY: OnceLock<HighlightSpans> = OnceLock::new();
     Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn should_handle_row_mouse_event_requires_bubble_phase_and_in_bounds() {
+        let row_bounds = test_bounds(10.0, 20.0, 50.0, 10.0);
+        let inside = point(px(20.0), px(25.0));
+        let outside = point(px(200.0), px(25.0));
+
+        assert!(should_handle_row_mouse_event(
+            DispatchPhase::Bubble,
+            &row_bounds,
+            inside,
+        ));
+        assert!(!should_handle_row_mouse_event(
+            DispatchPhase::Capture,
+            &row_bounds,
+            inside,
+        ));
+        assert!(!should_handle_row_mouse_event(
+            DispatchPhase::Bubble,
+            &row_bounds,
+            outside,
+        ));
+    }
+
+    #[test]
+    fn diff_row_text_regions_single_only_hits_inside_text() {
+        let regions =
+            DiffRowTextRegions::single(DiffTextRegion::Inline, test_bounds(5.0, 5.0, 20.0, 10.0));
+
+        assert_eq!(
+            regions.region_at(point(px(10.0), px(10.0))),
+            Some(DiffTextRegion::Inline)
+        );
+        assert_eq!(regions.region_at(point(px(1.0), px(10.0))), None);
+    }
+
+    #[test]
+    fn diff_row_text_regions_split_maps_left_and_right_regions() {
+        let regions = DiffRowTextRegions::split(
+            test_bounds(0.0, 0.0, 40.0, 20.0),
+            test_bounds(41.0, 0.0, 40.0, 20.0),
+        );
+
+        assert_eq!(
+            regions.region_at(point(px(10.0), px(10.0))),
+            Some(DiffTextRegion::SplitLeft)
+        );
+        assert_eq!(
+            regions.region_at(point(px(60.0), px(10.0))),
+            Some(DiffTextRegion::SplitRight)
+        );
+        assert_eq!(regions.region_at(point(px(40.5), px(10.0))), None);
+    }
 }

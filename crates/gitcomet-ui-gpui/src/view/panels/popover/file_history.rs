@@ -46,7 +46,7 @@ pub(super) fn panel(
                 }),
         );
 
-    let body: AnyElement = match repo.map(|r| &r.file_history) {
+    let body: AnyElement = match repo.map(|r| &r.history_state.file_history) {
         None => components::context_menu_label(theme, "No repository").into_any_element(),
         Some(Loadable::Loading) => {
             components::context_menu_label(theme, "Loading").into_any_element()

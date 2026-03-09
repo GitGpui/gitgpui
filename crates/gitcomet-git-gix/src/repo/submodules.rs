@@ -1,6 +1,6 @@
 use super::GixRepo;
 use crate::util::run_git_with_output;
-use gitcomet_core::domain::{CommitId, Submodule};
+use gitcomet_core::domain::{CommitId, Submodule, SubmoduleStatus};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::path::{Path, PathBuf};
@@ -111,7 +111,7 @@ fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
             continue;
         }
         let mut chars = line.chars();
-        let status = chars.next().unwrap_or(' ');
+        let status = SubmoduleStatus::from_git_status_marker(chars.next().unwrap_or(' '));
         let rest = chars.as_str().trim();
         let mut parts = rest.split_whitespace();
         let Some(sha) = parts.next() else {
@@ -132,34 +132,44 @@ fn parse_git_submodule_status(output: &str) -> Vec<Submodule> {
 #[cfg(test)]
 mod tests {
     use super::parse_git_submodule_status;
+    use gitcomet_core::domain::SubmoduleStatus;
     use std::path::PathBuf;
 
     #[test]
-    fn parse_git_submodule_status_parses_status_sha_and_path() {
+    fn parse_git_submodule_status_maps_known_markers() {
         let parsed = parse_git_submodule_status(
-            r#" 1111111111111111111111111111111111111111 libs/a (heads/main)
--2222222222222222222222222222222222222222 libs/b
-+3333333333333333333333333333333333333333 libs/c
-U4444444444444444444444444444444444444444 libs/d
-"#,
+            " 1111111111111111111111111111111111111111 deps/one\n\
+             -2222222222222222222222222222222222222222 deps/two\n\
+             +3333333333333333333333333333333333333333 deps/three\n\
+             U4444444444444444444444444444444444444444 deps/four\n",
         );
 
-        assert_eq!(parsed.len(), 4);
-        assert_eq!(parsed[0].status, ' ');
+        let statuses = parsed
+            .iter()
+            .map(|submodule| submodule.status)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                SubmoduleStatus::UpToDate,
+                SubmoduleStatus::NotInitialized,
+                SubmoduleStatus::HeadMismatch,
+                SubmoduleStatus::MergeConflict,
+            ]
+        );
         assert_eq!(
             parsed[0].head.as_ref(),
             "1111111111111111111111111111111111111111"
         );
-        assert_eq!(parsed[0].path, PathBuf::from("libs/a"));
+        assert_eq!(parsed[0].path, PathBuf::from("deps/one"));
+    }
 
-        assert_eq!(parsed[1].status, '-');
-        assert_eq!(parsed[1].path, PathBuf::from("libs/b"));
-
-        assert_eq!(parsed[2].status, '+');
-        assert_eq!(parsed[2].path, PathBuf::from("libs/c"));
-
-        assert_eq!(parsed[3].status, 'U');
-        assert_eq!(parsed[3].path, PathBuf::from("libs/d"));
+    #[test]
+    fn parse_git_submodule_status_preserves_unknown_marker() {
+        let parsed =
+            parse_git_submodule_status("M1111111111111111111111111111111111111111 deps/custom\n");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].status, SubmoduleStatus::Unknown('M'));
     }
 
     #[test]
@@ -173,7 +183,7 @@ not-a-real-line
         );
 
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].status, ' ');
+        assert_eq!(parsed[0].status, SubmoduleStatus::UpToDate);
         assert_eq!(
             parsed[0].head.as_ref(),
             "5555555555555555555555555555555555555555"

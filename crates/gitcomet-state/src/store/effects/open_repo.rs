@@ -20,21 +20,21 @@ pub(super) fn schedule_open_repo(
             Ok(repo) => {
                 send_or_log(
                     &msg_tx,
-                    Msg::RepoOpenedOk {
+                    Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
                         repo_id,
                         spec,
                         repo,
-                    },
+                    }),
                 );
             }
             Err(error) => {
                 send_or_log(
                     &msg_tx,
-                    Msg::RepoOpenedErr {
+                    Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
                         repo_id,
                         spec,
                         error,
-                    },
+                    }),
                 );
             }
         }

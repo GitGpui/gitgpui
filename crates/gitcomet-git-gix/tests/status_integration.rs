@@ -8,6 +8,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 #[cfg(windows)]
 use std::sync::OnceLock;
 #[cfg(unix)]
@@ -17,6 +18,52 @@ use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 const NULL_DEVICE: &str = "NUL";
 #[cfg(not(windows))]
 const NULL_DEVICE: &str = "/dev/null";
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn repo_local_mergetool_consent_key(repo: &Path, tool_name: &str) -> String {
+    let repo_path = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
+    let mut bytes = repo_path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes.extend_from_slice(tool_name.as_bytes());
+    format!(
+        "gitcomet.mergetool.allowrepolocalcmd-{:016x}",
+        fnv1a_64(&bytes)
+    )
+}
+
+fn allow_repo_local_mergetool_cmd(repo: &Path, tool_name: &str) {
+    static GLOBAL_CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = GLOBAL_CONFIG_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    let consent_key = repo_local_mergetool_consent_key(repo, tool_name);
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--global", &consent_key, "true"])
+        .status()
+        .expect("git config --global to run");
+    assert!(
+        status.success(),
+        "git config --global {} true failed",
+        consent_key
+    );
+}
+
+fn set_repo_local_mergetool_cmd_with_consent(repo: &Path, tool_name: &str, command: &str) {
+    let cmd_key = format!("mergetool.{tool_name}.cmd");
+    run_git(repo, &["config", &cmd_key, command]);
+    allow_repo_local_mergetool_cmd(repo, tool_name);
+}
 
 #[cfg(windows)]
 fn is_git_shell_startup_failure(text: &str) -> bool {
@@ -2194,13 +2241,10 @@ fn launch_mergetool_trust_exit_false_detects_same_size_content_change() {
     set_fixed_mtime(&repo.join("a.txt"));
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_same_size_content_change_and_exit_failure(),
-        ],
+        "fake",
+        cmd_same_size_content_change_and_exit_failure(),
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
@@ -2237,7 +2281,7 @@ fn launch_mergetool_trust_exit_false_requires_content_change() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(repo, &["config", "mergetool.fake.cmd", cmd_exit_success()]);
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_exit_success());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
     let backend = GixBackend;
@@ -2278,14 +2322,7 @@ fn launch_mergetool_trust_exit_false_detects_deleted_output_change() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_delete_merged_and_exit_failure(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_delete_merged_and_exit_failure());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "false"]);
 
     let backend = GixBackend;
@@ -2327,13 +2364,10 @@ fn launch_mergetool_rejects_unresolved_marker_output() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_write_unresolved_markers_and_exit_success(),
-        ],
+        "fake",
+        cmd_write_unresolved_markers_and_exit_success(),
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
@@ -2389,13 +2423,10 @@ fn launch_mergetool_custom_cmd_supports_braced_env_variables() {
     setup_both_modified_text_conflict(repo, conflicted_path, "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            "cat \"${REMOTE}\" > \"${MERGED}\"; exit 0",
-        ],
+        "fake",
+        "cat \"${REMOTE}\" > \"${MERGED}\"; exit 0",
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
@@ -2443,13 +2474,10 @@ fn launch_mergetool_custom_cmd_supports_cmd_percent_env_variables() {
     setup_both_modified_text_conflict(repo, conflicted_path, "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            "copy /Y \"%REMOTE%\" \"%MERGED%\" > NUL && exit /b 0",
-        ],
+        "fake",
+        "copy /Y \"%REMOTE%\" \"%MERGED%\" > NUL && exit /b 0",
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
@@ -2477,13 +2505,10 @@ fn launch_mergetool_custom_cmd_supports_unicode_conflicted_path() {
     setup_both_modified_text_conflict(repo, conflicted_path, "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_copy_remote_to_merged_and_exit_success(),
-        ],
+        "fake",
+        cmd_copy_remote_to_merged_and_exit_success(),
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
@@ -2531,14 +2556,8 @@ fn launch_mergetool_prefers_merge_guitool_when_gui_default_true() {
     run_git(repo, &["config", "merge.tool", "cli"]);
     run_git(repo, &["config", "merge.guitool", "gui"]);
     run_git(repo, &["config", "mergetool.guiDefault", "true"]);
-    run_git(
-        repo,
-        &["config", "mergetool.cli.cmd", cmd_write_cli_to_merged()],
-    );
-    run_git(
-        repo,
-        &["config", "mergetool.gui.cmd", cmd_write_gui_to_merged()],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "cli", cmd_write_cli_to_merged());
+    set_repo_local_mergetool_cmd_with_consent(repo, "gui", cmd_write_gui_to_merged());
     run_git(repo, &["config", "mergetool.cli.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.gui.trustExitCode", "true"]);
 
@@ -2619,10 +2638,7 @@ fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
             script_path.to_string_lossy().as_ref(),
         ],
     );
-    run_git(
-        repo,
-        &["config", "mergetool.fake.cmd", cmd_write_cmd_to_merged()],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_write_cmd_to_merged());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
     let backend = GixBackend;
@@ -2649,14 +2665,7 @@ fn launch_mergetool_write_to_temp_true_uses_temp_stage_paths() {
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_copy_remote(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_dump_stage_paths_and_copy_remote());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
 
@@ -2699,14 +2708,7 @@ fn launch_mergetool_write_to_temp_false_uses_workdir_prefixed_stage_paths() {
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_copy_remote(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_dump_stage_paths_and_copy_remote());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
 
@@ -2747,14 +2749,7 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files()
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_copy_remote(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_dump_stage_paths_and_copy_remote());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
     run_git(repo, &["config", "mergetool.keepTemporaries", "true"]);
@@ -2790,13 +2785,10 @@ fn launch_mergetool_write_to_temp_false_keep_temporaries_preserves_stage_files_o
     setup_both_modified_text_conflict(repo, "docs/note.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_exit_failure(),
-        ],
+        "fake",
+        cmd_dump_stage_paths_and_exit_failure(),
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "false"]);
@@ -2836,14 +2828,7 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files() 
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_copy_remote(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_dump_stage_paths_and_copy_remote());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
     run_git(repo, &["config", "mergetool.keepTemporaries", "true"]);
@@ -2895,13 +2880,10 @@ fn launch_mergetool_write_to_temp_true_keep_temporaries_preserves_stage_files_on
     setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
+    set_repo_local_mergetool_cmd_with_consent(
         repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_stage_paths_and_exit_failure(),
-        ],
+        "fake",
+        cmd_dump_stage_paths_and_exit_failure(),
     );
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
     run_git(repo, &["config", "mergetool.writeToTemp", "true"]);
@@ -2957,14 +2939,7 @@ fn launch_mergetool_no_base_conflict_passes_empty_base_file() {
     setup_both_added_text_conflict(repo, "new.txt", "ours added\n", "theirs added\n");
 
     run_git(repo, &["config", "merge.tool", "fake"]);
-    run_git(
-        repo,
-        &[
-            "config",
-            "mergetool.fake.cmd",
-            cmd_dump_base_size_and_copy_remote(),
-        ],
-    );
+    set_repo_local_mergetool_cmd_with_consent(repo, "fake", cmd_dump_base_size_and_copy_remote());
     run_git(repo, &["config", "mergetool.fake.trustExitCode", "true"]);
 
     let backend = GixBackend;
@@ -3950,11 +3925,20 @@ fn create_and_delete_local_branch() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
+    let head = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .expect("rev-parse HEAD");
+    assert!(head.status.success());
+    let head = String::from_utf8(head.stdout)
+        .expect("HEAD is utf-8")
+        .trim()
+        .to_owned();
+
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
         .unwrap();
     run_git(
         repo,
@@ -4116,6 +4100,7 @@ fn create_and_delete_local_tag() {
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
     run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "tag.gpgsign", "false"]);
 
     write(repo, "a.txt", "one\n");
     run_git(repo, &["add", "a.txt"]);
@@ -4132,6 +4117,17 @@ fn create_and_delete_local_tag() {
         repo,
         &["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"],
     );
+    let tag_type = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-t", "refs/tags/v1.0.0"])
+        .output()
+        .expect("cat-file");
+    assert!(
+        tag_type.status.success(),
+        "expected refs/tags/v1.0.0 to exist"
+    );
+    assert_eq!(String::from_utf8_lossy(&tag_type.stdout).trim(), "tag");
 
     opened.delete_tag_with_output("v1.0.0").unwrap();
     let deleted = git_command()
@@ -4141,6 +4137,64 @@ fn create_and_delete_local_tag() {
         .status()
         .expect("show-ref");
     assert!(!deleted.success(), "expected tag to be deleted");
+}
+
+#[test]
+fn create_tag_respects_tag_gpgsign_config() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "tag.gpgsign", "true"]);
+    run_git(
+        repo,
+        &["config", "gpg.program", "gitcomet-missing-gpg-program"],
+    );
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .create_tag_with_output("v1.0.0", "HEAD")
+        .expect_err("tag creation should fail when signing is required and gpg is missing");
+
+    match err.kind() {
+        ErrorKind::Backend(msg) => {
+            assert!(
+                msg.contains("git tag -m v1.0.0 -- v1.0.0 HEAD failed"),
+                "unexpected backend error: {msg}"
+            );
+            let lower = msg.to_ascii_lowercase();
+            assert!(
+                msg.contains("gitcomet-missing-gpg-program") || lower.contains("sign"),
+                "expected signing failure details in backend error: {msg}"
+            );
+        }
+        other => panic!("expected backend error, got {other:?}"),
+    }
+
+    let tag_present = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"])
+        .status()
+        .expect("show-ref");
+    assert!(
+        !tag_present.success(),
+        "tag should not exist when signing failed"
+    );
 }
 
 #[test]
@@ -4267,6 +4321,7 @@ fn push_and_delete_remote_tag() {
     run_git(&repo, &["config", "user.email", "you@example.com"]);
     run_git(&repo, &["config", "user.name", "You"]);
     run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["config", "tag.gpgsign", "false"]);
 
     write(&repo, "a.txt", "one\n");
     run_git(&repo, &["add", "a.txt"]);

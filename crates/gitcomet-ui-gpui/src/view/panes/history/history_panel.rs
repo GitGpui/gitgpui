@@ -153,7 +153,7 @@ impl HistoryView {
                     Loadable::Ready(page) => Arc::clone(page),
                     _ => return false,
                 };
-                (repo.selected_commit.clone(), page)
+                (repo.history_state.selected_commit.clone(), page)
             }
             None => return false,
         };
@@ -244,7 +244,7 @@ impl HistoryView {
         let cell_pad = handle_half;
         let scope_label: SharedString = self
             .active_repo()
-            .map(|r| match r.history_scope {
+            .map(|r| match r.history_state.history_scope {
                 gitcomet_core::domain::LogScope::CurrentBranch => "Current branch".to_string(),
                 gitcomet_core::domain::LogScope::AllBranches => "All branches".to_string(),
             })

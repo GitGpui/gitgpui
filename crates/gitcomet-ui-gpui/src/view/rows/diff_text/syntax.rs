@@ -8,6 +8,7 @@ thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
     static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
+    static TS_DOCUMENT_CACHE: RefCell<Option<TreesitterDocumentCache>> = const { RefCell::new(None) };
 }
 
 fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
@@ -18,7 +19,7 @@ fn ascii_lowercase_for_match(s: &str) -> Cow<'_, str> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
     Html,
@@ -60,6 +61,16 @@ pub(in crate::view) enum DiffSyntaxMode {
 pub(super) struct SyntaxToken {
     pub(super) range: Range<usize>,
     pub(super) kind: SyntaxTokenKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct PreparedSyntaxDocument {
+    cache_key: u64,
+}
+
+struct TreesitterDocumentCache {
+    cache_key: u64,
+    line_tokens: Vec<Vec<SyntaxToken>>,
 }
 
 pub(in crate::view) fn diff_syntax_language_for_path(path: &str) -> Option<DiffSyntaxLanguage> {
@@ -135,6 +146,75 @@ pub(super) fn syntax_tokens_for_line(
     }
 }
 
+pub(super) fn prepare_treesitter_document<'a, I>(
+    language: DiffSyntaxLanguage,
+    mode: DiffSyntaxMode,
+    lines: I,
+) -> Option<PreparedSyntaxDocument>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    if mode != DiffSyntaxMode::Auto {
+        return None;
+    }
+    if matches!(language, DiffSyntaxLanguage::Markdown) {
+        return None;
+    }
+
+    let ts_language = tree_sitter_language(language)?;
+    let highlight = tree_sitter_highlight_spec(language)?;
+
+    let mut input = String::new();
+    let mut line_lengths = Vec::new();
+    for line in lines {
+        input.push_str(line);
+        input.push('\n');
+        line_lengths.push(line.len());
+    }
+
+    let cache_key = treesitter_document_cache_key(language, &input);
+    let has_cache_hit = TS_DOCUMENT_CACHE.with(|cache| {
+        cache.borrow().as_ref().is_some_and(|cached| {
+            cached.cache_key == cache_key && cached.line_tokens.len() == line_lengths.len()
+        })
+    });
+    if has_cache_hit {
+        return Some(PreparedSyntaxDocument { cache_key });
+    }
+
+    let tree = TS_PARSER.with(|parser| {
+        let mut parser = parser.borrow_mut();
+        parser.set_language(&ts_language).ok()?;
+        parser.parse(&input, None)
+    })?;
+
+    let line_tokens =
+        collect_treesitter_document_line_tokens(&tree, highlight, input.as_bytes(), &line_lengths);
+
+    TS_DOCUMENT_CACHE.with(|cache| {
+        *cache.borrow_mut() = Some(TreesitterDocumentCache {
+            cache_key,
+            line_tokens,
+        });
+    });
+
+    Some(PreparedSyntaxDocument { cache_key })
+}
+
+pub(super) fn syntax_tokens_for_prepared_document_line(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+) -> Option<Vec<SyntaxToken>> {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let cache = cache.as_ref()?;
+        if cache.cache_key != document.cache_key {
+            return None;
+        }
+        Some(cache.line_tokens.get(line_ix).cloned().unwrap_or_default())
+    })
+}
+
 fn should_use_treesitter_for_line(text: &str) -> bool {
     text.len() <= MAX_TREESITTER_LINE_BYTES
 }
@@ -201,8 +281,104 @@ fn syntax_tokens_for_line_treesitter(
         });
     });
 
+    Some(normalize_non_overlapping_tokens(tokens))
+}
+
+fn treesitter_document_cache_key(language: DiffSyntaxLanguage, input: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    language.hash(&mut hasher);
+    input.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn collect_treesitter_document_line_tokens(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_lengths: &[usize],
+) -> Vec<Vec<SyntaxToken>> {
+    if line_lengths.is_empty() {
+        return Vec::new();
+    }
+
+    let mut line_starts = Vec::with_capacity(line_lengths.len());
+    let mut byte_offset = 0usize;
+    for line_len in line_lengths {
+        line_starts.push(byte_offset);
+        byte_offset += line_len.saturating_add(1);
+    }
+
+    let mut per_line: Vec<Vec<SyntaxToken>> = vec![Vec::new(); line_lengths.len()];
+    TS_CURSOR.with(|cursor| {
+        let mut cursor = cursor.borrow_mut();
+        let mut captures = cursor.captures(&highlight.query, tree.root_node(), input);
+        tree_sitter::StreamingIterator::advance(&mut captures);
+        while let Some((m, capture_ix)) = captures.get() {
+            let Some(capture) = m.captures.get(*capture_ix) else {
+                tree_sitter::StreamingIterator::advance(&mut captures);
+                continue;
+            };
+            let Some(kind) = highlight
+                .capture_kinds
+                .get(capture.index as usize)
+                .copied()
+                .flatten()
+            else {
+                tree_sitter::StreamingIterator::advance(&mut captures);
+                continue;
+            };
+
+            let mut byte_range = capture.node.byte_range();
+            byte_range.start = byte_range.start.min(input.len());
+            byte_range.end = byte_range.end.min(input.len());
+            if byte_range.start >= byte_range.end {
+                tree_sitter::StreamingIterator::advance(&mut captures);
+                continue;
+            }
+
+            let mut line_ix = line_ix_for_byte(&line_starts, byte_range.start);
+            while line_ix < line_starts.len() {
+                let line_start = line_starts[line_ix];
+                let line_end = line_start.saturating_add(line_lengths[line_ix]);
+                let token_start = byte_range.start.max(line_start);
+                let token_end = byte_range.end.min(line_end);
+                if token_start < token_end {
+                    per_line[line_ix].push(SyntaxToken {
+                        range: (token_start - line_start)..(token_end - line_start),
+                        kind,
+                    });
+                }
+                if byte_range.end <= line_end {
+                    break;
+                }
+                line_ix += 1;
+            }
+
+            tree_sitter::StreamingIterator::advance(&mut captures);
+        }
+    });
+
+    for line_tokens in &mut per_line {
+        let normalized = normalize_non_overlapping_tokens(std::mem::take(line_tokens));
+        *line_tokens = normalized;
+    }
+    per_line
+}
+
+fn line_ix_for_byte(line_starts: &[usize], byte: usize) -> usize {
+    match line_starts.binary_search(&byte) {
+        Ok(ix) => ix,
+        Err(0) => 0,
+        Err(ix) => ix - 1,
+    }
+}
+
+fn normalize_non_overlapping_tokens(mut tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
     if tokens.is_empty() {
-        return Some(tokens);
+        return tokens;
     }
 
     tokens.sort_by(|a, b| {
@@ -228,8 +404,7 @@ fn syntax_tokens_for_line_treesitter(
         }
         out.push(token);
     }
-
-    Some(out)
+    out
 }
 
 fn tree_sitter_language(language: DiffSyntaxLanguage) -> Option<tree_sitter::Language> {
@@ -1383,6 +1558,31 @@ mod tests {
             assert!(t.range.start <= t.range.end);
             assert!(t.range.end <= json_line.len());
         }
+    }
+
+    #[test]
+    fn prepared_document_preserves_multiline_treesitter_context() {
+        let lines = ["/* open comment", "still comment */ let x = 1;"];
+        let doc = prepare_treesitter_document(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            lines.iter().copied(),
+        )
+        .expect("rust should support tree-sitter document preparation");
+
+        let first = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("prepared tokens should be available for line 0");
+        let second = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("prepared tokens should be available for line 1");
+
+        assert!(
+            first.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "first line should include comment tokens"
+        );
+        assert!(
+            second.iter().any(|t| t.kind == SyntaxTokenKind::Comment),
+            "second line should include comment tokens from multiline context"
+        );
     }
 
     #[test]

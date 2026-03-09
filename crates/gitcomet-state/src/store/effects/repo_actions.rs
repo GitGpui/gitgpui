@@ -43,7 +43,9 @@ fn schedule_repo_action<F>(
         repo_id,
         run,
         |_msg_tx, _repo_id, _result| {},
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -91,7 +93,9 @@ pub(super) fn schedule_checkout_remote_branch(
         repo_id,
         move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch),
         send_refresh_branches_on_success,
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -148,7 +152,9 @@ pub(super) fn schedule_create_branch(
             repo.create_branch(&name, &target)
         },
         send_refresh_branches_on_success,
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -167,7 +173,10 @@ pub(super) fn schedule_create_branch_and_checkout(
         if refresh {
             send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
         }
-        send_or_log(&msg_tx, Msg::RepoActionFinished { repo_id, result });
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }),
+        );
     });
 }
 
@@ -185,7 +194,9 @@ pub(super) fn schedule_delete_branch(
         repo_id,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -203,7 +214,9 @@ pub(super) fn schedule_force_delete_branch(
         repo_id,
         move |repo| repo.delete_branch_force(&name),
         send_refresh_branches_on_success,
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -302,7 +315,9 @@ pub(super) fn schedule_commit(
         repo_id,
         move |repo| repo.commit(&message),
         |_msg_tx, _repo_id, _result| {},
-        |repo_id, result| Msg::CommitFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result })
+        },
     );
 }
 
@@ -320,7 +335,9 @@ pub(super) fn schedule_commit_amend(
         repo_id,
         move |repo| repo.commit_amend(&message),
         |_msg_tx, _repo_id, _result| {},
-        |repo_id, result| Msg::CommitAmendFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result })
+        },
     );
 }
 
@@ -343,7 +360,9 @@ pub(super) fn schedule_stash(
                 send_or_log(msg_tx, Msg::LoadStashes { repo_id });
             }
         },
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }
 
@@ -375,15 +394,18 @@ pub(super) fn schedule_pop_stash(
             Ok(()) => {
                 let result = repo.stash_drop(index);
                 send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
-                send_or_log(&msg_tx, Msg::RepoActionFinished { repo_id, result });
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }),
+                );
             }
             Err(err) => {
                 send_or_log(
                     &msg_tx,
-                    Msg::RepoActionFinished {
+                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                         repo_id,
                         result: Err(err),
-                    },
+                    }),
                 );
             }
         },
@@ -406,6 +428,8 @@ pub(super) fn schedule_drop_stash(
         |msg_tx, repo_id, _result| {
             send_or_log(msg_tx, Msg::LoadStashes { repo_id });
         },
-        |repo_id, result| Msg::RepoActionFinished { repo_id, result },
+        |repo_id, result| {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
+        },
     );
 }

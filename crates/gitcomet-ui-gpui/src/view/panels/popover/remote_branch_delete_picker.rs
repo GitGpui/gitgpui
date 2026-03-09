@@ -73,11 +73,10 @@ pub(super) fn panel(
                         return;
                     };
                     this.open_popover_at(
-                        PopoverKind::DeleteRemoteBranchConfirm {
+                        PopoverKind::remote(
                             repo_id,
-                            remote,
-                            branch,
-                        },
+                            RemotePopoverKind::DeleteBranchConfirm { remote, branch },
+                        ),
                         e.position(),
                         window,
                         cx,
@@ -100,11 +99,13 @@ pub(super) fn panel(
                     .child(div().text_sm().line_clamp(1).child(label))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         this.open_popover_at(
-                            PopoverKind::DeleteRemoteBranchConfirm {
+                            PopoverKind::remote(
                                 repo_id,
-                                remote: remote.clone(),
-                                branch: branch.clone(),
-                            },
+                                RemotePopoverKind::DeleteBranchConfirm {
+                                    remote: remote.clone(),
+                                    branch: branch.clone(),
+                                },
+                            ),
                             e.position(),
                             window,
                             cx,

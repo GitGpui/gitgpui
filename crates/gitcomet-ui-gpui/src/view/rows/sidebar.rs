@@ -350,7 +350,7 @@ impl SidebarPaneView {
                                 cx,
                             );
                             this.open_popover_at(
-                                PopoverKind::WorktreeSectionMenu { repo_id },
+                                PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
                                 e.position(),
                                 window,
                                 cx,
@@ -366,7 +366,10 @@ impl SidebarPaneView {
                                     cx,
                                 );
                                 this.open_popover_at(
-                                    PopoverKind::WorktreeSectionMenu { repo_id },
+                                    PopoverKind::worktree(
+                                        repo_id,
+                                        WorktreePopoverKind::SectionMenu,
+                                    ),
                                     e.position,
                                     window,
                                     cx,
@@ -453,10 +456,12 @@ impl SidebarPaneView {
                                     cx,
                                 );
                                 this.open_popover_at(
-                                    PopoverKind::WorktreeMenu {
+                                    PopoverKind::worktree(
                                         repo_id,
-                                        path: path_for_menu.clone(),
-                                    },
+                                        WorktreePopoverKind::Menu {
+                                            path: path_for_menu.clone(),
+                                        },
+                                    ),
                                     e.position,
                                     window,
                                     cx,
@@ -534,7 +539,7 @@ impl SidebarPaneView {
                                 cx,
                             );
                             this.open_popover_at(
-                                PopoverKind::SubmoduleSectionMenu { repo_id },
+                                PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
                                 e.position(),
                                 window,
                                 cx,
@@ -550,7 +555,10 @@ impl SidebarPaneView {
                                     cx,
                                 );
                                 this.open_popover_at(
-                                    PopoverKind::SubmoduleSectionMenu { repo_id },
+                                    PopoverKind::submodule(
+                                        repo_id,
+                                        SubmodulePopoverKind::SectionMenu,
+                                    ),
                                     e.position,
                                     window,
                                     cx,
@@ -633,10 +641,12 @@ impl SidebarPaneView {
                                     cx,
                                 );
                                 this.open_popover_at(
-                                    PopoverKind::SubmoduleMenu {
+                                    PopoverKind::submodule(
                                         repo_id,
-                                        path: path_for_menu.clone(),
-                                    },
+                                        SubmodulePopoverKind::Menu {
+                                            path: path_for_menu.clone(),
+                                        },
+                                    ),
                                     e.position,
                                     window,
                                     cx,
@@ -677,10 +687,12 @@ impl SidebarPaneView {
                                 cx,
                             );
                             this.open_popover_at(
-                                PopoverKind::RemoteMenu {
+                                PopoverKind::remote(
                                     repo_id,
-                                    name: remote_name_for_button.clone(),
-                                },
+                                    RemotePopoverKind::Menu {
+                                        name: remote_name_for_button.clone(),
+                                    },
+                                ),
                                 e.position(),
                                 window,
                                 cx,
@@ -743,10 +755,12 @@ impl SidebarPaneView {
                                     cx,
                                 );
                                 this.open_popover_at(
-                                    PopoverKind::RemoteMenu {
+                                    PopoverKind::remote(
                                         repo_id,
-                                        name: remote_name_for_right_click.clone(),
-                                    },
+                                        RemotePopoverKind::Menu {
+                                            name: remote_name_for_right_click.clone(),
+                                        },
+                                    ),
                                     e.position,
                                     window,
                                     cx,
@@ -989,7 +1003,7 @@ impl DetailsPaneView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let Loadable::Ready(details) = &repo.commit_details else {
+        let Loadable::Ready(details) = &repo.history_state.commit_details else {
             return Vec::new();
         };
 
@@ -1020,13 +1034,17 @@ impl DetailsPaneView {
                 let context_menu_active =
                     this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                 let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                let selected = repo.diff_target.as_ref().is_some_and(|t| match t {
-                    DiffTarget::Commit {
-                        commit_id: t_commit_id,
-                        path: Some(t_path),
-                    } => t_commit_id == &commit_id && t_path == &path,
-                    _ => false,
-                });
+                let selected = repo
+                    .diff_state
+                    .diff_target
+                    .as_ref()
+                    .is_some_and(|t| match t {
+                        DiffTarget::Commit {
+                            commit_id: t_commit_id,
+                            path: Some(t_path),
+                        } => t_commit_id == &commit_id && t_path == &path,
+                        _ => false,
+                    });
                 let commit_id_for_click = commit_id.clone();
                 let path_for_click = path.clone();
                 let commit_id_for_menu = commit_id.clone();

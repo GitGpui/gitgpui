@@ -537,7 +537,7 @@ fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
 }
 
-fn wait_for_repo_count(store: &AppStore, expected: usize) -> gitcomet_state::model::AppState {
+fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         let state = store.snapshot();

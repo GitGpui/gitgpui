@@ -37,11 +37,13 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::OpenPopover {
-                kind: PopoverKind::RemoteEditUrlPrompt {
+                kind: PopoverKind::remote(
                     repo_id,
-                    name: name.to_owned(),
-                    kind,
-                },
+                    RemotePopoverKind::EditUrlPrompt {
+                        name: name.to_owned(),
+                        kind,
+                    },
+                ),
             }),
         });
     }
@@ -53,10 +55,12 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RemoteRemoveConfirm {
+            kind: PopoverKind::remote(
                 repo_id,
-                name: name.to_owned(),
-            },
+                RemotePopoverKind::RemoveConfirm {
+                    name: name.to_owned(),
+                },
+            ),
         }),
     });
 

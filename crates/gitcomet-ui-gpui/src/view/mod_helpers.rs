@@ -32,13 +32,15 @@ pub(super) struct HistoryColResizeState {
     pub(super) start_sha: Pixels,
 }
 
-pub(super) struct HistoryColResizeDragGhost;
+pub(super) struct ResizeDragGhost;
 
-impl Render for HistoryColResizeDragGhost {
+impl Render for ResizeDragGhost {
     fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         div().w(px(0.0)).h(px(0.0))
     }
 }
+
+pub(super) use ResizeDragGhost as HistoryColResizeDragGhost;
 
 pub(super) fn should_hide_unified_diff_header_line(line: &AnnotatedDiffLine) -> bool {
     matches!(line.kind, gitcomet_core::domain::DiffLineKind::Header)
@@ -131,13 +133,7 @@ pub(super) struct PaneResizeState {
     pub(super) start_details: Pixels,
 }
 
-pub(super) struct PaneResizeDragGhost;
-
-impl Render for PaneResizeDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().w(px(0.0)).h(px(0.0))
-    }
-}
+pub(super) use ResizeDragGhost as PaneResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DiffSplitResizeHandle {
@@ -151,13 +147,7 @@ pub(super) struct DiffSplitResizeState {
     pub(super) start_ratio: f32,
 }
 
-pub(super) struct DiffSplitResizeDragGhost;
-
-impl Render for DiffSplitResizeDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().w(px(0.0)).h(px(0.0))
-    }
-}
+pub(super) use ResizeDragGhost as DiffSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictVSplitResizeHandle {
@@ -170,13 +160,7 @@ pub(super) struct ConflictVSplitResizeState {
     pub(super) start_ratio: f32,
 }
 
-pub(super) struct ConflictVSplitResizeDragGhost;
-
-impl Render for ConflictVSplitResizeDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().w(px(0.0)).h(px(0.0))
-    }
-}
+pub(super) use ResizeDragGhost as ConflictVSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictHSplitResizeHandle {
@@ -191,13 +175,7 @@ pub(super) struct ConflictHSplitResizeState {
     pub(super) start_ratios: [f32; 2],
 }
 
-pub(super) struct ConflictHSplitResizeDragGhost;
-
-impl Render for ConflictHSplitResizeDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().w(px(0.0)).h(px(0.0))
-    }
-}
+pub(super) use ResizeDragGhost as ConflictHSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictDiffSplitResizeHandle {
@@ -210,11 +188,27 @@ pub(super) struct ConflictDiffSplitResizeState {
     pub(super) start_ratio: f32,
 }
 
-pub(super) struct ConflictDiffSplitResizeDragGhost;
+pub(super) use ResizeDragGhost as ConflictDiffSplitResizeDragGhost;
 
-impl Render for ConflictDiffSplitResizeDragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        div().w(px(0.0)).h(px(0.0))
+#[cfg(test)]
+mod resize_drag_ghost_tests {
+    use super::{
+        ConflictDiffSplitResizeDragGhost, ConflictHSplitResizeDragGhost,
+        ConflictVSplitResizeDragGhost, DiffSplitResizeDragGhost, HistoryColResizeDragGhost,
+        PaneResizeDragGhost, ResizeDragGhost,
+    };
+    use std::any::TypeId;
+
+    #[test]
+    fn all_resize_drag_ghost_aliases_use_shared_type() {
+        let shared = TypeId::of::<ResizeDragGhost>();
+
+        assert_eq!(TypeId::of::<HistoryColResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<PaneResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<DiffSplitResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<ConflictVSplitResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<ConflictHSplitResizeDragGhost>(), shared);
+        assert_eq!(TypeId::of::<ConflictDiffSplitResizeDragGhost>(), shared);
     }
 }
 
@@ -325,6 +319,13 @@ pub(super) enum ThreeWayColumn {
     Theirs,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct ThreeWaySides<T> {
+    pub(super) base: T,
+    pub(super) ours: T,
+    pub(super) theirs: T,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ResolvedOutputConflictMarker {
     pub(super) conflict_ix: usize,
@@ -350,18 +351,12 @@ pub(super) struct ConflictResolverUiState {
     pub(super) view_mode: ConflictResolverViewMode,
     pub(super) diff_rows: Vec<FileDiffRow>,
     pub(super) inline_rows: Vec<ConflictInlineRow>,
-    pub(super) three_way_base_lines: Vec<SharedString>,
-    pub(super) three_way_ours_lines: Vec<SharedString>,
-    pub(super) three_way_theirs_lines: Vec<SharedString>,
+    pub(super) three_way_lines: ThreeWaySides<Vec<SharedString>>,
     pub(super) three_way_len: usize,
     pub(super) three_way_conflict_ranges: Vec<Range<usize>>,
-    pub(super) three_way_base_line_conflict_map: Vec<Option<usize>>,
-    pub(super) three_way_ours_line_conflict_map: Vec<Option<usize>>,
-    pub(super) three_way_theirs_line_conflict_map: Vec<Option<usize>>,
+    pub(super) three_way_line_conflict_map: ThreeWaySides<Vec<Option<usize>>>,
     pub(super) conflict_has_base: Vec<bool>,
-    pub(super) three_way_word_highlights_base: conflict_resolver::WordHighlights,
-    pub(super) three_way_word_highlights_ours: conflict_resolver::WordHighlights,
-    pub(super) three_way_word_highlights_theirs: conflict_resolver::WordHighlights,
+    pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
     pub(super) diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
     pub(super) diff_mode: ConflictDiffMode,
     pub(super) nav_anchor: Option<usize>,
@@ -412,18 +407,12 @@ impl Default for ConflictResolverUiState {
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             diff_rows: Vec::new(),
             inline_rows: Vec::new(),
-            three_way_base_lines: Vec::new(),
-            three_way_ours_lines: Vec::new(),
-            three_way_theirs_lines: Vec::new(),
+            three_way_lines: ThreeWaySides::default(),
             three_way_len: 0,
             three_way_conflict_ranges: Vec::new(),
-            three_way_base_line_conflict_map: Vec::new(),
-            three_way_ours_line_conflict_map: Vec::new(),
-            three_way_theirs_line_conflict_map: Vec::new(),
+            three_way_line_conflict_map: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
-            three_way_word_highlights_base: Vec::new(),
-            three_way_word_highlights_ours: Vec::new(),
-            three_way_word_highlights_theirs: Vec::new(),
+            three_way_word_highlights: ThreeWaySides::default(),
             diff_word_highlights_split: Vec::new(),
             diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
@@ -448,8 +437,46 @@ impl Default for ConflictResolverUiState {
     }
 }
 
+#[cfg(test)]
+mod conflict_resolver_ui_state_tests {
+    use super::{ConflictResolverUiState, ThreeWaySides};
+
+    #[test]
+    fn default_groups_three_way_side_fields() {
+        let state = ConflictResolverUiState::default();
+
+        assert!(state.three_way_lines.base.is_empty());
+        assert!(state.three_way_lines.ours.is_empty());
+        assert!(state.three_way_lines.theirs.is_empty());
+
+        assert!(state.three_way_line_conflict_map.base.is_empty());
+        assert!(state.three_way_line_conflict_map.ours.is_empty());
+        assert!(state.three_way_line_conflict_map.theirs.is_empty());
+
+        assert!(state.three_way_word_highlights.base.is_empty());
+        assert!(state.three_way_word_highlights.ours.is_empty());
+        assert!(state.three_way_word_highlights.theirs.is_empty());
+    }
+
+    #[test]
+    fn three_way_sides_keep_each_column_separate() {
+        let mut sides = ThreeWaySides {
+            base: vec![1],
+            ours: vec![2],
+            theirs: vec![3],
+        };
+
+        sides.base.push(10);
+        sides.ours.push(20);
+        sides.theirs.push(30);
+
+        assert_eq!(sides.base, vec![1, 10]);
+        assert_eq!(sides.ours, vec![2, 20]);
+        assert_eq!(sides.theirs, vec![3, 30]);
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[allow(dead_code)]
 pub(super) enum ResolverPickTarget {
     /// Append a specific line from the 3-way resolver pane.
     ThreeWayLine {
@@ -509,74 +536,9 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
     },
-    RemoteAddPrompt {
+    Repo {
         repo_id: RepoId,
-    },
-    #[allow(dead_code)]
-    RemoteUrlPicker {
-        repo_id: RepoId,
-        kind: RemoteUrlKind,
-    },
-    #[allow(dead_code)]
-    RemoteRemovePicker {
-        repo_id: RepoId,
-    },
-    RemoteBranchDeletePicker {
-        repo_id: RepoId,
-        remote: Option<String>,
-    },
-    RemoteEditUrlPrompt {
-        repo_id: RepoId,
-        name: String,
-        kind: RemoteUrlKind,
-    },
-    RemoteRemoveConfirm {
-        repo_id: RepoId,
-        name: String,
-    },
-    RemoteMenu {
-        repo_id: RepoId,
-        name: String,
-    },
-    WorktreeSectionMenu {
-        repo_id: RepoId,
-    },
-    WorktreeMenu {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    SubmoduleSectionMenu {
-        repo_id: RepoId,
-    },
-    SubmoduleMenu {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    WorktreeAddPrompt {
-        repo_id: RepoId,
-    },
-    WorktreeOpenPicker {
-        repo_id: RepoId,
-    },
-    WorktreeRemovePicker {
-        repo_id: RepoId,
-    },
-    WorktreeRemoveConfirm {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-    },
-    SubmoduleAddPrompt {
-        repo_id: RepoId,
-    },
-    SubmoduleOpenPicker {
-        repo_id: RepoId,
-    },
-    SubmoduleRemovePicker {
-        repo_id: RepoId,
-    },
-    SubmoduleRemoveConfirm {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
+        kind: RepoPopoverKind,
     },
     FileHistory {
         repo_id: RepoId,
@@ -607,11 +569,6 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         name: String,
     },
-    DeleteRemoteBranchConfirm {
-        repo_id: RepoId,
-        remote: String,
-        branch: String,
-    },
     DiscardChangesConfirm {
         repo_id: RepoId,
         area: DiffArea,
@@ -639,7 +596,6 @@ pub(super) enum PopoverKind {
         lines_count: usize,
         copy_text: Option<String>,
     },
-    #[allow(dead_code)]
     ConflictResolverInputRowMenu {
         line_label: SharedString,
         line_target: ResolverPickTarget,
@@ -692,6 +648,68 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     HistoryColumnSettings,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum RepoPopoverKind {
+    Remote(RemotePopoverKind),
+    Worktree(WorktreePopoverKind),
+    Submodule(SubmodulePopoverKind),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum RemotePopoverKind {
+    AddPrompt,
+    UrlPicker { kind: RemoteUrlKind },
+    RemovePicker,
+    BranchDeletePicker { remote: Option<String> },
+    EditUrlPrompt { name: String, kind: RemoteUrlKind },
+    RemoveConfirm { name: String },
+    Menu { name: String },
+    DeleteBranchConfirm { remote: String, branch: String },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum WorktreePopoverKind {
+    SectionMenu,
+    Menu { path: std::path::PathBuf },
+    AddPrompt,
+    OpenPicker,
+    RemovePicker,
+    RemoveConfirm { path: std::path::PathBuf },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SubmodulePopoverKind {
+    SectionMenu,
+    Menu { path: std::path::PathBuf },
+    AddPrompt,
+    OpenPicker,
+    RemovePicker,
+    RemoveConfirm { path: std::path::PathBuf },
+}
+
+impl PopoverKind {
+    pub(super) fn remote(repo_id: RepoId, kind: RemotePopoverKind) -> Self {
+        Self::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(kind),
+        }
+    }
+
+    pub(super) fn worktree(repo_id: RepoId, kind: WorktreePopoverKind) -> Self {
+        Self::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Worktree(kind),
+        }
+    }
+
+    pub(super) fn submodule(repo_id: RepoId, kind: SubmodulePopoverKind) -> Self {
+        Self::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Submodule(kind),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -884,15 +902,17 @@ pub(super) fn focused_mergetool_bootstrap_action(
         area: DiffArea::Unstaged,
         path: bootstrap.target_path.clone(),
     };
-    if repo.diff_target.as_ref() != Some(&target) {
+    if repo.diff_state.diff_target.as_ref() != Some(&target) {
         return Some(FocusedMergetoolBootstrapAction::SelectDiff {
             repo_id: repo.id,
             target,
         });
     }
 
-    let has_conflict_file_target = repo.conflict_file_path.as_ref() == Some(&bootstrap.target_path);
-    if !has_conflict_file_target || matches!(repo.conflict_file, Loadable::NotLoaded) {
+    let has_conflict_file_target =
+        repo.conflict_state.conflict_file_path.as_ref() == Some(&bootstrap.target_path);
+    if !has_conflict_file_target || matches!(repo.conflict_state.conflict_file, Loadable::NotLoaded)
+    {
         return Some(FocusedMergetoolBootstrapAction::LoadConflictFile {
             repo_id: repo.id,
             path: bootstrap.target_path.clone(),

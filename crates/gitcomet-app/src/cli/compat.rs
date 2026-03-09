@@ -1,5 +1,72 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum CompatLabelSlot {
+    L1,
+    L2,
+    L3,
+}
+
+fn parse_numbered_label_flag(token: &str) -> Option<CompatLabelSlot> {
+    let number = token
+        .strip_prefix("--L")
+        .or_else(|| token.strip_prefix("-L"))?;
+    if number.len() != 1 {
+        return None;
+    }
+    match number {
+        "1" => Some(CompatLabelSlot::L1),
+        "2" => Some(CompatLabelSlot::L2),
+        "3" => Some(CompatLabelSlot::L3),
+        _ => None,
+    }
+}
+
+fn parse_attached_numbered_label(token: &str) -> Option<(CompatLabelSlot, String)> {
+    if let Some(value) = token.strip_prefix("--L1=") {
+        return Some((CompatLabelSlot::L1, value.to_string()));
+    }
+    if let Some(value) = token.strip_prefix("--L2=") {
+        return Some((CompatLabelSlot::L2, value.to_string()));
+    }
+    if let Some(value) = token.strip_prefix("--L3=") {
+        return Some((CompatLabelSlot::L3, value.to_string()));
+    }
+    if let Some(rest) = token.strip_prefix("-L") {
+        let mut chars = rest.chars();
+        let Some(number) = chars.next() else {
+            return None;
+        };
+        let slot = match number {
+            '1' => CompatLabelSlot::L1,
+            '2' => CompatLabelSlot::L2,
+            '3' => CompatLabelSlot::L3,
+            _ => return None,
+        };
+        let remainder = chars.as_str();
+        if remainder.is_empty() {
+            return None;
+        }
+        let value = remainder.strip_prefix('=').unwrap_or(remainder);
+        return Some((slot, value.to_string()));
+    }
+    None
+}
+
+fn assign_numbered_compat_label(
+    label_l1: &mut Option<String>,
+    label_l2: &mut Option<String>,
+    label_l3: &mut Option<String>,
+    slot: CompatLabelSlot,
+    value: String,
+) {
+    match slot {
+        CompatLabelSlot::L1 => *label_l1 = Some(value),
+        CompatLabelSlot::L2 => *label_l2 = Some(value),
+        CompatLabelSlot::L3 => *label_l3 = Some(value),
+    }
+}
+
 fn assign_next_compat_label(
     label_l1: &mut Option<String>,
     label_l2: &mut Option<String>,
@@ -21,8 +88,24 @@ fn assign_next_compat_label(
     Err("Invalid external invocation: too many label flags; expected at most 3 labels across --L1/--L2/--L3 and -L/--label.".to_string())
 }
 
+fn compat_argv_log_dir() -> PathBuf {
+    std::env::temp_dir().join("gitcomet-compat-argv")
+}
+
+fn resolve_compat_argv_log_path(env: &dyn EnvLookup) -> Option<PathBuf> {
+    let requested = PathBuf::from(env.var_os("GITCOMET_COMPAT_ARGV_LOG")?);
+    let mut components = requested.components();
+    let Some(std::path::Component::Normal(file_name)) = components.next() else {
+        return None;
+    };
+    if components.next().is_some() {
+        return None;
+    }
+    Some(compat_argv_log_dir().join(file_name))
+}
+
 fn maybe_record_compat_argv(raw_args: &[OsString], env: &dyn EnvLookup) {
-    let Some(path) = env.var_os("GITCOMET_COMPAT_ARGV_LOG").map(PathBuf::from) else {
+    let Some(path) = resolve_compat_argv_log_path(env) else {
         return;
     };
 
@@ -73,35 +156,18 @@ pub(super) fn parse_compat_external_mode_with_config(
             continue;
         }
 
-        if token == "--L1" || token == "--L2" || token == "--L3" {
+        if let Some(slot) = parse_numbered_label_flag(token.as_ref()) {
             let next_idx = idx + 1;
             let value = raw_args.get(next_idx).ok_or_else(|| {
                 format!("Missing value for compatibility flag {token} in external tool mode")
             })?;
-            let value = value.to_string_lossy().into_owned();
-            match token.as_ref() {
-                "--L1" => label_l1 = Some(value),
-                "--L2" => label_l2 = Some(value),
-                "--L3" => label_l3 = Some(value),
-                _ => unreachable!(),
-            }
-            has_kdiff3_label_flags = true;
-            idx += 2;
-            continue;
-        }
-
-        if token == "-L1" || token == "-L2" || token == "-L3" {
-            let next_idx = idx + 1;
-            let value = raw_args.get(next_idx).ok_or_else(|| {
-                format!("Missing value for compatibility flag {token} in external tool mode")
-            })?;
-            let value = value.to_string_lossy().into_owned();
-            match token.as_ref() {
-                "-L1" => label_l1 = Some(value),
-                "-L2" => label_l2 = Some(value),
-                "-L3" => label_l3 = Some(value),
-                _ => unreachable!(),
-            }
+            assign_numbered_compat_label(
+                &mut label_l1,
+                &mut label_l2,
+                &mut label_l3,
+                slot,
+                value.to_string_lossy().into_owned(),
+            );
             has_kdiff3_label_flags = true;
             idx += 2;
             continue;
@@ -122,62 +188,8 @@ pub(super) fn parse_compat_external_mode_with_config(
             continue;
         }
 
-        if let Some(value) = token.strip_prefix("--L1=") {
-            label_l1 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--L2=") {
-            label_l2 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("--L3=") {
-            label_l3 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L1=") {
-            label_l1 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L2=") {
-            label_l2 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L3=") {
-            label_l3 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L1")
-            && !value.is_empty()
-        {
-            label_l1 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L2")
-            && !value.is_empty()
-        {
-            label_l2 = Some(value.to_string());
-            has_kdiff3_label_flags = true;
-            idx += 1;
-            continue;
-        }
-        if let Some(value) = token.strip_prefix("-L3")
-            && !value.is_empty()
-        {
-            label_l3 = Some(value.to_string());
+        if let Some((slot, value)) = parse_attached_numbered_label(token.as_ref()) {
+            assign_numbered_compat_label(&mut label_l1, &mut label_l2, &mut label_l3, slot, value);
             has_kdiff3_label_flags = true;
             idx += 1;
             continue;

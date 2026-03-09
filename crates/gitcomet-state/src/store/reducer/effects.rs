@@ -17,9 +17,9 @@ pub(super) fn file_history_loaded(
     result: std::result::Result<LogPage, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.file_history_path.as_ref() == Some(&path)
+        && repo_state.history_state.file_history_path.as_ref() == Some(&path)
     {
-        repo_state.file_history = match result {
+        repo_state.history_state.file_history = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -38,10 +38,10 @@ pub(super) fn blame_loaded(
     result: std::result::Result<Vec<gitcomet_core::services::BlameLine>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.blame_path.as_ref() == Some(&path)
-        && repo_state.blame_rev == rev
+        && repo_state.history_state.blame_path.as_ref() == Some(&path)
+        && repo_state.history_state.blame_rev == rev
     {
-        repo_state.blame = match result {
+        repo_state.history_state.blame = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
@@ -60,7 +60,7 @@ pub(super) fn conflict_file_loaded(
     conflict_session: Option<ConflictSession>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.conflict_file_path.as_ref() == Some(&path)
+        && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
     {
         let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
@@ -177,13 +177,13 @@ pub(super) fn select_commit(
         return Vec::new();
     };
 
-    if repo_state.selected_commit.as_ref() == Some(&commit_id) {
+    if repo_state.history_state.selected_commit.as_ref() == Some(&commit_id) {
         return Vec::new();
     }
 
     repo_state.set_selected_commit(Some(commit_id.clone()));
     let already_loaded = matches!(
-        &repo_state.commit_details,
+        &repo_state.history_state.commit_details,
         Loadable::Ready(details) if details.id == commit_id
     );
     if already_loaded {
@@ -191,7 +191,7 @@ pub(super) fn select_commit(
     }
 
     if matches!(
-        repo_state.commit_details,
+        repo_state.history_state.commit_details,
         Loadable::Error(_) | Loadable::NotLoaded
     ) {
         repo_state.set_commit_details(Loadable::NotLoaded);
@@ -281,8 +281,8 @@ pub(super) fn load_file_history(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.file_history_path = Some(path.clone());
-    repo_state.file_history = Loadable::Loading;
+    repo_state.history_state.file_history_path = Some(path.clone());
+    repo_state.history_state.file_history = Loadable::Loading;
     vec![Effect::LoadFileHistory {
         repo_id,
         path,
@@ -299,9 +299,9 @@ pub(super) fn load_blame(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.blame_path = Some(path.clone());
-    repo_state.blame_rev = rev.clone();
-    repo_state.blame = Loadable::Loading;
+    repo_state.history_state.blame_path = Some(path.clone());
+    repo_state.history_state.blame_rev = rev.clone();
+    repo_state.history_state.blame = Loadable::Loading;
     vec![Effect::LoadBlame { repo_id, path, rev }]
 }
 
@@ -429,7 +429,7 @@ pub(super) fn status_loaded(
 /// Clear conflict-file/session state when the tracked conflict path is no longer
 /// present as an unresolved conflict in status.
 fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
-    let Some(conflict_path) = repo_state.conflict_file_path.as_ref() else {
+    let Some(conflict_path) = repo_state.conflict_state.conflict_file_path.as_ref() else {
         return;
     };
     let still_conflicted = match &repo_state.status {
@@ -610,7 +610,7 @@ pub(super) fn commit_details_loaded(
     result: std::result::Result<CommitDetails, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.selected_commit.as_ref() == Some(&commit_id)
+        && repo_state.history_state.selected_commit.as_ref() == Some(&commit_id)
     {
         let value = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
@@ -759,7 +759,7 @@ mod tests {
         let mut state = new_state_with_repo(repo_id);
         let tracked = PathBuf::from("tracked.txt");
 
-        repo_mut(&mut state, repo_id).file_history_path = Some(tracked.clone());
+        repo_mut(&mut state, repo_id).history_state.file_history_path = Some(tracked.clone());
         file_history_loaded(
             &mut state,
             repo_id,
@@ -767,13 +767,13 @@ mod tests {
             Ok(empty_log_page()),
         );
         assert!(matches!(
-            repo_mut(&mut state, repo_id).file_history,
+            repo_mut(&mut state, repo_id).history_state.file_history,
             Loadable::NotLoaded
         ));
 
         file_history_loaded(&mut state, repo_id, tracked.clone(), Ok(empty_log_page()));
         assert!(matches!(
-            repo_mut(&mut state, repo_id).file_history,
+            repo_mut(&mut state, repo_id).history_state.file_history,
             Loadable::Ready(_)
         ));
 
@@ -784,7 +784,7 @@ mod tests {
             Err(backend_error("file history failed")),
         );
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.file_history, Loadable::Error(_)));
+        assert!(matches!(repo.history_state.file_history, Loadable::Error(_)));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 
@@ -797,8 +797,8 @@ mod tests {
 
         {
             let repo = repo_mut(&mut state, repo_id);
-            repo.blame_path = Some(path.clone());
-            repo.blame_rev = rev.clone();
+            repo.history_state.blame_path = Some(path.clone());
+            repo.history_state.blame_rev = rev.clone();
         }
 
         blame_loaded(
@@ -809,7 +809,7 @@ mod tests {
             Ok(Vec::new()),
         );
         assert!(matches!(
-            repo_mut(&mut state, repo_id).blame,
+            repo_mut(&mut state, repo_id).history_state.blame,
             Loadable::NotLoaded
         ));
 
@@ -821,7 +821,7 @@ mod tests {
             Ok(Vec::new()),
         );
         assert!(matches!(
-            repo_mut(&mut state, repo_id).blame,
+            repo_mut(&mut state, repo_id).history_state.blame,
             Loadable::Ready(_)
         ));
 
@@ -833,7 +833,7 @@ mod tests {
             Err(backend_error("blame failed")),
         );
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.blame, Loadable::Error(_)));
+        assert!(matches!(repo.history_state.blame, Loadable::Error(_)));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 
@@ -868,8 +868,8 @@ mod tests {
 
         conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(Some(file)), None);
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.conflict_file, Loadable::Ready(Some(_))));
-        let session = repo.conflict_session.as_ref().expect("session");
+        assert!(matches!(repo.conflict_state.conflict_file, Loadable::Ready(Some(_))));
+        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
         assert_eq!(session.path, path);
         assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
         assert!(!session.regions.is_empty());
@@ -904,7 +904,7 @@ mod tests {
 
         conflict_file_loaded(&mut state, repo_id, path, Ok(Some(file)), None);
         let repo = repo_mut(&mut state, repo_id);
-        let session = repo.conflict_session.as_ref().expect("session");
+        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
         assert!(session.base.is_binary());
     }
 
@@ -933,8 +933,8 @@ mod tests {
         );
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert!(matches!(repo.conflict_file, Loadable::Error(_)));
-            let session = repo.conflict_session.as_ref().expect("session");
+            assert!(matches!(repo.conflict_state.conflict_file, Loadable::Error(_)));
+            let session = repo.conflict_state.conflict_session.as_ref().expect("session");
             assert_eq!(session.path, provided.path);
             assert_eq!(session.conflict_kind, provided.conflict_kind);
             assert_eq!(session.strategy, provided.strategy);
@@ -951,8 +951,8 @@ mod tests {
             None,
         );
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.conflict_file, Loadable::Error(_)));
-        let session = repo.conflict_session.as_ref().expect("session");
+        assert!(matches!(repo.conflict_state.conflict_file, Loadable::Error(_)));
+        let session = repo.conflict_state.conflict_session.as_ref().expect("session");
         assert_eq!(session.path, provided.path);
         assert_eq!(session.conflict_kind, provided.conflict_kind);
         assert_eq!(session.strategy, provided.strategy);
@@ -987,10 +987,10 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.conflict_file_path.as_ref(), Some(&conflict_path));
-            assert!(repo.conflict_file.is_loading());
-            assert!(repo.conflict_session.is_none());
-            assert!(!repo.conflict_hide_resolved);
+            assert_eq!(repo.conflict_state.conflict_file_path.as_ref(), Some(&conflict_path));
+            assert!(repo.conflict_state.conflict_file.is_loading());
+            assert!(repo.conflict_state.conflict_session.is_none());
+            assert!(!repo.conflict_state.conflict_hide_resolved);
         }
 
         let effects = load_file_history(&mut state, repo_id, history_path.clone(), 25);
@@ -1005,8 +1005,8 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.file_history_path.as_ref(), Some(&history_path));
-            assert!(repo.file_history.is_loading());
+            assert_eq!(repo.history_state.file_history_path.as_ref(), Some(&history_path));
+            assert!(repo.history_state.file_history.is_loading());
         }
 
         let effects = load_blame(
@@ -1026,9 +1026,9 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.blame_path.as_ref(), Some(&blame_path));
-            assert_eq!(repo.blame_rev.as_deref(), Some("HEAD"));
-            assert!(repo.blame.is_loading());
+            assert_eq!(repo.history_state.blame_path.as_ref(), Some(&blame_path));
+            assert_eq!(repo.history_state.blame_rev.as_deref(), Some("HEAD"));
+            assert!(repo.history_state.blame.is_loading());
         }
 
         let effects = load_worktrees(&mut state, repo_id);
@@ -1100,8 +1100,8 @@ mod tests {
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.selected_commit.as_ref(), Some(&commit_a));
-            assert!(matches!(repo.commit_details, Loadable::NotLoaded));
+            assert_eq!(repo.history_state.selected_commit.as_ref(), Some(&commit_a));
+            assert!(matches!(repo.history_state.commit_details, Loadable::NotLoaded));
         }
 
         assert!(select_commit(&mut state, repo_id, commit_a.clone()).is_empty());
@@ -1130,14 +1130,14 @@ mod tests {
             } if rid == repo_id && commit_id == &commit_b
         ));
         assert!(matches!(
-            repo_mut(&mut state, repo_id).commit_details,
+            repo_mut(&mut state, repo_id).history_state.commit_details,
             Loadable::Loading
         ));
 
         assert!(clear_commit_selection(&mut state, repo_id).is_empty());
         let repo = repo_mut(&mut state, repo_id);
-        assert!(repo.selected_commit.is_none());
-        assert!(matches!(repo.commit_details, Loadable::NotLoaded));
+        assert!(repo.history_state.selected_commit.is_none());
+        assert!(matches!(repo.history_state.commit_details, Loadable::NotLoaded));
     }
 
     #[test]
@@ -1364,10 +1364,10 @@ mod tests {
         {
             let repo = repo_mut(&mut state, repo_id);
             assert!(matches!(repo.status, Loadable::Ready(_)));
-            assert!(repo.conflict_file_path.is_none());
-            assert!(matches!(repo.conflict_file, Loadable::NotLoaded));
-            assert!(repo.conflict_session.is_none());
-            assert!(!repo.conflict_hide_resolved);
+            assert!(repo.conflict_state.conflict_file_path.is_none());
+            assert!(matches!(repo.conflict_state.conflict_file, Loadable::NotLoaded));
+            assert!(repo.conflict_state.conflict_session.is_none());
+            assert!(!repo.conflict_state.conflict_hide_resolved);
         }
 
         {
@@ -1389,9 +1389,9 @@ mod tests {
         assert!(status_loaded(&mut state, repo_id, Ok(unresolved)).is_empty());
         {
             let repo = repo_mut(&mut state, repo_id);
-            assert_eq!(repo.conflict_file_path.as_ref(), Some(&path));
-            assert!(repo.conflict_session.is_some());
-            assert!(repo.conflict_hide_resolved);
+            assert_eq!(repo.conflict_state.conflict_file_path.as_ref(), Some(&path));
+            assert!(repo.conflict_state.conflict_session.is_some());
+            assert!(repo.conflict_state.conflict_hide_resolved);
         }
 
         assert!(status_loaded(&mut state, repo_id, Err(backend_error("status"))).is_empty());
@@ -1450,7 +1450,7 @@ mod tests {
             Ok(commit_details_for(other.clone())),
         );
         assert!(matches!(
-            repo_mut(&mut state, repo_id).commit_details,
+            repo_mut(&mut state, repo_id).history_state.commit_details,
             Loadable::NotLoaded
         ));
 
@@ -1461,13 +1461,13 @@ mod tests {
             Ok(commit_details_for(selected.clone())),
         );
         assert!(matches!(
-            repo_mut(&mut state, repo_id).commit_details,
+            repo_mut(&mut state, repo_id).history_state.commit_details,
             Loadable::Ready(_)
         ));
 
         commit_details_loaded(&mut state, repo_id, selected, Err(backend_error("details")));
         let repo = repo_mut(&mut state, repo_id);
-        assert!(matches!(repo.commit_details, Loadable::Error(_)));
+        assert!(matches!(repo.history_state.commit_details, Loadable::Error(_)));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 }

@@ -138,7 +138,29 @@ impl AppTheme {
     }
 }
 
-fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
+pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color.a = alpha;
     color
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Rgba, with_alpha};
+
+    #[test]
+    fn with_alpha_preserves_rgb_and_overwrites_alpha() {
+        let color = Rgba {
+            r: 0.1,
+            g: 0.2,
+            b: 0.3,
+            a: 0.4,
+        };
+
+        let adjusted = with_alpha(color, 0.75);
+
+        assert_eq!(adjusted.r, color.r);
+        assert_eq!(adjusted.g, color.g);
+        assert_eq!(adjusted.b, color.b);
+        assert_eq!(adjusted.a, 0.75);
+    }
 }

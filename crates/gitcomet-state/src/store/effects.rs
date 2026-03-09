@@ -6,6 +6,7 @@ mod repo_load;
 mod util;
 
 use crate::msg::{Effect, Msg};
+use crate::session;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, mpsc};
@@ -15,12 +16,31 @@ use super::executor::TaskExecutor;
 
 pub(super) fn schedule_effect(
     executor: &TaskExecutor,
+    session_persist_executor: &TaskExecutor,
     backend: &Arc<dyn GitBackend>,
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     msg_tx: mpsc::Sender<Msg>,
     effect: Effect,
 ) {
     match effect {
+        Effect::PersistSession {
+            snapshot,
+            repo_id,
+            action,
+        } => {
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_repos_snapshot(&snapshot) {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::OpenRepo { repo_id, path } => {
             open_repo::schedule_open_repo(executor, Arc::clone(backend), msg_tx, repo_id, path);
         }

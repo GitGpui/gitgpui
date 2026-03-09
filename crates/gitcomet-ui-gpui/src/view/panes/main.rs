@@ -33,7 +33,7 @@ impl Render for MainPaneView {
 
         let show_diff = self
             .active_repo()
-            .and_then(|r| r.diff_target.as_ref())
+            .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
         if show_diff {
             div().size_full().child(self.diff_view(cx))

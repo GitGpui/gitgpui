@@ -1,20 +1,32 @@
 use super::util::{
-    dedup_paths_in_order, diff_target_is_svg, diff_target_wants_image_preview,
-    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
-    push_notification, refresh_full_effects, refresh_primary_effects,
+    dedup_paths_in_order, diff_reload_effects, format_failure_summary,
+    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
+    refresh_full_effects, refresh_primary_effects,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
 };
 use crate::msg::Effect;
 use crate::session;
-use gitcomet_core::domain::{DiffTarget, RepoSpec};
+use gitcomet_core::domain::RepoSpec;
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{CommandOutput, GitRepository};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+fn persist_session_effect(
+    state: &AppState,
+    repo_id: Option<RepoId>,
+    action: &'static str,
+) -> Effect {
+    Effect::PersistSession {
+        snapshot: session::snapshot_repos_from_state(state),
+        repo_id,
+        action,
+    }
+}
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
     let path = normalize_repo_path(path);
@@ -35,7 +47,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     state.repos.push({
         let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
         if let Some(scope) = session::load_repo_history_scope(&spec.workdir) {
-            repo_state.history_scope = scope;
+            repo_state.history_state.history_scope = scope;
         }
         if let Some(enabled) =
             session::load_repo_fetch_prune_deleted_remote_tracking_branches(&spec.workdir)
@@ -45,12 +57,15 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_state
     });
     state.active_repo = Some(repo_id);
-    let effects = vec![Effect::OpenRepo {
+    let mut effects = vec![Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
     }];
-    let persist_result = session::persist_from_state(state);
-    handle_session_persist_result(state, Some(repo_id), "opening a repository", persist_result);
+    effects.push(persist_session_effect(
+        state,
+        Some(repo_id),
+        "opening a repository",
+    ));
     effects
 }
 
@@ -72,7 +87,7 @@ pub(super) fn restore_session(
     let mut active_repo_id: Option<RepoId> = None;
 
     let open_repos = dedup_paths_in_order(open_repos);
-    let mut effects = Vec::with_capacity(open_repos.len());
+    let mut effects = Vec::with_capacity(open_repos.len() + 1);
     let mut seen_workdirs: HashSet<PathBuf> = HashSet::default();
     seen_workdirs.reserve(open_repos.len());
 
@@ -94,7 +109,7 @@ pub(super) fn restore_session(
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
             let workdir_key = session::path_storage_key(&spec.workdir);
             if let Some(scope) = repo_history_scopes.get(&workdir_key).copied() {
-                repo_state.history_scope = scope;
+                repo_state.history_state.history_scope = scope;
             }
             if let Some(enabled) = repo_fetch_prune_deleted_remote_tracking_branches
                 .get(&workdir_key)
@@ -116,13 +131,11 @@ pub(super) fn restore_session(
         state.repos.last().map(|r| r.id)
     };
 
-    let persist_result = session::persist_from_state(state);
-    handle_session_persist_result(
+    effects.push(persist_session_effect(
         state,
         state.active_repo,
         "restoring repository session",
-        persist_result,
-    );
+    ));
     effects
 }
 
@@ -136,14 +149,11 @@ pub(super) fn close_repo(
     if state.active_repo == Some(repo_id) {
         state.active_repo = state.repos.first().map(|r| r.id);
     }
-    let persist_result = session::persist_from_state(state);
-    handle_session_persist_result(
+    vec![persist_session_effect(
         state,
         state.active_repo,
         "closing a repository",
-        persist_result,
-    );
-    Vec::new()
+    )]
 }
 
 pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -153,15 +163,8 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
 
     let changed = state.active_repo != Some(repo_id);
     state.active_repo = Some(repo_id);
-    if changed {
-        let persist_result = session::persist_from_state(state);
-        handle_session_persist_result(
-            state,
-            Some(repo_id),
-            "switching active repository",
-            persist_result,
-        );
-    }
+    let persist_effect = changed
+        .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -178,28 +181,11 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
 
     // Reload the selected diff when switching repos; steady-state refreshes rely on the
     // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
-    if changed && let Some(target) = repo_state.diff_target.clone() {
-        let supports_file = matches!(
-            &target,
-            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-        );
-        let wants_image = diff_target_wants_image_preview(&target);
-        let is_svg = diff_target_is_svg(&target);
-        effects.push(Effect::LoadDiff {
-            repo_id,
-            target: target.clone(),
-        });
-        if supports_file {
-            if wants_image {
-                effects.push(Effect::LoadDiffFileImage {
-                    repo_id,
-                    target: target.clone(),
-                });
-            }
-            if !wants_image || is_svg {
-                effects.push(Effect::LoadDiffFile { repo_id, target });
-            }
-        }
+    if changed && let Some(target) = repo_state.diff_state.diff_target.clone() {
+        effects.extend(diff_reload_effects(repo_id, target));
+    }
+    if let Some(effect) = persist_effect {
+        effects.push(effect);
     }
     effects
 }
@@ -272,14 +258,11 @@ pub(super) fn reorder_repo_tabs(
     };
     state.repos.insert(insert_ix, moved);
 
-    let persist_result = session::persist_from_state(state);
-    handle_session_persist_result(
+    vec![persist_session_effect(
         state,
         state.active_repo,
         "reordering repository tabs",
-        persist_result,
-    );
-    Vec::new()
+    )]
 }
 
 pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Vec<Effect> {
@@ -369,24 +352,24 @@ pub(super) fn repo_opened_ok(
         repo_state.set_remote_branches(Loadable::Loading);
         repo_state.set_status(Loadable::Loading);
         repo_state.set_log(Loadable::Loading);
-        repo_state.log_loading_more = false;
+        repo_state.set_log_loading_more(false);
         repo_state.set_stashes(Loadable::Loading);
         repo_state.reflog = Loadable::NotLoaded;
         repo_state.set_rebase_in_progress(Loadable::Loading);
         repo_state.set_merge_commit_message(Loadable::Loading);
-        repo_state.file_history_path = None;
-        repo_state.file_history = Loadable::NotLoaded;
-        repo_state.blame_path = None;
-        repo_state.blame_rev = None;
-        repo_state.blame = Loadable::NotLoaded;
+        repo_state.history_state.file_history_path = None;
+        repo_state.history_state.file_history = Loadable::NotLoaded;
+        repo_state.history_state.blame_path = None;
+        repo_state.history_state.blame_rev = None;
+        repo_state.history_state.blame = Loadable::NotLoaded;
         repo_state.set_worktrees(Loadable::NotLoaded);
         repo_state.set_submodules(Loadable::NotLoaded);
         repo_state.set_selected_commit(None);
         repo_state.set_commit_details(Loadable::NotLoaded);
-        repo_state.diff_target = None;
-        repo_state.diff = Loadable::NotLoaded;
-        repo_state.diff_file = Loadable::NotLoaded;
-        repo_state.diff_file_image = Loadable::NotLoaded;
+        repo_state.diff_state.diff_target = None;
+        repo_state.diff_state.diff = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
         repo_state.bump_diff_state_rev();
         repo_state.last_error = None;
 

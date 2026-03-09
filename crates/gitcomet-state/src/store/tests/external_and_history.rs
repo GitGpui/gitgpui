@@ -17,13 +17,13 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             repo: Arc::new(DummyRepo::new("/tmp/repo")),
-        },
+        }),
     );
 
     reduce(
@@ -44,10 +44,10 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id: RepoId(1),
             result: Ok(gitcomet_core::domain::RepoStatus::default()),
-        },
+        }),
     );
 
     let effects = reduce(
@@ -126,13 +126,13 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             repo: Arc::new(DummyRepo::new("/tmp/repo")),
-        },
+        }),
     );
 
     reduce(
@@ -153,52 +153,52 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::HeadBranchLoaded {
+        Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
             repo_id: RepoId(1),
             result: Ok("main".to_string()),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::UpstreamDivergenceLoaded {
+        Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
             repo_id: RepoId(1),
             result: Ok(None),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RebaseStateLoaded {
+        Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
             result: Ok(false),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::MergeCommitMessageLoaded {
+        Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
             repo_id: RepoId(1),
             result: Ok(None),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id: RepoId(1),
             result: Ok(gitcomet_core::domain::RepoStatus::default()),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::LogLoaded {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
             cursor: None,
@@ -206,25 +206,25 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
                 commits: Vec::new(),
                 next_cursor: None,
             }),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::BranchesLoaded {
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
             repo_id: RepoId(1),
             result: Ok(Vec::new()),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RemoteBranchesLoaded {
+        Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
             repo_id: RepoId(1),
             result: Ok(Vec::new()),
-        },
+        }),
     );
 
     let effects = reduce(
@@ -364,10 +364,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::HeadBranchLoaded {
+        Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
             repo_id: RepoId(1),
             result: Ok("main".to_string()),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -378,10 +378,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::UpstreamDivergenceLoaded {
+        Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
             repo_id: RepoId(1),
             result: Ok(None),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -392,10 +392,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RebaseStateLoaded {
+        Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
             result: Ok(false),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -406,10 +406,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::MergeCommitMessageLoaded {
+        Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
             repo_id: RepoId(1),
             result: Ok(None),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -420,10 +420,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id: RepoId(1),
             result: Ok(gitcomet_core::domain::RepoStatus::default()),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -434,7 +434,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::LogLoaded {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
             cursor: None,
@@ -442,7 +442,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
                 commits: Vec::new(),
                 next_cursor: None,
             }),
-        },
+        }),
     );
     assert!(matches!(
         effects.as_slice(),
@@ -484,7 +484,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
     assert!(repo_state.log.is_loading());
-    assert!(!repo_state.log_loading_more);
+    assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
     assert!(
         effects
@@ -507,7 +507,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
     state.active_repo = Some(RepoId(1));
 
     let repo_state = &mut state.repos[0];
-    repo_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".to_string()),
@@ -520,7 +520,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
             last_seen: CommitId("c1".to_string()),
         }),
     }));
-    repo_state.log_loading_more = false;
+    repo_state.history_state.log_loading_more = false;
 
     let effects = reduce(
         &mut repos,
@@ -530,7 +530,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.log_loading_more);
+    assert!(repo_state.history_state.log_loading_more);
     assert!(matches!(
         effects.as_slice(),
         [Effect::LoadLog {
@@ -556,7 +556,7 @@ fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
     state.active_repo = Some(RepoId(1));
 
     let repo_state = &mut state.repos[0];
-    repo_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![],
         next_cursor: None,
@@ -573,7 +573,10 @@ fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
     );
 
     let repo_state = &state.repos[0];
-    assert_eq!(repo_state.history_scope, LogScope::AllBranches);
+    assert_eq!(
+        repo_state.history_state.history_scope,
+        LogScope::AllBranches
+    );
     assert!(repo_state.log.is_loading());
     assert!(
         effects.iter().any(|e| matches!(
@@ -621,7 +624,7 @@ fn load_more_history_noops_when_no_next_cursor() {
     );
 
     let repo_state = &state.repos[0];
-    assert!(!repo_state.log_loading_more);
+    assert!(!repo_state.history_state.log_loading_more);
     assert!(effects.is_empty());
 }
 
@@ -639,7 +642,7 @@ fn log_loaded_appends_when_loading_more() {
     state.active_repo = Some(RepoId(1));
 
     let repo_state = &mut state.repos[0];
-    repo_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
     repo_state.log = Loadable::Ready(Arc::new(LogPage {
         commits: vec![Commit {
             id: CommitId("c1".to_string()),
@@ -652,13 +655,13 @@ fn log_loaded_appends_when_loading_more() {
             last_seen: CommitId("c1".to_string()),
         }),
     }));
-    repo_state.log_loading_more = true;
+    repo_state.history_state.log_loading_more = true;
 
     let _effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::LogLoaded {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
@@ -674,11 +677,11 @@ fn log_loaded_appends_when_loading_more() {
                 }],
                 next_cursor: None,
             }),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
-    assert!(!repo_state.log_loading_more);
+    assert!(!repo_state.history_state.log_loading_more);
     let Loadable::Ready(page) = &repo_state.log else {
         panic!("expected log ready");
     };
@@ -705,13 +708,13 @@ fn log_loaded_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = state.repos[0].log_rev;
+    let log_before = state.repos[0].history_state.log_rev;
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::LogLoaded {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             scope: LogScope::CurrentBranch,
             cursor: None,
@@ -725,11 +728,11 @@ fn log_loaded_bumps_log_rev() {
                 }],
                 next_cursor: None,
             }),
-        },
+        }),
     );
 
     assert!(
-        state.repos[0].log_rev > log_before,
+        state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after LogLoaded"
     );
 }
@@ -749,7 +752,7 @@ fn set_history_scope_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = state.repos[0].log_rev;
+    let log_before = state.repos[0].history_state.log_rev;
 
     reduce(
         &mut repos,
@@ -762,7 +765,7 @@ fn set_history_scope_bumps_log_rev() {
     );
 
     assert!(
-        state.repos[0].log_rev > log_before,
+        state.repos[0].history_state.log_rev > log_before,
         "log_rev should bump after SetHistoryScope"
     );
 }
@@ -788,10 +791,10 @@ fn status_loaded_bumps_status_rev() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::StatusLoaded {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
             repo_id,
             result: Ok(RepoStatus::default()),
-        },
+        }),
     );
 
     assert!(

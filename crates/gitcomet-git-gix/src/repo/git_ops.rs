@@ -6,14 +6,6 @@ use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
 use std::process::Command;
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-pub(super) enum GitOpMode {
-    GixOnly,
-    CliOnly,
-    PreferGixWithFallback,
-}
-
 pub(super) struct GitOps<'repo> {
     gix: GixOps<'repo>,
     cli: CliOps<'repo>,
@@ -27,28 +19,20 @@ impl<'repo> GitOps<'repo> {
         }
     }
 
-    pub(super) fn current_branch(&self, mode: GitOpMode) -> Result<String> {
-        match mode {
-            GitOpMode::GixOnly => self.gix.current_branch(),
-            GitOpMode::CliOnly => self.cli.current_branch(),
-            GitOpMode::PreferGixWithFallback => prefer_gix_with_fallback(
-                || self.gix.current_branch(),
-                || self.cli.current_branch(),
-                "current branch",
-            ),
-        }
+    pub(super) fn current_branch(&self) -> Result<String> {
+        prefer_gix_with_fallback(
+            || self.gix.current_branch(),
+            || self.cli.current_branch(),
+            "current branch",
+        )
     }
 
-    pub(super) fn list_branches(&self, mode: GitOpMode) -> Result<Vec<Branch>> {
-        match mode {
-            GitOpMode::GixOnly => self.gix.list_branches(),
-            GitOpMode::CliOnly => self.cli.list_branches(),
-            GitOpMode::PreferGixWithFallback => prefer_gix_with_fallback(
-                || self.gix.list_branches(),
-                || self.cli.list_branches(),
-                "list branches",
-            ),
-        }
+    pub(super) fn list_branches(&self) -> Result<Vec<Branch>> {
+        prefer_gix_with_fallback(
+            || self.gix.list_branches(),
+            || self.cli.list_branches(),
+            "list branches",
+        )
     }
 }
 
@@ -343,67 +327,10 @@ fn branch_upstream_and_divergence(
 #[cfg(test)]
 mod tests {
     use super::{
-        CliOps, GitOpMode, GitOps, GixOps, GixRepo, parse_branch_record, parse_rev_list_counts,
-        parse_upstream_short, prefer_gix_with_fallback,
+        parse_branch_record, parse_rev_list_counts, parse_upstream_short, prefer_gix_with_fallback,
     };
     use gitcomet_core::domain::UpstreamDivergence;
-    use gitcomet_core::error::{Error, ErrorKind};
-    use std::fs;
-    use std::path::Path;
-    use std::process::Command;
-
-    #[cfg(windows)]
-    const NULL_DEVICE: &str = "NUL";
-    #[cfg(not(windows))]
-    const NULL_DEVICE: &str = "/dev/null";
-
-    fn git_command() -> Command {
-        let mut cmd = Command::new("git");
-        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-        cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
-        cmd.env("GIT_ALLOW_PROTOCOL", "file");
-        cmd
-    }
-
-    fn run_git(repo: &Path, args: &[&str]) {
-        let status = git_command()
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .status()
-            .expect("git command to run");
-        assert!(status.success(), "git {:?} failed", args);
-    }
-
-    fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-        let output = git_command()
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .output()
-            .expect("git command to run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8_lossy(&output.stdout).to_string()
-    }
-
-    fn init_repo_with_user(repo: &Path) {
-        run_git(repo, &["init"]);
-        run_git(repo, &["config", "user.email", "you@example.com"]);
-        run_git(repo, &["config", "user.name", "You"]);
-        run_git(repo, &["config", "commit.gpgsign", "false"]);
-        run_git(repo, &["config", "core.autocrlf", "false"]);
-        run_git(repo, &["config", "core.eol", "lf"]);
-    }
-
-    fn open_repo(repo: &Path) -> GixRepo {
-        let opened = gix::open(repo).expect("open repository");
-        GixRepo::new(repo.to_path_buf(), opened.into_sync())
-    }
+    use gitcomet_core::error::ErrorKind;
 
     #[test]
     fn parse_branch_record_parses_name_target_and_upstream() {
@@ -450,164 +377,56 @@ mod tests {
     }
 
     #[test]
-    fn git_op_mode_variants_stay_stable() {
-        assert!(matches!(GitOpMode::GixOnly, GitOpMode::GixOnly));
-        assert!(matches!(GitOpMode::CliOnly, GitOpMode::CliOnly));
-        assert!(matches!(
-            GitOpMode::PreferGixWithFallback,
-            GitOpMode::PreferGixWithFallback
-        ));
+    fn prefer_gix_with_fallback_uses_gix_on_success() {
+        let value = prefer_gix_with_fallback(
+            || Ok::<_, gitcomet_core::error::Error>("gix".to_string()),
+            || Ok::<_, gitcomet_core::error::Error>("cli".to_string()),
+            "op",
+        )
+        .expect("gix should succeed");
+
+        assert_eq!(value, "gix");
     }
 
     #[test]
-    fn prefer_gix_with_fallback_uses_cli_when_gix_errors() {
+    fn prefer_gix_with_fallback_uses_cli_when_gix_fails() {
         let value = prefer_gix_with_fallback(
-            || Err(Error::new(ErrorKind::Backend("gix failed".to_string()))),
-            || Ok::<_, Error>(42usize),
-            "current branch",
+            || {
+                Err(gitcomet_core::error::Error::new(ErrorKind::Backend(
+                    "gix failed".to_string(),
+                )))
+            },
+            || Ok::<_, gitcomet_core::error::Error>("cli".to_string()),
+            "op",
         )
-        .expect("fallback should return cli value");
-        assert_eq!(value, 42);
+        .expect("cli fallback should succeed");
+
+        assert_eq!(value, "cli");
     }
 
     #[test]
     fn prefer_gix_with_fallback_reports_both_failures() {
-        let err = prefer_gix_with_fallback::<usize>(
-            || Err(Error::new(ErrorKind::Backend("gix failed".to_string()))),
-            || Err(Error::new(ErrorKind::Backend("cli failed".to_string()))),
-            "list branches",
+        let err = prefer_gix_with_fallback::<String>(
+            || {
+                Err(gitcomet_core::error::Error::new(ErrorKind::Backend(
+                    "gix failed".to_string(),
+                )))
+            },
+            || {
+                Err(gitcomet_core::error::Error::new(ErrorKind::Backend(
+                    "cli failed".to_string(),
+                )))
+            },
+            "op",
         )
         .expect_err("both paths should fail");
-        let text = err.to_string();
-        assert!(text.contains("list branches"));
-        assert!(text.contains("gix failed"));
-        assert!(text.contains("cli failed"));
-    }
 
-    #[test]
-    fn git_ops_current_branch_modes_cover_gix_cli_and_detached_head_paths() {
-        let dir = tempfile::tempdir().expect("create tempdir");
-        let repo = dir.path();
-        init_repo_with_user(repo);
-
-        fs::write(repo.join("a.txt"), "base\n").expect("write base file");
-        run_git(repo, &["add", "a.txt"]);
-        run_git(
-            repo,
-            &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
-        );
-
-        let branch = run_git_capture(repo, &["branch", "--show-current"])
-            .trim()
-            .to_string();
-
-        let opened_repo = open_repo(repo);
-        let ops = GitOps::new(&opened_repo);
-        assert_eq!(
-            ops.current_branch(GitOpMode::GixOnly)
-                .expect("gix current_branch"),
-            branch
-        );
-        assert_eq!(
-            ops.current_branch(GitOpMode::CliOnly)
-                .expect("cli current_branch"),
-            branch
-        );
-        assert_eq!(
-            ops.current_branch(GitOpMode::PreferGixWithFallback)
-                .expect("prefer current_branch"),
-            branch
-        );
-
-        run_git(repo, &["checkout", "--detach", "HEAD"]);
-        let detached_repo = open_repo(repo);
-        let cli = CliOps {
-            repo: &detached_repo,
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected backend error, got {:?}", err.kind());
         };
-        let gix = GixOps {
-            repo: &detached_repo,
-        };
-        assert_eq!(
-            cli.current_branch().expect("detached cli current_branch"),
-            "HEAD"
-        );
-        assert_eq!(
-            gix.current_branch().expect("detached gix current_branch"),
-            "HEAD"
-        );
-    }
-
-    #[test]
-    fn git_ops_list_branches_modes_cover_upstream_divergence_and_missing_tracking_ref() {
-        let dir = tempfile::tempdir().expect("create tempdir");
-        let root = dir.path();
-        let remote = root.join("origin.git");
-        let repo = root.join("work");
-        fs::create_dir_all(&remote).expect("create remote dir");
-        fs::create_dir_all(&repo).expect("create repo dir");
-
-        run_git(&remote, &["init", "--bare"]);
-        init_repo_with_user(&repo);
-
-        fs::write(repo.join("a.txt"), "base\n").expect("write base file");
-        run_git(&repo, &["add", "a.txt"]);
-        run_git(
-            &repo,
-            &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
-        );
-
-        let remote_str = remote.to_string_lossy().into_owned();
-        run_git(&repo, &["remote", "add", "origin", &remote_str]);
-        run_git(&repo, &["push", "-u", "origin", "HEAD"]);
-
-        fs::write(repo.join("a.txt"), "base\nlocal\n").expect("write local change");
-        run_git(&repo, &["add", "a.txt"]);
-        run_git(
-            &repo,
-            &["-c", "commit.gpgsign=false", "commit", "-m", "local ahead"],
-        );
-
-        run_git(&repo, &["branch", "gone"]);
-        run_git(&repo, &["config", "branch.gone.remote", "origin"]);
-        run_git(
-            &repo,
-            &["config", "branch.gone.merge", "refs/heads/does-not-exist"],
-        );
-
-        let current_branch = run_git_capture(&repo, &["branch", "--show-current"])
-            .trim()
-            .to_string();
-        let opened_repo = open_repo(&repo);
-        let ops = GitOps::new(&opened_repo);
-
-        for mode in [
-            GitOpMode::GixOnly,
-            GitOpMode::CliOnly,
-            GitOpMode::PreferGixWithFallback,
-        ] {
-            let branches = ops.list_branches(mode).expect("list branches");
-            let current = branches
-                .iter()
-                .find(|branch| branch.name == current_branch)
-                .expect("current branch listed");
-            let upstream = current.upstream.as_ref().expect("upstream exists");
-            assert_eq!(upstream.remote, "origin");
-            assert_eq!(upstream.branch, current_branch);
-            let divergence = current.divergence.as_ref().expect("divergence exists");
-            assert!(divergence.ahead >= 1);
-            assert_eq!(divergence.behind, 0);
-
-            let gone = branches
-                .iter()
-                .find(|branch| branch.name == "gone")
-                .expect("gone branch listed");
-            let gone_upstream = gone.upstream.as_ref().expect("gone upstream exists");
-            assert_eq!(gone_upstream.remote, "origin");
-            assert_eq!(gone_upstream.branch, "does-not-exist");
-            assert!(
-                gone.divergence.is_none(),
-                "missing tracking ref should omit divergence"
-            );
-        }
+        assert!(message.contains("op: gix path failed"));
+        assert!(message.contains("gix failed"));
+        assert!(message.contains("cli fallback failed"));
+        assert!(message.contains("cli failed"));
     }
 }

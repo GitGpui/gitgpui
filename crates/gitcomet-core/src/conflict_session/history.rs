@@ -1,4 +1,7 @@
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
+
+const USER_REGEX_SIZE_LIMIT: usize = 1_048_576; // 1 MiB
+const USER_REGEX_DFA_SIZE_LIMIT: usize = 1_048_576; // 1 MiB
 
 // ---------------------------------------------------------------------------
 // History-aware auto-resolve (kdiff3-inspired)
@@ -85,8 +88,16 @@ pub fn history_merge_region(
         return None;
     }
 
-    let section_re = Regex::new(&options.section_start).ok()?;
-    let entry_re = Regex::new(&options.entry_start).ok()?;
+    let section_re = RegexBuilder::new(&options.section_start)
+        .size_limit(USER_REGEX_SIZE_LIMIT)
+        .dfa_size_limit(USER_REGEX_DFA_SIZE_LIMIT)
+        .build()
+        .ok()?;
+    let entry_re = RegexBuilder::new(&options.entry_start)
+        .size_limit(USER_REGEX_SIZE_LIMIT)
+        .dfa_size_limit(USER_REGEX_DFA_SIZE_LIMIT)
+        .build()
+        .ok()?;
 
     // At least one side must contain a history section marker.
     let ours_has_section = ours.lines().any(|l| section_re.is_match(l));

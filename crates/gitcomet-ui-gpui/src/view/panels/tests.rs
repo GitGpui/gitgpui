@@ -156,7 +156,7 @@ fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
                 }
                 .into(),
             );
-            repo.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
                 path: file_rel.clone(),
                 area: gitcomet_core::domain::DiffArea::Staged,
             });
@@ -237,7 +237,7 @@ fn file_preview_renders_scrollable_syntax_highlighted_rows(cx: &mut gpui::TestAp
                 }
                 .into(),
             );
-            repo.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
                 path: file_rel.clone(),
                 area: gitcomet_core::domain::DiffArea::Unstaged,
             });
@@ -344,9 +344,9 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
             repo.status = gitcomet_state::model::Loadable::Ready(
                 gitcomet_core::domain::RepoStatus::default().into(),
             );
-            repo.diff_target = Some(target);
-            repo.diff_rev = 1;
-            repo.diff = gitcomet_state::model::Loadable::Ready(diff.into());
+            repo.diff_state.diff_target = Some(target);
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(diff.into());
 
             let next_state = Arc::new(AppState {
                 repos: vec![repo],
@@ -411,11 +411,11 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                 }
                 .into(),
             );
-            repo.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
                 path: file_rel.clone(),
                 area: gitcomet_core::domain::DiffArea::Staged,
             });
-            repo.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
                 gitcomet_core::domain::FileDiffText {
                     path: file_rel.clone(),
                     old: Some("one\ntwo\n".to_string()),
@@ -515,8 +515,9 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
                     workdir: std::path::PathBuf::from("/tmp/repo-commit-metadata-copy"),
                 },
             );
-            repo.selected_commit = Some(gitcomet_core::domain::CommitId(commit_sha.clone()));
-            repo.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(commit_sha.clone()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone()),
                     message: "subject".to_string(),

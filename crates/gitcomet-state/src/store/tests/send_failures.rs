@@ -13,7 +13,7 @@ fn dispatch_increments_failure_counter_when_channel_is_disconnected() {
     drop(msg_rx);
 
     let store = AppStore {
-        state: Arc::new(RwLock::new(AppState::default())),
+        state: Arc::new(RwLock::new(Arc::new(AppState::default()))),
         msg_tx,
     };
 

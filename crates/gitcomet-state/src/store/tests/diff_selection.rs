@@ -29,9 +29,9 @@ fn select_diff_sets_loading_and_emits_effect() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
-    assert_eq!(repo_state.diff_target, Some(target.clone()));
-    assert!(repo_state.diff.is_loading());
-    assert!(repo_state.diff_file.is_loading());
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(matches!(
         effects.as_slice(),
         [
@@ -70,10 +70,13 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
-    assert_eq!(repo_state.diff_target, Some(target.clone()));
-    assert!(repo_state.diff.is_loading());
-    assert!(matches!(repo_state.diff_file, Loadable::NotLoaded));
-    assert!(repo_state.diff_file_image.is_loading());
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
         [
@@ -112,10 +115,13 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
-    assert_eq!(repo_state.diff_target, Some(target.clone()));
-    assert!(repo_state.diff.is_loading());
-    assert!(matches!(repo_state.diff_file, Loadable::NotLoaded));
-    assert!(repo_state.diff_file_image.is_loading());
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
         [
@@ -154,10 +160,10 @@ fn select_diff_for_svg_loads_image_and_text() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
-    assert_eq!(repo_state.diff_target, Some(target.clone()));
-    assert!(repo_state.diff.is_loading());
-    assert!(repo_state.diff_file.is_loading());
-    assert!(repo_state.diff_file_image.is_loading());
+    assert_eq!(repo_state.diff_state.diff_target, Some(target.clone()));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(repo_state.diff_state.diff_file.is_loading());
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(matches!(
         effects.as_slice(),
         [
@@ -243,12 +249,12 @@ fn stage_hunk_command_finished_reloads_current_diff() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("a.txt"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     });
-    repo_state.diff = Loadable::NotLoaded;
-    repo_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file = Loadable::NotLoaded;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -256,16 +262,16 @@ fn stage_hunk_command_finished_reloads_current_diff() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id: RepoId(1),
             command: crate::msg::RepoCommandKind::StageHunk,
             result: Ok(CommandOutput::default()),
-        },
+        }),
     );
 
     let repo_state = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
-    assert!(repo_state.diff.is_loading());
-    assert!(repo_state.diff_file.is_loading());
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(effects.iter().any(|e| {
         matches!(e, Effect::LoadDiff { repo_id: RepoId(1), target: DiffTarget::WorkingTree { path, area: gitcomet_core::domain::DiffArea::Unstaged } } if path == &PathBuf::from("a.txt"))
     }));
@@ -289,12 +295,12 @@ fn clear_diff_selection_resets_diff_state() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+    repo_state.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     });
-    repo_state.diff = Loadable::Loading;
-    repo_state.diff_file = Loadable::Loading;
+    repo_state.diff_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_file = Loadable::Loading;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -306,9 +312,12 @@ fn clear_diff_selection_resets_diff_state() {
     );
 
     let repo_state = state.repos.first().expect("repo state to exist");
-    assert!(repo_state.diff_target.is_none());
-    assert!(matches!(repo_state.diff, Loadable::NotLoaded));
-    assert!(matches!(repo_state.diff_file, Loadable::NotLoaded));
+    assert!(repo_state.diff_state.diff_target.is_none());
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
     assert!(effects.is_empty());
 }
 
@@ -327,8 +336,8 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
         path: PathBuf::from("src/lib.rs"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
-    repo_state.diff_target = Some(target.clone());
-    repo_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Loading;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -337,15 +346,15 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id: RepoId(1),
             target,
             result: Err(error),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
-    assert!(matches!(repo_state.diff, Loadable::Error(_)));
+    assert!(matches!(repo_state.diff_state.diff, Loadable::Error(_)));
     assert!(
         repo_state
             .diagnostics
@@ -369,7 +378,7 @@ fn select_diff_bumps_diff_state_rev() {
     ));
     state.active_repo = Some(RepoId(1));
 
-    let before = state.repos[0].diff_state_rev;
+    let before = state.repos[0].diff_state.diff_state_rev;
 
     let target = DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
@@ -386,7 +395,7 @@ fn select_diff_bumps_diff_state_rev() {
     );
 
     assert!(
-        state.repos[0].diff_state_rev > before,
+        state.repos[0].diff_state.diff_state_rev > before,
         "diff_state_rev should bump after SelectDiff"
     );
 }
@@ -418,7 +427,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
             target,
         },
     );
-    let before = state.repos[0].diff_state_rev;
+    let before = state.repos[0].diff_state.diff_state_rev;
 
     // Now clear
     reduce(
@@ -429,7 +438,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
     );
 
     assert!(
-        state.repos[0].diff_state_rev > before,
+        state.repos[0].diff_state.diff_state_rev > before,
         "diff_state_rev should bump after ClearDiffSelection"
     );
 }
@@ -449,7 +458,7 @@ fn select_diff_does_not_bump_unrelated_revs() {
 
     let ops_before = state.repos[0].ops_rev;
     let status_before = state.repos[0].status_rev;
-    let log_before = state.repos[0].log_rev;
+    let log_before = state.repos[0].history_state.log_rev;
 
     let target = DiffTarget::WorkingTree {
         path: PathBuf::from("src/lib.rs"),
@@ -467,7 +476,7 @@ fn select_diff_does_not_bump_unrelated_revs() {
 
     assert_eq!(state.repos[0].ops_rev, ops_before);
     assert_eq!(state.repos[0].status_rev, status_before);
-    assert_eq!(state.repos[0].log_rev, log_before);
+    assert_eq!(state.repos[0].history_state.log_rev, log_before);
 }
 
 #[test]
@@ -552,8 +561,8 @@ fn diff_loaded_ok_sets_ready_when_target_matches() {
         path: PathBuf::from("src/lib.rs"),
         area: DiffArea::Unstaged,
     };
-    repo_state.diff_target = Some(target.clone());
-    repo_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Loading;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -565,15 +574,15 @@ fn diff_loaded_ok_sets_ready_when_target_matches() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id: RepoId(1),
             target,
             result: Ok(diff),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
-    assert!(matches!(repo_state.diff, Loadable::Ready(_)));
+    assert!(matches!(repo_state.diff_state.diff, Loadable::Ready(_)));
     assert!(repo_state.diagnostics.is_empty());
 }
 
@@ -592,9 +601,9 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
         path: PathBuf::from("img.png"),
         area: DiffArea::Unstaged,
     };
-    repo_state.diff_target = Some(target.clone());
-    repo_state.diff_file = Loadable::Loading;
-    repo_state.diff_file_image = Loadable::Loading;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff_file = Loadable::Loading;
+    repo_state.diff_state.diff_file_image = Loadable::Loading;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -602,7 +611,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id: RepoId(1),
             target: target.clone(),
             result: Ok(Some(gitcomet_core::domain::FileDiffText {
@@ -610,15 +619,15 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
                 old: Some("old".to_string()),
                 new: Some("new".to_string()),
             })),
-        },
+        }),
     );
-    assert!(matches!(state.repos[0].diff_file, Loadable::Ready(_)));
+    assert!(matches!(state.repos[0].diff_state.diff_file, Loadable::Ready(_)));
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileImageLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id: RepoId(1),
             target: target.clone(),
             result: Ok(Some(gitcomet_core::domain::FileDiffImage {
@@ -626,37 +635,37 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
                 old: Some(vec![0x01]),
                 new: Some(vec![0x02]),
             })),
-        },
+        }),
     );
-    assert!(matches!(state.repos[0].diff_file_image, Loadable::Ready(_)));
+    assert!(matches!(state.repos[0].diff_state.diff_file_image, Loadable::Ready(_)));
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id: RepoId(1),
             target: target.clone(),
             result: Err(Error::new(ErrorKind::Backend(
                 "text side-by-side failed".to_string(),
             ))),
-        },
+        }),
     );
-    assert!(matches!(state.repos[0].diff_file, Loadable::Error(_)));
+    assert!(matches!(state.repos[0].diff_state.diff_file, Loadable::Error(_)));
 
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileImageLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id: RepoId(1),
             target,
             result: Err(Error::new(ErrorKind::Backend(
                 "image preview failed".to_string(),
             ))),
-        },
+        }),
     );
-    assert!(matches!(state.repos[0].diff_file_image, Loadable::Error(_)));
+    assert!(matches!(state.repos[0].diff_state.diff_file_image, Loadable::Error(_)));
     assert!(
         state.repos[0]
             .diagnostics
@@ -690,10 +699,10 @@ fn diff_results_are_ignored_for_non_matching_target() {
         path: PathBuf::from("other.txt"),
         area: DiffArea::Unstaged,
     };
-    repo_state.diff_target = Some(selected.clone());
-    repo_state.diff = Loadable::Loading;
-    repo_state.diff_file = Loadable::Loading;
-    repo_state.diff_file_image = Loadable::Loading;
+    repo_state.diff_state.diff_target = Some(selected.clone());
+    repo_state.diff_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_file = Loadable::Loading;
+    repo_state.diff_state.diff_file_image = Loadable::Loading;
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
@@ -701,39 +710,39 @@ fn diff_results_are_ignored_for_non_matching_target() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id: RepoId(1),
             target: other.clone(),
             result: Ok(gitcomet_core::domain::Diff {
                 target: other.clone(),
                 lines: vec![],
             }),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
             repo_id: RepoId(1),
             target: other.clone(),
             result: Ok(None),
-        },
+        }),
     );
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::DiffFileImageLoaded {
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
             repo_id: RepoId(1),
             target: other,
             result: Ok(None),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
-    assert!(repo_state.diff.is_loading());
-    assert!(repo_state.diff_file.is_loading());
-    assert!(repo_state.diff_file_image.is_loading());
-    assert_eq!(repo_state.diff_target, Some(selected));
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(repo_state.diff_state.diff_file.is_loading());
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
+    assert_eq!(repo_state.diff_state.diff_target, Some(selected));
 }

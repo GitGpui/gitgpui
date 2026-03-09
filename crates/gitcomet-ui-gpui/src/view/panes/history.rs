@@ -50,7 +50,7 @@ impl HistoryView {
             repo.remote_branches_rev.hash(&mut hasher);
             repo.tags_rev.hash(&mut hasher);
             repo.stashes_rev.hash(&mut hasher);
-            repo.selected_commit_rev.hash(&mut hasher);
+            repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.status_rev.hash(&mut hasher);
         }
 

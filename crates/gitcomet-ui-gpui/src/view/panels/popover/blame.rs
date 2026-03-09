@@ -54,7 +54,7 @@ pub(super) fn panel(
                 }),
         );
 
-    let body: AnyElement = match repo.map(|r| &r.blame) {
+    let body: AnyElement = match repo.map(|r| &r.history_state.blame) {
         None => components::context_menu_label(theme, "No repository").into_any_element(),
         Some(Loadable::Loading) => {
             components::context_menu_label(theme, "Loading").into_any_element()
@@ -116,7 +116,7 @@ fn render_blame_popover_rows(
     let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    let Loadable::Ready(lines) = &repo.blame else {
+    let Loadable::Ready(lines) = &repo.history_state.blame else {
         return Vec::new();
     };
 

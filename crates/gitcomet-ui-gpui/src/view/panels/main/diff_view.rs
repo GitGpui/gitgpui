@@ -38,11 +38,12 @@ impl MainPaneView {
         let wants_file_diff = !is_file_preview
             && self
                 .active_repo()
-                .is_some_and(|r| Self::is_file_diff_target(r.diff_target.as_ref()));
+                .is_some_and(|r| Self::is_file_diff_target(r.diff_state.diff_target.as_ref()));
 
         let repo = self.active_repo();
         let conflict_target = repo.and_then(|repo| {
-            let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+            let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
+            else {
                 return None;
             };
             if *area != DiffArea::Unstaged {
@@ -64,7 +65,7 @@ impl MainPaneView {
             .unwrap_or((None, None));
         // Detect binary from loaded conflict file bytes (has bytes but no text).
         let is_binary_conflict = repo
-            .and_then(|r| match &r.conflict_file {
+            .and_then(|r| match &r.conflict_state.conflict_file {
                 Loadable::Ready(Some(file)) => {
                     let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
                         bytes.is_some() && text.is_none()
@@ -82,17 +83,18 @@ impl MainPaneView {
         let is_conflict_resolver = conflict_strategy.is_some();
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
 
-        let diff_target_path = repo.and_then(|repo| match repo.diff_target.as_ref()? {
-            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
-            DiffTarget::Commit {
-                path: Some(path), ..
-            } => Some(path.as_path()),
-            _ => None,
-        });
+        let diff_target_path =
+            repo.and_then(|repo| match repo.diff_state.diff_target.as_ref()? {
+                DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
+                DiffTarget::Commit {
+                    path: Some(path), ..
+                } => Some(path.as_path()),
+                _ => None,
+            });
         let is_svg_diff_target = diff_target_path.is_some_and(super::super::is_svg_path);
         let show_svg_view_toggle = wants_file_diff && is_svg_diff_target;
-        let is_image_diff_loaded =
-            repo.is_some_and(|repo| !matches!(repo.diff_file_image, Loadable::NotLoaded));
+        let is_image_diff_loaded = repo
+            .is_some_and(|repo| !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
         let is_image_diff_view = wants_file_diff
             && is_image_diff_loaded
             && (!is_svg_diff_target || self.svg_diff_view_mode == SvgDiffViewMode::Image);
@@ -637,7 +639,7 @@ impl MainPaneView {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
                     if let Some(repo_id) = repo_id {
-                        match &repo.conflict_file {
+                        match &repo.conflict_state.conflict_file {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, title, "Loading conflict data…")
                                     .into_any_element()
@@ -889,7 +891,7 @@ impl MainPaneView {
                             let resolved_count = self.conflict_resolver_resolved_count();
                             let unresolved_count = conflict_count - resolved_count;
                             let active_autosolve_trace = repo
-                                .conflict_session
+                                .conflict_state.conflict_session
                                 .as_ref()
                                 .and_then(|session| {
                                     conflict_resolver::active_conflict_autosolve_trace_label(
@@ -2012,7 +2014,7 @@ impl MainPaneView {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
 
-                    match &repo.conflict_file {
+                    match &repo.conflict_state.conflict_file {
                         Loadable::NotLoaded | Loadable::Loading => {
                             components::empty_state(theme, title, "Loading conflict data…")
                                 .into_any_element()
@@ -2122,7 +2124,7 @@ impl MainPaneView {
         } else {
             match repo {
                 None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
-                Some(repo) => match &repo.diff {
+                Some(repo) => match &repo.diff_state.diff {
                     Loadable::NotLoaded => {
                         components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                     }
@@ -2178,8 +2180,8 @@ impl MainPaneView {
                                     .into_any_element()
                             } else {
                                 if self.diff_cache_repo_id != Some(repo.id)
-                                    || self.diff_cache_rev != repo.diff_rev
-                                    || self.diff_cache_target != repo.diff_target
+                                    || self.diff_cache_rev != repo.diff_state.diff_rev
+                                    || self.diff_cache_target != repo.diff_state.diff_target
                                     || self.diff_cache.len() != diff.lines.len()
                                 {
                                     self.rebuild_diff_cache(cx);
@@ -2589,7 +2591,8 @@ impl MainPaneView {
                         .is_focused(window)
                     && let Some(repo_id) = this.active_repo_id()
                     && let Some(repo) = this.active_repo()
-                    && let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.clone()
+                    && let Some(DiffTarget::WorkingTree { path, area }) =
+                        repo.diff_state.diff_target.clone()
                 {
                     let next_path_in_area = |entries: &[gitcomet_core::domain::FileStatus]| {
                         if entries.len() <= 1 {
@@ -2707,7 +2710,8 @@ impl MainPaneView {
                 }
 
                 let conflict_resolver_active = this.active_repo().is_some_and(|repo| {
-                    let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref()
+                    let Some(DiffTarget::WorkingTree { path, area }) =
+                        repo.diff_state.diff_target.as_ref()
                     else {
                         return false;
                     };
@@ -2752,7 +2756,7 @@ impl MainPaneView {
                                 || this.deleted_file_preview_abs_path().is_some();
                             if !is_file_preview
                                 && !this.active_repo().is_some_and(|r| {
-                                    Self::is_file_diff_target(r.diff_target.as_ref())
+                                    Self::is_file_diff_target(r.diff_state.diff_target.as_ref())
                                 })
                             {
                                 this.open_popover_at_cursor(PopoverKind::DiffHunks, window, cx);

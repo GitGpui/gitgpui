@@ -190,7 +190,10 @@ fn submodule_add_update_remove_round_trip() {
     let listed = opened.list_submodules().expect("list submodules after add");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].path, PathBuf::from("mods/sub-one"));
-    assert_eq!(listed[0].status, ' ');
+    assert_eq!(
+        listed[0].status,
+        gitcomet_core::domain::SubmoduleStatus::UpToDate
+    );
     assert_eq!(listed[0].head.as_ref().len(), 40);
 
     let update_output = opened

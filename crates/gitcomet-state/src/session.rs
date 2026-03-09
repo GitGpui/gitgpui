@@ -4,6 +4,7 @@ use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 
@@ -123,15 +124,13 @@ pub fn load_from_path(path: &Path) -> UiSession {
     }
 }
 
-pub fn persist_from_state(state: &AppState) -> io::Result<()> {
-    let Some(path) = default_session_file_path() else {
-        return Ok(());
-    };
-
-    persist_from_state_to_path(state, &path)
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionReposSnapshot {
+    pub open_repos: Vec<String>,
+    pub active_repo: Option<String>,
 }
 
-pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<()> {
+pub fn snapshot_repos_from_state(state: &AppState) -> SessionReposSnapshot {
     let mut open_repos: Vec<String> = Vec::with_capacity(state.repos.len());
     let mut seen: FxHashSet<&Path> = FxHashSet::default();
     for repo in &state.repos {
@@ -146,10 +145,41 @@ pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<(
         .filter(|p| seen.contains(*p))
         .map(path_storage_key);
 
+    SessionReposSnapshot {
+        open_repos,
+        active_repo,
+    }
+}
+
+pub fn persist_from_state(state: &AppState) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+
+    let snapshot = snapshot_repos_from_state(state);
+    persist_repos_snapshot_to_path(&snapshot, &path)
+}
+
+pub fn persist_from_state_to_path(state: &AppState, path: &Path) -> io::Result<()> {
+    let snapshot = snapshot_repos_from_state(state);
+    persist_repos_snapshot_to_path(&snapshot, path)
+}
+
+pub fn persist_repos_snapshot(snapshot: &SessionReposSnapshot) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_repos_snapshot_to_path(snapshot, &path)
+}
+
+pub fn persist_repos_snapshot_to_path(
+    snapshot: &SessionReposSnapshot,
+    path: &Path,
+) -> io::Result<()> {
     let mut file = load_file_v2(path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
-    file.open_repos = open_repos;
-    file.active_repo = active_repo;
+    file.open_repos = snapshot.open_repos.clone();
+    file.active_repo = snapshot.active_repo.clone();
 
     persist_to_path(path, &file)
 }
@@ -509,29 +539,16 @@ fn hex_value(byte: u8) -> Option<u8> {
 }
 
 fn persist_to_path(path: &Path, session: &impl Serialize) -> io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
 
-    let tmp_path = path.with_extension("json.tmp");
     let contents = serde_json::to_vec(session).expect("serializing session file should succeed");
-    fs::write(&tmp_path, contents)?;
 
-    match fs::rename(&tmp_path, path) {
-        Ok(()) => Ok(()),
-        Err(rename_err) => {
-            // Windows can't overwrite an existing file via rename.
-            let copy_res = fs::copy(&tmp_path, path);
-            let _ = fs::remove_file(&tmp_path);
-            match copy_res {
-                Ok(_) => Ok(()),
-                Err(copy_err) => Err(io::Error::new(
-                    copy_err.kind(),
-                    format!("rename failed: {rename_err}; copy failed: {copy_err}"),
-                )),
-            }
-        }
-    }
+    let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
+    tmp_file.write_all(&contents)?;
+    tmp_file.flush()?;
+
+    tmp_file.persist(path).map(|_| ()).map_err(|err| err.error)
 }
 
 fn default_session_file_path() -> Option<PathBuf> {
@@ -725,6 +742,53 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.open_repos, vec![repo_a, repo_b.clone()]);
         assert_eq!(loaded.active_repo, Some(repo_b));
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_dedups_and_filters_inactive_selection() {
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+        let state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+            ],
+            active_repo: Some(RepoId(999)),
+            ..Default::default()
+        };
+
+        let snapshot = snapshot_repos_from_state(&state);
+        assert_eq!(snapshot.open_repos, vec![path_storage_key(&repo_a)]);
+        assert_eq!(snapshot.active_repo, None);
+
+        let state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(RepoId(2), RepoSpec { workdir: repo_b }),
+            ],
+            active_repo: Some(RepoId(2)),
+            ..Default::default()
+        };
+        let snapshot = snapshot_repos_from_state(&state);
+        assert_eq!(
+            snapshot.active_repo,
+            Some(path_storage_key(Path::new("/tmp/repo-b")))
+        );
     }
 
     #[test]

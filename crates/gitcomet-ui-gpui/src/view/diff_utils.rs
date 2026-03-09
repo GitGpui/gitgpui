@@ -94,7 +94,7 @@ pub(super) fn image_format_for_path(path: &std::path::Path) -> Option<gpui::Imag
 const SVG_PREVIEW_MIN_RASTER_WIDTH_PX: f32 = 2048.0;
 const SVG_PREVIEW_MAX_RASTER_EDGE_PX: f32 = 4096.0;
 
-pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::Image>> {
+pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
     let tree = resvg::usvg::Tree::from_data(svg_bytes, &resvg::usvg::Options::default()).ok()?;
     let svg_size = tree.size();
     let svg_width = svg_size.width();
@@ -126,7 +126,11 @@ pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::
         raster_height as f32 / svg_height,
     );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    let png = pixmap.encode_png().ok()?;
+    pixmap.encode_png().ok()
+}
+
+pub(super) fn rasterize_svg_preview_image(svg_bytes: &[u8]) -> Option<Arc<gpui::Image>> {
+    let png = rasterize_svg_preview_png(svg_bytes)?;
     Some(Arc::new(gpui::Image::from_bytes(
         gpui::ImageFormat::Png,
         png,
@@ -428,10 +432,39 @@ pub(super) fn build_unified_patch_for_hunks(
     (!out.trim().is_empty()).then_some(out)
 }
 
-pub(super) fn build_unified_patch_for_hunk_selection(
+#[derive(Clone, Copy)]
+enum UnselectedHunkLineBehavior {
+    Drop,
+    KeepAsContext,
+}
+
+fn append_unselected_hunk_line(
+    out: &mut String,
+    line_text: &str,
+    expected_prefix: char,
+    behavior: UnselectedHunkLineBehavior,
+    prev_included: &mut bool,
+) {
+    match behavior {
+        UnselectedHunkLineBehavior::Drop => {
+            *prev_included = false;
+        }
+        UnselectedHunkLineBehavior::KeepAsContext => {
+            let content = line_text.strip_prefix(expected_prefix).unwrap_or(line_text);
+            out.push(' ');
+            out.push_str(content);
+            out.push('\n');
+            *prev_included = true;
+        }
+    }
+}
+
+fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
     selected_src_ixs: &HashSet<usize>,
+    unselected_add: UnselectedHunkLineBehavior,
+    unselected_remove: UnselectedHunkLineBehavior,
 ) -> Option<String> {
     if selected_src_ixs.is_empty() {
         return None;
@@ -476,7 +509,13 @@ pub(super) fn build_unified_patch_for_hunk_selection(
                     has_change = true;
                     prev_included = true;
                 } else {
-                    prev_included = false;
+                    append_unselected_hunk_line(
+                        &mut out,
+                        line.text(),
+                        '+',
+                        unselected_add,
+                        &mut prev_included,
+                    );
                 }
             }
             gitcomet_core::domain::DiffLineKind::Remove => {
@@ -486,12 +525,13 @@ pub(super) fn build_unified_patch_for_hunk_selection(
                     has_change = true;
                     prev_included = true;
                 } else {
-                    let text = line.text();
-                    let content = text.strip_prefix('-').unwrap_or(text);
-                    out.push(' ');
-                    out.push_str(content);
-                    out.push('\n');
-                    prev_included = true;
+                    append_unselected_hunk_line(
+                        &mut out,
+                        line.text(),
+                        '-',
+                        unselected_remove,
+                        &mut prev_included,
+                    );
                 }
             }
             gitcomet_core::domain::DiffLineKind::Context => {
@@ -511,87 +551,32 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     has_change.then_some(out)
 }
 
+pub(super) fn build_unified_patch_for_hunk_selection(
+    diff: &[AnnotatedDiffLine],
+    hunk_src_ix: usize,
+    selected_src_ixs: &HashSet<usize>,
+) -> Option<String> {
+    build_unified_patch_for_hunk_selection_with_unselected_behavior(
+        diff,
+        hunk_src_ix,
+        selected_src_ixs,
+        UnselectedHunkLineBehavior::Drop,
+        UnselectedHunkLineBehavior::KeepAsContext,
+    )
+}
+
 pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
     selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
-    if selected_src_ixs.is_empty() {
-        return None;
-    }
-
-    let lines = diff;
-    let (file_start, header_end, hunk_end) =
-        unified_patch_file_and_hunk_bounds(lines, hunk_src_ix)?;
-
-    let capacity = unified_patch_capacity(lines, file_start, header_end, hunk_src_ix, hunk_end);
-    let mut out = String::with_capacity(capacity);
-    for line in &lines[file_start..header_end] {
-        out.push_str(line.text());
-        out.push('\n');
-    }
-
-    // Keep the original hunk header; `git apply --recount` will adjust counts.
-    out.push_str(lines[hunk_src_ix].text());
-    out.push('\n');
-
-    let mut has_change = false;
-    let mut prev_included = false;
-    for (ix, line) in lines
-        .iter()
-        .enumerate()
-        .take(hunk_end)
-        .skip(hunk_src_ix + 1)
-    {
-        if line.text().starts_with("\\") {
-            if prev_included {
-                out.push_str(line.text());
-                out.push('\n');
-            }
-            continue;
-        }
-
-        match line.kind {
-            gitcomet_core::domain::DiffLineKind::Add => {
-                if selected_src_ixs.contains(&ix) {
-                    out.push_str(line.text());
-                    out.push('\n');
-                    has_change = true;
-                    prev_included = true;
-                } else {
-                    let text = line.text();
-                    let content = text.strip_prefix('+').unwrap_or(text);
-                    out.push(' ');
-                    out.push_str(content);
-                    out.push('\n');
-                    prev_included = true;
-                }
-            }
-            gitcomet_core::domain::DiffLineKind::Remove => {
-                if selected_src_ixs.contains(&ix) {
-                    out.push_str(line.text());
-                    out.push('\n');
-                    has_change = true;
-                    prev_included = true;
-                } else {
-                    prev_included = false;
-                }
-            }
-            gitcomet_core::domain::DiffLineKind::Context => {
-                out.push_str(line.text());
-                out.push('\n');
-                prev_included = true;
-            }
-            gitcomet_core::domain::DiffLineKind::Header
-            | gitcomet_core::domain::DiffLineKind::Hunk => {
-                out.push_str(line.text());
-                out.push('\n');
-                prev_included = true;
-            }
-        }
-    }
-
-    has_change.then_some(out)
+    build_unified_patch_for_hunk_selection_with_unselected_behavior(
+        diff,
+        hunk_src_ix,
+        selected_src_ixs,
+        UnselectedHunkLineBehavior::KeepAsContext,
+        UnselectedHunkLineBehavior::Drop,
+    )
 }
 
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
@@ -804,6 +789,21 @@ mod tests {
         assert!(patch.contains("diff --git a/b.txt b/b.txt"));
         assert!(patch.contains("+a"));
         assert!(patch.contains("+b"));
+    }
+
+    #[test]
+    fn build_unified_patch_for_selected_lines_across_hunks_keeps_unselected_preimage_as_context() {
+        let diff = example_two_mods_one_hunk_diff();
+        let selected: HashSet<usize> = [6, 7].into_iter().collect();
+
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
+
+        assert!(patch.contains("-line2"));
+        assert!(patch.contains("+line2_mod"));
+        assert!(!patch.contains("-line3"));
+        assert!(!patch.contains("+line3_mod"));
+        assert!(patch.contains(" line3"));
     }
 
     #[test]

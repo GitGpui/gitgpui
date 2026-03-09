@@ -31,7 +31,10 @@ pub(super) fn panel(
                                     return;
                                 };
                                 this.open_popover_at(
-                                    PopoverKind::SubmoduleRemoveConfirm { repo_id, path },
+                                    PopoverKind::submodule(
+                                        repo_id,
+                                        SubmodulePopoverKind::RemoveConfirm { path },
+                                    ),
                                     e.position(),
                                     window,
                                     cx,

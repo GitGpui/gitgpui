@@ -38,7 +38,7 @@ pub(super) fn apply_bulk_choice(
     if !matches_current_conflict_path(repo_state, &path) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
     if session.path != path {
@@ -65,7 +65,7 @@ pub(super) fn set_region_choice(
     if !matches_current_conflict_path(repo_state, &path) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
     if session.path != path {
@@ -109,7 +109,7 @@ pub(super) fn sync_region_resolutions(
     if !matches_current_conflict_path(repo_state, &path) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
     if session.path != path {
@@ -154,7 +154,7 @@ pub(super) fn apply_autosolve(
     if !matches_current_conflict_path(repo_state, &path) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
     if session.path != path {
@@ -179,7 +179,7 @@ pub(super) fn reset_resolutions(
     if !matches_current_conflict_path(repo_state, &path) {
         return Vec::new();
     }
-    let Some(session) = repo_state.conflict_session.as_mut() else {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
         return Vec::new();
     };
     if session.path != path {
@@ -194,8 +194,9 @@ pub(super) fn reset_resolutions(
 }
 
 fn matches_current_conflict_path(repo_state: &crate::model::RepoState, path: &Path) -> bool {
-    repo_state.conflict_file_path.as_deref() == Some(path)
+    repo_state.conflict_state.conflict_file_path.as_deref() == Some(path)
         || repo_state
+            .conflict_state
             .conflict_session
             .as_ref()
             .is_some_and(|session| session.path.as_path() == path)

@@ -80,25 +80,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
         | PopoverKind::CreateTagPrompt { repo_id, .. }
-        | PopoverKind::RemoteAddPrompt { repo_id }
-        | PopoverKind::RemoteUrlPicker { repo_id, .. }
-        | PopoverKind::RemoteRemovePicker { repo_id }
-        | PopoverKind::RemoteBranchDeletePicker { repo_id, .. }
-        | PopoverKind::RemoteEditUrlPrompt { repo_id, .. }
-        | PopoverKind::RemoteRemoveConfirm { repo_id, .. }
-        | PopoverKind::RemoteMenu { repo_id, .. }
-        | PopoverKind::WorktreeSectionMenu { repo_id }
-        | PopoverKind::WorktreeMenu { repo_id, .. }
-        | PopoverKind::SubmoduleSectionMenu { repo_id }
-        | PopoverKind::SubmoduleMenu { repo_id, .. }
-        | PopoverKind::WorktreeAddPrompt { repo_id }
-        | PopoverKind::WorktreeOpenPicker { repo_id }
-        | PopoverKind::WorktreeRemovePicker { repo_id }
-        | PopoverKind::WorktreeRemoveConfirm { repo_id, .. }
-        | PopoverKind::SubmoduleAddPrompt { repo_id }
-        | PopoverKind::SubmoduleOpenPicker { repo_id }
-        | PopoverKind::SubmoduleRemovePicker { repo_id }
-        | PopoverKind::SubmoduleRemoveConfirm { repo_id, .. }
+        | PopoverKind::Repo { repo_id, .. }
         | PopoverKind::FileHistory { repo_id, .. }
         | PopoverKind::Blame { repo_id, .. }
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
@@ -106,7 +88,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::ConflictSaveStageConfirm { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
-        | PopoverKind::DeleteRemoteBranchConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
@@ -139,33 +120,25 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.tags_rev.hash(hasher);
         }
 
-        PopoverKind::RemoteAddPrompt { .. }
-        | PopoverKind::RemoteUrlPicker { .. }
-        | PopoverKind::RemoteRemovePicker { .. }
-        | PopoverKind::RemoteBranchDeletePicker { .. }
-        | PopoverKind::RemoteEditUrlPrompt { .. }
-        | PopoverKind::RemoteRemoveConfirm { .. }
-        | PopoverKind::RemoteMenu { .. }
-        | PopoverKind::DeleteRemoteBranchConfirm { .. } => {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Remote(_),
+            ..
+        } => {
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
         }
 
-        PopoverKind::WorktreeSectionMenu { .. }
-        | PopoverKind::WorktreeMenu { .. }
-        | PopoverKind::WorktreeAddPrompt { .. }
-        | PopoverKind::WorktreeOpenPicker { .. }
-        | PopoverKind::WorktreeRemovePicker { .. }
-        | PopoverKind::WorktreeRemoveConfirm { .. } => {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Worktree(_),
+            ..
+        } => {
             repo.worktrees_rev.hash(hasher);
         }
 
-        PopoverKind::SubmoduleSectionMenu { .. }
-        | PopoverKind::SubmoduleMenu { .. }
-        | PopoverKind::SubmoduleAddPrompt { .. }
-        | PopoverKind::SubmoduleOpenPicker { .. }
-        | PopoverKind::SubmoduleRemovePicker { .. }
-        | PopoverKind::SubmoduleRemoveConfirm { .. } => {
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Submodule(_),
+            ..
+        } => {
             repo.submodules_rev.hash(hasher);
         }
 
@@ -178,37 +151,40 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         PopoverKind::FileHistory { .. } => {
-            repo.file_history_path.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.file_history, hasher);
+            repo.history_state.file_history_path.hash(hasher);
+            view_fingerprint::hash_loadable_arc(&repo.history_state.file_history, hasher);
         }
 
         PopoverKind::Blame { .. } => {
-            repo.blame_path.hash(hasher);
-            repo.blame_rev.hash(hasher);
-            view_fingerprint::hash_loadable_arc(&repo.blame, hasher);
+            repo.history_state.blame_path.hash(hasher);
+            repo.history_state.blame_rev.hash(hasher);
+            view_fingerprint::hash_loadable_arc(&repo.history_state.blame, hasher);
         }
 
         PopoverKind::DiffHunks
         | PopoverKind::DiffHunkMenu { .. }
         | PopoverKind::DiffEditorMenu { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => {
-            repo.diff_rev.hash(hasher);
-            if let Some(t) = repo.diff_target.as_ref() {
+            repo.diff_state.diff_rev.hash(hasher);
+            if let Some(t) = repo.diff_state.diff_target.as_ref() {
                 view_fingerprint::hash_diff_target(t, hasher)
             }
-            view_fingerprint::hash_loadable_arc(&repo.diff, hasher);
-            repo.diff_file_rev.hash(hasher);
-            view_fingerprint::hash_loadable_kind(&repo.diff_file, hasher);
-            view_fingerprint::hash_loadable_kind(&repo.diff_file_image, hasher);
+            view_fingerprint::hash_loadable_arc(&repo.diff_state.diff, hasher);
+            repo.diff_state.diff_file_rev.hash(hasher);
+            view_fingerprint::hash_loadable_kind(&repo.diff_state.diff_file, hasher);
+            view_fingerprint::hash_loadable_kind(&repo.diff_state.diff_file_image, hasher);
 
             // Working tree diff popovers need status for file-kind/conflict decisions.
-            if matches!(repo.diff_target, Some(DiffTarget::WorkingTree { .. })) {
+            if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            ) {
                 view_fingerprint::hash_loadable_arc(&repo.status, hasher);
             }
         }
 
         PopoverKind::HistoryBranchFilter { .. } => {
-            repo.history_scope.hash(hasher);
+            repo.history_state.history_scope.hash(hasher);
             repo.branches_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             repo.tags_rev.hash(hasher);
@@ -310,96 +286,8 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
         }
-        PopoverKind::RemoteAddPrompt { repo_id } => {
-            9u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::RemoteUrlPicker { repo_id, kind } => {
-            10u8.hash(hasher);
-            repo_id.hash(hasher);
-            hash_remote_url_kind(*kind, hasher);
-        }
-        PopoverKind::RemoteRemovePicker { repo_id } => {
-            11u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::RemoteBranchDeletePicker { repo_id, remote } => {
-            12u8.hash(hasher);
-            repo_id.hash(hasher);
-            remote.hash(hasher);
-        }
-        PopoverKind::RemoteEditUrlPrompt {
-            repo_id,
-            name,
-            kind,
-        } => {
-            13u8.hash(hasher);
-            repo_id.hash(hasher);
-            name.hash(hasher);
-            hash_remote_url_kind(*kind, hasher);
-        }
-        PopoverKind::RemoteRemoveConfirm { repo_id, name } => {
-            14u8.hash(hasher);
-            repo_id.hash(hasher);
-            name.hash(hasher);
-        }
-        PopoverKind::RemoteMenu { repo_id, name } => {
-            15u8.hash(hasher);
-            repo_id.hash(hasher);
-            name.hash(hasher);
-        }
-
-        PopoverKind::WorktreeSectionMenu { repo_id } => {
-            16u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::WorktreeMenu { repo_id, path } => {
-            17u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::SubmoduleSectionMenu { repo_id } => {
-            18u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::SubmoduleMenu { repo_id, path } => {
-            19u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::WorktreeAddPrompt { repo_id } => {
-            20u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::WorktreeOpenPicker { repo_id } => {
-            21u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::WorktreeRemovePicker { repo_id } => {
-            22u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::WorktreeRemoveConfirm { repo_id, path } => {
-            23u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
-        }
-        PopoverKind::SubmoduleAddPrompt { repo_id } => {
-            24u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::SubmoduleOpenPicker { repo_id } => {
-            25u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::SubmoduleRemovePicker { repo_id } => {
-            26u8.hash(hasher);
-            repo_id.hash(hasher);
-        }
-        PopoverKind::SubmoduleRemoveConfirm { repo_id, path } => {
-            27u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
+        PopoverKind::Repo { repo_id, kind } => {
+            hash_repo_popover_kind(*repo_id, kind, hasher);
         }
 
         PopoverKind::FileHistory { repo_id, path } => {
@@ -427,16 +315,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             32u8.hash(hasher);
             repo_id.hash(hasher);
             name.hash(hasher);
-        }
-        PopoverKind::DeleteRemoteBranchConfirm {
-            repo_id,
-            remote,
-            branch,
-        } => {
-            33u8.hash(hasher);
-            repo_id.hash(hasher);
-            remote.hash(hasher);
-            branch.hash(hasher);
         }
         PopoverKind::DiscardChangesConfirm {
             repo_id,
@@ -587,6 +465,109 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     }
 }
 
+fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, hasher: &mut H) {
+    match kind {
+        RepoPopoverKind::Remote(remote_kind) => match remote_kind {
+            RemotePopoverKind::AddPrompt => {
+                9u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            RemotePopoverKind::UrlPicker { kind } => {
+                10u8.hash(hasher);
+                repo_id.hash(hasher);
+                hash_remote_url_kind(*kind, hasher);
+            }
+            RemotePopoverKind::RemovePicker => {
+                11u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            RemotePopoverKind::BranchDeletePicker { remote } => {
+                12u8.hash(hasher);
+                repo_id.hash(hasher);
+                remote.hash(hasher);
+            }
+            RemotePopoverKind::EditUrlPrompt { name, kind } => {
+                13u8.hash(hasher);
+                repo_id.hash(hasher);
+                name.hash(hasher);
+                hash_remote_url_kind(*kind, hasher);
+            }
+            RemotePopoverKind::RemoveConfirm { name } => {
+                14u8.hash(hasher);
+                repo_id.hash(hasher);
+                name.hash(hasher);
+            }
+            RemotePopoverKind::Menu { name } => {
+                15u8.hash(hasher);
+                repo_id.hash(hasher);
+                name.hash(hasher);
+            }
+            RemotePopoverKind::DeleteBranchConfirm { remote, branch } => {
+                33u8.hash(hasher);
+                repo_id.hash(hasher);
+                remote.hash(hasher);
+                branch.hash(hasher);
+            }
+        },
+        RepoPopoverKind::Worktree(worktree_kind) => match worktree_kind {
+            WorktreePopoverKind::SectionMenu => {
+                16u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            WorktreePopoverKind::Menu { path } => {
+                17u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            WorktreePopoverKind::AddPrompt => {
+                20u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            WorktreePopoverKind::OpenPicker => {
+                21u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            WorktreePopoverKind::RemovePicker => {
+                22u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            WorktreePopoverKind::RemoveConfirm { path } => {
+                23u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+        },
+        RepoPopoverKind::Submodule(submodule_kind) => match submodule_kind {
+            SubmodulePopoverKind::SectionMenu => {
+                18u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::Menu { path } => {
+                19u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+            SubmodulePopoverKind::AddPrompt => {
+                24u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::OpenPicker => {
+                25u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::RemovePicker => {
+                26u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            SubmodulePopoverKind::RemoveConfirm { path } => {
+                27u8.hash(hasher);
+                repo_id.hash(hasher);
+                path.hash(hasher);
+            }
+        },
+    }
+}
+
 fn hash_diff_area<H: Hasher>(area: DiffArea, hasher: &mut H) {
     match area {
         DiffArea::Staged => 0u8.hash(hasher),
@@ -613,5 +594,56 @@ fn hash_reset_mode<H: Hasher>(mode: ResetMode, hasher: &mut H) {
         ResetMode::Soft => 0u8.hash(hasher),
         ResetMode::Mixed => 1u8.hash(hasher),
         ResetMode::Hard => 2u8.hash(hasher),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash_kind(kind: PopoverKind) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hash_popover_kind(&kind, &mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn grouped_repo_popover_hash_changes_with_nested_payload() {
+        let repo_id = RepoId(7);
+        let hash_origin = hash_kind(PopoverKind::remote(
+            repo_id,
+            RemotePopoverKind::Menu {
+                name: "origin".to_string(),
+            },
+        ));
+        let hash_upstream = hash_kind(PopoverKind::remote(
+            repo_id,
+            RemotePopoverKind::Menu {
+                name: "upstream".to_string(),
+            },
+        ));
+
+        assert_ne!(hash_origin, hash_upstream);
+    }
+
+    #[test]
+    fn grouped_repo_popover_resolves_explicit_repo_id() {
+        let repo_id = RepoId(42);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_repo_popover_repo_for_popover"),
+            },
+        );
+        let state = AppState {
+            repos: vec![repo],
+            active_repo: None,
+            ..Default::default()
+        };
+
+        let popover = PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu);
+        let resolved = repo_for_popover(&state, &popover).expect("expected repo lookup to work");
+
+        assert_eq!(resolved.id, repo_id);
     }
 }

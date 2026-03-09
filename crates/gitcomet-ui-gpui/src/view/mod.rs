@@ -93,7 +93,7 @@ use diff_utils::{
     compute_diff_file_for_src_ix, compute_diff_file_stats, compute_diff_word_highlights,
     context_menu_selection_range_from_diff_text, diff_content_text, enclosing_hunk_src_ix,
     image_format_for_path, parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    rasterize_svg_preview_image, scrollbar_markers_from_flags,
+    rasterize_svg_preview_image, rasterize_svg_preview_png, scrollbar_markers_from_flags,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
@@ -323,7 +323,7 @@ impl GitCometView {
             store.dispatch(Msg::OpenRepo(path.clone()));
         }
 
-        let initial_state = Arc::new(store.snapshot());
+        let initial_state = store.snapshot();
         let ui_model = cx.new(|_cx| AppUiModel::new(Arc::clone(&initial_state)));
 
         let ui_model_subscription = cx.observe(&ui_model, |this, model, cx| {

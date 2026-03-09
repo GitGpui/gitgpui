@@ -5,7 +5,7 @@
 //! Uninstall removes those entries while preserving unrelated tool settings.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single `git config` key-value pair to set.
 struct ConfigEntry {
@@ -92,6 +92,10 @@ fn current_exe_path() -> Result<PathBuf, String> {
     std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|e| format!("Cannot determine gitcomet-app binary path: {e}"))
+}
+
+fn executable_path_for_shell(bin_path: &Path) -> String {
+    bin_path.to_string_lossy().into_owned()
 }
 
 fn quoted_env_var(name: &str) -> String {
@@ -762,14 +766,9 @@ pub struct UninstallResult {
 /// Execute the setup command.
 pub fn run_setup(dry_run: bool, local: bool) -> Result<SetupResult, String> {
     let bin_path = current_exe_path()?;
-    let bin_str = bin_path.to_str().ok_or_else(|| {
-        format!(
-            "Binary path contains non-UTF-8 characters: {}",
-            bin_path.display()
-        )
-    })?;
+    let bin_str = executable_path_for_shell(&bin_path);
 
-    let entries = build_config_entries(bin_str);
+    let entries = build_config_entries(&bin_str);
     let backup_entries = build_backup_entries();
     let scope = if local { "--local" } else { "--global" };
     let scope_label = if local { "local" } else { "global" };
@@ -882,6 +881,29 @@ mod tests {
     #[test]
     fn shell_single_quote_escapes_embedded_single_quote() {
         assert_eq!(shell_single_quote("it's"), "'it'\"'\"'s'");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_path_for_shell_handles_non_utf8_unix_paths() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(vec![
+            b'/', b't', b'm', b'p', b'/', b'g', b'i', b't', b'c', b'o', b'm', b'e', b't', b'-',
+            0xff,
+        ]));
+        let bin_str = executable_path_for_shell(&path);
+        let entries = build_config_entries(&bin_str);
+        let merge_cmd = entries
+            .iter()
+            .find(|e| e.key == "mergetool.gitcomet.cmd")
+            .unwrap();
+
+        assert!(bin_str.starts_with("/tmp/gitcomet-"));
+        assert!(bin_str.contains('\u{fffd}'));
+        assert!(merge_cmd.value.starts_with("'/tmp/gitcomet-"));
+        assert!(merge_cmd.value.contains(" mergetool --base"));
     }
 
     #[test]

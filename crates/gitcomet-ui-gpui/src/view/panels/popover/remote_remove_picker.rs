@@ -33,7 +33,7 @@ pub(super) fn panel(
                         return;
                     };
                     this.open_popover_at(
-                        PopoverKind::RemoteRemoveConfirm { repo_id, name },
+                        PopoverKind::remote(repo_id, RemotePopoverKind::RemoveConfirm { name }),
                         e.position(),
                         window,
                         cx,
@@ -55,10 +55,10 @@ pub(super) fn panel(
                     .child(div().text_sm().line_clamp(1).child(item))
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         this.open_popover_at(
-                            PopoverKind::RemoteRemoveConfirm {
+                            PopoverKind::remote(
                                 repo_id,
-                                name: name.clone(),
-                            },
+                                RemotePopoverKind::RemoveConfirm { name: name.clone() },
+                            ),
                             e.position(),
                             window,
                             cx,

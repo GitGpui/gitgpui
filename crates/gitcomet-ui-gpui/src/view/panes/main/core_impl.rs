@@ -9,11 +9,14 @@ impl MainPaneView {
         if let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
-            repo.diff_state_rev.hash(&mut hasher);
-            repo.conflict_rev.hash(&mut hasher);
+            repo.diff_state.diff_state_rev.hash(&mut hasher);
+            repo.conflict_state.conflict_rev.hash(&mut hasher);
 
             // Only include status changes when viewing a working tree diff.
-            let status_rev = if matches!(repo.diff_target, Some(DiffTarget::WorkingTree { .. })) {
+            let status_rev = if matches!(
+                repo.diff_state.diff_target,
+                Some(DiffTarget::WorkingTree { .. })
+            ) {
                 repo.status_rev
             } else {
                 0
@@ -486,9 +489,9 @@ impl MainPaneView {
         };
         let sources = match view_mode {
             ConflictResolverViewMode::ThreeWay => conflict_resolver::SourceLines {
-                a: &self.conflict_resolver.three_way_base_lines,
-                b: &self.conflict_resolver.three_way_ours_lines,
-                c: &self.conflict_resolver.three_way_theirs_lines,
+                a: &self.conflict_resolver.three_way_lines.base,
+                b: &self.conflict_resolver.three_way_lines.ours,
+                c: &self.conflict_resolver.three_way_lines.theirs,
             },
             ConflictResolverViewMode::TwoWayDiff => conflict_resolver::SourceLines {
                 a: &two_way_old,
@@ -710,7 +713,7 @@ impl MainPaneView {
         });
     }
 
-    #[allow(clippy::too_many_arguments, dead_code)]
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::view) fn open_conflict_resolver_input_row_context_menu(
         &mut self,
         invoker: SharedString,
@@ -842,9 +845,9 @@ impl MainPaneView {
 
         let (has_source_a, has_source_b, has_source_c) = if is_three_way {
             (
-                context_line < self.conflict_resolver.three_way_base_lines.len(),
-                context_line < self.conflict_resolver.three_way_ours_lines.len(),
-                context_line < self.conflict_resolver.three_way_theirs_lines.len(),
+                context_line < self.conflict_resolver.three_way_lines.base.len(),
+                context_line < self.conflict_resolver.three_way_lines.ours.len(),
+                context_line < self.conflict_resolver.three_way_lines.theirs.len(),
             )
         } else {
             (
@@ -964,13 +967,15 @@ impl MainPaneView {
         let prev_active_repo_id = self.state.active_repo;
         let prev_diff_target = self
             .active_repo()
-            .and_then(|r| r.diff_target.as_ref())
+            .and_then(|r| r.diff_state.diff_target.as_ref())
             .cloned();
 
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
-        let next_diff_target = next_repo.and_then(|r| r.diff_target.as_ref()).cloned();
-        let next_diff_rev = next_repo.map(|r| r.diff_rev).unwrap_or(0);
+        let next_diff_target = next_repo
+            .and_then(|r| r.diff_state.diff_target.as_ref())
+            .cloned();
+        let next_diff_rev = next_repo.map(|r| r.diff_state.diff_rev).unwrap_or(0);
 
         if prev_diff_target != next_diff_target {
             self.diff_selection_anchor = None;
@@ -1099,8 +1104,8 @@ impl MainPaneView {
             return false;
         };
         self.file_diff_cache_repo_id == Some(repo.id)
-            && self.file_diff_cache_rev == repo.diff_file_rev
-            && self.file_diff_cache_target == repo.diff_target
+            && self.file_diff_cache_rev == repo.diff_state.diff_file_rev
+            && self.file_diff_cache_target == repo.diff_state.diff_target
             && self.file_diff_cache_path.is_some()
     }
 
@@ -1109,8 +1114,8 @@ impl MainPaneView {
             return false;
         };
         self.file_image_diff_cache_repo_id == Some(repo.id)
-            && self.file_image_diff_cache_rev == repo.diff_file_rev
-            && self.file_image_diff_cache_target == repo.diff_target
+            && self.file_image_diff_cache_rev == repo.diff_state.diff_file_rev
+            && self.file_image_diff_cache_target == repo.diff_state.diff_target
             && self.file_image_diff_cache_path.is_some()
             && (self.file_image_diff_cache_old.is_some()
                 || self.file_image_diff_cache_new.is_some()

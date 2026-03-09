@@ -89,11 +89,11 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::FetchAll,
             result: Ok(CommandOutput::empty_success("git fetch --all")),
-        },
+        }),
     );
     assert_eq!(state.repos[0].pull_in_flight, 3);
 
@@ -101,13 +101,13 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::Pull {
                 mode: PullMode::Default,
             },
             result: Ok(CommandOutput::empty_success("git pull")),
-        },
+        }),
     );
     assert_eq!(state.repos[0].pull_in_flight, 2);
 
@@ -115,11 +115,11 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::PruneMergedBranches,
             result: Ok(CommandOutput::empty_success("git prune merged branches")),
-        },
+        }),
     );
     assert_eq!(state.repos[0].pull_in_flight, 1);
 
@@ -127,11 +127,11 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::PruneLocalTags,
             result: Ok(CommandOutput::empty_success("git prune local tags")),
-        },
+        }),
     );
     assert_eq!(state.repos[0].pull_in_flight, 0);
 
@@ -139,11 +139,11 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::Push,
             result: Ok(CommandOutput::empty_success("git push")),
-        },
+        }),
     );
     assert_eq!(state.repos[0].push_in_flight, 3);
 
@@ -151,7 +151,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::DeleteRemoteBranch {
                 remote: "origin".to_string(),
@@ -160,7 +160,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
             result: Ok(CommandOutput::empty_success(
                 "git push origin --delete feature",
             )),
-        },
+        }),
     );
     assert_eq!(state.repos[0].push_in_flight, 2);
 
@@ -168,7 +168,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::PushTag {
                 remote: "origin".to_string(),
@@ -177,7 +177,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
             result: Ok(CommandOutput::empty_success(
                 "git push origin refs/tags/v1.0.0",
             )),
-        },
+        }),
     );
     assert_eq!(state.repos[0].push_in_flight, 1);
 
@@ -185,7 +185,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::DeleteRemoteTag {
                 remote: "origin".to_string(),
@@ -194,7 +194,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
             result: Ok(CommandOutput::empty_success(
                 "git push origin --delete refs/tags/v1.0.0",
             )),
-        },
+        }),
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
 }
@@ -249,14 +249,14 @@ fn pull_error_is_formatted_as_command_and_output() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::PullBranch {
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
             },
             result: Err(error),
-        },
+        }),
     );
 
     let repo_state = &state.repos[0];
@@ -270,6 +270,45 @@ fn pull_error_is_formatted_as_command_and_output() {
     ));
     assert!(!summary.contains("\\n"));
     assert_eq!(repo_state.last_error.as_deref(), Some(summary.as_str()));
+}
+
+#[test]
+fn fetch_all_emits_effect_with_repo_prune_setting() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.fetch_prune_deleted_remote_tracking_branches = false;
+    state.repos.push(repo_state);
+
+    let fetch_without_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    assert!(matches!(
+        fetch_without_prune.as_slice(),
+        [Effect::FetchAll {
+            repo_id: RepoId(1),
+            prune: false
+        }]
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+
+    state.repos[0].fetch_prune_deleted_remote_tracking_branches = true;
+    let fetch_with_prune = reduce(&mut repos, &id_alloc, &mut state, Msg::FetchAll { repo_id });
+    assert!(matches!(
+        fetch_with_prune.as_slice(),
+        [Effect::FetchAll {
+            repo_id: RepoId(1),
+            prune: true
+        }]
+    ));
+    assert_eq!(state.repos[0].pull_in_flight, 2);
 }
 
 #[test]
@@ -472,7 +511,7 @@ fn worktree_commands_reload_worktrees_on_success() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::AddWorktree {
                 path: PathBuf::from("/tmp/worktree"),
@@ -481,7 +520,7 @@ fn worktree_commands_reload_worktrees_on_success() {
             result: Ok(CommandOutput::empty_success(
                 "git worktree add /tmp/worktree",
             )),
-        },
+        }),
     );
 
     assert!(state.repos[0].worktrees.is_loading());
@@ -496,7 +535,7 @@ fn worktree_commands_reload_worktrees_on_success() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::RemoveWorktree {
                 path: PathBuf::from("/tmp/worktree"),
@@ -504,7 +543,7 @@ fn worktree_commands_reload_worktrees_on_success() {
             result: Ok(CommandOutput::empty_success(
                 "git worktree remove /tmp/worktree",
             )),
-        },
+        }),
     );
 
     assert!(state.repos[0].worktrees.is_loading());
@@ -539,7 +578,7 @@ fn worktree_remove_closes_tab_for_removed_worktree() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id: RepoId(1),
             command: RepoCommandKind::RemoveWorktree {
                 path: PathBuf::from("/tmp/worktree"),
@@ -547,7 +586,7 @@ fn worktree_remove_closes_tab_for_removed_worktree() {
             result: Ok(CommandOutput::empty_success(
                 "git worktree remove /tmp/worktree",
             )),
-        },
+        }),
     );
 
     assert_eq!(state.repos.len(), 1);
@@ -579,14 +618,14 @@ fn submodule_commands_reload_submodules_on_success() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::AddSubmodule {
                 url: "https://example.com/sub.git".to_string(),
                 path: PathBuf::from("submodule"),
             },
             result: Ok(CommandOutput::empty_success("git submodule add")),
-        },
+        }),
     );
 
     assert!(state.repos[0].submodules.is_loading());
@@ -601,13 +640,13 @@ fn submodule_commands_reload_submodules_on_success() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::UpdateSubmodules,
             result: Ok(CommandOutput::empty_success(
                 "git submodule update --init --recursive",
             )),
-        },
+        }),
     );
 
     assert!(state.repos[0].submodules.is_loading());
@@ -622,7 +661,7 @@ fn submodule_commands_reload_submodules_on_success() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::RemoveSubmodule {
                 path: PathBuf::from("submodule"),
@@ -630,7 +669,7 @@ fn submodule_commands_reload_submodules_on_success() {
             result: Ok(CommandOutput::empty_success(
                 "git submodule deinit -f submodule",
             )),
-        },
+        }),
     );
 
     assert!(state.repos[0].submodules.is_loading());
@@ -1163,17 +1202,80 @@ fn pull_push_bump_ops_rev() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::Pull {
                 mode: PullMode::Default,
             },
             result: Ok(CommandOutput::empty_success("git pull")),
-        },
+        }),
     );
     assert!(
         state.repos[0].ops_rev > ops_after_push,
         "ops_rev should bump when command finishes"
+    );
+}
+
+#[test]
+fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let ops_before = state.repos[0].ops_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PullBranch {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].pull_in_flight, 1);
+    assert!(
+        state.repos[0].ops_rev > ops_before,
+        "ops_rev should bump after PullBranch"
+    );
+    let ops_after_pull_branch = state.repos[0].ops_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ForcePush { repo_id },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 1);
+    assert!(
+        state.repos[0].ops_rev > ops_after_pull_branch,
+        "ops_rev should bump after ForcePush"
+    );
+    let ops_after_force_push = state.repos[0].ops_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PushSetUpstream {
+            repo_id,
+            remote: "origin".to_string(),
+            branch: "feature/test".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 2);
+    assert!(
+        state.repos[0].ops_rev > ops_after_force_push,
+        "ops_rev should bump after PushSetUpstream"
     );
 }
 
@@ -1223,8 +1325,8 @@ fn pull_push_do_not_bump_unrelated_revs() {
     ));
 
     let status_before = state.repos[0].status_rev;
-    let log_before = state.repos[0].log_rev;
-    let selected_before = state.repos[0].selected_commit_rev;
+    let log_before = state.repos[0].history_state.log_rev;
+    let selected_before = state.repos[0].history_state.selected_commit_rev;
 
     reduce(
         &mut repos,
@@ -1237,8 +1339,181 @@ fn pull_push_do_not_bump_unrelated_revs() {
     );
 
     assert_eq!(state.repos[0].status_rev, status_before);
-    assert_eq!(state.repos[0].log_rev, log_before);
-    assert_eq!(state.repos[0].selected_commit_rev, selected_before);
+    assert_eq!(state.repos[0].history_state.log_rev, log_before);
+    assert_eq!(
+        state.repos[0].history_state.selected_commit_rev,
+        selected_before
+    );
+}
+
+#[test]
+fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("README.md"),
+        area: DiffArea::Unstaged,
+    });
+    state.repos[0].diff_state.diff = Loadable::Loading;
+    state.repos[0].diff_state.diff_file = Loadable::Loading;
+    state.repos[0].diff_state.diff_file_image = Loadable::Loading;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(()),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert_eq!(state.repos[0].commit_in_flight, 0);
+    assert_eq!(state.repos[0].diff_state.diff_target, None);
+    assert!(matches!(
+        state.repos[0].diff_state.diff,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id: id } if *id == repo_id))
+    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadLog {
+            repo_id: id,
+            scope: LogScope::CurrentBranch,
+            ..
+        } if *id == repo_id
+    )));
+}
+
+#[test]
+fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::StageHunk,
+            result: Ok(CommandOutput::empty_success("git apply --cached")),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].diff_state.diff.is_loading());
+    assert!(state.repos[0].diff_state.diff_file.is_loading());
+    assert!(matches!(
+        state.repos[0].diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiff {
+            repo_id: id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *id == repo_id && path == &PathBuf::from("src/lib.rs")
+    )));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFile {
+            repo_id: id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *id == repo_id && path == &PathBuf::from("src/lib.rs")
+    )));
+}
+
+#[test]
+fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload_effects() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("icon.svg"),
+        area: DiffArea::Unstaged,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::StageHunk,
+            result: Ok(CommandOutput::empty_success("git apply --cached")),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].diff_state.diff.is_loading());
+    assert!(state.repos[0].diff_state.diff_file.is_loading());
+    assert!(state.repos[0].diff_state.diff_file_image.is_loading());
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiff {
+            repo_id: id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *id == repo_id && path == &PathBuf::from("icon.svg")
+    )));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFileImage {
+            repo_id: id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *id == repo_id && path == &PathBuf::from("icon.svg")
+    )));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFile {
+            repo_id: id,
+            target: DiffTarget::WorkingTree { path, .. },
+        } if *id == repo_id && path == &PathBuf::from("icon.svg")
+    )));
 }
 
 #[test]
@@ -1379,7 +1654,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     ));
 
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 6,
+        state.repos[0].local_actions_in_flight, 7,
         "expected begin_local_action for all routed local-action messages"
     );
 
@@ -1732,11 +2007,11 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::RepoCommandFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command,
                 result: Err(Error::new(ErrorKind::Backend("boom".to_string()))),
-            },
+            }),
         );
 
         let summary = state.repos[0]
@@ -1845,11 +2120,11 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
             &mut repos,
             &id_alloc,
             &mut state,
-            Msg::RepoCommandFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command,
                 result: Ok(CommandOutput::empty_success("git command")),
-            },
+            }),
         );
 
         let summary = state.repos[0]
@@ -1878,10 +2153,10 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
         path: PathBuf::from("image.png"),
         area: DiffArea::Unstaged,
     };
-    repo_state.diff_target = Some(target.clone());
-    repo_state.diff = Loadable::NotLoaded;
-    repo_state.diff_file = Loadable::NotLoaded;
-    repo_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
     state.repos.push(repo_state);
     state.active_repo = Some(repo_id);
 
@@ -1889,17 +2164,17 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::ApplyWorktreePatch { reverse: true },
             result: Ok(CommandOutput::empty_success("git apply -R")),
-        },
+        }),
     );
 
     let repo_state = state.repos.first().expect("repo");
-    assert!(repo_state.diff.is_loading());
-    assert!(matches!(repo_state.diff_file, Loadable::NotLoaded));
-    assert!(repo_state.diff_file_image.is_loading());
+    assert!(repo_state.diff_state.diff.is_loading());
+    assert!(matches!(repo_state.diff_state.diff_file, Loadable::NotLoaded));
+    assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::LoadDiff {
@@ -2083,33 +2358,33 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         let repo = &mut state.repos[0];
         repo.local_actions_in_flight = 1;
         repo.commit_in_flight = 1;
-        repo.diff_target = Some(DiffTarget::WorkingTree {
+        repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
             path: PathBuf::from("a.txt"),
             area: DiffArea::Unstaged,
         });
-        repo.diff = Loadable::Loading;
-        repo.diff_file = Loadable::Loading;
-        repo.diff_file_image = Loadable::Loading;
+        repo.diff_state.diff = Loadable::Loading;
+        repo.diff_state.diff_file = Loadable::Loading;
+        repo.diff_state.diff_file_image = Loadable::Loading;
     }
 
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
             result: Ok(()),
-        },
+        }),
     );
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
     assert_eq!(repo.local_actions_in_flight, 0);
     assert_eq!(repo.commit_in_flight, 0);
     assert!(repo.last_error.is_none());
-    assert!(repo.diff_target.is_none());
-    assert!(matches!(repo.diff, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_file, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_file_image, Loadable::NotLoaded));
+    assert!(repo.diff_state.diff_target.is_none());
+    assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
+    assert!(matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
     assert_eq!(
         repo.command_log.last().map(|entry| entry.summary.as_str()),
         Some("Commit: Completed")
@@ -2121,10 +2396,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
-        },
+        }),
     );
     assert!(
         state.repos[0]
@@ -2140,10 +2415,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id,
             result: Ok(()),
-        },
+        }),
     );
     assert_eq!(
         state.repos[0]
@@ -2158,10 +2433,10 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id,
             result: Err(Error::new(ErrorKind::Backend("amend boom".to_string()))),
-        },
+        }),
     );
     assert!(
         state.repos[0]
@@ -2175,20 +2450,20 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id: RepoId(999),
             result: Ok(()),
-        },
+        }),
     );
     assert!(missing_commit.is_empty());
     let missing_amend = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::CommitAmendFinished {
+        Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id: RepoId(999),
             result: Ok(()),
-        },
+        }),
     );
     assert!(missing_amend.is_empty());
 }
@@ -2205,47 +2480,47 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_target = Some(DiffTarget::WorkingTree {
+    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("a.txt"),
         area: DiffArea::Staged,
     });
-    repo_state.diff = Loadable::Loading;
-    repo_state.diff_file = Loadable::Loading;
-    repo_state.diff_file_image = Loadable::Loading;
+    repo_state.diff_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_file = Loadable::Loading;
+    repo_state.diff_state.diff_file_image = Loadable::Loading;
     state.repos.push(repo_state);
 
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::Reset {
                 mode: gitcomet_core::services::ResetMode::Mixed,
                 target: "HEAD~1".to_string(),
             },
             result: Ok(CommandOutput::empty_success("git reset --mixed HEAD~1")),
-        },
+        }),
     );
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
-    assert!(repo.diff_target.is_none());
-    assert!(matches!(repo.diff, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_file, Loadable::NotLoaded));
-    assert!(matches!(repo.diff_file_image, Loadable::NotLoaded));
+    assert!(repo.diff_state.diff_target.is_none());
+    assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
+    assert!(matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
 
     let no_repo_effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id: RepoId(999),
             command: RepoCommandKind::Reset {
                 mode: gitcomet_core::services::ResetMode::Hard,
                 target: "HEAD".to_string(),
             },
             result: Ok(CommandOutput::empty_success("git reset --hard HEAD")),
-        },
+        }),
     );
     assert!(no_repo_effects.is_empty());
 }
@@ -2266,24 +2541,24 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
-    repo_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff_target = Some(target.clone());
     state.repos.push(repo_state);
 
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoCommandFinished {
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::StageHunk,
             result: Ok(CommandOutput::empty_success("git apply --cached")),
-        },
+        }),
     );
 
     let repo = state.repos.first().expect("repo");
-    assert!(repo.diff.is_loading());
-    assert!(matches!(repo.diff_file, Loadable::NotLoaded));
-    assert!(repo.diff_file_image.is_loading());
+    assert!(repo.diff_state.diff.is_loading());
+    assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
+    assert!(repo.diff_state.diff_file_image.is_loading());
     assert!(effects.iter().any(|effect| matches!(
         effect,
         Effect::LoadDiff {

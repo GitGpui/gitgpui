@@ -2,6 +2,7 @@ use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, mpsc};
@@ -19,8 +20,28 @@ use reducer::reduce;
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
 
+fn canonicalize_path(path: PathBuf) -> PathBuf {
+    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    if let Ok(stripped) = path.strip_prefix(std::path::Path::new(r"\\?\UNC\")) {
+        return std::path::Path::new(r"\\").join(stripped);
+    }
+    if let Ok(stripped) = path.strip_prefix(std::path::Path::new(r"\\?\")) {
+        return stripped.to_path_buf();
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
+}
+
 pub struct AppStore {
-    state: Arc<RwLock<AppState>>,
+    state: Arc<RwLock<Arc<AppState>>>,
     msg_tx: mpsc::Sender<Msg>,
 }
 
@@ -35,7 +56,7 @@ impl Clone for AppStore {
 
 impl AppStore {
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
-        let state = Arc::new(RwLock::new(AppState::default()));
+        let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
         let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
@@ -45,6 +66,7 @@ impl AppStore {
 
         thread::spawn(move || {
             let executor = TaskExecutor::new(default_worker_threads());
+            let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
@@ -59,8 +81,8 @@ impl AppStore {
 
                 let effects = {
                     let mut app_state = thread_state.write().unwrap_or_else(|e| e.into_inner());
-
-                    reduce(&mut repos, &id_alloc, &mut app_state, msg)
+                    let app_state = Arc::make_mut(&mut app_state);
+                    reduce(&mut repos, &id_alloc, app_state, msg)
                 };
 
                 let active_value = thread_state
@@ -107,7 +129,14 @@ impl AppStore {
                 }
 
                 for effect in effects {
-                    schedule_effect(&executor, &backend, &repos, thread_msg_tx.clone(), effect);
+                    schedule_effect(
+                        &executor,
+                        &session_persist_executor,
+                        &backend,
+                        &repos,
+                        thread_msg_tx.clone(),
+                        effect,
+                    );
                 }
             }
         });
@@ -124,8 +153,61 @@ impl AppStore {
         );
     }
 
-    pub fn snapshot(&self) -> AppState {
-        self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
+    pub fn snapshot(&self) -> Arc<AppState> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(&state)
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::canonicalize_path;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_path(label: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "gitcomet-state-{label}-{}-{suffix}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn canonicalize_path_keeps_missing_path() {
+        let missing = unique_temp_path("missing");
+        let _ = fs::remove_file(&missing);
+        let _ = fs::remove_dir_all(&missing);
+
+        assert_eq!(canonicalize_path(missing.clone()), missing);
+    }
+
+    #[test]
+    fn canonicalize_path_resolves_existing_path() {
+        let root = unique_temp_path("existing");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).expect("test directory to be created");
+
+        let input = nested.join("..");
+        let actual = canonicalize_path(input);
+
+        #[cfg(not(windows))]
+        {
+            let expected = fs::canonicalize(&root).expect("canonical path for existing directory");
+            assert_eq!(actual, expected);
+        }
+
+        #[cfg(windows)]
+        {
+            assert_eq!(actual.file_name(), root.file_name());
+            assert!(!actual.to_string_lossy().starts_with(r"\\?\"));
+        }
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
 

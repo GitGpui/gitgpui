@@ -1,4 +1,6 @@
-use crate::file_diff::{Edit, EditKind, myers_edits, split_lines};
+use crate::file_diff::{
+    DiffHunk, Edit, edits_to_hunks_with, myers_edits, reconstruct_side_with, split_lines,
+};
 use crate::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
 
 // ---------------------------------------------------------------------------
@@ -21,14 +23,7 @@ pub enum Subchunk {
 
 /// A contiguous range of base lines that were changed (deleted/replaced/inserted)
 /// on one side of a 2-way diff.
-struct LineHunk {
-    /// Start index in base lines (inclusive).
-    base_start: usize,
-    /// End index in base lines (exclusive). Equals `base_start` for pure insertions.
-    base_end: usize,
-    /// The replacement lines on this side.
-    new_lines: Vec<String>,
-}
+type LineHunk = DiffHunk<String>;
 
 /// Maximum number of lines per side before we skip subchunk splitting.
 const SUBCHUNK_MAX_LINES: usize = 500;
@@ -88,41 +83,7 @@ pub fn split_conflict_into_subchunks(
 
 /// Convert a Myers edit script into line-level hunks relative to the base.
 fn edits_to_line_hunks(edits: &[Edit<'_>]) -> Vec<LineHunk> {
-    let mut hunks = Vec::new();
-    let mut base_ix = 0usize;
-    let mut i = 0;
-
-    while i < edits.len() {
-        if edits[i].kind == EditKind::Equal {
-            base_ix += 1;
-            i += 1;
-            continue;
-        }
-
-        let hunk_base_start = base_ix;
-        let mut new_lines = Vec::new();
-
-        while i < edits.len() && edits[i].kind != EditKind::Equal {
-            match edits[i].kind {
-                EditKind::Delete => {
-                    base_ix += 1;
-                }
-                EditKind::Insert => {
-                    new_lines.push(edits[i].new.unwrap_or("").to_string());
-                }
-                EditKind::Equal => unreachable!(),
-            }
-            i += 1;
-        }
-
-        hunks.push(LineHunk {
-            base_start: hunk_base_start,
-            base_end: base_ix,
-            new_lines,
-        });
-    }
-
-    hunks
+    edits_to_hunks_with(edits, |line| line.to_string())
 }
 
 /// Per-line 3-way merge for three sequences of equal length.
@@ -403,25 +364,20 @@ fn side_content(
     hunks: &[LineHunk],
     line_ending: &str,
 ) -> String {
-    let mut lines: Vec<&str> = Vec::new();
-    let mut pos = range_start;
-
-    for hunk in hunks {
-        // Unchanged base lines before this hunk.
-        let base_limit = hunk.base_start.min(range_end).min(base_lines.len());
-        lines.extend_from_slice(&base_lines[pos..base_limit]);
-        // Hunk replacement content.
-        for line in &hunk.new_lines {
-            lines.push(line.as_str());
-        }
-        pos = hunk.base_end;
-    }
-
-    // Remaining base lines after last hunk.
-    let tail_limit = range_end.min(base_lines.len());
-    lines.extend_from_slice(&base_lines[pos..tail_limit]);
-
-    lines_to_text(&lines, line_ending)
+    let mut lines: Vec<String> = Vec::new();
+    reconstruct_side_with(
+        base_lines,
+        range_start,
+        range_end,
+        hunks,
+        &mut lines,
+        |h| h.base_start,
+        |h| h.base_end,
+        |line| line.to_string(),
+        |h, out| out.extend(h.new_lines.iter().cloned()),
+    );
+    let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    lines_to_text(&line_refs, line_ending)
 }
 
 /// Join a slice of line strings into text with the given line ending.

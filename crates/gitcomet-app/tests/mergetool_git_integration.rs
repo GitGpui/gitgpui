@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 #[cfg(windows)]
@@ -711,12 +712,19 @@ fn git_mergetool_kdiff3_path_override_records_real_argv_shape() {
     setup_whitespace_only_conflict(repo);
     configure_kdiff3_path_override_to_gitcomet(repo, true);
 
-    let argv_log = repo.join("kdiff3-argv.log");
-    let argv_log_str = argv_log.to_string_lossy().to_string();
+    let repo_tag = repo
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "repo".to_string());
+    let argv_log_name = format!("kdiff3-argv-{}-{repo_tag}.log", std::process::id());
+    let argv_log = std::env::temp_dir()
+        .join("gitcomet-compat-argv")
+        .join(&argv_log_name);
+    let _ = fs::remove_file(&argv_log);
     let output = run_git_capture_with_env(
         repo,
         &["mergetool", "--no-prompt"],
-        &[("GITCOMET_COMPAT_ARGV_LOG", argv_log_str.as_str())],
+        &[("GITCOMET_COMPAT_ARGV_LOG", argv_log_name.as_str())],
     );
     let text = output_text(&output);
     // Git's post-tool resolution behavior can vary by version. This check is

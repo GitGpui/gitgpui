@@ -36,7 +36,7 @@ impl MainPaneView {
             _ => return None,
         };
         let workdir = repo.spec.workdir.clone();
-        let DiffTarget::WorkingTree { path, area } = repo.diff_target.as_ref()? else {
+        let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()? else {
             return None;
         };
         if *area != DiffArea::Unstaged {
@@ -60,7 +60,7 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let target = repo.diff_target.as_ref()?;
+        let target = repo.diff_state.diff_target.as_ref()?;
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -88,7 +88,7 @@ impl MainPaneView {
                 commit_id,
                 path: Some(path),
             } => {
-                let details = match &repo.commit_details {
+                let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
                     _ => return None,
                 };
@@ -113,7 +113,7 @@ impl MainPaneView {
     ) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         let workdir = repo.spec.workdir.clone();
-        let target = repo.diff_target.as_ref()?;
+        let target = repo.diff_state.diff_target.as_ref()?;
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -141,7 +141,7 @@ impl MainPaneView {
                 commit_id,
                 path: Some(path),
             } => {
-                let details = match &repo.commit_details {
+                let details = match &repo.history_state.commit_details {
                     Loadable::Ready(d) => d,
                     _ => return None,
                 };
@@ -252,7 +252,7 @@ impl MainPaneView {
     pub(in super::super::super) fn try_populate_worktree_preview_from_diff_file(&mut self) {
         let Some((abs_path, preview_result)) = (|| {
             let repo = self.active_repo()?;
-            let path_from_target = match repo.diff_target.as_ref()? {
+            let path_from_target = match repo.diff_state.diff_target.as_ref()? {
                 DiffTarget::WorkingTree { path, .. } => Some(path),
                 DiffTarget::Commit {
                     path: Some(path), ..
@@ -266,7 +266,7 @@ impl MainPaneView {
                 repo.spec.workdir.join(path_from_target)
             };
 
-            let prefer_old = match repo.diff_target.as_ref()? {
+            let prefer_old = match repo.diff_state.diff_target.as_ref()? {
                 DiffTarget::WorkingTree { path, area } => match &repo.status {
                     Loadable::Ready(status) => {
                         let entries = match area {
@@ -282,7 +282,7 @@ impl MainPaneView {
                 DiffTarget::Commit {
                     commit_id,
                     path: Some(path),
-                } => match &repo.commit_details {
+                } => match &repo.history_state.commit_details {
                     Loadable::Ready(details) if &details.id == commit_id => details
                         .files
                         .iter()
@@ -293,42 +293,42 @@ impl MainPaneView {
             };
 
             let mut diff_file_error: Option<String> = None;
-            let mut preview_result: Option<Result<Arc<Vec<String>>, String>> = match &repo.diff_file
-            {
-                Loadable::NotLoaded | Loadable::Loading => None,
-                Loadable::Error(e) => {
-                    diff_file_error = Some(e.clone());
-                    None
-                }
-                Loadable::Ready(file) => file.as_ref().and_then(|file| {
-                    let text = if prefer_old {
-                        file.old.as_deref()
-                    } else {
-                        file.new.as_deref()
-                    };
-                    text.map(|text| {
-                        let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
-                        Ok(Arc::new(lines))
-                    })
-                }),
-            };
+            let mut preview_result: Option<Result<Arc<Vec<String>>, String>> =
+                match &repo.diff_state.diff_file {
+                    Loadable::NotLoaded | Loadable::Loading => None,
+                    Loadable::Error(e) => {
+                        diff_file_error = Some(e.clone());
+                        None
+                    }
+                    Loadable::Ready(file) => file.as_ref().and_then(|file| {
+                        let text = if prefer_old {
+                            file.old.as_deref()
+                        } else {
+                            file.new.as_deref()
+                        };
+                        text.map(|text| {
+                            let lines = text.lines().map(|s| s.to_string()).collect::<Vec<_>>();
+                            Ok(Arc::new(lines))
+                        })
+                    }),
+                };
 
             if preview_result.is_none() {
-                match &repo.diff {
+                match &repo.diff_state.diff {
                     Loadable::Ready(diff) => {
                         let annotated = annotate_unified(diff);
                         if prefer_old {
                             if let Some((_abs_path, lines)) = build_deleted_file_preview_from_diff(
                                 &annotated,
                                 &repo.spec.workdir,
-                                repo.diff_target.as_ref(),
+                                repo.diff_state.diff_target.as_ref(),
                             ) {
                                 preview_result = Some(Ok(Arc::new(lines)));
                             }
                         } else if let Some((_abs_path, lines)) = build_new_file_preview_from_diff(
                             &annotated,
                             &repo.spec.workdir,
-                            repo.diff_target.as_ref(),
+                            repo.diff_state.diff_target.as_ref(),
                         ) {
                             preview_result = Some(Ok(Arc::new(lines)));
                         } else if let Some(e) = diff_file_error {

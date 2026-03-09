@@ -449,7 +449,8 @@ impl MainPaneView {
             conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(ri) => Some(*ri),
             conflict_resolver::ThreeWayVisibleItem::Line(line_ix) => self
                 .conflict_resolver
-                .three_way_ours_line_conflict_map
+                .three_way_line_conflict_map
+                .ours
                 .get(*line_ix)
                 .copied()
                 .flatten(),
@@ -594,7 +595,8 @@ impl MainPaneView {
             return;
         };
 
-        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_target.as_ref() else {
+        let Some(DiffTarget::WorkingTree { path, area }) = repo.diff_state.diff_target.as_ref()
+        else {
             self.conflict_resolver = ConflictResolverUiState::default();
             self.conflict_resolver_invalidate_resolved_outline();
             return;
@@ -620,8 +622,8 @@ impl MainPaneView {
 
         let path = path.clone();
 
-        let should_load = repo.conflict_file_path.as_ref() != Some(&path)
-            && !matches!(repo.conflict_file, Loadable::Loading);
+        let should_load = repo.conflict_state.conflict_file_path.as_ref() != Some(&path)
+            && !matches!(repo.conflict_state.conflict_file, Loadable::Loading);
         if should_load {
             self.conflict_resolver = ConflictResolverUiState::default();
             self.conflict_resolver_invalidate_resolved_outline();
@@ -634,7 +636,7 @@ impl MainPaneView {
             return;
         }
 
-        let Loadable::Ready(Some(file)) = &repo.conflict_file else {
+        let Loadable::Ready(Some(file)) = &repo.conflict_state.conflict_file else {
             return;
         };
         if file.path != path {
@@ -658,7 +660,7 @@ impl MainPaneView {
         // session resolutions and rebuilds visible maps without recomputing the
         // expensive diff/highlight data.
         if !needs_rebuild {
-            if self.conflict_resolver.conflict_rev != repo.conflict_rev {
+            if self.conflict_resolver.conflict_rev != repo.conflict_state.conflict_rev {
                 self.resync_conflict_resolver_from_state(cx);
             }
             return;
@@ -672,7 +674,9 @@ impl MainPaneView {
 
         // Use the ConflictSession from state for strategy if available,
         // otherwise fall back to local computation.
-        let (conflict_strategy, is_binary) = if let Some(session) = &repo.conflict_session {
+        let (conflict_strategy, is_binary) = if let Some(session) =
+            &repo.conflict_state.conflict_session
+        {
             let binary =
                 session.base.is_binary() || session.ours.is_binary() || session.theirs.is_binary();
             (Some(session.strategy), binary)
@@ -707,7 +711,7 @@ impl MainPaneView {
                 strategy: conflict_strategy,
                 conflict_kind,
                 last_autosolve_summary: None,
-                conflict_rev: repo.conflict_rev,
+                conflict_rev: repo.conflict_state.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
             self.conflict_resolver_invalidate_resolved_outline();
@@ -744,7 +748,7 @@ impl MainPaneView {
         }
         let mut conflict_region_indices =
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
-        if let Some(session) = &repo.conflict_session {
+        if let Some(session) = &repo.conflict_state.conflict_session {
             let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
                 &mut marker_segments,
                 &session.regions,
@@ -811,7 +815,7 @@ impl MainPaneView {
         {
             self.conflict_resolver.hide_resolved
         } else {
-            repo.conflict_hide_resolved
+            repo.conflict_state.conflict_hide_resolved
         };
         let diff_mode = if self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path)
@@ -892,18 +896,24 @@ impl MainPaneView {
             view_mode,
             diff_rows,
             inline_rows,
-            three_way_base_lines,
-            three_way_ours_lines,
-            three_way_theirs_lines,
+            three_way_lines: ThreeWaySides {
+                base: three_way_base_lines,
+                ours: three_way_ours_lines,
+                theirs: three_way_theirs_lines,
+            },
             three_way_len,
             three_way_conflict_ranges: three_way_conflict_maps.conflict_ranges,
-            three_way_base_line_conflict_map: three_way_conflict_maps.base_line_conflict_map,
-            three_way_ours_line_conflict_map: three_way_conflict_maps.ours_line_conflict_map,
-            three_way_theirs_line_conflict_map: three_way_conflict_maps.theirs_line_conflict_map,
+            three_way_line_conflict_map: ThreeWaySides {
+                base: three_way_conflict_maps.base_line_conflict_map,
+                ours: three_way_conflict_maps.ours_line_conflict_map,
+                theirs: three_way_conflict_maps.theirs_line_conflict_map,
+            },
             conflict_has_base: three_way_conflict_maps.conflict_has_base,
-            three_way_word_highlights_base,
-            three_way_word_highlights_ours,
-            three_way_word_highlights_theirs,
+            three_way_word_highlights: ThreeWaySides {
+                base: three_way_word_highlights_base,
+                ours: three_way_word_highlights_ours,
+                theirs: three_way_word_highlights_theirs,
+            },
             diff_word_highlights_split,
             diff_mode,
             nav_anchor,
@@ -918,7 +928,7 @@ impl MainPaneView {
             strategy: conflict_strategy,
             conflict_kind,
             last_autosolve_summary: None,
-            conflict_rev: repo.conflict_rev,
+            conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_line_meta: Vec::new(),
             resolved_output_conflict_markers: Vec::new(),
@@ -957,7 +967,7 @@ impl MainPaneView {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return;
         };
-        let Loadable::Ready(Some(file)) = &repo.conflict_file else {
+        let Loadable::Ready(Some(file)) = &repo.conflict_state.conflict_file else {
             return;
         };
 
@@ -982,7 +992,7 @@ impl MainPaneView {
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
 
         // Re-apply session region resolutions from state.
-        if let Some(session) = &repo.conflict_session {
+        if let Some(session) = &repo.conflict_state.conflict_session {
             let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
                 &mut marker_segments,
                 &session.regions,
@@ -1006,13 +1016,13 @@ impl MainPaneView {
         };
 
         // Read hide_resolved from state (authoritative source).
-        let hide_resolved = repo.conflict_hide_resolved;
+        let hide_resolved = repo.conflict_state.conflict_hide_resolved;
 
         let three_way_conflict_maps = conflict_resolver::build_three_way_conflict_maps(
             &marker_segments,
-            self.conflict_resolver.three_way_base_lines.len(),
-            self.conflict_resolver.three_way_ours_lines.len(),
-            self.conflict_resolver.three_way_theirs_lines.len(),
+            self.conflict_resolver.three_way_lines.base.len(),
+            self.conflict_resolver.three_way_lines.ours.len(),
+            self.conflict_resolver.three_way_lines.theirs.len(),
         );
 
         // Recompute row→conflict maps using existing diff/inline rows.
@@ -1049,18 +1059,18 @@ impl MainPaneView {
             self.conflict_resolver.active_conflict.min(total - 1)
         };
 
-        let new_rev = repo.conflict_rev;
+        let new_rev = repo.conflict_state.conflict_rev;
 
         // Update only the fields that change during a state re-sync.
         self.conflict_resolver.marker_segments = marker_segments;
         self.conflict_resolver.conflict_region_indices = conflict_region_indices;
         self.conflict_resolver.hide_resolved = hide_resolved;
         self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_maps.conflict_ranges;
-        self.conflict_resolver.three_way_base_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.base =
             three_way_conflict_maps.base_line_conflict_map;
-        self.conflict_resolver.three_way_ours_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.ours =
             three_way_conflict_maps.ours_line_conflict_map;
-        self.conflict_resolver.three_way_theirs_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.theirs =
             three_way_conflict_maps.theirs_line_conflict_map;
         self.conflict_resolver.conflict_has_base = three_way_conflict_maps.conflict_has_base;
         self.conflict_resolver.three_way_visible_map = three_way_visible_map;
@@ -1176,16 +1186,16 @@ impl MainPaneView {
     pub(super) fn conflict_resolver_rebuild_visible_map(&mut self) {
         let three_way_conflict_maps = conflict_resolver::build_three_way_conflict_maps(
             &self.conflict_resolver.marker_segments,
-            self.conflict_resolver.three_way_base_lines.len(),
-            self.conflict_resolver.three_way_ours_lines.len(),
-            self.conflict_resolver.three_way_theirs_lines.len(),
+            self.conflict_resolver.three_way_lines.base.len(),
+            self.conflict_resolver.three_way_lines.ours.len(),
+            self.conflict_resolver.three_way_lines.theirs.len(),
         );
         self.conflict_resolver.three_way_conflict_ranges = three_way_conflict_maps.conflict_ranges;
-        self.conflict_resolver.three_way_base_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.base =
             three_way_conflict_maps.base_line_conflict_map;
-        self.conflict_resolver.three_way_ours_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.ours =
             three_way_conflict_maps.ours_line_conflict_map;
-        self.conflict_resolver.three_way_theirs_line_conflict_map =
+        self.conflict_resolver.three_way_line_conflict_map.theirs =
             three_way_conflict_maps.theirs_line_conflict_map;
         self.conflict_resolver.conflict_has_base = three_way_conflict_maps.conflict_has_base;
         self.conflict_resolver.three_way_visible_map =
@@ -1527,13 +1537,13 @@ impl MainPaneView {
     ) {
         let line = match choice {
             conflict_resolver::ConflictChoice::Base => {
-                self.conflict_resolver.three_way_base_lines.get(line_ix)
+                self.conflict_resolver.three_way_lines.base.get(line_ix)
             }
             conflict_resolver::ConflictChoice::Ours => {
-                self.conflict_resolver.three_way_ours_lines.get(line_ix)
+                self.conflict_resolver.three_way_lines.ours.get(line_ix)
             }
             conflict_resolver::ConflictChoice::Theirs => {
-                self.conflict_resolver.three_way_theirs_lines.get(line_ix)
+                self.conflict_resolver.three_way_lines.theirs.get(line_ix)
             }
             conflict_resolver::ConflictChoice::Both => {
                 // Both is chunk-level only, not line-level.
@@ -1625,17 +1635,20 @@ impl MainPaneView {
             match choice {
                 conflict_resolver::ConflictChoice::Base => self
                     .conflict_resolver
-                    .three_way_base_lines
+                    .three_way_lines
+                    .base
                     .get(line_ix)
                     .map(|s| s.to_string()),
                 conflict_resolver::ConflictChoice::Ours => self
                     .conflict_resolver
-                    .three_way_ours_lines
+                    .three_way_lines
+                    .ours
                     .get(line_ix)
                     .map(|s| s.to_string()),
                 conflict_resolver::ConflictChoice::Theirs => self
                     .conflict_resolver
-                    .three_way_theirs_lines
+                    .three_way_lines
+                    .theirs
                     .get(line_ix)
                     .map(|s| s.to_string()),
                 conflict_resolver::ConflictChoice::Both => return,
@@ -1793,7 +1806,11 @@ impl MainPaneView {
 
     pub(super) fn conflict_resolver_session_counts(&self) -> Option<(usize, usize)> {
         let resolver_path = self.conflict_resolver.path.as_ref()?;
-        let session = self.active_repo()?.conflict_session.as_ref()?;
+        let session = self
+            .active_repo()?
+            .conflict_state
+            .conflict_session
+            .as_ref()?;
         if session.path.as_path() != resolver_path.as_path() {
             return None;
         }

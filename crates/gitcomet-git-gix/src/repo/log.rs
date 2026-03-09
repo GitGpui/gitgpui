@@ -272,79 +272,77 @@ impl GixRepo {
         &self,
         path: &Path,
         limit: usize,
-        _cursor: Option<&LogCursor>,
+        cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.spec.workdir)
             .arg("log")
             .arg("--follow")
-            .arg(format!("-n{limit}"))
             .arg("--date=unix")
-            .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e")
-            .arg("--")
-            .arg(path);
+            .arg("--pretty=format:%H%x1f%P%x1f%an%x1f%ct%x1f%s%x1e");
+        if cursor.is_none() {
+            cmd.arg(format!("-n{limit}"));
+        }
+        cmd.arg("--").arg(path);
 
         let output = run_git_capture(cmd, "git log --follow")?;
-        Ok(parse_git_log_pretty_records(&output))
+        let parsed = parse_git_log_pretty_records(&output);
+        let mut cursor_gate = CursorGate::new(cursor);
+        let mut commits = Vec::with_capacity(limit.min(parsed.commits.len()));
+        let mut next_cursor: Option<LogCursor> = None;
+
+        for commit in parsed.commits {
+            if cursor_gate.should_skip(commit.id.as_ref()) {
+                continue;
+            }
+
+            commits.push(commit);
+
+            if commits.len() >= limit {
+                next_cursor = commits.last().map(|c| LogCursor {
+                    last_seen: c.id.clone(),
+                });
+                break;
+            }
+        }
+
+        Ok(LogPage {
+            commits,
+            next_cursor,
+        })
     }
 
     pub(super) fn commit_details_impl(&self, id: &CommitId) -> Result<CommitDetails> {
         let sha = id.as_ref();
 
-        let message = {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("show")
-                .arg("-s")
-                .arg("--format=%B")
-                .arg(sha);
-            run_git_capture(cmd, "git show --format=%B")?
-                .trim_end()
-                .to_string()
-        };
-
-        let committed_at = {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("show")
-                .arg("-s")
-                .arg("--format=%cI")
-                .arg(sha);
-            run_git_capture(cmd, "git show --format=%cI")?
-                .trim()
-                .to_string()
-        };
-
-        let parent_ids = {
-            let mut cmd = Command::new("git");
-            cmd.arg("-C")
-                .arg(&self.spec.workdir)
-                .arg("show")
-                .arg("-s")
-                .arg("--format=%P")
-                .arg(sha);
-            run_git_capture(cmd, "git show --format=%P")?
-                .split_whitespace()
-                .map(|p| CommitId(p.to_string()))
-                .collect::<Vec<_>>()
-        };
-
-        let files = {
+        let (message, committed_at, parent_ids, files) = {
             let mut cmd = Command::new("git");
             cmd.arg("-C")
                 .arg(&self.spec.workdir)
                 .arg("show")
                 .arg("--name-status")
-                .arg("--pretty=format:")
+                .arg("--format=%B%x00%cI%x00%P%x00")
                 .arg(sha);
-            let output = run_git_capture(cmd, "git show --name-status")?;
-            output
+            let output = run_git_capture(cmd, "git show --name-status --format=<commit-details>")?;
+
+            let mut parts = output.splitn(4, '\0');
+            let message = parts.next().unwrap_or_default().trim_end().to_string();
+            let committed_at = parts.next().unwrap_or_default().trim().to_string();
+            let parent_ids = parts
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|p| CommitId(p.to_string()))
+                .collect::<Vec<_>>();
+            let files = parts
+                .next()
+                .unwrap_or_default()
                 .lines()
                 .filter_map(parse_name_status_line)
-                .collect::<Vec<CommitFileChange>>()
+                .collect::<Vec<CommitFileChange>>();
+
+            (message, committed_at, parent_ids, files)
         };
 
         Ok(CommitDetails {

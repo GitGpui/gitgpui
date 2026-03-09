@@ -9,7 +9,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::SubmoduleAddPrompt { repo_id },
+            kind: PopoverKind::submodule(repo_id, SubmodulePopoverKind::AddPrompt),
         }),
     });
     items.push(ContextMenuItem::Entry {
@@ -25,7 +25,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::SubmoduleOpenPicker { repo_id },
+            kind: PopoverKind::submodule(repo_id, SubmodulePopoverKind::OpenPicker),
         }),
     });
     items.push(ContextMenuItem::Entry {
@@ -34,7 +34,7 @@ pub(super) fn model(repo_id: RepoId) -> ContextMenuModel {
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::SubmoduleRemovePicker { repo_id },
+            kind: PopoverKind::submodule(repo_id, SubmodulePopoverKind::RemovePicker),
         }),
     });
 

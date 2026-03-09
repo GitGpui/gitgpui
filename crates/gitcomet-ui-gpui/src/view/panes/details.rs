@@ -46,8 +46,8 @@ impl DetailsPaneView {
         {
             repo.status_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
-            repo.selected_commit_rev.hash(&mut hasher);
-            repo.commit_details_rev.hash(&mut hasher);
+            repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
         }
 
@@ -242,7 +242,7 @@ impl DetailsPaneView {
                 .repos
                 .iter()
                 .find(|r| r.id == repo_id)
-                .and_then(|r| r.selected_commit.clone())
+                .and_then(|r| r.history_state.selected_commit.clone())
         });
         let prev_merge_message = prev_active_repo_id.and_then(|repo_id| {
             self.state
@@ -257,7 +257,7 @@ impl DetailsPaneView {
 
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
-        let next_selected_commit = next_repo.and_then(|r| r.selected_commit.clone());
+        let next_selected_commit = next_repo.and_then(|r| r.history_state.selected_commit.clone());
         let next_merge_message = next_repo.and_then(|r| match &r.merge_commit_message {
             Loadable::Ready(Some(message)) => Some(message.clone()),
             _ => None,
@@ -338,12 +338,12 @@ impl DetailsPaneView {
     fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {
         let Some((repo_id, selected_id, ready_for_selected, is_error)) = (|| {
             let repo = self.active_repo()?;
-            let selected_id = repo.selected_commit.clone()?;
+            let selected_id = repo.history_state.selected_commit.clone()?;
             let ready_for_selected = matches!(
-                &repo.commit_details,
+                &repo.history_state.commit_details,
                 Loadable::Ready(details) if details.id == selected_id
             );
-            let is_error = matches!(&repo.commit_details, Loadable::Error(_));
+            let is_error = matches!(&repo.history_state.commit_details, Loadable::Error(_));
             Some((repo.id, selected_id, ready_for_selected, is_error))
         })() else {
             self.commit_details_delay = None;
@@ -382,7 +382,7 @@ impl DetailsPaneView {
                     let Some(repo) = this.active_repo() else {
                         return;
                     };
-                    let Some(current_selected) = repo.selected_commit.clone() else {
+                    let Some(current_selected) = repo.history_state.selected_commit.clone() else {
                         return;
                     };
                     if repo.id != repo_id {
@@ -390,10 +390,12 @@ impl DetailsPaneView {
                     }
 
                     let ready_for_selected = matches!(
-                        &repo.commit_details,
+                        &repo.history_state.commit_details,
                         Loadable::Ready(details) if details.id == current_selected
                     );
-                    if ready_for_selected || matches!(&repo.commit_details, Loadable::Error(_)) {
+                    if ready_for_selected
+                        || matches!(&repo.history_state.commit_details, Loadable::Error(_))
+                    {
                         return;
                     }
 

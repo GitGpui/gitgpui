@@ -63,6 +63,29 @@ pub(super) fn model(
 
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);
+        if !is_current_branch {
+            items.push(ContextMenuItem::Entry {
+                label: "Pull into current".into(),
+                icon: Some("↓".into()),
+                shortcut: Some("P".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::PullBranch {
+                    repo_id,
+                    remote: ".".to_string(),
+                    branch: name.clone(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Merge into current".into(),
+                icon: Some("⇄".into()),
+                shortcut: Some("M".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::MergeRef {
+                    repo_id,
+                    reference: name.clone(),
+                }),
+            });
+        }
         items.push(ContextMenuItem::Entry {
             label: "Delete branch".into(),
             icon: Some("🗑".into()),
@@ -106,11 +129,13 @@ pub(super) fn model(
                 shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::OpenPopover {
-                    kind: PopoverKind::DeleteRemoteBranchConfirm {
+                    kind: PopoverKind::remote(
                         repo_id,
-                        remote: remote.to_string(),
-                        branch: branch.to_string(),
-                    },
+                        RemotePopoverKind::DeleteBranchConfirm {
+                            remote: remote.to_string(),
+                            branch: branch.to_string(),
+                        },
+                    ),
                 }),
             });
             items.push(ContextMenuItem::Separator);

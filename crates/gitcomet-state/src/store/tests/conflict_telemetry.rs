@@ -17,13 +17,13 @@ fn record_conflict_autosolve_telemetry_logs_mode_and_unresolved_deltas() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id: RepoId(1),
             spec: RepoSpec {
                 workdir: PathBuf::from("/tmp/repo"),
             },
             repo: Arc::new(DummyRepo::new("/tmp/repo")),
-        },
+        }),
     );
 
     let effects = reduce(

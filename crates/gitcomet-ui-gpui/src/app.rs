@@ -38,18 +38,17 @@ struct WindowLaunchConfig {
     title: String,
     app_id: String,
     view_config: GitCometViewConfig,
-    use_legacy_constructor: bool,
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    run_with_startup_crash_report(backend, None)
+    run_with_startup_crash_report(backend, None, None)
 }
 
 pub fn run_with_startup_crash_report(
     backend: Arc<dyn GitBackend>,
+    initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
 ) -> Result<(), UiLaunchError> {
-    let initial_path = std::env::args_os().nth(1).map(std::path::PathBuf::from);
     let launch = normal_launch_config(initial_path, startup_crash_report);
     run_with_panic_guard("main GPUI window launch", move || {
         run_windowed_app(backend, launch)
@@ -77,7 +76,6 @@ fn normal_launch_config(
         title: "GitComet".to_string(),
         app_id: "gitcomet".to_string(),
         view_config: GitCometViewConfig::normal(initial_path, startup_crash_report),
-        use_legacy_constructor: false,
     }
 }
 
@@ -103,7 +101,6 @@ fn focused_mergetool_launch_config(
             focused_mergetool_exit_code: exit_code,
             startup_crash_report: None,
         },
-        use_legacy_constructor: false,
     }
 }
 
@@ -144,7 +141,6 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
             let window_title = launch.title.clone();
             let app_id = launch.app_id.clone();
             let view_config = launch.view_config.clone();
-            let use_legacy_constructor = launch.use_legacy_constructor;
 
             cx.open_window(
                 WindowOptions {
@@ -163,23 +159,18 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
                 },
                 move |window, cx| {
                     let (store, events) = AppStore::new(Arc::clone(&backend));
-                    if use_legacy_constructor {
-                        let initial_path = view_config.initial_path.clone();
-                        cx.new(|cx| GitCometView::new(store, events, initial_path, window, cx))
-                    } else {
-                        cx.new(|cx| {
-                            GitCometView::new_with_config(
-                                store,
-                                events,
-                                view_config.clone(),
-                                window,
-                                cx,
-                            )
-                        })
-                    }
+                    cx.new(|cx| {
+                        GitCometView::new_with_config(
+                            store,
+                            events,
+                            view_config.clone(),
+                            window,
+                            cx,
+                        )
+                    })
                 },
             )
-            .unwrap();
+            .expect("failed to open main GitComet window");
 
             cx.activate(true);
         });

@@ -13,6 +13,8 @@ impl GixRepo {
     ///
     /// The implementation:
     /// 1. Reads `merge.tool` from git config to determine the tool name.
+    ///    Repository-local `mergetool.<tool>.cmd` is blocked by default unless
+    ///    explicitly trusted via a GitComet global consent key.
     /// 2. Extracts conflict stages (`:1:`, `:2:`, `:3:`) into temp files.
     /// 3. Invokes the tool with BASE, LOCAL, REMOTE, MERGED file paths.
     /// 4. Reads trust-exit config to decide success semantics:
@@ -184,6 +186,13 @@ struct MergetoolConfig {
     keep_temporaries: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GitConfigScope {
+    Any,
+    Global,
+    Local,
+}
+
 fn env_has_display() -> bool {
     std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
@@ -310,7 +319,7 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
         parse_gui_default(git_config_get(workdir, "mergetool.guiDefault")?.as_deref())?;
 
     let tool_name = choose_mergetool_name(merge_tool, merge_guitool, gui_default, has_display)?;
-    let tool_cmd = git_config_get(workdir, &format!("mergetool.{tool_name}.cmd"))?;
+    let tool_cmd = resolve_mergetool_command_with_trust_mode(workdir, &tool_name)?;
     let tool_path = git_config_get(workdir, &format!("mergetool.{tool_name}.path"))?;
     let trust_exit_code =
         match git_config_get_bool(workdir, &format!("mergetool.{tool_name}.trustExitCode"))? {
@@ -329,6 +338,67 @@ fn resolve_mergetool_config(workdir: &Path, has_display: bool) -> Result<Mergeto
         write_to_temp,
         keep_temporaries,
     })
+}
+
+fn resolve_mergetool_command_with_trust_mode(
+    workdir: &Path,
+    tool_name: &str,
+) -> Result<Option<String>> {
+    let cmd_key = format!("mergetool.{tool_name}.cmd");
+    let global_cmd = git_config_get_with_scope(workdir, &cmd_key, GitConfigScope::Global)?;
+    let local_cmd = git_config_get_with_scope(workdir, &cmd_key, GitConfigScope::Local)?;
+
+    let Some(local_cmd) = local_cmd else {
+        return Ok(global_cmd);
+    };
+
+    if repo_local_mergetool_command_allowed(workdir, tool_name)? {
+        return Ok(Some(local_cmd));
+    }
+
+    if global_cmd.is_some() {
+        return Ok(global_cmd);
+    }
+
+    let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
+    Err(Error::new(ErrorKind::Backend(format!(
+        "Refusing to execute repository-local mergetool command for '{tool_name}' without explicit consent.\n\
+         Blocked command from repository config:\n\
+         {local_cmd}\n\
+         To allow this command for this repository and tool, run:\n\
+         git config --global {} true",
+        consent_key,
+    ))))
+}
+
+fn repo_local_mergetool_command_allowed(workdir: &Path, tool_name: &str) -> Result<bool> {
+    let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
+    Ok(
+        git_config_get_bool_with_scope(workdir, &consent_key, GitConfigScope::Global)?
+            .unwrap_or(false),
+    )
+}
+
+fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> String {
+    let repo_tool_fingerprint = stable_repo_tool_fingerprint(workdir, tool_name);
+    format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
+}
+
+fn stable_repo_tool_fingerprint(workdir: &Path, tool_name: &str) -> String {
+    let repo_path = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    let mut bytes = repo_path.to_string_lossy().into_owned().into_bytes();
+    bytes.push(0);
+    bytes.extend_from_slice(tool_name.as_bytes());
+    format!("{:016x}", fnv1a_64(&bytes))
+}
+
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[derive(Debug)]
@@ -522,12 +592,16 @@ fn write_stage_bytes(workdir: &Path, stage_path: &Path, bytes: &[u8]) -> Result<
 
 /// Read a git config value. Returns `Ok(None)` if the key is not set.
 fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("config")
-        .arg("--get")
-        .arg(key)
+    git_config_get_with_scope(workdir, key, GitConfigScope::Any)
+}
+
+/// Read a git config value from a specific scope. Returns `Ok(None)` if the key is not set.
+fn git_config_get_with_scope(
+    workdir: &Path,
+    key: &str,
+    scope: GitConfigScope,
+) -> Result<Option<String>> {
+    let output = git_config_get_command(workdir, key, scope)
         .output()
         .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
@@ -545,8 +619,9 @@ fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
             Ok(None)
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let scope_args = git_config_scope_args(scope);
             Err(Error::new(ErrorKind::Backend(format!(
-                "git config --get {key} failed: {}",
+                "git config {scope_args} --get {key} failed: {}",
                 stderr.trim()
             ))))
         }
@@ -557,12 +632,18 @@ fn git_config_get(workdir: &Path, key: &str) -> Result<Option<String>> {
 ///
 /// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
 fn git_config_get_bool(workdir: &Path, key: &str) -> Result<Option<bool>> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .arg("config")
-        .arg("--get")
-        .arg(key)
+    git_config_get_bool_with_scope(workdir, key, GitConfigScope::Any)
+}
+
+/// Read a git config boolean value from a specific scope.
+///
+/// Supports git-style boolean literals: true/false, yes/no, on/off, 1/0.
+fn git_config_get_bool_with_scope(
+    workdir: &Path,
+    key: &str,
+    scope: GitConfigScope,
+) -> Result<Option<bool>> {
+    let output = git_config_get_command(workdir, key, scope)
         .output()
         .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
@@ -585,11 +666,36 @@ fn git_config_get_bool(workdir: &Path, key: &str) -> Result<Option<bool>> {
             Ok(None)
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let scope_args = git_config_scope_args(scope);
             Err(Error::new(ErrorKind::Backend(format!(
-                "git config --get {key} failed: {}",
+                "git config {scope_args} --get {key} failed: {}",
                 stderr.trim()
             ))))
         }
+    }
+}
+
+fn git_config_get_command(workdir: &Path, key: &str, scope: GitConfigScope) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(workdir).arg("config");
+    match scope {
+        GitConfigScope::Any => {}
+        GitConfigScope::Global => {
+            command.arg("--global");
+        }
+        GitConfigScope::Local => {
+            command.arg("--local");
+        }
+    }
+    command.arg("--get").arg(key);
+    command
+}
+
+fn git_config_scope_args(scope: GitConfigScope) -> &'static str {
+    match scope {
+        GitConfigScope::Any => "",
+        GitConfigScope::Global => "--global",
+        GitConfigScope::Local => "--local",
     }
 }
 
@@ -1148,16 +1254,10 @@ mod tests {
             .args(["config", "mergetool.guiDefault", "auto"])
             .output()
             .unwrap();
-        Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["config", "mergetool.cli.cmd", "exit 0"])
-            .output()
-            .unwrap();
 
         let cfg = resolve_mergetool_config(workdir, false).unwrap();
         assert_eq!(cfg.tool_name, "cli");
-        assert_eq!(cfg.tool_cmd.as_deref(), Some("exit 0"));
+        assert_eq!(cfg.tool_cmd, None);
         assert!(!cfg.write_to_temp);
         assert!(!cfg.keep_temporaries);
     }
@@ -1177,12 +1277,6 @@ mod tests {
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["config", "mergetool.cli.cmd", "exit 0"])
             .output()
             .unwrap();
         Command::new("git")
@@ -1211,12 +1305,6 @@ mod tests {
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["config", "mergetool.cli.cmd", "exit 0"])
             .output()
             .unwrap();
         Command::new("git")
@@ -1256,12 +1344,6 @@ mod tests {
         Command::new("git")
             .arg("-C")
             .arg(workdir)
-            .args(["config", "mergetool.cli.cmd", "exit 0"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .arg("-C")
-            .arg(workdir)
             .args(["config", "mergetool.writeToTemp", "true"])
             .output()
             .unwrap();
@@ -1286,12 +1368,6 @@ mod tests {
             .arg("-C")
             .arg(workdir)
             .args(["config", "merge.tool", "cli"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["config", "mergetool.cli.cmd", "exit 0"])
             .output()
             .unwrap();
         Command::new("git")

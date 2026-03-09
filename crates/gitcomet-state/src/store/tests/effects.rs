@@ -44,6 +44,7 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -64,11 +65,11 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
         };
 
         match msg {
-            Msg::CloneRepoFinished {
+            Msg::Internal(crate::msg::InternalMsg::CloneRepoFinished {
                 dest: finished_dest,
                 result,
                 ..
-            } if finished_dest == dest => {
+            }) if finished_dest == dest => {
                 assert!(result.is_ok(), "clone failed: {result:?}");
                 saw_finished_ok = true;
             }
@@ -229,6 +230,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -241,12 +243,12 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
-            && let Msg::ConflictFileLoaded {
+            && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
                 repo_id: rid,
                 path,
                 result,
                 conflict_session,
-            } = msg
+            }) = msg
         {
             assert_eq!(rid, repo_id);
             assert_eq!(path, rel);
@@ -402,9 +404,10 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
-        msg_tx,
+        msg_tx.clone(),
         Effect::SaveWorktreeFile {
             repo_id,
             path: rel.clone(),
@@ -413,14 +416,15 @@ fn save_worktree_file_effect_writes_and_can_stage() {
         },
     );
 
+    let mut saw_write_and_stage = false;
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
-            && let Msg::RepoCommandFinished {
+            && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
                 result,
-            } = msg
+            }) = msg
         {
             assert_eq!(rid, repo_id);
             assert!(matches!(
@@ -432,6 +436,73 @@ fn save_worktree_file_effect_writes_and_can_stage() {
             assert_eq!(on_disk, contents);
             let staged = repo.staged.lock().unwrap().clone();
             assert_eq!(staged, vec![rel.clone()]);
+            saw_write_and_stage = true;
+            break;
+        };
+    }
+    assert!(
+        saw_write_and_stage,
+        "timed out waiting for RepoCommandFinished"
+    );
+
+    let escaped_name = format!(
+        "gitcomet-save-worktree-file-escape-{}-{}.txt",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let escaped_path = PathBuf::from("..").join(&escaped_name);
+    let escaped_dest = base
+        .parent()
+        .expect("temp dir should have a parent")
+        .join(&escaped_name);
+    let _ = std::fs::remove_file(&escaped_dest);
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::SaveWorktreeFile {
+            repo_id,
+            path: escaped_path,
+            contents: "escape".to_string(),
+            stage: false,
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id: rid,
+                command,
+                result,
+            }) = msg
+        {
+            assert_eq!(rid, repo_id);
+            assert!(matches!(
+                command,
+                crate::msg::RepoCommandKind::SaveWorktreeFile { .. }
+            ));
+            let err = result.expect_err("expected traversal write to fail");
+            match err.kind() {
+                ErrorKind::Backend(message) => {
+                    assert!(
+                        message.contains("outside repository workdir"),
+                        "unexpected error message: {message}"
+                    );
+                }
+                other => panic!("unexpected error kind: {other:?}"),
+            }
+            assert!(
+                !escaped_dest.exists(),
+                "unexpected file written outside workdir: {}",
+                escaped_dest.display()
+            );
             return;
         };
     }
@@ -568,6 +639,7 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -580,11 +652,11 @@ fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
-            && let Msg::RepoCommandFinished {
+            && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
                 result,
-            } = msg
+            }) = msg
         {
             assert_eq!(rid, repo_id);
             assert!(matches!(
@@ -729,6 +801,7 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -741,11 +814,11 @@ fn accept_conflict_deletion_effect_calls_repo_and_emits_finished() {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(5) {
         if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
-            && let Msg::RepoCommandFinished {
+            && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id: rid,
                 command,
                 result,
-            } = msg
+            }) = msg
         {
             assert_eq!(rid, repo_id);
             assert!(matches!(
@@ -899,6 +972,7 @@ fn load_stashes_effect_truncates_results_to_limit() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -914,10 +988,10 @@ fn load_stashes_effect_truncates_results_to_limit() {
         };
 
         match msg {
-            Msg::StashesLoaded {
+            Msg::Internal(crate::msg::InternalMsg::StashesLoaded {
                 repo_id: got_repo_id,
                 result,
-            } if got_repo_id == repo_id => {
+            }) if got_repo_id == repo_id => {
                 let entries = result.expect("expected stash list Ok");
                 assert_eq!(entries.len(), 2);
                 assert_eq!(entries[0].index, 0);
@@ -1054,6 +1128,7 @@ fn stash_effect_requests_stash_reload_on_success() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1076,10 +1151,10 @@ fn stash_effect_requests_stash_reload_on_success() {
 
         match msg {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
-            Msg::RepoActionFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
                 result: Ok(()),
-            } => saw_finished = true,
+            }) => saw_finished = true,
             _ => {}
         }
 
@@ -1221,6 +1296,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1242,10 +1318,10 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
 
         match msg {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
-            Msg::RepoActionFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
                 result: Ok(()),
-            } => saw_finished = true,
+            }) => saw_finished = true,
             _ => {}
         }
 
@@ -1387,6 +1463,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1408,10 +1485,10 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
 
         match msg {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
-            Msg::RepoActionFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
                 result: Err(_),
-            } => {
+            }) => {
                 saw_finished_err = true;
                 break;
             }
@@ -1551,6 +1628,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1572,10 +1650,10 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
 
         match msg {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
-            Msg::RepoActionFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
                 result: Ok(()),
-            } => saw_finished = true,
+            }) => saw_finished = true,
             _ => {}
         }
 
@@ -1713,6 +1791,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1734,10 +1813,10 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
 
         match msg {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
-            Msg::RepoActionFinished {
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
                 result: Err(_),
-            } => {
+            }) => {
                 saw_finished_err = true;
                 break;
             }
@@ -1899,6 +1978,7 @@ fn open_repo_effect_emits_repo_opened_ok() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1912,11 +1992,11 @@ fn open_repo_effect_emits_repo_opened_ok() {
         .recv_timeout(Duration::from_secs(5))
         .expect("expected RepoOpenedOk");
     match msg {
-        Msg::RepoOpenedOk {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
             repo_id: got_repo_id,
             spec,
             repo,
-        } => {
+        }) => {
             assert_eq!(got_repo_id, repo_id);
             assert_eq!(spec.workdir, workdir);
             assert_eq!(repo.spec().workdir, workdir);
@@ -1945,6 +2025,7 @@ fn open_repo_effect_emits_repo_opened_err() {
 
     super::effects::schedule_effect(
         &executor,
+        &executor,
         &backend,
         &repos,
         msg_tx,
@@ -1958,11 +2039,11 @@ fn open_repo_effect_emits_repo_opened_err() {
         .recv_timeout(Duration::from_secs(5))
         .expect("expected RepoOpenedErr");
     match msg {
-        Msg::RepoOpenedErr {
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: got_repo_id,
             spec,
             error,
-        } => {
+        }) => {
             assert_eq!(got_repo_id, repo_id);
             assert_eq!(spec.workdir, workdir);
             assert!(matches!(error.kind(), ErrorKind::Backend(_)));
@@ -2453,7 +2534,14 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
     ];
 
     for (effect, expected_messages) in effect_specs {
-        super::effects::schedule_effect(&executor, &backend, &repos, msg_tx.clone(), effect);
+        super::effects::schedule_effect(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            msg_tx.clone(),
+            effect,
+        );
         recv_n_msgs(&msg_rx, expected_messages);
     }
 }

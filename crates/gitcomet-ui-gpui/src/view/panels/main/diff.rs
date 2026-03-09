@@ -30,14 +30,14 @@ impl MainPaneView {
         let (wants_image, is_svg) = self
             .active_repo()
             .map(|repo| {
-                let is_svg = match repo.diff_target.as_ref() {
+                let is_svg = match repo.diff_state.diff_target.as_ref() {
                     Some(DiffTarget::WorkingTree { path, .. }) => crate::view::is_svg_path(path),
                     Some(DiffTarget::Commit {
                         path: Some(path), ..
                     }) => crate::view::is_svg_path(path),
                     _ => false,
                 };
-                let has_image = !matches!(repo.diff_file_image, Loadable::NotLoaded);
+                let has_image = !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded);
                 let wants_image =
                     has_image && (!is_svg || self.svg_diff_view_mode == SvgDiffViewMode::Image);
                 (wants_image, is_svg)
@@ -52,7 +52,10 @@ impl MainPaneView {
                 Ready { has_file: bool },
             }
 
-            let diff_file_state = match self.active_repo().map(|repo| &repo.diff_file_image) {
+            let diff_file_state = match self
+                .active_repo()
+                .map(|repo| &repo.diff_state.diff_file_image)
+            {
                 None => {
                     return components::empty_state(theme, "Diff", "No repository.")
                         .into_any_element();
@@ -65,7 +68,7 @@ impl MainPaneView {
                 },
             };
 
-            self.ensure_file_image_diff_cache();
+            self.ensure_file_image_diff_cache(cx);
             match diff_file_state {
                 DiffFileImageState::NotLoaded => {
                     components::empty_state(theme, "Diff", "Select a file.").into_any_element()
@@ -199,7 +202,7 @@ impl MainPaneView {
                 Ready { has_file: bool },
             }
 
-            let diff_file_state = match self.active_repo().map(|repo| &repo.diff_file) {
+            let diff_file_state = match self.active_repo().map(|repo| &repo.diff_state.diff_file) {
                 None => {
                     return components::empty_state(theme, "Diff", "No repository.")
                         .into_any_element();

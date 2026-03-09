@@ -28,17 +28,13 @@ mod worktrees;
 
 pub(crate) struct GixRepo {
     spec: RepoSpec,
-    _workdir: PathBuf,
     _repo: gix::ThreadSafeRepository,
 }
 
 impl GixRepo {
     pub(crate) fn new(workdir: PathBuf, repo: gix::ThreadSafeRepository) -> Self {
         Self {
-            spec: RepoSpec {
-                workdir: workdir.clone(),
-            },
-            _workdir: workdir,
+            spec: RepoSpec { workdir },
             _repo: repo,
         }
     }
