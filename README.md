@@ -13,6 +13,10 @@ Fast, resource-efficient, fully open source Git GUI written in Rust, targeting G
 
 ### Quick start
 
+Download the latest available GitComet version (prebuilt binaries/installers) from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
+
+To build and run from source instead:
+
 ```bash
 cargo build -p gitcomet-app --features ui-gpui,gix
 cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
