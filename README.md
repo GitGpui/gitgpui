@@ -11,6 +11,9 @@ Fast, resource-efficient, fully open source Git GUI written in Rust, targeting G
 - Open source with a permissive license (AGPL-3.0)
 - Cross-platform (Windows, Linux, macOS)
 
+
+<img alt="GitComet screenshot" src="https://raw.githubusercontent.com/Auto-Explore/GitComet/refs/heads/main/assets/gitcomet_screenshot.png"/>
+
 ### Quick start
 
 Download the latest available GitComet version (prebuilt binaries/installers) from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
