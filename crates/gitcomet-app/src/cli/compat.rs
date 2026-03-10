@@ -104,7 +104,7 @@ fn compat_log_arg_text(arg: &std::ffi::OsStr) -> String {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
-        return format!("gitcomet-argv-bytes:{}", hex_encode(arg.as_bytes()));
+        format!("gitcomet-argv-bytes:{}", hex_encode(arg.as_bytes()))
     }
 
     #[cfg(windows)]

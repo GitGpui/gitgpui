@@ -389,7 +389,7 @@ fn stable_path_bytes(path: &Path) -> Vec<u8> {
     {
         use std::os::unix::ffi::OsStrExt as _;
 
-        return path.as_os_str().as_bytes().to_vec();
+        path.as_os_str().as_bytes().to_vec()
     }
 
     #[cfg(windows)]
