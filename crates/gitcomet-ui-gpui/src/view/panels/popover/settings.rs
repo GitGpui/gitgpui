@@ -44,6 +44,7 @@ fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
 #[derive(Clone, Debug)]
 pub(super) struct SettingsRuntimeInfo {
     pub(super) git: GitRuntimeInfo,
+    pub(super) app_version_display: SharedString,
     pub(super) operating_system: SharedString,
     pub(super) github_url: SharedString,
     pub(super) license_url: SharedString,
@@ -74,6 +75,7 @@ impl SettingsRuntimeInfo {
     pub(super) fn detect() -> Self {
         Self {
             git: detect_git_runtime_info(),
+            app_version_display: app_version_display(),
             operating_system: format!(
                 "{} ({}, {})",
                 std::env::consts::OS,
@@ -85,6 +87,10 @@ impl SettingsRuntimeInfo {
             license_url: LICENSE_URL.into(),
         }
     }
+}
+
+fn app_version_display() -> SharedString {
+    format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into()
 }
 
 fn detect_git_runtime_info() -> GitRuntimeInfo {
@@ -489,6 +495,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 ),
         );
 
+    let app_version_row = info_row(
+        "settings_app_version",
+        "Build",
+        runtime.app_version_display.clone(),
+    );
     let os_row = info_row(
         "settings_os_info",
         "Operating system",
@@ -612,6 +623,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .flex()
             .flex_col()
             .gap_1()
+            .child(app_version_row)
             .child(git_row)
             .child(os_row)
             .child(github_row)
@@ -662,7 +674,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
 #[cfg(test)]
 mod tests {
     use super::{
-        GitVersion, MIN_GIT_MAJOR, MIN_GIT_MINOR, is_supported_git_version, parse_git_version,
+        GitVersion, MIN_GIT_MAJOR, MIN_GIT_MINOR, app_version_display, is_supported_git_version,
+        parse_git_version,
     };
 
     #[test]
@@ -708,5 +721,11 @@ mod tests {
             minor: 0,
             patch: Some(0)
         }));
+    }
+
+    #[test]
+    fn app_version_display_uses_package_version() {
+        let expected = format!("GitComet v{}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(app_version_display().as_ref(), expected);
     }
 }
