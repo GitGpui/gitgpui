@@ -4,6 +4,7 @@ use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::any::Any;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
