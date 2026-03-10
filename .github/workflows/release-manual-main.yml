@@ -1,0 +1,186 @@
+name: Release (Manual Main Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.2.0 or v0.2.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark GitHub release as prerelease"
+        required: true
+        default: false
+        type: boolean
+      draft:
+        description: "Keep release as draft after artifacts upload"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-manual-main-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate:
+    name: Validate inputs and branch guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.norm.outputs.version }}
+      tag: ${{ steps.norm.outputs.tag }}
+      prerelease: ${{ steps.flags.outputs.prerelease }}
+      draft: ${{ steps.flags.outputs.draft }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Enforce main-only dispatch
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "::error title=Invalid dispatch branch::This workflow may only run from main. Current ref: ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+      - name: Normalize and validate version/tag
+        id: norm
+        run: |
+          set -euo pipefail
+          raw="${{ github.event.inputs.version }}"
+          raw="$(echo "$raw" | tr -d '[:space:]')"
+          if [ -z "$raw" ]; then
+            echo "::error title=Missing version::Input 'version' must not be empty."
+            exit 1
+          fi
+
+          ver="${raw#v}"
+          if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version format::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          tag="v${ver}"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Release tag: $tag"
+
+      - name: Verify crate version matches release version
+        run: |
+          set -euo pipefail
+          crate_version="$(sed -n 's/^version = \"\\([^\"]*\\)\"/\\1/p' crates/gitcomet-app/Cargo.toml | head -n1)"
+          wanted="${{ steps.norm.outputs.version }}"
+          if [ "$crate_version" != "$wanted" ]; then
+            echo "::error title=Version mismatch::crates/gitcomet-app/Cargo.toml version '$crate_version' does not match requested release '$wanted'."
+            exit 1
+          fi
+
+      - name: Ensure tag does not already exist on origin
+        run: |
+          set -euo pipefail
+          tag="${{ steps.norm.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error title=Tag already exists::Tag ${tag} already exists in origin."
+            exit 1
+          fi
+
+      - name: Normalize boolean flags
+        id: flags
+        run: |
+          set -euo pipefail
+          echo "prerelease=${{ github.event.inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          echo "draft=${{ github.event.inputs.draft }}" >> "$GITHUB_OUTPUT"
+
+  create_release:
+    name: Create tag and draft GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: validate
+    environment: production-release
+    outputs:
+      release_id: ${{ steps.create_release.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create annotated tag at current main commit
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "GitComet $tag"
+          git push origin "$tag"
+
+      - name: Create draft GitHub release
+        id: create_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          prerelease="${{ needs.validate.outputs.prerelease }}"
+
+          args=(release create "$tag" --title "GitComet $tag" --target "$GITHUB_SHA" --generate-notes --draft)
+          if [ "$prerelease" = "true" ]; then
+            args+=(--prerelease)
+          fi
+
+          gh "${args[@]}"
+          release_id="$(gh release view "$tag" --json id --jq '.id')"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  build_and_upload:
+    name: Build and upload release artifacts
+    needs: [validate, create_release]
+    uses: ./.github/workflows/build-release-artifacts.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      release_id: ${{ needs.create_release.outputs.release_id }}
+    secrets: inherit
+
+  publish_release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [validate, create_release, build_and_upload]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false }}
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          gh release edit "$tag" --draft=false
+          gh release view "$tag"
+
+  cleanup_failed_release:
+    name: Cleanup failed draft/tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [validate, create_release, build_and_upload]
+    if: ${{ always() && needs.create_release.result == 'success' && needs.build_and_upload.result != 'success' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Delete failed draft release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.validate.outputs.tag }}"
+          gh release delete "$tag" --cleanup-tag --yes || true

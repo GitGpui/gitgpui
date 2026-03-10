@@ -1,0 +1,364 @@
+name: Build Release Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      release_id:
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build from (e.g. v0.2.0)"
+        required: true
+        type: string
+      version:
+        description: "Optional version override (e.g. 0.2.0). If omitted, derived from tag."
+        required: false
+        type: string
+      release_id:
+        description: "Optional release id for manual backfills"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: build-release-artifacts-${{ inputs.tag || github.event.inputs.tag || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Normalize release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.norm.outputs.tag }}
+      version: ${{ steps.norm.outputs.version }}
+      release_id: ${{ steps.norm.outputs.release_id }}
+    steps:
+      - name: Normalize tag and version
+        id: norm
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_RELEASE_ID: ${{ inputs.release_id }}
+          DISPATCH_RELEASE_ID: ${{ github.event.inputs.release_id }}
+        run: |
+          set -euo pipefail
+
+          tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
+          version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          release_id="${INPUT_RELEASE_ID:-${DISPATCH_RELEASE_ID:-}}"
+
+          tag="$(echo "$tag" | tr -d '[:space:]')"
+          version="$(echo "$version" | tr -d '[:space:]')"
+          release_id="$(echo "$release_id" | tr -d '[:space:]')"
+
+          if [ -z "$tag" ]; then
+            echo "::error title=Missing tag::Tag is required."
+            exit 1
+          fi
+
+          if [[ "$tag" != v* ]]; then
+            tag="v${tag}"
+          fi
+
+          if [ -z "$version" ]; then
+            version="${tag#v}"
+          fi
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
+            echo "::error title=Invalid version::Expected semver like 1.2.3 or 1.2.3-rc.1."
+            exit 1
+          fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error title=Tag/version mismatch::Tag '$tag' does not match version '$version'."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  build_windows:
+    name: Build Windows artifacts
+    runs-on: windows-latest
+    timeout-minutes: 120
+    needs: prepare
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        shell: pwsh
+        run: |
+          cargo build -p gitcomet-app --release --locked --features ui-gpui,gix
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path dist\portable -Force | Out-Null
+          Copy-Item target\release\gitcomet-app.exe dist\portable\gitcomet-app.exe -Force
+          Copy-Item README.md dist\portable\README.md -Force
+          Copy-Item LICENSE-AGPL-3.0 dist\portable\LICENSE-AGPL-3.0 -Force
+          Copy-Item NOTICE dist\portable\NOTICE -Force
+
+          $zipName = "gitcomet-v${env:VERSION}-windows-x86_64-portable.zip"
+          if (Test-Path "dist\$zipName") { Remove-Item "dist\$zipName" -Force }
+          Compress-Archive -Path dist\portable\* -DestinationPath "dist\$zipName"
+
+      - name: Build MSI installer (WiX)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install wixtoolset --yes --no-progress
+          cargo install cargo-wix --locked
+          if (!(Test-Path "wix\main.wxs")) {
+            cargo wix init --package gitcomet-app
+          }
+          $msiName = "gitcomet-v${env:VERSION}-windows-x86_64.msi"
+          cargo wix --package gitcomet-app --profile release --nocapture --no-build --output "dist\$msiName"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release-artifacts
+          path: |
+            dist/*.zip
+            dist/*.msi
+          if-no-files-found: error
+          retention-days: 14
+
+  build_linux:
+    name: Build Linux artifacts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    needs: prepare
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Linux UI native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build -p gitcomet-app --release --locked --features ui-gpui,gix
+
+      - name: Package tar.gz
+        run: |
+          set -euo pipefail
+          root="gitcomet-v${VERSION}-linux-x86_64"
+          mkdir -p "dist/stage/${root}"
+          install -m755 target/release/gitcomet-app "dist/stage/${root}/gitcomet-app"
+          install -m644 README.md "dist/stage/${root}/README.md"
+          install -m644 LICENSE-AGPL-3.0 "dist/stage/${root}/LICENSE-AGPL-3.0"
+          install -m644 NOTICE "dist/stage/${root}/NOTICE"
+          tar -C dist/stage -czf "dist/${root}.tar.gz" "${root}"
+
+      - name: Package .deb
+        run: |
+          set -euo pipefail
+          deb_version="${VERSION/-rc./~rc.}"
+          pkg_root="dist/deb-root"
+          mkdir -p "${pkg_root}/DEBIAN"
+          mkdir -p "${pkg_root}/usr/bin"
+          mkdir -p "${pkg_root}/usr/share/applications"
+          mkdir -p "${pkg_root}/usr/share/icons/hicolor/512x512/apps"
+
+          install -m755 target/release/gitcomet-app "${pkg_root}/usr/bin/gitcomet-app"
+          install -m644 assets/linux/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
+          install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
+
+          cat > "${pkg_root}/DEBIAN/control" <<EOF
+Package: gitcomet
+Version: ${deb_version}
+Architecture: amd64
+Maintainer: AutoExplore Oy <info@autoexplore.ai>
+Depends: git
+Section: utils
+Priority: optional
+Description: Fast, resource-efficient Git GUI written in Rust.
+EOF
+
+          dpkg-deb --build "${pkg_root}" "dist/gitcomet-v${VERSION}-linux-x86_64.deb"
+
+      - name: Package AppImage
+        run: |
+          set -euo pipefail
+          appdir="dist/AppDir"
+          mkdir -p "${appdir}/usr/bin"
+          install -m755 target/release/gitcomet-app "${appdir}/usr/bin/gitcomet-app"
+          install -m644 assets/linux/gitcomet.desktop "${appdir}/gitcomet.desktop"
+          install -m644 assets/gitcomet-512.png "${appdir}/gitcomet.png"
+
+          cat > "${appdir}/AppRun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "${HERE}/usr/bin/gitcomet-app" "$@"
+EOF
+          chmod +x "${appdir}/AppRun"
+
+          curl -fsSL \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -o /tmp/appimagetool.AppImage
+          chmod +x /tmp/appimagetool.AppImage
+          ARCH=x86_64 /tmp/appimagetool.AppImage --appimage-extract-and-run \
+            "${appdir}" "dist/gitcomet-v${VERSION}-linux-x86_64.AppImage"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-artifacts
+          path: |
+            dist/*.tar.gz
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  publish_release_assets:
+    name: Attach assets and checksums to GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [prepare, build_windows, build_linux]
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+      ENABLE_KEYLESS_SIGNING: ${{ vars.ENABLE_KEYLESS_SIGNING }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: windows-release-artifacts
+          path: dist/windows
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: linux-release-artifacts
+          path: dist/linux
+
+      - name: Assemble release payload
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          find dist/windows -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
+          find dist/linux -maxdepth 1 -type f -exec cp -f {} dist/release/ \;
+          file_count="$(find dist/release -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
+          if [ "${file_count}" = "0" ]; then
+            echo "::error title=No release artifacts::No files were assembled into dist/release."
+            exit 1
+          fi
+          ls -lah dist/release
+
+      - name: Generate checksums
+        run: |
+          set -euo pipefail
+          pushd dist/release >/dev/null
+          md5_file="gitcomet-v${VERSION}-checksums.md5"
+          sha_file="gitcomet-v${VERSION}-checksums.sha256"
+
+          find . -maxdepth 1 -type f \
+            ! -name "*checksums*" \
+            -printf "%P\n" \
+            | LC_ALL=C sort > /tmp/release_files.txt
+
+          xargs -I{} md5sum "{}" < /tmp/release_files.txt > "$md5_file"
+          xargs -I{} sha256sum "{}" < /tmp/release_files.txt > "$sha_file"
+          popd >/dev/null
+
+      - name: Install cosign
+        if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign SHA256 checksums with keyless signing
+        if: ${{ env.ENABLE_KEYLESS_SIGNING == 'true' }}
+        run: |
+          set -euo pipefail
+          sha_file="dist/release/gitcomet-v${VERSION}-checksums.sha256"
+          sig_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.sig"
+          cert_file="dist/release/gitcomet-v${VERSION}-checksums.sha256.pem"
+          cosign sign-blob --yes \
+            --output-signature "$sig_file" \
+            --output-certificate "$cert_file" \
+            "$sha_file"
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-payload
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload assets to GitHub release
+        if: ${{ env.RELEASE_ID != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null
+          gh release upload "$TAG" dist/release/* --clobber
+
+      - name: Emit release summary
+        run: |
+          set -euo pipefail
+          uploaded="no"
+          if [ -n "${RELEASE_ID}" ]; then
+            uploaded="yes"
+          fi
+          {
+            echo "### Built release artifacts"
+            echo ""
+            echo "- Tag: \`$TAG\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- Release upload attempted: \`${uploaded}\`"
+            echo ""
+            echo "Files:"
+            ls -1 dist/release | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
