@@ -213,16 +213,16 @@ jobs:
           install -m644 assets/linux/gitcomet.desktop "${pkg_root}/usr/share/applications/gitcomet.desktop"
           install -m644 assets/gitcomet-512.png "${pkg_root}/usr/share/icons/hicolor/512x512/apps/gitcomet.png"
 
-          cat > "${pkg_root}/DEBIAN/control" <<EOF
-Package: gitcomet
-Version: ${deb_version}
-Architecture: amd64
-Maintainer: AutoExplore Oy <info@autoexplore.ai>
-Depends: git
-Section: utils
-Priority: optional
-Description: Fast, resource-efficient Git GUI written in Rust.
-EOF
+          {
+            echo "Package: gitcomet"
+            echo "Version: ${deb_version}"
+            echo "Architecture: amd64"
+            echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
+            echo "Depends: git"
+            echo "Section: utils"
+            echo "Priority: optional"
+            echo "Description: Fast, resource-efficient Git GUI written in Rust."
+          } > "${pkg_root}/DEBIAN/control"
 
           dpkg-deb --build "${pkg_root}" "dist/gitcomet-v${VERSION}-linux-x86_64.deb"
 
@@ -235,12 +235,12 @@ EOF
           install -m644 assets/linux/gitcomet.desktop "${appdir}/gitcomet.desktop"
           install -m644 assets/gitcomet-512.png "${appdir}/gitcomet.png"
 
-          cat > "${appdir}/AppRun" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "${HERE}/usr/bin/gitcomet-app" "$@"
-EOF
+          {
+            echo '#!/usr/bin/env bash'
+            echo 'set -euo pipefail'
+            echo 'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+            echo 'exec "${HERE}/usr/bin/gitcomet-app" "$@"'
+          } > "${appdir}/AppRun"
           chmod +x "${appdir}/AppRun"
 
           curl -fsSL \
