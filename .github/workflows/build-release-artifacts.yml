@@ -355,8 +355,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release view "$TAG" >/dev/null
-          gh release upload "$TAG" dist/release/* --clobber
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" dist/release/* --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Emit release summary
         run: |

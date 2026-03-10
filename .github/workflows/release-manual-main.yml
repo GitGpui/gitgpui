@@ -131,13 +131,13 @@ jobs:
           tag="${{ needs.validate.outputs.tag }}"
           prerelease="${{ needs.validate.outputs.prerelease }}"
 
-          args=(release create "$tag" --title "GitComet $tag" --target "$GITHUB_SHA" --generate-notes --draft)
+          args=(release create "$tag" --repo "$GITHUB_REPOSITORY" --title "GitComet $tag" --target "$GITHUB_SHA" --generate-notes --draft)
           if [ "$prerelease" = "true" ]; then
             args+=(--prerelease)
           fi
 
           gh "${args[@]}"
-          release_id="$(gh release view "$tag" --json id --jq '.id')"
+          release_id="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json id --jq '.id')"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   build_and_upload:
@@ -165,8 +165,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.validate.outputs.tag }}"
-          gh release edit "$tag" --draft=false
-          gh release view "$tag"
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY"
 
   cleanup_failed_release:
     name: Cleanup failed draft/tag
@@ -183,4 +183,4 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ needs.validate.outputs.tag }}"
-          gh release delete "$tag" --cleanup-tag --yes || true
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes || true
