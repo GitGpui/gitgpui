@@ -2,6 +2,8 @@
 
 [![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
 [![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/2ufDGP8RnA)
+[![Website](https://img.shields.io/badge/Website-gitcomet.dev-0A66C2?logo=googlechrome&logoColor=white)](https://gitcomet.dev)
+[![AutoExplore](https://img.shields.io/badge/AutoExplore-autoexplore.ai-0B7A75?logo=safari&logoColor=white)](https://autoexplore.ai)
 
 Fast, resource-efficient, fully open source Git GUI written in Rust, targeting GitKraken/SourceTree/GitHub Desktop-class workflows using `gpui` for the UI.
 
