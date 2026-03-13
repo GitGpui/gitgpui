@@ -529,3 +529,18 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
         assert!(!view.read(app).sidebar_collapsed);
     });
 }
+
+#[test]
+fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
+    assert!(GitCometView::should_render_generic_error_banner(false));
+    assert!(!GitCometView::should_render_generic_error_banner(true));
+}
+
+#[test]
+fn auth_prompt_banner_colors_use_accent_palette() {
+    let theme = AppTheme::zed_one_light();
+    let (bg, border) = GitCometView::auth_prompt_banner_colors(theme);
+
+    assert_eq!(bg, with_alpha(theme.colors.accent, 0.15));
+    assert_eq!(border, with_alpha(theme.colors.accent, 0.3));
+}

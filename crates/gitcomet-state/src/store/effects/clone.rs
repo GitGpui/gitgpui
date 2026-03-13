@@ -1,8 +1,8 @@
 use crate::msg::Msg;
 use gitcomet_core::auth::{
-    GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_PASSPHRASE, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
-    take_staged_git_auth,
+    GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
+    GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
+    GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::CommandOutput;
@@ -19,11 +19,13 @@ use super::util::send_or_log;
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
+const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 const ALLOWED_CLONE_URL_SCHEMES: [&str; 4] = ["https", "ssh", "git", "file"];
 
 struct AskPassScript {
     _dir: tempfile::TempDir,
     path: PathBuf,
+    prompt_log_path: PathBuf,
 }
 
 fn bytes_to_text_preserving_utf8(bytes: &[u8]) -> String {
@@ -141,12 +143,23 @@ fn take_pending_git_auth() -> Option<StagedGitAuth> {
 fn askpass_script_contents() -> &'static [u8] {
     br#"#!/bin/sh
 prompt="$1"
+lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
+if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
+  case "$lower_prompt" in
+    *authenticity\ of\ host*|*continue\ connecting*|*yes/no*|*fingerprint*)
+      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PROMPT_LOG}" ;;
+  esac
+fi
 kind="${GITCOMET_AUTH_KIND:-}"
 if [ "$kind" = "username_password" ]; then
-  lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
   case "$lower_prompt" in
     *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
     *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
+  esac
+elif [ "$kind" = "host_verification" ]; then
+  case "$lower_prompt" in
+    *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
+    *) printf '\n' ;;
   esac
 else
   printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
@@ -159,12 +172,27 @@ fn askpass_script_contents() -> &'static [u8] {
     br#"@echo off
 setlocal EnableDelayedExpansion
 set "prompt=%~1"
+if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
+  echo %prompt% | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  if not errorlevel 1 (
+    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
+  )
+)
 if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
   echo %prompt% | findstr /I "username" >nul
   if not errorlevel 1 (
     echo %GITCOMET_AUTH_USERNAME%
     exit /b 0
   )
+  echo %GITCOMET_AUTH_SECRET%
+  exit /b 0
+)
+if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
+  echo %prompt% | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  if not errorlevel 1 (
+    echo %GITCOMET_AUTH_SECRET%
+  )
+  exit /b 0
 )
 echo %GITCOMET_AUTH_SECRET%
 "#
@@ -177,8 +205,10 @@ fn create_askpass_script() -> Result<AskPassScript, Error> {
     #[cfg(not(windows))]
     let script_name = "gitcomet-askpass.sh";
     let path = dir.path().join(script_name);
+    let prompt_log_path = dir.path().join("gitcomet-askpass-prompt.log");
 
     fs::write(&path, askpass_script_contents()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    fs::write(&prompt_log_path, b"").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -189,7 +219,11 @@ fn create_askpass_script() -> Result<AskPassScript, Error> {
         permissions.set_mode(0o700);
         fs::set_permissions(&path, permissions).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
     }
-    Ok(AskPassScript { _dir: dir, path })
+    Ok(AskPassScript {
+        _dir: dir,
+        path,
+        prompt_log_path,
+    })
 }
 
 fn configure_clone_auth_prompt(
@@ -200,6 +234,7 @@ fn configure_clone_auth_prompt(
     cmd.env("GIT_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
+    cmd.env(GITCOMET_ASKPASS_PROMPT_LOG_ENV, &askpass.prompt_log_path);
     if cfg!(all(unix, not(target_os = "macos"))) && std::env::var_os("DISPLAY").is_none() {
         cmd.env("DISPLAY", "gitcomet:0");
     }
@@ -208,6 +243,7 @@ fn configure_clone_auth_prompt(
         let kind = match auth.kind {
             GitAuthKind::UsernamePassword => GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
             GitAuthKind::Passphrase => GITCOMET_AUTH_KIND_PASSPHRASE,
+            GitAuthKind::HostVerification => GITCOMET_AUTH_KIND_HOST_VERIFICATION,
         };
         cmd.env(GITCOMET_AUTH_KIND_ENV, kind);
         if let Some(username) = &auth.username {
@@ -221,6 +257,26 @@ fn configure_clone_auth_prompt(
         cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
         cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
     }
+}
+
+fn append_host_prompt_to_stderr(stderr: &mut String, askpass: &AskPassScript) {
+    let Ok(raw_prompt_log) = fs::read_to_string(&askpass.prompt_log_path) else {
+        return;
+    };
+    let prompt_log = raw_prompt_log.trim();
+    if prompt_log.is_empty() {
+        return;
+    }
+    if stderr.contains(prompt_log) {
+        return;
+    }
+
+    if !stderr.is_empty() && !stderr.ends_with('\n') {
+        stderr.push('\n');
+    }
+    stderr.push_str("SSH host verification prompt:\n");
+    stderr.push_str(prompt_log);
+    stderr.push('\n');
 }
 
 pub(super) fn schedule_clone_repo(
@@ -291,7 +347,7 @@ pub(super) fn schedule_clone_repo(
                 return;
             }
         };
-        let _askpass_script = askpass_script;
+        let askpass_script = askpass_script;
 
         let stdout = child.stdout.take();
         let stdout_handle = std::thread::spawn(move || {
@@ -342,7 +398,8 @@ pub(super) fn schedule_clone_repo(
             }
         };
         let stdout_str = stdout_handle.join().unwrap_or_default();
-        let stderr_acc = stderr_handle.join().unwrap_or_default();
+        let mut stderr_acc = stderr_handle.join().unwrap_or_default();
+        append_host_prompt_to_stderr(&mut stderr_acc, &askpass_script);
 
         let result = match status {
             Ok(status) => {
@@ -392,7 +449,7 @@ pub(super) fn schedule_clone_repo(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_clone_url;
+    use super::*;
 
     #[test]
     fn validate_clone_url_accepts_allowlisted_schemes() {
@@ -418,5 +475,35 @@ mod tests {
     #[test]
     fn validate_clone_url_rejects_malformed_allowlisted_schemes() {
         assert!(validate_clone_url("ssh:git@example.com/org/repo.git").is_err());
+    }
+
+    #[test]
+    fn append_host_prompt_to_stderr_includes_logged_prompt_with_fingerprint() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        std::fs::write(
+            &askpass.prompt_log_path,
+            "The authenticity of host 'github.com (140.82.121.3)' can't be established.\nED25519 key fingerprint is: SHA256:+DiY...\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+        )
+        .expect("write prompt log");
+
+        let mut stderr = "Host key verification failed.\n".to_string();
+        append_host_prompt_to_stderr(&mut stderr, &askpass);
+
+        assert!(stderr.contains("SSH host verification prompt:"));
+        assert!(stderr.contains("ED25519 key fingerprint is: SHA256:+DiY..."));
+        assert!(stderr.contains("yes/no/[fingerprint]"));
+    }
+
+    #[test]
+    fn append_host_prompt_to_stderr_skips_when_prompt_already_present() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        let prompt = "Are you sure you want to continue connecting (yes/no/[fingerprint])?";
+        std::fs::write(&askpass.prompt_log_path, prompt).expect("write prompt log");
+
+        let mut stderr = format!("Host key verification failed.\n{prompt}\n");
+        append_host_prompt_to_stderr(&mut stderr, &askpass);
+
+        assert_eq!(stderr.matches("SSH host verification prompt:").count(), 0);
+        assert_eq!(stderr.matches(prompt).count(), 1);
     }
 }

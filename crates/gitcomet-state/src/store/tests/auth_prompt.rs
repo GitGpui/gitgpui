@@ -94,6 +94,41 @@ fn repo_command_finished_auth_error_sets_passphrase_prompt() {
 }
 
 #[test]
+fn repo_command_finished_host_key_error_sets_host_verification_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+            result: Err(auth_error(
+                "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository.",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::HostVerification);
+    assert!(prompt.reason.contains("Host key verification failed"));
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::Pull {
+                mode: PullMode::Default,
+            },
+        }
+    );
+}
+
+#[test]
 fn repo_command_finished_non_auth_error_does_not_set_prompt() {
     let repo_id = RepoId(1);
     let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
@@ -471,6 +506,49 @@ fn submit_auth_prompt_replays_clone_operation() {
         }] if effect_url == &url && effect_dest == &dest
     ));
     assert!(state.auth_prompt.is_none());
+
+    clear_staged_git_auth();
+}
+
+#[test]
+fn submit_auth_prompt_host_verification_replays_repo_command_and_stages_confirmation() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::HostVerification,
+        reason: "Host key verification failed".to_string(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::FetchAll,
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: None,
+            secret: "yes".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::FetchAll {
+            repo_id: RepoId(1),
+            prune: _,
+        }]
+    ));
+    assert!(state.auth_prompt.is_none());
+
+    let staged = take_staged_git_auth().expect("staged auth should be present");
+    assert_eq!(staged.kind, GitAuthKind::HostVerification);
+    assert_eq!(staged.secret, "yes");
 
     clear_staged_git_auth();
 }

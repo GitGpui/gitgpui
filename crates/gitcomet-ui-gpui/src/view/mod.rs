@@ -504,7 +504,7 @@ impl GitCometView {
         let auth_prompt_secret_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "Password / passphrase".into(),
+                    placeholder: "Password / passphrase / confirmation".into(),
                     multiline: false,
                     read_only: false,
                     chromeless: false,
@@ -1120,6 +1120,17 @@ impl GitCometView {
         (Some(command.into()), collapsed.join("\n").into())
     }
 
+    fn should_render_generic_error_banner(auth_prompt_active: bool) -> bool {
+        !auth_prompt_active
+    }
+
+    fn auth_prompt_banner_colors(theme: AppTheme) -> (gpui::Rgba, gpui::Rgba) {
+        (
+            with_alpha(theme.colors.accent, 0.15),
+            with_alpha(theme.colors.accent, 0.3),
+        )
+    }
+
     fn push_toast(
         &mut self,
         kind: components::ToastKind,
@@ -1458,19 +1469,33 @@ impl Render for GitCometView {
 
             self.auth_prompt_username_input
                 .update(cx, |input, cx| input.set_theme(theme, cx));
-            self.auth_prompt_secret_input
-                .update(cx, |input, cx| input.set_theme(theme, cx));
+            let is_host_verification = prompt.kind == AuthPromptKind::HostVerification;
+            self.auth_prompt_secret_input.update(cx, |input, cx| {
+                input.set_theme(theme, cx);
+                input.set_masked(!is_host_verification, cx);
+            });
 
             let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
             let title = match prompt.kind {
                 AuthPromptKind::UsernamePassword => "Repository authentication required",
                 AuthPromptKind::Passphrase => "Passphrase required",
+                AuthPromptKind::HostVerification => "Host authenticity confirmation required",
             };
             let subtitle = match prompt.kind {
                 AuthPromptKind::UsernamePassword => {
                     "Enter username and password, then confirm to retry."
                 }
                 AuthPromptKind::Passphrase => "Enter your key passphrase, then confirm to retry.",
+                AuthPromptKind::HostVerification => {
+                    "Enter `yes` to trust this host key, or paste the shown fingerprint."
+                }
+            };
+            let secret_required_message = match prompt.kind {
+                AuthPromptKind::UsernamePassword => "Password is required.",
+                AuthPromptKind::Passphrase => "Passphrase is required.",
+                AuthPromptKind::HostVerification => {
+                    "Confirmation is required (`yes` or fingerprint)."
+                }
             };
 
             let confirm_button = components::Button::new("auth_prompt_confirm", "Confirm")
@@ -1495,7 +1520,7 @@ impl Render for GitCometView {
                     if secret.trim().is_empty() {
                         this.push_toast(
                             components::ToastKind::Error,
-                            "Password/passphrase is required.".to_string(),
+                            secret_required_message.to_string(),
                             cx,
                         );
                         return;
@@ -1530,6 +1555,14 @@ impl Render for GitCometView {
                     this.child(self.auth_prompt_username_input.clone())
                 })
                 .child(self.auth_prompt_secret_input.clone())
+                .when(is_host_verification, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Use Cancel if you do not trust this host."),
+                    )
+                })
                 .when(!prompt.reason.trim().is_empty(), |this| {
                     this.child(
                         div()
@@ -1554,14 +1587,15 @@ impl Render for GitCometView {
                         .child(cancel_button),
                 );
 
+            let (prompt_bg, prompt_border) = Self::auth_prompt_banner_colors(theme);
             body = body.child(
                 div()
                     .relative()
                     .px_2()
                     .py_1()
-                    .bg(with_alpha(theme.colors.danger, 0.15))
+                    .bg(prompt_bg)
                     .border_1()
-                    .border_color(with_alpha(theme.colors.danger, 0.3))
+                    .border_color(prompt_border)
                     .rounded(px(theme.radii.panel))
                     .child(prompt_form),
             );
@@ -1576,11 +1610,15 @@ impl Render for GitCometView {
                     .and_then(|repo| repo.last_error.as_ref().map(|err| (repo_id, err.clone())))
             })
             .map(|(repo_id, err)| (Some(repo_id), err.into()));
-        let banner_error = self
-            .transient_error_banner
-            .clone()
-            .map(|err| (None, err))
-            .or(repo_error);
+        let banner_error =
+            if Self::should_render_generic_error_banner(self.state.auth_prompt.is_some()) {
+                self.transient_error_banner
+                    .clone()
+                    .map(|err| (None, err))
+                    .or(repo_error)
+            } else {
+                None
+            };
         if let Some((dismiss_repo_id, err_text)) = banner_error {
             let (error_command, display_error) =
                 Self::split_error_banner_message(err_text.as_ref());

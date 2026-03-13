@@ -38,7 +38,7 @@ pub(super) fn open_file_location(path: &Path) -> Result<(), io::Error> {
             .arg("-R")
             .arg(path)
             .spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -87,7 +87,7 @@ fn open_with_default(arg: &str) -> Result<(), io::Error> {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open").arg(arg).spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -132,7 +132,7 @@ fn open_with_default_os_str(arg: &std::ffi::OsStr) -> Result<(), io::Error> {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open").arg(arg).spawn()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]

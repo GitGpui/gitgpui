@@ -685,6 +685,15 @@ pub(super) fn detect_auth_prompt_kind(error: &Error) -> Option<AuthPromptKind> {
 pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<AuthPromptKind> {
     let lower = message.to_ascii_lowercase();
 
+    let host_verification = lower.contains("host key verification failed")
+        || lower.contains("the authenticity of host")
+        || lower.contains("this key is not known by any other names")
+        || (lower.contains("are you sure you want to continue connecting")
+            && lower.contains("yes/no"));
+    if host_verification {
+        return Some(AuthPromptKind::HostVerification);
+    }
+
     let passphrase = lower.contains("could not read passphrase")
         || lower.contains("enter passphrase for key")
         || lower.contains("read_passphrase")
@@ -724,7 +733,7 @@ pub(super) fn stage_git_auth_env(
 ) -> Result<(), Error> {
     if secret.trim().is_empty() {
         return Err(Error::new(ErrorKind::Backend(
-            "credential/passphrase cannot be empty".to_string(),
+            "credential/passphrase/confirmation cannot be empty".to_string(),
         )));
     }
     if kind.requires_username() && username.unwrap_or_default().trim().is_empty() {
@@ -737,6 +746,7 @@ pub(super) fn stage_git_auth_env(
         kind: match kind {
             AuthPromptKind::UsernamePassword => GitAuthKind::UsernamePassword,
             AuthPromptKind::Passphrase => GitAuthKind::Passphrase,
+            AuthPromptKind::HostVerification => GitAuthKind::HostVerification,
         },
         username: username.map(ToOwned::to_owned),
         secret: secret.to_string(),
@@ -1431,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_auth_prompt_kind_classifies_username_password_and_passphrase() {
+    fn detect_auth_prompt_kind_classifies_username_password_passphrase_and_host_verification() {
         assert_eq!(
             detect_auth_prompt_kind_from_message(
                 "git pull failed: fatal: could not read Username for 'https://example.com': terminal prompts disabled"
@@ -1449,6 +1459,18 @@ mod tests {
                 "git clone --progress git@github.com:org/repo.git C:\\git\\repo failed: git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository."
             ),
             Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git pull --no-rebase origin main failed: Host key verification failed.\nfatal: Could not read from remote repository."
+            ),
+            Some(crate::model::AuthPromptKind::HostVerification)
+        );
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git fetch origin failed: The authenticity of host 'github.com (140.82.121.3)' can't be established.\nED25519 key fingerprint is: SHA256:+DiY...\nAre you sure you want to continue connecting (yes/no/[fingerprint])?"
+            ),
+            Some(crate::model::AuthPromptKind::HostVerification)
         );
         assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
     }
@@ -1478,6 +1500,22 @@ mod tests {
             "ssh-passphrase",
         )
         .expect("staging passphrase");
+
+        let staged =
+            gitcomet_core::auth::take_staged_git_auth().expect("staged passphrase to exist");
+        assert_eq!(staged.kind, gitcomet_core::auth::GitAuthKind::Passphrase);
+
+        stage_git_auth_env(crate::model::AuthPromptKind::HostVerification, None, "yes")
+            .expect("staging host verification");
+
+        let staged =
+            gitcomet_core::auth::take_staged_git_auth().expect("staged host verification to exist");
+        assert_eq!(
+            staged.kind,
+            gitcomet_core::auth::GitAuthKind::HostVerification
+        );
+        assert_eq!(staged.secret, "yes");
+
         clear_staged_git_auth_env();
         assert!(gitcomet_core::auth::take_staged_git_auth().is_none());
     }

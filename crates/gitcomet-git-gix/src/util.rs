@@ -1,7 +1,7 @@
 use gitcomet_core::auth::{
-    GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_PASSPHRASE, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
-    take_staged_git_auth,
+    GITCOMET_AUTH_KIND_ENV, GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
+    GITCOMET_AUTH_KIND_USERNAME_PASSWORD, GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV,
+    GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
 use gitcomet_core::domain::{Commit, CommitFileChange, CommitId, FileStatusKind, LogPage};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -21,10 +21,12 @@ use gitcomet_core::domain::RemoteBranch;
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
+const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
 
 struct AskPassScript {
     _dir: tempfile::TempDir,
     path: PathBuf,
+    prompt_log_path: PathBuf,
 }
 
 fn git_command_timeout() -> Duration {
@@ -76,12 +78,23 @@ fn take_pending_git_auth() -> Option<StagedGitAuth> {
 fn askpass_script_contents() -> &'static [u8] {
     br#"#!/bin/sh
 prompt="$1"
+lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
+if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
+  case "$lower_prompt" in
+    *authenticity\ of\ host*|*continue\ connecting*|*yes/no*|*fingerprint*)
+      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PROMPT_LOG}" ;;
+  esac
+fi
 kind="${GITCOMET_AUTH_KIND:-}"
 if [ "$kind" = "username_password" ]; then
-  lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
   case "$lower_prompt" in
     *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
     *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
+  esac
+elif [ "$kind" = "host_verification" ]; then
+  case "$lower_prompt" in
+    *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
+    *) printf '\n' ;;
   esac
 else
   printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
@@ -94,12 +107,27 @@ fn askpass_script_contents() -> &'static [u8] {
     br#"@echo off
 setlocal EnableDelayedExpansion
 set "prompt=%~1"
+if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
+  echo %prompt% | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  if not errorlevel 1 (
+    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
+  )
+)
 if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
   echo %prompt% | findstr /I "username" >nul
   if not errorlevel 1 (
     echo %GITCOMET_AUTH_USERNAME%
     exit /b 0
   )
+  echo %GITCOMET_AUTH_SECRET%
+  exit /b 0
+)
+if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
+  echo %prompt% | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
+  if not errorlevel 1 (
+    echo %GITCOMET_AUTH_SECRET%
+  )
+  exit /b 0
 )
 echo %GITCOMET_AUTH_SECRET%
 "#
@@ -112,8 +140,10 @@ fn create_askpass_script() -> Result<AskPassScript> {
     #[cfg(not(windows))]
     let script_name = "gitcomet-askpass.sh";
     let path = dir.path().join(script_name);
+    let prompt_log_path = dir.path().join("gitcomet-askpass-prompt.log");
 
     fs::write(&path, askpass_script_contents()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+    fs::write(&prompt_log_path, b"").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
     #[cfg(unix)]
     {
@@ -126,7 +156,11 @@ fn create_askpass_script() -> Result<AskPassScript> {
         fs::set_permissions(&path, permissions).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
     }
 
-    Ok(AskPassScript { _dir: dir, path })
+    Ok(AskPassScript {
+        _dir: dir,
+        path,
+        prompt_log_path,
+    })
 }
 
 fn configure_git_auth_prompt(
@@ -137,6 +171,7 @@ fn configure_git_auth_prompt(
     cmd.env("GIT_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS", &askpass.path);
     cmd.env("SSH_ASKPASS_REQUIRE", "force");
+    cmd.env(GITCOMET_ASKPASS_PROMPT_LOG_ENV, &askpass.prompt_log_path);
     if cfg!(all(unix, not(target_os = "macos"))) && std::env::var_os("DISPLAY").is_none() {
         cmd.env("DISPLAY", "gitcomet:0");
     }
@@ -145,6 +180,7 @@ fn configure_git_auth_prompt(
         let kind = match auth.kind {
             GitAuthKind::UsernamePassword => GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
             GitAuthKind::Passphrase => GITCOMET_AUTH_KIND_PASSPHRASE,
+            GitAuthKind::HostVerification => GITCOMET_AUTH_KIND_HOST_VERIFICATION,
         };
         cmd.env(GITCOMET_AUTH_KIND_ENV, kind);
         if let Some(username) = &auth.username {
@@ -158,6 +194,28 @@ fn configure_git_auth_prompt(
         cmd.env_remove(GITCOMET_AUTH_USERNAME_ENV);
         cmd.env_remove(GITCOMET_AUTH_SECRET_ENV);
     }
+}
+
+fn append_host_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
+    let Ok(raw_prompt_log) = fs::read_to_string(&askpass.prompt_log_path) else {
+        return;
+    };
+    let prompt_log = raw_prompt_log.trim();
+    if prompt_log.is_empty() {
+        return;
+    }
+
+    let stderr_text = String::from_utf8_lossy(stderr);
+    if stderr_text.contains(prompt_log) {
+        return;
+    }
+
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+        stderr.push(b'\n');
+    }
+    stderr.extend_from_slice(b"SSH host verification prompt:\n");
+    stderr.extend_from_slice(prompt_log.as_bytes());
+    stderr.push(b'\n');
 }
 
 fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> {
@@ -175,7 +233,7 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-    let _askpass_script = askpass_script;
+    let askpass_script = askpass_script;
 
     let stdout = child.stdout.take();
     let stdout_handle = thread::spawn(move || {
@@ -218,7 +276,11 @@ fn run_git_output_with_timeout(mut cmd: Command, label: &str) -> Result<Output> 
     };
 
     let stdout = stdout_handle.join().unwrap_or_default();
-    let stderr = stderr_handle.join().unwrap_or_default();
+    let mut stderr = stderr_handle.join().unwrap_or_default();
+
+    if let Some(askpass_script) = askpass_script.as_ref() {
+        append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
 
     if timed_out {
         return Err(Error::new(ErrorKind::Backend(format!(
@@ -1121,6 +1183,7 @@ mod tests {
             std::fs::read_to_string(&askpass.path).expect("askpass script should be readable");
         assert!(contents.contains("GITCOMET_AUTH_SECRET"));
         assert!(contents.contains("GITCOMET_AUTH_KIND"));
+        assert!(contents.contains("host_verification"));
 
         #[cfg(unix)]
         {
@@ -1133,6 +1196,38 @@ mod tests {
                 & 0o777;
             assert_eq!(mode, 0o700);
         }
+    }
+
+    #[test]
+    fn append_host_prompt_to_stderr_includes_logged_prompt_with_fingerprint() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        std::fs::write(
+            &askpass.prompt_log_path,
+            "The authenticity of host 'github.com (140.82.121.3)' can't be established.\nED25519 key fingerprint is: SHA256:+DiY...\nAre you sure you want to continue connecting (yes/no/[fingerprint])?",
+        )
+        .expect("write prompt log");
+
+        let mut stderr = b"Host key verification failed.\n".to_vec();
+        append_host_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("stderr should be utf-8 for test");
+        assert!(rendered.contains("SSH host verification prompt:"));
+        assert!(rendered.contains("ED25519 key fingerprint is: SHA256:+DiY..."));
+        assert!(rendered.contains("yes/no/[fingerprint]"));
+    }
+
+    #[test]
+    fn append_host_prompt_to_stderr_skips_when_prompt_already_present() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        let prompt = "Are you sure you want to continue connecting (yes/no/[fingerprint])?";
+        std::fs::write(&askpass.prompt_log_path, prompt).expect("write prompt log");
+
+        let mut stderr = format!("Host key verification failed.\n{prompt}\n").into_bytes();
+        append_host_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("stderr should be utf-8 for test");
+        assert_eq!(rendered.matches("SSH host verification prompt:").count(), 0);
+        assert_eq!(rendered.matches(prompt).count(), 1);
     }
 
     fn command_env_value(cmd: &Command, key: &str) -> Option<String> {
@@ -1184,6 +1279,10 @@ mod tests {
             Some("force")
         );
         assert_eq!(
+            command_env_value(&cmd, GITCOMET_ASKPASS_PROMPT_LOG_ENV).as_deref(),
+            askpass.prompt_log_path.to_str()
+        );
+        assert_eq!(
             command_env_value(&cmd, GITCOMET_AUTH_KIND_ENV).as_deref(),
             Some(GITCOMET_AUTH_KIND_USERNAME_PASSWORD)
         );
@@ -1225,6 +1324,30 @@ mod tests {
         assert_eq!(
             command_env_value(&cmd, GITCOMET_AUTH_SECRET_ENV).as_deref(),
             Some("ssh-passphrase")
+        );
+    }
+
+    #[test]
+    fn configure_git_auth_prompt_sets_host_verification_env_and_removes_username() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        let mut cmd = Command::new("git");
+        cmd.env(GITCOMET_AUTH_USERNAME_ENV, "legacy-user");
+        let auth = StagedGitAuth {
+            kind: GitAuthKind::HostVerification,
+            username: None,
+            secret: "yes".to_string(),
+        };
+
+        configure_git_auth_prompt(&mut cmd, Some(&auth), &askpass);
+
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_AUTH_KIND_ENV).as_deref(),
+            Some(GITCOMET_AUTH_KIND_HOST_VERIFICATION)
+        );
+        assert!(command_env_removed(&cmd, GITCOMET_AUTH_USERNAME_ENV));
+        assert_eq!(
+            command_env_value(&cmd, GITCOMET_AUTH_SECRET_ENV).as_deref(),
+            Some("yes")
         );
     }
 

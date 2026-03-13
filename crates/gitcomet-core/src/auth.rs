@@ -6,11 +6,13 @@ pub const GITCOMET_AUTH_SECRET_ENV: &str = "GITCOMET_AUTH_SECRET";
 
 pub const GITCOMET_AUTH_KIND_USERNAME_PASSWORD: &str = "username_password";
 pub const GITCOMET_AUTH_KIND_PASSPHRASE: &str = "passphrase";
+pub const GITCOMET_AUTH_KIND_HOST_VERIFICATION: &str = "host_verification";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitAuthKind {
     UsernamePassword,
     Passphrase,
+    HostVerification,
 }
 
 #[derive(Clone, Eq, PartialEq)]

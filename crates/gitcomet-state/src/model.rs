@@ -139,6 +139,7 @@ pub struct AppState {
 pub enum AuthPromptKind {
     UsernamePassword,
     Passphrase,
+    HostVerification,
 }
 
 impl AuthPromptKind {

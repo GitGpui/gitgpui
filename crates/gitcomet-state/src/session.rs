@@ -603,7 +603,7 @@ fn app_state_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         let home = env::var_os("HOME")?;
-        return Some(PathBuf::from(home).join("Library/Application Support/gitcomet"));
+        Some(PathBuf::from(home).join("Library/Application Support/gitcomet"))
     }
 
     #[cfg(target_os = "windows")]
