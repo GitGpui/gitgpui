@@ -1,6 +1,7 @@
 use super::GixRepo;
 use crate::util::git_stage_blob_spec;
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::platform::{host_command, host_tempdir};
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
@@ -60,7 +61,7 @@ impl GixRepo {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
             let tool_executable = tool_path.as_deref().unwrap_or(&tool_name);
-            Command::new(tool_executable)
+            host_command(tool_executable)
                 .arg(local_path)
                 .arg(base_path)
                 .arg(remote_path)
@@ -200,14 +201,14 @@ fn env_has_display() -> bool {
 #[cfg(windows)]
 #[allow(dead_code)]
 fn shell_command(custom_cmd: &str) -> Command {
-    let mut command = Command::new("cmd");
+    let mut command = host_command("cmd");
     command.arg("/C").arg(custom_cmd);
     command
 }
 
 #[cfg(not(windows))]
 fn shell_command(custom_cmd: &str) -> Command {
-    let mut command = Command::new("sh");
+    let mut command = host_command("sh");
     command.arg("-c").arg(custom_cmd);
     command
 }
@@ -531,10 +532,8 @@ fn build_stage_paths(
     let pid = std::process::id();
 
     if write_to_temp {
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("gitcomet-mergetool-")
-            .tempdir()
-            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        let tmp_dir =
+            host_tempdir("gitcomet-mergetool-").map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
         let (tmp_dir_path, temp_dir_guard) = if keep_temporaries {
             (tmp_dir.keep(), None)
         } else {

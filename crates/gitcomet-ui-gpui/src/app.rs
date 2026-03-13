@@ -4,6 +4,7 @@ use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, StartupCrashReport,
 };
+use gitcomet_core::platform::APP_ID;
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
@@ -80,7 +81,7 @@ fn normal_launch_config(
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
         title: "GitComet".to_string(),
-        app_id: "gitcomet".to_string(),
+        app_id: APP_ID.to_string(),
         view_config: GitCometViewConfig::normal(initial_path, startup_crash_report),
     }
 }
@@ -91,7 +92,7 @@ fn focused_mergetool_launch_config(
 ) -> WindowLaunchConfig {
     WindowLaunchConfig {
         title: focused_mergetool_window_title(&config.conflicted_file_path),
-        app_id: "gitcomet-mergetool".to_string(),
+        app_id: APP_ID.to_string(),
         view_config: GitCometViewConfig {
             initial_path: Some(config.repo_path.clone()),
             view_mode: GitCometViewMode::FocusedMergetool,
@@ -309,7 +310,7 @@ mod tests {
         };
 
         let launch = focused_mergetool_launch_config(&config, None);
-        assert_eq!(launch.app_id, "gitcomet-mergetool");
+        assert_eq!(launch.app_id, APP_ID);
         assert_eq!(launch.title, "GitComet - Mergetool (conflict.txt)");
         assert_eq!(launch.view_config.initial_path, Some(config.repo_path));
         assert_eq!(

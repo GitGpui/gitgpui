@@ -1,9 +1,10 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
+use gitcomet_core::platform::host_tempdir;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tempfile::{Builder, TempDir};
+use tempfile::TempDir;
 
 /// Result of running the dedicated difftool mode.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -230,9 +231,7 @@ fn prepare_diff_inputs(config: &DifftoolConfig) -> Result<PreparedDiffInputs, St
         });
     }
 
-    let tempdir = Builder::new()
-        .prefix("gitcomet-difftool-")
-        .tempdir()
+    let tempdir = host_tempdir("gitcomet-difftool-")
         .map_err(|e| format!("Failed to create temporary directory staging area: {e}"))?;
 
     let staged_local = tempdir.path().join("left");

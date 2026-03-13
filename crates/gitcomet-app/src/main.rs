@@ -10,6 +10,9 @@ use cli::{AppMode, exit_code};
 use mimalloc::MiMalloc;
 use std::io::{self, Write};
 
+#[cfg(all(target_os = "macos", feature = "ui-gpui"))]
+use gitcomet_core::platform::APP_ID;
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -398,7 +401,7 @@ fn ensure_macos_dev_app_bundle(
   <key>CFBundleExecutable</key>
   <string>gitcomet-app</string>
   <key>CFBundleIdentifier</key>
-  <string>ai.autoexplore.gitcomet.dev</string>
+  <string>{app_id}</string>
   <key>CFBundleIconFile</key>
   <string>GitComet.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -418,6 +421,7 @@ fn ensure_macos_dev_app_bundle(
 </dict>
 </plist>
 "#,
+        app_id = APP_ID,
         version = env!("CARGO_PKG_VERSION")
     );
     std::fs::write(contents.join("Info.plist"), plist)

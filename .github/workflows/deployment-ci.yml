@@ -5,14 +5,26 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-flathub.yml"
+      - "assets/linux/dev.gitcomet.GitComet.desktop"
+      - "flatpak/**"
+      - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/render-flathub-manifest.sh"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
   push:
     branches: ["main"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
+      - ".github/workflows/deployment-ci.yml"
       - ".github/workflows/deploy-homebrew-tap.yml"
+      - ".github/workflows/deploy-flathub.yml"
+      - "assets/linux/dev.gitcomet.GitComet.desktop"
+      - "flatpak/**"
+      - "scripts/generate-flatpak-cargo-sources.py"
+      - "scripts/render-flathub-manifest.sh"
       - "scripts/package-macos.sh"
       - "scripts/generate-homebrew-formula.sh"
   workflow_dispatch:
@@ -111,3 +123,41 @@ jobs:
 
           "${mount_point}/GitComet.app/Contents/MacOS/gitcomet-app" --help >/dev/null
           hdiutil detach "$mount_point"
+
+  flatpak-packaging-smoke:
+    name: Flatpak packaging smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify generated cargo sources stay in sync
+        run: |
+          set -euo pipefail
+          python3 scripts/generate-flatpak-cargo-sources.py --output /tmp/cargo-sources.json
+          cmp /tmp/cargo-sources.json flatpak/cargo-sources.json
+
+      - name: Render release manifest
+        run: |
+          set -euo pipefail
+          scripts/render-flathub-manifest.sh \
+            --source-url "https://example.invalid/gitcomet-v0.0.0-ci-source.tar.gz" \
+            --source-sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            --output /tmp/dev.gitcomet.GitComet.yaml
+          test -s /tmp/dev.gitcomet.GitComet.yaml
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: dev.gitcomet.GitComet.flatpak
+          manifest-path: flatpak/dev.gitcomet.GitComet.local.yaml
+          cache-key: deployment-ci-flatpak
+          upload-artifact: false
+
+      - name: Verify Flatpak bundle output
+        run: |
+          set -euo pipefail
+          test -f dev.gitcomet.GitComet.flatpak

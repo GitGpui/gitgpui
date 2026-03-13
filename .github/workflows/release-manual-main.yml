@@ -181,6 +181,20 @@ jobs:
       dry_run: false
     secrets: inherit
 
+  deploy_flathub:
+    name: Deploy Flathub manifest
+    needs: [validate, build_and_upload, publish_release]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
+    uses: ./.github/workflows/deploy-flathub.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      flathub_repo: ${{ vars.FLATHUB_REPO }}
+      flathub_branch: ${{ vars.FLATHUB_BRANCH }}
+      mode: ${{ vars.FLATHUB_MODE }}
+      dry_run: false
+    secrets: inherit
+
   cleanup_failed_release:
     name: Cleanup failed draft/tag
     runs-on: ubuntu-latest

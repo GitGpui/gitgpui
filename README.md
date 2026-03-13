@@ -26,6 +26,15 @@ brew tap auto-explore/gitcomet
 brew install gitcomet
 ```
 
+#### Flatpak / Flathub
+
+GitHub releases also publish:
+
+- a Linux Flatpak bundle: `gitcomet-v<VERSION>-linux-x86_64.flatpak`
+- a source tarball for Flathub: `gitcomet-v<VERSION>-source.tar.gz`
+- the rendered Flathub manifest: `dev.gitcomet.GitComet.yaml`
+- the pinned Cargo source list: `cargo-sources.json`
+
 ### Fast, Free, Familiar
 
 - **Fast**: Built end-to-end in Rust for speed and efficiency using [smol](https://github.com/smol-rs/smol), [gix](https://github.com/GitoxideLabs/gitoxide), and [gpui](https://www.gpui.rs/).
