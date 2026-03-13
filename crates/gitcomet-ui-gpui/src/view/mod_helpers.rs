@@ -1123,8 +1123,16 @@ pub struct GitCometView {
 
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 
+    pub(super) sidebar_collapsed: bool,
+    pub(super) details_collapsed: bool,
     pub(super) sidebar_width: Pixels,
     pub(super) details_width: Pixels,
+    pub(super) sidebar_render_width: Pixels,
+    pub(super) details_render_width: Pixels,
+    pub(super) sidebar_width_anim_seq: u64,
+    pub(super) details_width_anim_seq: u64,
+    pub(super) sidebar_width_animating: bool,
+    pub(super) details_width_animating: bool,
     pub(super) pane_resize: Option<PaneResizeState>,
 
     pub(super) last_mouse_pos: Point<Pixels>,

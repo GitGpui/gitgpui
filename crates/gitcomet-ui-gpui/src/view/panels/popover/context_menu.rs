@@ -22,6 +22,28 @@ mod tag;
 mod worktree;
 mod worktree_section;
 
+fn normalize_platform_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let mut normalized = std::path::PathBuf::new();
+        for component in path.components() {
+            normalized.push(component.as_os_str());
+        }
+        normalized
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        path
+    }
+}
+
+pub(super) fn path_text_for_copy(path: &std::path::Path) -> String {
+    normalize_platform_path(path.to_path_buf())
+        .display()
+        .to_string()
+}
+
 fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.theme_mode;
     let check = |enabled: bool| enabled.then_some("✓".into());
@@ -133,7 +155,7 @@ impl PopoverHost {
         let workdir = self
             .workdir_for_repo(repo_id)
             .ok_or_else(|| "Repository is not available".to_string())?;
-        Ok(workdir.join(path))
+        Ok(normalize_platform_path(workdir.join(path)))
     }
 
     fn open_path_default(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
@@ -456,6 +478,15 @@ impl PopoverHost {
                     });
                 });
                 self.schedule_ui_settings_persist(cx);
+                close_after_action = false;
+            }
+            ContextMenuAction::ResetHistoryColumnWidths => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.history_view.update(cx, |view, cx| {
+                        view.reset_history_column_widths();
+                        cx.notify();
+                    });
+                });
                 close_after_action = false;
             }
             ContextMenuAction::SetThemeMode { mode } => {

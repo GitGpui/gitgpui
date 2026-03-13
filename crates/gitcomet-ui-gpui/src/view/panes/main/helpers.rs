@@ -1649,6 +1649,10 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) active_context_menu_invoker: Option<SharedString>,
 
     pub(in crate::view) last_window_size: Size<Pixels>,
+    pub(in crate::view) layout_sidebar_render_width: Pixels,
+    pub(in crate::view) layout_details_render_width: Pixels,
+    pub(in crate::view) layout_sidebar_collapsed: bool,
+    pub(in crate::view) layout_details_collapsed: bool,
 
     pub(in crate::view) show_whitespace: bool,
     pub(in crate::view) diff_view: DiffViewMode,
@@ -1710,11 +1714,13 @@ pub(in crate::view) struct MainPaneView {
 
     pub(in crate::view) file_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_diff_cache_rev: u64,
+    pub(in crate::view) file_diff_cache_content_signature: Option<u64>,
     pub(in crate::view) file_diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
+    pub(in crate::view) file_diff_inline_text: SharedString,
     pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,

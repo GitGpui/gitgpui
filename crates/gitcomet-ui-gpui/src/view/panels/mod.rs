@@ -53,6 +53,7 @@ enum ContextMenuAction {
         show_date: bool,
         show_sha: bool,
     },
+    ResetHistoryColumnWidths,
     SetThemeMode {
         mode: ThemeMode,
     },

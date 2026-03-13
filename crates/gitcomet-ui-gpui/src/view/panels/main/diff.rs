@@ -261,20 +261,13 @@ impl MainPaneView {
                         self.maybe_autoscroll_diff_to_first_change();
 
                         if self.diff_word_wrap {
-                            let approx_len: usize = self
-                                .file_diff_inline_cache
-                                .iter()
-                                .map(|l| l.text.len().saturating_add(1))
-                                .sum();
-                            let mut raw = String::with_capacity(approx_len);
-                            for line in &self.file_diff_inline_cache {
-                                raw.push_str(line.text.as_ref());
-                                raw.push('\n');
-                            }
+                            let raw = self.file_diff_inline_text.clone();
                             self.diff_raw_input.update(cx, |input, cx| {
                                 input.set_theme(theme, cx);
                                 input.set_soft_wrap(true, cx);
-                                input.set_text(raw, cx);
+                                if input.text() != raw.as_ref() {
+                                    input.set_text(raw.to_string(), cx);
+                                }
                                 input.set_read_only(true, cx);
                             });
 
@@ -442,8 +435,12 @@ impl MainPaneView {
                                                     let available =
                                                         (main_w - handle_w).max(px(0.0));
                                                     if available <= min_col_w * 2.0 {
-                                                        this.diff_split_ratio = 0.5;
-                                                        cx.notify();
+                                                        if (this.diff_split_ratio - 0.5).abs()
+                                                            > f32::EPSILON
+                                                        {
+                                                            this.diff_split_ratio = 0.5;
+                                                            cx.notify();
+                                                        }
                                                         return;
                                                     }
 
@@ -455,23 +452,30 @@ impl MainPaneView {
                                                     next_left =
                                                         next_left.max(min_col_w).min(max_left);
 
-                                                    this.diff_split_ratio =
+                                                    let next_ratio =
                                                         (next_left / available).clamp(0.0, 1.0);
-                                                    cx.notify();
+                                                    if (this.diff_split_ratio - next_ratio).abs()
+                                                        > f32::EPSILON
+                                                    {
+                                                        this.diff_split_ratio = next_ratio;
+                                                        cx.notify();
+                                                    }
                                                 },
                                             ))
                                             .on_mouse_up(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _e, _w, cx| {
-                                                    this.diff_split_resize = None;
-                                                    cx.notify();
+                                                    if this.diff_split_resize.take().is_some() {
+                                                        cx.notify();
+                                                    }
                                                 }),
                                             )
                                             .on_mouse_up_out(
                                                 MouseButton::Left,
                                                 cx.listener(|this, _e, _w, cx| {
-                                                    this.diff_split_resize = None;
-                                                    cx.notify();
+                                                    if this.diff_split_resize.take().is_some() {
+                                                        cx.notify();
+                                                    }
                                                 }),
                                             )
                                     };

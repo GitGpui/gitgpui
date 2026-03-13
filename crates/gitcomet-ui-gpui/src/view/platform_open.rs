@@ -16,6 +16,7 @@ pub(super) fn open_path(path: &Path) -> Result<(), io::Error> {
     {
         // Normalize to an absolute path to avoid ambiguous explorer.exe argument parsing.
         let path = std::fs::canonicalize(path)?;
+        let path = windows_shell_normalized_path(&path);
         open_with_default_os_str(path.as_os_str())
     }
 
@@ -42,6 +43,13 @@ pub(super) fn open_file_location(path: &Path) -> Result<(), io::Error> {
 
     #[cfg(target_os = "windows")]
     {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let path = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+        let path = windows_shell_normalized_path(&path);
         let mut arg = std::ffi::OsString::from("/select,");
         arg.push(path.as_os_str());
         let _ = std::process::Command::new("explorer.exe")
@@ -194,6 +202,22 @@ fn is_allowed_url_scheme(scheme: &str) -> bool {
         || scheme.eq_ignore_ascii_case("mailto")
 }
 
+#[cfg(target_os = "windows")]
+fn windows_shell_normalized_path(path: &Path) -> std::path::PathBuf {
+    let mut normalized = std::path::PathBuf::new();
+    for component in path.components() {
+        normalized.push(component.as_os_str());
+    }
+
+    let mut rendered = normalized.display().to_string();
+    if let Some(stripped) = rendered.strip_prefix(r"\\?\UNC\") {
+        rendered = format!(r"\\{stripped}");
+    } else if let Some(stripped) = rendered.strip_prefix(r"\\?\") {
+        rendered = stripped.to_string();
+    }
+    std::path::PathBuf::from(rendered)
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn try_show_file_in_file_manager(path: &Path) -> Result<(), io::Error> {
     let file_uri = file_uri_for_file_manager(path)?;
@@ -277,5 +301,30 @@ mod tests {
             .expect("uri for relative path");
         assert!(uri.starts_with("file:///"));
         assert!(uri.ends_with("/folder/with%20space.txt"));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::windows_shell_normalized_path;
+    use std::path::Path;
+
+    #[test]
+    fn windows_shell_path_normalizes_mixed_separators() {
+        let mixed = Path::new(r"C:\git\GitComet\crates/gitcomet-ui-gpui/src/smoke_tests.rs");
+        let normalized = windows_shell_normalized_path(mixed).display().to_string();
+
+        assert!(!normalized.contains('/'));
+        assert!(normalized.contains('\\'));
+    }
+
+    #[test]
+    fn windows_shell_path_strips_verbatim_prefix() {
+        let prefixed = Path::new(r"\\?\C:\git\GitComet\src\main.rs");
+        let normalized = windows_shell_normalized_path(prefixed)
+            .display()
+            .to_string();
+        assert!(!normalized.starts_with(r"\\?\"));
+        assert_eq!(normalized, r"C:\git\GitComet\src\main.rs");
     }
 }

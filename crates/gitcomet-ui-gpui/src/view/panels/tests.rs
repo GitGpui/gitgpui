@@ -9,6 +9,7 @@ use gitcomet_state::store::AppStore;
 use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, px};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const _: () = {
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
@@ -405,6 +406,241 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
             "expected syntax highlighting highlights for context line"
         );
     });
+}
+
+#[gpui::test]
+fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(46);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_smoke_tests_diff_refresh",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs");
+    let old_text = include_str!("../../smoke_tests.rs");
+    let new_text = format!("{old_text}\n// refresh-loop-regression\n");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: path.clone(),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            });
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path,
+                    old: Some(old_text.to_string()),
+                    new: Some(new_text),
+                },
+            )));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    let root_notifies = Arc::new(AtomicUsize::new(0));
+    let _root_notify_sub = cx.update(|_window, app| {
+        let root_notifies = Arc::clone(&root_notifies);
+        view.update(app, |_this, cx| {
+            cx.observe_self(move |_this, _cx| {
+                root_notifies.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+    });
+
+    let main_notifies = Arc::new(AtomicUsize::new(0));
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let _main_notify_sub = cx.update(|_window, app| {
+        let main_notifies = Arc::clone(&main_notifies);
+        main_pane.update(app, |_pane, cx| {
+            cx.observe_self(move |_pane, _cx| {
+                main_notifies.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+    });
+
+    for _ in 0..4 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    root_notifies.store(0, Ordering::Relaxed);
+    main_notifies.store(0, Ordering::Relaxed);
+
+    for _ in 0..8 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let root_notify_count = root_notifies.load(Ordering::Relaxed);
+    let main_notify_count = main_notifies.load(Ordering::Relaxed);
+    assert!(
+        root_notify_count <= 1,
+        "root view kept notifying during steady smoke_tests.rs diff draws: {root_notify_count}",
+    );
+    assert!(
+        main_notify_count <= 1,
+        "main pane kept notifying during steady smoke_tests.rs diff draws: {main_notify_count}",
+    );
+}
+
+#[gpui::test]
+fn file_diff_cache_does_not_rebuild_when_rev_changes_with_identical_payload(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(47);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_smoke_tests_diff_rev_stability",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs");
+    let old_text = "fn smoke_test_fixture() {\n    let mut x = 1;\n    x += 1;\n}\n".repeat(64);
+    let new_text = format!("{old_text}\n// file-diff-cache-rev-stability\n");
+
+    let set_state = |cx: &mut gpui::VisualTestContext, diff_file_rev: u64| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = gitcomet_state::model::RepoState::new_opening(
+                    repo_id,
+                    gitcomet_core::domain::RepoSpec {
+                        workdir: workdir.clone(),
+                    },
+                );
+                repo.status = gitcomet_state::model::Loadable::Ready(
+                    gitcomet_core::domain::RepoStatus {
+                        staged: vec![],
+                        unstaged: vec![gitcomet_core::domain::FileStatus {
+                            path: path.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        }],
+                    }
+                    .into(),
+                );
+                repo.diff_state.diff_target =
+                    Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: gitcomet_core::domain::DiffArea::Unstaged,
+                    });
+                repo.diff_state.diff_file_rev = diff_file_rev;
+                repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                    gitcomet_core::domain::FileDiffText {
+                        path: path.clone(),
+                        old: Some(old_text.clone()),
+                        new: Some(new_text.clone()),
+                    },
+                )));
+
+                let next_state = Arc::new(AppState {
+                    repos: vec![repo],
+                    active_repo: Some(repo_id),
+                    ..Default::default()
+                });
+
+                this._ui_model.update(cx, |model, cx| {
+                    model.set_state(Arc::clone(&next_state), cx);
+                });
+            });
+        });
+    };
+
+    set_state(cx, 1);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        let ready = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            pane.file_diff_cache_inflight.is_none() && pane.file_diff_cache_path.is_some()
+        });
+        if ready {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let snapshot = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                (
+                    pane.file_diff_cache_seq,
+                    pane.file_diff_cache_inflight,
+                    pane.file_diff_cache_repo_id,
+                    pane.file_diff_cache_rev,
+                    pane.file_diff_cache_target.clone(),
+                    pane.file_diff_cache_path.clone(),
+                    pane.file_diff_inline_cache.len(),
+                    pane.active_repo().map(|repo| repo.diff_state.diff_file_rev),
+                    pane.active_repo()
+                        .and_then(|repo| repo.diff_state.diff_target.clone()),
+                    pane.is_file_diff_view_active(),
+                )
+            });
+            panic!("timed out waiting for initial file-diff cache build: {snapshot:?}");
+        }
+    }
+
+    let baseline_seq =
+        cx.update(|_window, app| view.read(app).main_pane.read(app).file_diff_cache_seq);
+
+    for rev in 2..=6 {
+        set_state(cx, rev);
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            assert_eq!(
+                pane.file_diff_cache_seq, baseline_seq,
+                "identical diff payload should not trigger file-diff rebuild when diff_file_rev changes"
+            );
+            assert!(
+                pane.file_diff_cache_inflight.is_none(),
+                "file-diff cache should remain built with no background rebuild for identical payload refreshes"
+            );
+        });
+    }
 }
 
 #[gpui::test]

@@ -373,29 +373,117 @@ impl HistoryView {
                         }
 
                         let dx = e.event.position.x - state.start_x;
+                        let available_width =
+                            super::history_columns_available_width(this.last_window_size.width);
+                        let show_author_pref = this.history_show_author;
+                        let show_date_pref = this.history_show_date;
+                        let show_sha_pref = this.history_show_sha;
+                        let mut changed = false;
                         match state.handle {
                             HistoryColResizeHandle::Branch => {
-                                this.history_col_branch =
-                                    (state.start_branch + dx).max(px(HISTORY_COL_BRANCH_MIN_PX));
+                                let candidate = state.start_branch + dx;
+                                let next = super::history_column_drag_clamped_width(
+                                    HistoryColResizeHandle::Branch,
+                                    candidate,
+                                    available_width,
+                                    show_author_pref,
+                                    show_date_pref,
+                                    show_sha_pref,
+                                    this.history_col_branch,
+                                    this.history_col_graph,
+                                    this.history_col_author,
+                                    this.history_col_date,
+                                    this.history_col_sha,
+                                );
+                                if this.history_col_branch != next {
+                                    this.history_col_branch = next;
+                                    changed = true;
+                                }
                             }
                             HistoryColResizeHandle::Graph => {
-                                this.history_col_graph =
-                                    (state.start_graph + dx).max(px(HISTORY_COL_GRAPH_MIN_PX));
+                                let candidate = state.start_graph + dx;
+                                let next = super::history_column_drag_clamped_width(
+                                    HistoryColResizeHandle::Graph,
+                                    candidate,
+                                    available_width,
+                                    show_author_pref,
+                                    show_date_pref,
+                                    show_sha_pref,
+                                    this.history_col_branch,
+                                    this.history_col_graph,
+                                    this.history_col_author,
+                                    this.history_col_date,
+                                    this.history_col_sha,
+                                );
+                                if this.history_col_graph != next {
+                                    this.history_col_graph = next;
+                                    changed = true;
+                                }
                             }
                             HistoryColResizeHandle::Author => {
-                                this.history_col_author =
-                                    (state.start_author - dx).max(px(HISTORY_COL_AUTHOR_MIN_PX));
+                                let candidate = state.start_author - dx;
+                                let next = super::history_column_drag_clamped_width(
+                                    HistoryColResizeHandle::Author,
+                                    candidate,
+                                    available_width,
+                                    show_author_pref,
+                                    show_date_pref,
+                                    show_sha_pref,
+                                    this.history_col_branch,
+                                    this.history_col_graph,
+                                    this.history_col_author,
+                                    this.history_col_date,
+                                    this.history_col_sha,
+                                );
+                                if this.history_col_author != next {
+                                    this.history_col_author = next;
+                                    changed = true;
+                                }
                             }
                             HistoryColResizeHandle::Date => {
-                                this.history_col_date =
-                                    (state.start_date - dx).max(px(HISTORY_COL_DATE_MIN_PX));
+                                let candidate = state.start_date - dx;
+                                let next = super::history_column_drag_clamped_width(
+                                    HistoryColResizeHandle::Date,
+                                    candidate,
+                                    available_width,
+                                    show_author_pref,
+                                    show_date_pref,
+                                    show_sha_pref,
+                                    this.history_col_branch,
+                                    this.history_col_graph,
+                                    this.history_col_author,
+                                    this.history_col_date,
+                                    this.history_col_sha,
+                                );
+                                if this.history_col_date != next {
+                                    this.history_col_date = next;
+                                    changed = true;
+                                }
                             }
                             HistoryColResizeHandle::Sha => {
-                                this.history_col_sha =
-                                    (state.start_sha - dx).max(px(HISTORY_COL_SHA_MIN_PX));
+                                let candidate = state.start_sha - dx;
+                                let next = super::history_column_drag_clamped_width(
+                                    HistoryColResizeHandle::Sha,
+                                    candidate,
+                                    available_width,
+                                    show_author_pref,
+                                    show_date_pref,
+                                    show_sha_pref,
+                                    this.history_col_branch,
+                                    this.history_col_graph,
+                                    this.history_col_author,
+                                    this.history_col_date,
+                                    this.history_col_sha,
+                                );
+                                if this.history_col_sha != next {
+                                    this.history_col_sha = next;
+                                    changed = true;
+                                }
                             }
                         }
-                        cx.notify();
+                        if changed {
+                            cx.notify();
+                        }
                     },
                 ))
                 .on_mouse_up(

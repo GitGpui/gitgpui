@@ -64,15 +64,66 @@ impl GitCometView {
             return;
         }
 
-        let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
+        let sidebar_handle_w = if self.sidebar_collapsed {
+            px(0.0)
+        } else {
+            px(PANE_RESIZE_HANDLE_PX)
+        };
+        let details_handle_w = if self.details_collapsed {
+            px(0.0)
+        } else {
+            px(PANE_RESIZE_HANDLE_PX)
+        };
+        let handles_w = sidebar_handle_w + details_handle_w;
         let main_min = px(MAIN_MIN_PX);
         let sidebar_min = px(SIDEBAR_MIN_PX);
         let details_min = px(DETAILS_MIN_PX);
+        let collapsed_w = px(PANE_COLLAPSED_PX);
 
-        let max_sidebar = (total_w - self.details_width - main_min - handles_w).max(sidebar_min);
-        self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
+        if !self.sidebar_collapsed {
+            let details_w = if self.details_collapsed {
+                collapsed_w
+            } else {
+                self.details_width.max(details_min)
+            };
+            let max_sidebar = (total_w - details_w - main_min - handles_w).max(sidebar_min);
+            self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
+        } else {
+            self.sidebar_width = self.sidebar_width.max(sidebar_min);
+        }
 
-        let max_details = (total_w - self.sidebar_width - main_min - handles_w).max(details_min);
-        self.details_width = self.details_width.max(details_min).min(max_details);
+        if !self.details_collapsed {
+            let sidebar_w = if self.sidebar_collapsed {
+                collapsed_w
+            } else {
+                self.sidebar_width.max(sidebar_min)
+            };
+            let max_details = (total_w - sidebar_w - main_min - handles_w).max(details_min);
+            self.details_width = self.details_width.max(details_min).min(max_details);
+        } else {
+            self.details_width = self.details_width.max(details_min);
+        }
+
+        let sidebar_target = if self.sidebar_collapsed {
+            collapsed_w
+        } else {
+            self.sidebar_width
+        };
+        let details_target = if self.details_collapsed {
+            collapsed_w
+        } else {
+            self.details_width
+        };
+
+        if !self.sidebar_width_animating {
+            self.sidebar_render_width = sidebar_target;
+        } else {
+            self.sidebar_render_width = self.sidebar_render_width.max(px(0.0)).min(total_w);
+        }
+        if !self.details_width_animating {
+            self.details_render_width = details_target;
+        } else {
+            self.details_render_width = self.details_render_width.max(px(0.0)).min(total_w);
+        }
     }
 }

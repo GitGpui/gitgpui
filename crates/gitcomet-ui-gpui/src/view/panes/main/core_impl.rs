@@ -409,6 +409,10 @@ impl MainPaneView {
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),
+            layout_sidebar_render_width: px(280.0),
+            layout_details_render_width: px(420.0),
+            layout_sidebar_collapsed: false,
+            layout_details_collapsed: false,
             show_whitespace: false,
             diff_view: DiffViewMode::Split,
             svg_diff_view_mode: SvgDiffViewMode::Image,
@@ -467,11 +471,13 @@ impl MainPaneView {
             _diff_search_subscription: diff_search_subscription,
             file_diff_cache_repo_id: None,
             file_diff_cache_rev: 0,
+            file_diff_cache_content_signature: None,
             file_diff_cache_target: None,
             file_diff_cache_path: None,
             file_diff_cache_language: None,
             file_diff_cache_rows: Vec::new(),
             file_diff_inline_cache: Vec::new(),
+            file_diff_inline_text: SharedString::default(),
             file_diff_inline_word_highlights: Vec::new(),
             file_diff_split_word_highlights_old: Vec::new(),
             file_diff_split_word_highlights_new: Vec::new(),
@@ -532,6 +538,35 @@ impl MainPaneView {
         pane.set_theme(theme, cx);
         pane.rebuild_diff_cache(cx);
         pane
+    }
+
+    pub(in crate::view) fn sync_root_layout_snapshot(&mut self, cx: &mut gpui::Context<Self>) {
+        let fallback_sidebar = self.layout_sidebar_render_width;
+        let fallback_details = self.layout_details_render_width;
+        let fallback_sidebar_collapsed = self.layout_sidebar_collapsed;
+        let fallback_details_collapsed = self.layout_details_collapsed;
+
+        let (sidebar_w, details_w, sidebar_collapsed, details_collapsed) = self
+            .root_view
+            .read_with(cx, |root, _cx| {
+                (
+                    root.sidebar_render_width,
+                    root.details_render_width,
+                    root.sidebar_collapsed,
+                    root.details_collapsed,
+                )
+            })
+            .unwrap_or((
+                fallback_sidebar,
+                fallback_details,
+                fallback_sidebar_collapsed,
+                fallback_details_collapsed,
+            ));
+
+        self.layout_sidebar_render_width = sidebar_w;
+        self.layout_details_render_width = details_w;
+        self.layout_sidebar_collapsed = sidebar_collapsed;
+        self.layout_details_collapsed = details_collapsed;
     }
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -1943,14 +1978,14 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
-        let fallback_sidebar = px(280.0);
-        let fallback_details = px(420.0);
-        let (sidebar_w, details_w) = self
-            .root_view
-            .update(cx, |root, _cx| (root.sidebar_width, root.details_width))
-            .unwrap_or((fallback_sidebar, fallback_details));
+        let _ = cx;
 
-        let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
-        (self.last_window_size.width - sidebar_w - details_w - handles_w).max(px(0.0))
+        super::pane_content_width_for_layout(
+            self.last_window_size.width,
+            self.layout_sidebar_render_width,
+            self.layout_details_render_width,
+            self.layout_sidebar_collapsed,
+            self.layout_details_collapsed,
+        )
     }
 }

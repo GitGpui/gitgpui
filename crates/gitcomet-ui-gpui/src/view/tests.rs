@@ -1,6 +1,33 @@
 use super::*;
 use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream};
+use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_state::store::AppStore;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+struct TestBackend;
+
+impl GitBackend for TestBackend {
+    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Test backend does not open repositories",
+        )))
+    }
+}
+
+fn pump_for(cx: &mut gpui::VisualTestContext, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        std::thread::sleep(Duration::from_millis(16));
+    }
+}
 
 #[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
@@ -456,4 +483,49 @@ fn focused_mergetool_bootstrap_completes_after_conflict_file_target_set() {
 fn focused_mergetool_mode_hides_full_chrome() {
     assert!(renders_full_chrome(GitCometViewMode::Normal));
     assert!(!renders_full_chrome(GitCometViewMode::FocusedMergetool));
+}
+
+#[test]
+fn ease_out_cubic_hits_expected_anchor_points() {
+    assert_eq!(GitCometView::ease_out_cubic(0.0), 0.0);
+    assert_eq!(GitCometView::ease_out_cubic(1.0), 1.0);
+    assert!((GitCometView::ease_out_cubic(0.5) - 0.875).abs() < 1e-6);
+}
+
+#[test]
+fn ease_out_cubic_is_monotonic_in_unit_interval() {
+    let a = GitCometView::ease_out_cubic(0.2);
+    let b = GitCometView::ease_out_cubic(0.6);
+    let c = GitCometView::ease_out_cubic(0.9);
+    assert!(a < b);
+    assert!(b < c);
+}
+
+#[gpui::test]
+fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx));
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| this.set_sidebar_collapsed(false, cx));
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    cx.update(|_window, app| {
+        assert!(!view.read(app).sidebar_collapsed);
+    });
 }

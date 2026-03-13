@@ -456,6 +456,155 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 }
 
 #[test]
+fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+        "expected first worktree event to request status refresh"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert!(
+        effects.is_empty(),
+        "expected in-flight coalescing while status load is running, got {effects:?}"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id,
+            result: Ok(RepoStatus::default()),
+        }),
+    );
+    assert!(
+        effects
+            .iter()
+            .all(|e| !matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+        "unchanged status payload should not replay another status load, got {effects:?}"
+    );
+    assert!(
+        !state.repos[0].loads_in_flight.any_in_flight(),
+        "in-flight flags should settle after unchanged status load"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id: rid } if *rid == repo_id)),
+        "subsequent real worktree events should still trigger status refresh"
+    );
+}
+
+#[test]
+fn external_worktree_refresh_is_fully_coalesced_while_status_is_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("crates/gitcomet-ui-gpui/src/smoke_tests.rs"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+
+    let effects1 = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert!(
+        effects1
+            .iter()
+            .any(|e| matches!(e, Effect::LoadStatus { repo_id: RepoId(1) })),
+        "expected first refresh to request status"
+    );
+    assert!(
+        effects1.iter().any(|e| matches!(
+            e,
+            Effect::LoadDiff {
+                repo_id: RepoId(1),
+                ..
+            }
+        )),
+        "expected first refresh to request diff reload"
+    );
+
+    let effects2 = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert!(
+        effects2.is_empty(),
+        "coalesced worktree refresh should not emit duplicate diff/status effects, got {effects2:?}"
+    );
+}
+
+#[test]
 fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

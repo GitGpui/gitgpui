@@ -825,6 +825,11 @@ fn classify_repo_event(
     let mut uncached_worktree_rels = Vec::new();
 
     for path in &event.paths {
+        if is_git_index_lock_path(workdir, git_dir, path) {
+            // Ignore `.git/index.lock` churn from read-only git commands. These transient
+            // lockfile create/delete events can self-trigger endless refresh loops.
+            continue;
+        }
         if is_git_related_path(workdir, git_dir, path) {
             continue;
         }
@@ -845,6 +850,9 @@ fn classify_repo_event(
     gitignore.prefetch_ignored_rels(uncached_worktree_rels, is_dir_hint);
 
     for path in &event.paths {
+        if is_git_index_lock_path(workdir, git_dir, path) {
+            continue;
+        }
         if is_git_related_path(workdir, git_dir, path) {
             // Treat `.git/index` updates like worktree changes: they typically reflect staging
             // operations and should not trigger branch list refreshes.
@@ -883,12 +891,27 @@ fn is_git_related_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> b
 
 fn is_git_index_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
     let dot_git = workdir.join(".git");
-    if path == dot_git.join("index") || path == dot_git.join("index.lock") {
+    if path == dot_git.join("index") {
         return true;
     }
 
     if let Some(git_dir) = git_dir
-        && (path == git_dir.join("index") || path == git_dir.join("index.lock"))
+        && path == git_dir.join("index")
+    {
+        return true;
+    }
+
+    false
+}
+
+fn is_git_index_lock_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
+    let dot_git = workdir.join(".git");
+    if path == dot_git.join("index.lock") {
+        return true;
+    }
+
+    if let Some(git_dir) = git_dir
+        && path == git_dir.join("index.lock")
     {
         return true;
     }
@@ -1113,6 +1136,69 @@ mod tests {
                 &event
             ),
             Some(RepoExternalChange::Both)
+        );
+    }
+
+    #[test]
+    fn classify_repo_change_ignores_git_index_lock_churn() {
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.join("repo");
+        let _ = fs::create_dir_all(workdir.join(".git"));
+
+        let mut rules = GitignoreRules::default();
+        let create_lock = notify::Event {
+            kind: EventKind::Create(CreateKind::File),
+            paths: vec![workdir.join(".git").join("index.lock")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut rules,
+                &create_lock
+            ),
+            None,
+            "index.lock creation should not trigger external refresh"
+        );
+
+        let mut rules = GitignoreRules::default();
+        let remove_lock = notify::Event {
+            kind: EventKind::Remove(RemoveKind::File),
+            paths: vec![workdir.join(".git").join("index.lock")],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(
+                &workdir,
+                Some(&workdir.join(".git")),
+                &mut rules,
+                &remove_lock
+            ),
+            None,
+            "index.lock deletion should not trigger external refresh"
+        );
+    }
+
+    #[test]
+    fn classify_repo_change_ignoring_index_lock_does_not_drop_real_worktree_events() {
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.join("repo");
+        let _ = fs::create_dir_all(workdir.join(".git"));
+
+        let mut rules = GitignoreRules::default();
+        let event = notify::Event {
+            kind: EventKind::Create(CreateKind::Any),
+            paths: vec![
+                workdir.join(".git").join("index.lock"),
+                workdir.join("file.txt"),
+            ],
+            attrs: Default::default(),
+        };
+        assert_eq!(
+            classify_repo_event(&workdir, Some(&workdir.join(".git")), &mut rules, &event),
+            Some(RepoExternalChange::Worktree),
+            "ignoring index.lock should still classify real worktree changes"
         );
     }
 
@@ -1441,6 +1527,11 @@ mod tests {
             &workdir,
             Some(&git_dir),
             &git_dir.join("index")
+        ));
+        assert!(is_git_index_lock_path(
+            &workdir,
+            Some(&git_dir),
+            &git_dir.join("index.lock")
         ));
         assert!(is_gitignore_config_path(
             &workdir,

@@ -28,7 +28,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod app_model;
 mod branch_sidebar;
@@ -118,15 +118,22 @@ const HISTORY_COL_SHA_PX: f32 = 88.0;
 const HISTORY_COL_HANDLE_PX: f32 = 8.0;
 
 const HISTORY_COL_BRANCH_MIN_PX: f32 = 60.0;
+const HISTORY_COL_BRANCH_MAX_PX: f32 = 320.0;
 const HISTORY_COL_GRAPH_MIN_PX: f32 = 44.0;
 const HISTORY_COL_AUTHOR_MIN_PX: f32 = 80.0;
+const HISTORY_COL_AUTHOR_MAX_PX: f32 = 260.0;
 const HISTORY_COL_DATE_MIN_PX: f32 = 110.0;
+const HISTORY_COL_DATE_MAX_PX: f32 = 240.0;
 const HISTORY_COL_SHA_MIN_PX: f32 = 60.0;
+const HISTORY_COL_SHA_MAX_PX: f32 = 160.0;
+const HISTORY_COL_MESSAGE_MIN_PX: f32 = 220.0;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
 const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
 
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
+const PANE_COLLAPSED_PX: f32 = 34.0;
+const PANE_COLLAPSE_ANIM_MS: u64 = 120;
 const SIDEBAR_MIN_PX: f32 = 200.0;
 const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
@@ -510,6 +517,15 @@ impl GitCometView {
             input
         });
 
+        let initial_sidebar_width = restored_sidebar_width
+            .map(|w| px(w as f32))
+            .unwrap_or(px(280.0))
+            .max(px(SIDEBAR_MIN_PX));
+        let initial_details_width = restored_details_width
+            .map(|w| px(w as f32))
+            .unwrap_or(px(420.0))
+            .max(px(DETAILS_MIN_PX));
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             _ui_model: ui_model,
@@ -540,14 +556,16 @@ impl GitCometView {
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
-            sidebar_width: restored_sidebar_width
-                .map(|w| px(w as f32))
-                .unwrap_or(px(280.0))
-                .max(px(SIDEBAR_MIN_PX)),
-            details_width: restored_details_width
-                .map(|w| px(w as f32))
-                .unwrap_or(px(420.0))
-                .max(px(DETAILS_MIN_PX)),
+            sidebar_collapsed: false,
+            details_collapsed: false,
+            sidebar_width: initial_sidebar_width,
+            details_width: initial_details_width,
+            sidebar_render_width: initial_sidebar_width,
+            details_render_width: initial_details_width,
+            sidebar_width_anim_seq: 0,
+            details_width_anim_seq: 0,
+            sidebar_width_animating: false,
+            details_width_animating: false,
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
@@ -618,6 +636,214 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    fn visible_pane_resize_handles_width(&self) -> Pixels {
+        let sidebar_handle = if self.sidebar_collapsed {
+            px(0.0)
+        } else {
+            px(PANE_RESIZE_HANDLE_PX)
+        };
+        let details_handle = if self.details_collapsed {
+            px(0.0)
+        } else {
+            px(PANE_RESIZE_HANDLE_PX)
+        };
+        sidebar_handle + details_handle
+    }
+
+    fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
+        let main_pane = self.main_pane.clone();
+        cx.defer(move |cx| {
+            main_pane.update(cx, |pane, cx| {
+                pane.sync_root_layout_snapshot(cx);
+                cx.notify();
+            });
+        });
+    }
+
+    fn ease_out_cubic(t: f32) -> f32 {
+        1.0 - (1.0 - t).powi(3)
+    }
+
+    fn animate_sidebar_render_width_to(&mut self, target: Pixels, cx: &mut gpui::Context<Self>) {
+        let start = self.sidebar_render_width;
+        let start_f: f32 = start.into();
+        let target_f: f32 = target.into();
+        self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
+        let seq = self.sidebar_width_anim_seq;
+        if (start_f - target_f).abs() <= 0.5 {
+            self.sidebar_render_width = target;
+            self.sidebar_width_animating = false;
+            return;
+        }
+
+        self.sidebar_width_animating = true;
+        let started = Instant::now();
+        let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
+
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
+                Timer::after(Duration::from_millis(16)).await;
+
+                let mut t =
+                    started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
+                if !t.is_finite() {
+                    t = 1.0;
+                }
+                let t = t.clamp(0.0, 1.0);
+                let eased = Self::ease_out_cubic(t);
+                let mut done = t >= 1.0;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.sidebar_width_anim_seq != seq {
+                        done = true;
+                        return;
+                    }
+
+                    let mut changed = false;
+                    let next_width = px(start_f + (target_f - start_f) * eased);
+                    if this.sidebar_render_width != next_width {
+                        this.sidebar_render_width = next_width;
+                        changed = true;
+                    }
+                    if t >= 1.0 {
+                        if this.sidebar_render_width != px(target_f) {
+                            this.sidebar_render_width = px(target_f);
+                        }
+                        this.sidebar_width_animating = false;
+                        this.refresh_main_pane_after_panel_animation(cx);
+                        changed = true;
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if done {
+                    break;
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn animate_details_render_width_to(&mut self, target: Pixels, cx: &mut gpui::Context<Self>) {
+        let start = self.details_render_width;
+        let start_f: f32 = start.into();
+        let target_f: f32 = target.into();
+        self.details_width_anim_seq = self.details_width_anim_seq.wrapping_add(1);
+        let seq = self.details_width_anim_seq;
+        if (start_f - target_f).abs() <= 0.5 {
+            self.details_render_width = target;
+            self.details_width_animating = false;
+            return;
+        }
+
+        self.details_width_animating = true;
+        let started = Instant::now();
+        let duration = Duration::from_millis(PANE_COLLAPSE_ANIM_MS);
+
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| loop {
+                Timer::after(Duration::from_millis(16)).await;
+
+                let mut t =
+                    started.elapsed().as_secs_f32() / duration.as_secs_f32().max(f32::EPSILON);
+                if !t.is_finite() {
+                    t = 1.0;
+                }
+                let t = t.clamp(0.0, 1.0);
+                let eased = Self::ease_out_cubic(t);
+                let mut done = t >= 1.0;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.details_width_anim_seq != seq {
+                        done = true;
+                        return;
+                    }
+
+                    let mut changed = false;
+                    let next_width = px(start_f + (target_f - start_f) * eased);
+                    if this.details_render_width != next_width {
+                        this.details_render_width = next_width;
+                        changed = true;
+                    }
+                    if t >= 1.0 {
+                        if this.details_render_width != px(target_f) {
+                            this.details_render_width = px(target_f);
+                        }
+                        this.details_width_animating = false;
+                        this.refresh_main_pane_after_panel_animation(cx);
+                        changed = true;
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+
+                if done {
+                    break;
+                }
+            },
+        )
+        .detach();
+    }
+
+    fn set_sidebar_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
+        if self.sidebar_collapsed == collapsed {
+            return;
+        }
+
+        self.sidebar_collapsed = collapsed;
+        if matches!(
+            self.pane_resize,
+            Some(PaneResizeState {
+                handle: PaneResizeHandle::Sidebar,
+                ..
+            })
+        ) {
+            self.pane_resize = None;
+        }
+        if !collapsed {
+            self.clamp_pane_widths_to_window();
+        }
+
+        let target = if collapsed {
+            px(PANE_COLLAPSED_PX)
+        } else {
+            self.sidebar_width
+        };
+        self.animate_sidebar_render_width_to(target, cx);
+        cx.notify();
+    }
+
+    fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
+        if self.details_collapsed == collapsed {
+            return;
+        }
+
+        self.details_collapsed = collapsed;
+        if matches!(
+            self.pane_resize,
+            Some(PaneResizeState {
+                handle: PaneResizeHandle::Details,
+                ..
+            })
+        ) {
+            self.pane_resize = None;
+        }
+        if !collapsed {
+            self.clamp_pane_widths_to_window();
+        }
+
+        let target = if collapsed {
+            px(PANE_COLLAPSED_PX)
+        } else {
+            self.details_width
+        };
+        self.animate_details_render_width_to(target, cx);
+        cx.notify();
+    }
+
     fn pane_resize_handle(
         &self,
         theme: AppTheme,
@@ -625,6 +851,14 @@ impl GitCometView {
         handle: PaneResizeHandle,
         cx: &gpui::Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let collapsed = match handle {
+            PaneResizeHandle::Sidebar => self.sidebar_collapsed,
+            PaneResizeHandle::Details => self.details_collapsed,
+        };
+        if collapsed {
+            return div().id(id).w(px(0.0)).h_full();
+        }
+
         div()
             .id(id)
             .w(px(PANE_RESIZE_HANDLE_PX))
@@ -643,6 +877,20 @@ impl GitCometView {
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
+                    match handle {
+                        PaneResizeHandle::Sidebar => {
+                            this.sidebar_width_anim_seq =
+                                this.sidebar_width_anim_seq.wrapping_add(1);
+                            this.sidebar_width_animating = false;
+                            this.sidebar_render_width = this.sidebar_width;
+                        }
+                        PaneResizeHandle::Details => {
+                            this.details_width_anim_seq =
+                                this.details_width_anim_seq.wrapping_add(1);
+                            this.details_width_animating = false;
+                            this.details_render_width = this.details_width;
+                        }
+                    }
                     this.pane_resize = Some(PaneResizeState {
                         handle,
                         start_x: e.position.x,
@@ -662,45 +910,75 @@ impl GitCometView {
                     }
 
                     let total_w = this.last_window_size.width;
-                    let handles_w = px(PANE_RESIZE_HANDLE_PX) * 2.0;
+                    let handles_w = this.visible_pane_resize_handles_width();
                     let main_min = px(MAIN_MIN_PX);
                     let sidebar_min = px(SIDEBAR_MIN_PX);
                     let details_min = px(DETAILS_MIN_PX);
+                    let collapsed_w = px(PANE_COLLAPSED_PX);
 
                     let dx = e.event.position.x - state.start_x;
+                    let mut changed = false;
                     match state.handle {
                         PaneResizeHandle::Sidebar => {
+                            let details_w = if this.details_collapsed {
+                                collapsed_w
+                            } else {
+                                state.start_details
+                            };
                             let max_sidebar =
-                                (total_w - state.start_details - main_min - handles_w)
-                                    .max(sidebar_min);
-                            this.sidebar_width =
+                                (total_w - details_w - main_min - handles_w).max(sidebar_min);
+                            let next_sidebar =
                                 (state.start_sidebar + dx).max(sidebar_min).min(max_sidebar);
+                            if this.sidebar_width != next_sidebar {
+                                this.sidebar_width = next_sidebar;
+                                changed = true;
+                            }
+                            if this.sidebar_render_width != next_sidebar {
+                                this.sidebar_render_width = next_sidebar;
+                                changed = true;
+                            }
                         }
                         PaneResizeHandle::Details => {
+                            let sidebar_w = if this.sidebar_collapsed {
+                                collapsed_w
+                            } else {
+                                state.start_sidebar
+                            };
                             let max_details =
-                                (total_w - state.start_sidebar - main_min - handles_w)
-                                    .max(details_min);
-                            this.details_width =
+                                (total_w - sidebar_w - main_min - handles_w).max(details_min);
+                            let next_details =
                                 (state.start_details - dx).max(details_min).min(max_details);
+                            if this.details_width != next_details {
+                                this.details_width = next_details;
+                                changed = true;
+                            }
+                            if this.details_render_width != next_details {
+                                this.details_render_width = next_details;
+                                changed = true;
+                            }
                         }
                     }
-                    cx.notify();
+                    if changed {
+                        cx.notify();
+                    }
                 },
             ))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
-                    this.pane_resize = None;
-                    this.schedule_ui_settings_persist(cx);
-                    cx.notify();
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
                 }),
             )
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
-                    this.pane_resize = None;
-                    this.schedule_ui_settings_persist(cx);
-                    cx.notify();
+                    if this.pane_resize.take().is_some() {
+                        this.schedule_ui_settings_persist(cx);
+                        cx.notify();
+                    }
                 }),
             )
     }
@@ -966,10 +1244,37 @@ impl Render for GitCometView {
                         .child(
                             div()
                                 .id("sidebar_pane")
-                                .w(self.sidebar_width)
+                                .relative()
+                                .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
                                 .bg(theme.colors.surface_bg)
-                                .child(self.sidebar_pane.clone()),
+                                .when(self.sidebar_collapsed, |d| {
+                                    d.border_r_1().border_color(theme.colors.border)
+                                })
+                                .when(!self.sidebar_collapsed, |d| {
+                                    d.child(self.sidebar_pane.clone())
+                                })
+                                .child(
+                                    div().absolute().bottom(px(6.0)).right(px(6.0)).child(
+                                        components::Button::new("sidebar_toggle", "")
+                                            .start_slot(svg_icon(
+                                                if self.sidebar_collapsed {
+                                                    "icons/arrow_right.svg"
+                                                } else {
+                                                    "icons/arrow_left.svg"
+                                                },
+                                                theme.colors.text_muted,
+                                                px(12.0),
+                                            ))
+                                            .style(components::ButtonStyle::Transparent)
+                                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                                this.set_sidebar_collapsed(
+                                                    !this.sidebar_collapsed,
+                                                    cx,
+                                                );
+                                            }),
+                                    ),
+                                ),
                         )
                         .child(self.pane_resize_handle(
                             theme,
@@ -993,15 +1298,42 @@ impl Render for GitCometView {
                         .child(
                             div()
                                 .id("details_pane")
-                                .w(self.details_width)
+                                .relative()
+                                .w(self.details_render_width)
                                 .min_h(px(0.0))
                                 .flex()
                                 .flex_col()
+                                .when(self.details_collapsed, |d| {
+                                    d.border_l_1().border_color(theme.colors.border)
+                                })
+                                .when(!self.details_collapsed, |d| {
+                                    d.child(
+                                        div()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .child(self.details_pane.clone()),
+                                    )
+                                })
                                 .child(
-                                    div()
-                                        .flex_1()
-                                        .min_h(px(0.0))
-                                        .child(self.details_pane.clone()),
+                                    div().absolute().bottom(px(6.0)).left(px(6.0)).child(
+                                        components::Button::new("details_toggle", "")
+                                            .start_slot(svg_icon(
+                                                if self.details_collapsed {
+                                                    "icons/arrow_left.svg"
+                                                } else {
+                                                    "icons/arrow_right.svg"
+                                                },
+                                                theme.colors.text_muted,
+                                                px(12.0),
+                                            ))
+                                            .style(components::ButtonStyle::Transparent)
+                                            .on_click(theme, cx, |this, _e, _w, cx| {
+                                                this.set_details_collapsed(
+                                                    !this.details_collapsed,
+                                                    cx,
+                                                );
+                                            }),
+                                    ),
                                 ),
                         ),
                 )

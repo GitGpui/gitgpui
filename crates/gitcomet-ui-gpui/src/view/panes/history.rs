@@ -3,6 +3,82 @@ use std::hash::{Hash, Hasher};
 
 mod history_panel;
 
+fn history_columns_available_width(window_width: Pixels) -> Pixels {
+    let mut available = window_width;
+    available -= px(280.0);
+    available -= px(420.0);
+    available -= px(64.0);
+    available.max(px(0.0))
+}
+
+fn history_column_static_bounds(handle: HistoryColResizeHandle) -> (Pixels, Pixels) {
+    match handle {
+        HistoryColResizeHandle::Branch => {
+            (px(HISTORY_COL_BRANCH_MIN_PX), px(HISTORY_COL_BRANCH_MAX_PX))
+        }
+        HistoryColResizeHandle::Graph => {
+            (px(HISTORY_COL_GRAPH_MIN_PX), px(HISTORY_COL_GRAPH_MAX_PX))
+        }
+        HistoryColResizeHandle::Author => {
+            (px(HISTORY_COL_AUTHOR_MIN_PX), px(HISTORY_COL_AUTHOR_MAX_PX))
+        }
+        HistoryColResizeHandle::Date => (px(HISTORY_COL_DATE_MIN_PX), px(HISTORY_COL_DATE_MAX_PX)),
+        HistoryColResizeHandle::Sha => (px(HISTORY_COL_SHA_MIN_PX), px(HISTORY_COL_SHA_MAX_PX)),
+    }
+}
+
+fn history_column_drag_clamped_width(
+    handle: HistoryColResizeHandle,
+    candidate: Pixels,
+    available_width: Pixels,
+    show_author: bool,
+    show_date: bool,
+    show_sha: bool,
+    branch_w: Pixels,
+    graph_w: Pixels,
+    author_w: Pixels,
+    date_w: Pixels,
+    sha_w: Pixels,
+) -> Pixels {
+    let (min_w, static_max_w) = history_column_static_bounds(handle);
+    let right_fixed_w = match handle {
+        HistoryColResizeHandle::Branch => {
+            graph_w
+                + if show_author { author_w } else { px(0.0) }
+                + if show_date { date_w } else { px(0.0) }
+                + if show_sha { sha_w } else { px(0.0) }
+        }
+        HistoryColResizeHandle::Graph => {
+            branch_w
+                + if show_author { author_w } else { px(0.0) }
+                + if show_date { date_w } else { px(0.0) }
+                + if show_sha { sha_w } else { px(0.0) }
+        }
+        HistoryColResizeHandle::Author => {
+            branch_w
+                + graph_w
+                + if show_date { date_w } else { px(0.0) }
+                + if show_sha { sha_w } else { px(0.0) }
+        }
+        HistoryColResizeHandle::Date => {
+            branch_w
+                + graph_w
+                + if show_author { author_w } else { px(0.0) }
+                + if show_sha { sha_w } else { px(0.0) }
+        }
+        HistoryColResizeHandle::Sha => {
+            branch_w
+                + graph_w
+                + if show_author { author_w } else { px(0.0) }
+                + if show_date { date_w } else { px(0.0) }
+        }
+    };
+
+    let dynamic_max = (available_width - right_fixed_w - px(HISTORY_COL_MESSAGE_MIN_PX)).max(min_w);
+    let max_w = static_max_w.min(dynamic_max).max(min_w);
+    candidate.max(min_w).min(max_w)
+}
+
 pub(in super::super) struct HistoryView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -144,15 +220,12 @@ impl HistoryView {
 
     pub(in super::super) fn history_visible_columns(&self) -> (bool, bool, bool) {
         // Prefer keeping commit message visible. Hide SHA first, then date, then author.
-        let mut available = self.last_window_size.width;
-        available -= px(280.0);
-        available -= px(420.0);
-        available -= px(64.0);
+        let available = history_columns_available_width(self.last_window_size.width);
         if available <= px(0.0) {
             return (false, false, false);
         }
 
-        let min_message = px(220.0);
+        let min_message = px(HISTORY_COL_MESSAGE_MIN_PX);
 
         let mut show_author = self.history_show_author;
         let mut show_date = self.history_show_date;
@@ -200,6 +273,16 @@ impl HistoryView {
         }
 
         (show_author, show_date, show_sha)
+    }
+
+    pub(in super::super) fn reset_history_column_widths(&mut self) {
+        self.history_col_branch = px(HISTORY_COL_BRANCH_PX);
+        self.history_col_graph = px(HISTORY_COL_GRAPH_PX);
+        self.history_col_author = px(HISTORY_COL_AUTHOR_PX);
+        self.history_col_date = px(HISTORY_COL_DATE_PX);
+        self.history_col_sha = px(HISTORY_COL_SHA_PX);
+        self.history_col_graph_auto = true;
+        self.history_col_resize = None;
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -960,5 +1043,64 @@ mod tests {
             Some("keep this")
         );
         assert_eq!(stash_summary_from_log_summary("no delimiter"), None);
+    }
+
+    #[test]
+    fn history_column_drag_clamp_respects_static_maximums() {
+        let available = history_columns_available_width(px(2200.0));
+        let next = history_column_drag_clamped_width(
+            HistoryColResizeHandle::Branch,
+            px(900.0),
+            available,
+            true,
+            true,
+            true,
+            px(HISTORY_COL_BRANCH_PX),
+            px(HISTORY_COL_GRAPH_PX),
+            px(HISTORY_COL_AUTHOR_PX),
+            px(HISTORY_COL_DATE_PX),
+            px(HISTORY_COL_SHA_PX),
+        );
+        assert_eq!(next, px(HISTORY_COL_BRANCH_MAX_PX));
+    }
+
+    #[test]
+    fn history_column_drag_clamp_preserves_message_space() {
+        let available = history_columns_available_width(px(1600.0));
+        let next = history_column_drag_clamped_width(
+            HistoryColResizeHandle::Branch,
+            px(500.0),
+            available,
+            true,
+            true,
+            true,
+            px(HISTORY_COL_BRANCH_PX),
+            px(HISTORY_COL_GRAPH_PX),
+            px(HISTORY_COL_AUTHOR_PX),
+            px(HISTORY_COL_DATE_PX),
+            px(HISTORY_COL_SHA_PX),
+        );
+
+        let next_f: f32 = next.into();
+        assert!((next_f - 148.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn history_column_drag_clamp_never_goes_below_minimum() {
+        let available = history_columns_available_width(px(2200.0));
+        let next = history_column_drag_clamped_width(
+            HistoryColResizeHandle::Sha,
+            px(0.0),
+            available,
+            true,
+            true,
+            true,
+            px(HISTORY_COL_BRANCH_PX),
+            px(HISTORY_COL_GRAPH_PX),
+            px(HISTORY_COL_AUTHOR_PX),
+            px(HISTORY_COL_DATE_PX),
+            px(HISTORY_COL_SHA_PX),
+        );
+        assert_eq!(next, px(HISTORY_COL_SHA_MIN_PX));
     }
 }

@@ -21,6 +21,25 @@ const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
 const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;
 const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;
 
+pub(in crate::view) fn pane_content_width_for_layout(
+    total_w: Pixels,
+    sidebar_w: Pixels,
+    details_w: Pixels,
+    sidebar_collapsed: bool,
+    details_collapsed: bool,
+) -> Pixels {
+    let handles_w = (if sidebar_collapsed {
+        px(0.0)
+    } else {
+        px(PANE_RESIZE_HANDLE_PX)
+    }) + (if details_collapsed {
+        px(0.0)
+    } else {
+        px(PANE_RESIZE_HANDLE_PX)
+    });
+    (total_w - sidebar_w - details_w - handles_w).max(px(0.0))
+}
+
 impl Render for MainPaneView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         debug_assert!(matches!(
@@ -30,6 +49,7 @@ impl Render for MainPaneView {
         self.last_window_size = window.viewport_size();
         self.history_view
             .update(cx, |v, _| v.set_last_window_size(self.last_window_size));
+        self.sync_root_layout_snapshot(cx);
 
         let show_diff = self
             .active_repo()

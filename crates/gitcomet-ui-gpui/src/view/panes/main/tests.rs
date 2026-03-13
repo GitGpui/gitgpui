@@ -5,10 +5,11 @@ use super::{
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
     dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
     focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
-    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta,
-    replace_output_lines_in_range, resolved_outline_delta_between_texts,
-    resolved_output_conflict_block_ranges_in_text, resolved_output_marker_for_line,
-    resolved_output_markers_for_text, split_target_conflict_block_into_subchunks,
+    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
+    remap_line_keyed_cache_for_delta, replace_output_lines_in_range,
+    resolved_outline_delta_between_texts, resolved_output_conflict_block_ranges_in_text,
+    resolved_output_marker_for_line, resolved_output_markers_for_text,
+    split_target_conflict_block_into_subchunks,
 };
 use crate::view::GitCometViewMode;
 use crate::view::conflict_resolver::{
@@ -1119,4 +1120,25 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
         )),
         true
     );
+}
+
+#[test]
+fn pane_content_width_for_layout_omits_hidden_handles_when_panels_collapsed() {
+    let total_w = gpui::px(1000.0);
+    let expanded =
+        pane_content_width_for_layout(total_w, gpui::px(280.0), gpui::px(420.0), false, false);
+    let both_collapsed =
+        pane_content_width_for_layout(total_w, gpui::px(34.0), gpui::px(34.0), true, true);
+
+    assert_eq!(expanded, gpui::px(284.0));
+    assert_eq!(both_collapsed, gpui::px(932.0));
+}
+
+#[test]
+fn pane_content_width_for_layout_clamps_at_zero_for_tight_space() {
+    let total_w = gpui::px(200.0);
+    let width =
+        pane_content_width_for_layout(total_w, gpui::px(140.0), gpui::px(80.0), false, false);
+
+    assert_eq!(width, gpui::px(0.0));
 }

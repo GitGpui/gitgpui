@@ -403,7 +403,7 @@ pub(super) fn status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        match result {
+        let should_replay_pending = match result {
             Ok(next) => {
                 let status_unchanged = matches!(
                     &repo_state.status,
@@ -413,14 +413,24 @@ pub(super) fn status_loaded(
                     repo_state.set_status(Loadable::Ready(Arc::new(next)));
                 }
                 clear_resolved_conflict_context(repo_state);
+                !status_unchanged
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_status(Loadable::Error(e.to_string()));
+                true
             }
-        }
+        };
+        // Replaying an unchanged status payload can self-sustain refresh loops when file-system
+        // events are produced by the status read itself (for example `.git/index` churn).
         if repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS) {
-            effects.push(Effect::LoadStatus { repo_id });
+            if should_replay_pending {
+                effects.push(Effect::LoadStatus { repo_id });
+            } else {
+                // `finish` marks STATUS back as in-flight when there was pending work. We are
+                // intentionally dropping that replay request, so clear the in-flight bit too.
+                let _ = repo_state.loads_in_flight.finish(RepoLoadsInFlight::STATUS);
+            }
         }
     }
     effects

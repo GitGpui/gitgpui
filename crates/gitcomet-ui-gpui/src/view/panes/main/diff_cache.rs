@@ -14,6 +14,30 @@ static IMAGE_DIFF_CACHE_STARTUP_CLEANUP: std::sync::Once = std::sync::Once::new(
 static IMAGE_DIFF_CACHE_WRITE_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
+    let total_len = lines
+        .iter()
+        .map(|line| line.text.len().saturating_add(1))
+        .sum::<usize>();
+    let mut text = String::with_capacity(total_len);
+    for line in lines {
+        text.push_str(line.text.as_ref());
+        text.push('\n');
+    }
+    SharedString::from(text)
+}
+
+fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    file.path.hash(&mut hasher);
+    file.old.hash(&mut hasher);
+    file.new.hash(&mut hasher);
+    hasher.finish()
+}
+
 #[derive(Debug)]
 struct ImageDiffCacheEntry {
     path: std::path::PathBuf,
@@ -1466,6 +1490,7 @@ impl MainPaneView {
             language: Option<rows::DiffSyntaxLanguage>,
             rows: Vec<FileDiffRow>,
             inline_rows: Vec<AnnotatedDiffLine>,
+            inline_text: SharedString,
             inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
             split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
             split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
@@ -1475,12 +1500,14 @@ impl MainPaneView {
             this.file_diff_cache_repo_id = None;
             this.file_diff_cache_target = None;
             this.file_diff_cache_rev = 0;
+            this.file_diff_cache_content_signature = None;
             this.file_diff_cache_inflight = None;
             this.file_diff_syntax_generation = this.file_diff_syntax_generation.wrapping_add(1);
             this.file_diff_cache_path = None;
             this.file_diff_cache_language = None;
             this.file_diff_cache_rows.clear();
             this.file_diff_inline_cache.clear();
+            this.file_diff_inline_text = SharedString::default();
             this.file_diff_inline_word_highlights.clear();
             this.file_diff_split_word_highlights_old.clear();
             this.file_diff_split_word_highlights_new.clear();
@@ -1510,16 +1537,32 @@ impl MainPaneView {
         };
 
         let diff_target_for_task = diff_target.clone();
+        let file_content_signature = file
+            .as_ref()
+            .map(|file| file_diff_text_signature(file.as_ref()));
 
-        if self.file_diff_cache_repo_id == Some(repo_id)
-            && self.file_diff_cache_rev == diff_file_rev
-            && self.file_diff_cache_target == diff_target
+        let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
+            && self.file_diff_cache_target == diff_target;
+
+        if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
+            return;
+        }
+
+        if same_repo_and_target
+            && let Some(signature) = file_content_signature
+            && self.file_diff_cache_content_signature == Some(signature)
         {
+            // Store-side refreshes can bump diff_file_rev with identical file payloads.
+            // Keep the prepared cache and only advance the rev marker after inflight work settles.
+            if self.file_diff_cache_inflight.is_none() {
+                self.file_diff_cache_rev = diff_file_rev;
+            }
             return;
         }
 
         self.file_diff_cache_repo_id = Some(repo_id);
         self.file_diff_cache_rev = diff_file_rev;
+        self.file_diff_cache_content_signature = None;
         self.file_diff_cache_target = diff_target;
         self.file_diff_cache_inflight = None;
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
@@ -1527,6 +1570,7 @@ impl MainPaneView {
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
         self.file_diff_inline_cache.clear();
+        self.file_diff_inline_text = SharedString::default();
         self.file_diff_inline_word_highlights.clear();
         self.file_diff_split_word_highlights_old.clear();
         self.file_diff_split_word_highlights_new.clear();
@@ -1537,6 +1581,8 @@ impl MainPaneView {
         let Some(file) = file else {
             return;
         };
+        let content_signature =
+            file_content_signature.unwrap_or_else(|| file_diff_text_signature(file.as_ref()));
 
         self.file_diff_cache_seq = self.file_diff_cache_seq.wrapping_add(1);
         let seq = self.file_diff_cache_seq;
@@ -1629,11 +1675,14 @@ impl MainPaneView {
                         }
                     }
 
+                    let inline_text = build_inline_text(inline_rows.as_slice());
+
                     Rebuild {
                         file_path,
                         language,
                         rows,
                         inline_rows,
+                        inline_text,
                         inline_word_highlights,
                         split_word_highlights_old,
                         split_word_highlights_new,
@@ -1657,6 +1706,8 @@ impl MainPaneView {
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_cache_rows = rebuild.rows;
                     this.file_diff_inline_cache = rebuild.inline_rows;
+                    this.file_diff_inline_text = rebuild.inline_text;
+                    this.file_diff_cache_content_signature = Some(content_signature);
                     this.file_diff_inline_word_highlights = rebuild.inline_word_highlights;
                     this.file_diff_split_word_highlights_old = rebuild.split_word_highlights_old;
                     this.file_diff_split_word_highlights_new = rebuild.split_word_highlights_new;
@@ -2289,6 +2340,39 @@ mod tests {
             click_kinds.as_slice(),
             hidden.as_slice(),
         )
+    }
+
+    #[test]
+    fn build_inline_text_joins_lines_with_trailing_newline() {
+        let rows = vec![
+            AnnotatedDiffLine {
+                kind: gitcomet_core::domain::DiffLineKind::Header,
+                text: Arc::from("diff --git a/file b/file"),
+                old_line: None,
+                new_line: None,
+            },
+            AnnotatedDiffLine {
+                kind: gitcomet_core::domain::DiffLineKind::Remove,
+                text: Arc::from("-old"),
+                old_line: Some(1),
+                new_line: None,
+            },
+            AnnotatedDiffLine {
+                kind: gitcomet_core::domain::DiffLineKind::Add,
+                text: Arc::from("+new"),
+                old_line: None,
+                new_line: Some(1),
+            },
+        ];
+
+        let text = build_inline_text(rows.as_slice());
+        assert_eq!(text.as_ref(), "diff --git a/file b/file\n-old\n+new\n");
+    }
+
+    #[test]
+    fn build_inline_text_returns_empty_for_empty_rows() {
+        let text = build_inline_text(&[]);
+        assert!(text.as_ref().is_empty());
     }
 
     #[test]

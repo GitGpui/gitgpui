@@ -1449,8 +1449,7 @@ mod tests {
     #[test]
     fn side_by_side_large_files_keep_distant_changes_localized() {
         let line_count = 6_000;
-        let mut old_lines: Vec<String> =
-            (0..line_count).map(|i| format!("line-{i:05}")).collect();
+        let mut old_lines: Vec<String> = (0..line_count).map(|i| format!("line-{i:05}")).collect();
         let mut new_lines = old_lines.clone();
 
         let first_change_ix = 137usize;
@@ -1475,7 +1474,9 @@ mod tests {
             "large files should not collapse distant edits into one huge changed block"
         );
         assert!(
-            changed.iter().all(|row| row.kind == FileDiffRowKind::Modify),
+            changed
+                .iter()
+                .all(|row| row.kind == FileDiffRowKind::Modify),
             "both changes should remain localized modify rows"
         );
         assert_eq!(changed[0].old_line, Some((first_change_ix + 1) as u32));

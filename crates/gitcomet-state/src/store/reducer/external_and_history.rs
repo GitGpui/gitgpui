@@ -51,15 +51,15 @@ pub(super) fn repo_externally_changed(
     };
 
     // Coalesce refreshes while a refresh is already in flight.
-    let mut effects = match change {
+    let (mut effects, should_reload_diff) = match change {
         RepoExternalChange::Worktree => {
             if repo_state
                 .loads_in_flight
                 .request(RepoLoadsInFlight::STATUS)
             {
-                vec![Effect::LoadStatus { repo_id }]
+                (vec![Effect::LoadStatus { repo_id }], true)
             } else {
-                Vec::new()
+                (Vec::new(), false)
             }
         }
         RepoExternalChange::GitState | RepoExternalChange::Both => {
@@ -76,11 +76,13 @@ pub(super) fn repo_externally_changed(
             {
                 effects.push(Effect::LoadRemoteBranches { repo_id });
             }
-            effects
+            let should_reload_diff = !effects.is_empty();
+            (effects, should_reload_diff)
         }
     };
 
-    if let Some(target) = repo_state.diff_state.diff_target.clone()
+    if should_reload_diff
+        && let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
         effects.extend(diff_reload_effects(repo_id, target));

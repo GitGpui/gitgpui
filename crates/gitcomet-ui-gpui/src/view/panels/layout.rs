@@ -869,62 +869,51 @@ impl DetailsPaneView {
                 .render(theme),
             );
         div().flex().flex_col().gap_2().child(commit_message).child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("Commit staged changes"),
-                )
-                .child(
-                    div().flex().items_center().gap_2().child(
-                        components::Button::new("commit", "Commit")
-                            .start_slot(if commit_in_flight {
-                                spinner(("commit_spinner", repo_key)).into_any_element()
+            div().flex().items_center().justify_end().child(
+                div().flex().items_center().gap_2().child(
+                    components::Button::new("commit", "Commit")
+                        .start_slot(if commit_in_flight {
+                            spinner(("commit_spinner", repo_key)).into_any_element()
+                        } else {
+                            icon("icons/check.svg").into_any_element()
+                        })
+                        .style(components::ButtonStyle::Filled)
+                        .disabled(!can_submit_commit)
+                        .render(theme)
+                        .debug_selector(|| "commit_button".to_string())
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                            let Some(repo_id) = this.active_repo_id() else {
+                                return;
+                            };
+                            let message = this
+                                .commit_message_input
+                                .read_with(cx, |i, _| i.text().to_string());
+                            if !Self::can_submit_commit(this.active_repo(), &message) {
+                                return;
+                            }
+                            let message = message.trim().to_string();
+                            this.store.dispatch(Msg::Commit { repo_id, message });
+                            this.commit_message_programmatic_change = true;
+                            this.commit_message_input
+                                .update(cx, |i, cx| i.set_text(String::new(), cx));
+                            this.commit_message_scroll
+                                .set_offset(point(px(0.0), px(0.0)));
+                            cx.notify();
+                        }))
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString = "Commit staged changes".into();
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
                             } else {
-                                icon("icons/check.svg").into_any_element()
-                            })
-                            .style(components::ButtonStyle::Filled)
-                            .disabled(!can_submit_commit)
-                            .render(theme)
-                            .debug_selector(|| "commit_button".to_string())
-                            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                                let Some(repo_id) = this.active_repo_id() else {
-                                    return;
-                                };
-                                let message = this
-                                    .commit_message_input
-                                    .read_with(cx, |i, _| i.text().to_string());
-                                if !Self::can_submit_commit(this.active_repo(), &message) {
-                                    return;
-                                }
-                                let message = message.trim().to_string();
-                                this.store.dispatch(Msg::Commit { repo_id, message });
-                                this.commit_message_programmatic_change = true;
-                                this.commit_message_input
-                                    .update(cx, |i, cx| i.set_text(String::new(), cx));
-                                this.commit_message_scroll
-                                    .set_offset(point(px(0.0), px(0.0)));
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
+                            }
+                            if changed {
                                 cx.notify();
-                            }))
-                            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                let text: SharedString = "Commit staged changes".into();
-                                let mut changed = false;
-                                if *hovering {
-                                    changed |=
-                                        this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                } else {
-                                    changed |= this.clear_tooltip_if_matches(&text, cx);
-                                }
-                                if changed {
-                                    cx.notify();
-                                }
-                            })),
-                    ),
+                            }
+                        })),
                 ),
+            ),
         )
     }
 }
