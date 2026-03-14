@@ -697,16 +697,8 @@ fn make_test_cache_key(doc_hash: u64) -> PreparedSyntaxCacheKey {
     TreesitterDocumentCache::make_test_cache_key(doc_hash)
 }
 
-pub(in crate::view) fn diff_syntax_language_for_path(
-    path: impl AsRef<std::path::Path>,
-) -> Option<DiffSyntaxLanguage> {
-    let p = path.as_ref();
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let ext = ascii_lowercase_for_match(ext);
-
-    let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-    Some(match ext.as_ref() {
+fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLanguage> {
+    Some(match identifier {
         "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" => DiffSyntaxLanguage::Markdown,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         // Use HTML highlighting for XML-ish formats as a pragmatic baseline.
@@ -715,38 +707,57 @@ pub(in crate::view) fn diff_syntax_language_for_path(
         "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
         "bicep" => DiffSyntaxLanguage::Bicep,
         "lua" => DiffSyntaxLanguage::Lua,
-        "mk" => DiffSyntaxLanguage::Makefile,
-        "kt" | "kts" => DiffSyntaxLanguage::Kotlin,
+        "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
+        "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
-        "rs" => DiffSyntaxLanguage::Rust,
-        "py" => DiffSyntaxLanguage::Python,
-        "js" | "jsx" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
-        "ts" | "cts" | "mts" => DiffSyntaxLanguage::TypeScript,
+        "rs" | "rust" => DiffSyntaxLanguage::Rust,
+        "py" | "python" => DiffSyntaxLanguage::Python,
+        "js" | "jsx" | "mjs" | "cjs" | "javascript" => DiffSyntaxLanguage::JavaScript,
+        "ts" | "cts" | "mts" | "typescript" => DiffSyntaxLanguage::TypeScript,
         "tsx" => DiffSyntaxLanguage::Tsx,
-        "go" => DiffSyntaxLanguage::Go,
+        "go" | "golang" => DiffSyntaxLanguage::Go,
         "c" | "h" => DiffSyntaxLanguage::C,
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => DiffSyntaxLanguage::Cpp,
-        "cs" => DiffSyntaxLanguage::CSharp,
-        "fs" | "fsx" | "fsi" => DiffSyntaxLanguage::FSharp,
-        "vb" | "vbs" => DiffSyntaxLanguage::VisualBasic,
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" => DiffSyntaxLanguage::Cpp,
+        "cs" | "c#" | "csharp" => DiffSyntaxLanguage::CSharp,
+        "fs" | "fsx" | "fsi" | "f#" | "fsharp" => DiffSyntaxLanguage::FSharp,
+        "vb" | "vbs" | "vbnet" | "visualbasic" => DiffSyntaxLanguage::VisualBasic,
         "java" => DiffSyntaxLanguage::Java,
         "php" | "phtml" => DiffSyntaxLanguage::Php,
-        "rb" => DiffSyntaxLanguage::Ruby,
+        "rb" | "ruby" => DiffSyntaxLanguage::Ruby,
         "json" => DiffSyntaxLanguage::Json,
         "toml" => DiffSyntaxLanguage::Toml,
         "yaml" | "yml" => DiffSyntaxLanguage::Yaml,
         "sql" => DiffSyntaxLanguage::Sql,
-        "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
-        _ => {
-            if file_name.eq_ignore_ascii_case("makefile")
-                || file_name.eq_ignore_ascii_case("gnumakefile")
-            {
-                DiffSyntaxLanguage::Makefile
-            } else {
-                return None;
-            }
-        }
+        "sh" | "bash" | "zsh" | "shell" | "console" => DiffSyntaxLanguage::Bash,
+        _ => return None,
     })
+}
+
+pub(in crate::view) fn diff_syntax_language_for_path(
+    path: impl AsRef<std::path::Path>,
+) -> Option<DiffSyntaxLanguage> {
+    let p = path.as_ref();
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = ascii_lowercase_for_match(ext);
+    diff_syntax_language_for_identifier(ext.as_ref()).or_else(|| {
+        let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let file_name = ascii_lowercase_for_match(file_name);
+        diff_syntax_language_for_identifier(file_name.as_ref())
+    })
+}
+
+pub(in crate::view) fn diff_syntax_language_for_code_fence_info(
+    info: &str,
+) -> Option<DiffSyntaxLanguage> {
+    let token = info
+        .trim()
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .find(|segment| !segment.is_empty())?;
+    let token = token.trim_matches(|ch| matches!(ch, '{' | '}'));
+    let token = token.trim_start_matches('.');
+    let token = token.strip_prefix("language-").unwrap_or(token);
+    let token = ascii_lowercase_for_match(token);
+    diff_syntax_language_for_identifier(token.as_ref())
 }
 
 pub(super) fn syntax_tokens_for_line(
@@ -2970,6 +2981,22 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_path("notes.markdown"),
             Some(DiffSyntaxLanguage::Markdown)
+        );
+    }
+
+    #[test]
+    fn fenced_code_info_aliases_are_supported() {
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("rust"),
+            Some(DiffSyntaxLanguage::Rust)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("language-typescript title=\"main.ts\""),
+            Some(DiffSyntaxLanguage::TypeScript)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("{.shell}"),
+            Some(DiffSyntaxLanguage::Bash)
         );
     }
 

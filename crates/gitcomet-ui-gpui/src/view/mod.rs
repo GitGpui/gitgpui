@@ -47,6 +47,7 @@ mod fingerprint;
 mod history_graph;
 mod icons;
 mod linux_desktop_integration;
+mod markdown_preview;
 mod mod_helpers;
 mod panels;
 mod panes;
@@ -161,6 +162,11 @@ pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "DejaVu Sans Mono";
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = "monospace";
 
 impl GitCometView {
+    #[cfg(test)]
+    pub(in crate::view) fn disable_poller_for_tests(&mut self) {
+        self._poller = Poller::disabled();
+    }
+
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
