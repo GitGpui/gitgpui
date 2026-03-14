@@ -32,4 +32,11 @@ impl Poller {
 
         Poller { _task: task }
     }
+
+    #[cfg(test)]
+    pub(super) fn disabled() -> Poller {
+        Poller {
+            _task: gpui::Task::ready(()),
+        }
+    }
 }

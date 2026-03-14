@@ -667,14 +667,13 @@ impl TextInput {
         byte_end: usize,
     ) -> ResolvedProviderHighlights {
         let requested_range = byte_start..byte_end;
-        if let Some(ref cache) = self.provider_highlight_cache {
-            if cache.contains_range(self.highlight_epoch, &requested_range) {
+        if let Some(ref cache) = self.provider_highlight_cache
+            && cache.contains_range(self.highlight_epoch, &requested_range) {
                 return ResolvedProviderHighlights {
                     pending: cache.pending,
                     highlights: Arc::clone(&cache.highlights),
                 };
             }
-        }
         let Some(ref provider) = self.highlight_provider else {
             return ResolvedProviderHighlights {
                 pending: false,

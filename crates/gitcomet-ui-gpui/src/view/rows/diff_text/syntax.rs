@@ -1066,8 +1066,10 @@ fn prepared_syntax_cache_metrics() -> PreparedSyntaxCacheMetrics {
 }
 
 #[cfg(test)]
-fn reset_prepared_syntax_cache_metrics() {
-    benchmark_reset_prepared_syntax_cache_metrics();
+fn reset_prepared_syntax_cache() {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        *cache.borrow_mut() = TreesitterDocumentCache::new();
+    });
 }
 
 #[cfg(test)]
@@ -1075,16 +1077,8 @@ fn prepared_syntax_loaded_chunk_count(document: PreparedSyntaxDocument) -> usize
     benchmark_prepared_syntax_loaded_chunk_count(document).unwrap_or_default()
 }
 
-pub(in crate::view) fn diff_syntax_language_for_path(
-    path: impl AsRef<std::path::Path>,
-) -> Option<DiffSyntaxLanguage> {
-    let p = path.as_ref();
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let ext = ascii_lowercase_for_match(ext);
-
-    let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-    Some(match ext.as_ref() {
+fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLanguage> {
+    Some(match identifier {
         "md" | "markdown" | "mdown" | "mkd" | "mkdn" | "mdwn" => DiffSyntaxLanguage::Markdown,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
@@ -1094,39 +1088,58 @@ pub(in crate::view) fn diff_syntax_language_for_path(
         "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
         "bicep" => DiffSyntaxLanguage::Bicep,
         "lua" => DiffSyntaxLanguage::Lua,
-        "mk" => DiffSyntaxLanguage::Makefile,
-        "kt" | "kts" => DiffSyntaxLanguage::Kotlin,
+        "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
+        "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
-        "rs" => DiffSyntaxLanguage::Rust,
-        "py" => DiffSyntaxLanguage::Python,
-        "js" | "mjs" | "cjs" => DiffSyntaxLanguage::JavaScript,
+        "rs" | "rust" => DiffSyntaxLanguage::Rust,
+        "py" | "python" => DiffSyntaxLanguage::Python,
+        "js" | "mjs" | "cjs" | "javascript" => DiffSyntaxLanguage::JavaScript,
         "jsx" => DiffSyntaxLanguage::Tsx,
-        "ts" | "cts" | "mts" => DiffSyntaxLanguage::TypeScript,
+        "ts" | "cts" | "mts" | "typescript" => DiffSyntaxLanguage::TypeScript,
         "tsx" => DiffSyntaxLanguage::Tsx,
-        "go" => DiffSyntaxLanguage::Go,
+        "go" | "golang" => DiffSyntaxLanguage::Go,
         "c" | "h" => DiffSyntaxLanguage::C,
-        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => DiffSyntaxLanguage::Cpp,
-        "cs" => DiffSyntaxLanguage::CSharp,
-        "fs" | "fsx" | "fsi" => DiffSyntaxLanguage::FSharp,
-        "vb" | "vbs" => DiffSyntaxLanguage::VisualBasic,
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" => DiffSyntaxLanguage::Cpp,
+        "cs" | "c#" | "csharp" => DiffSyntaxLanguage::CSharp,
+        "fs" | "fsx" | "fsi" | "f#" | "fsharp" => DiffSyntaxLanguage::FSharp,
+        "vb" | "vbs" | "vbnet" | "visualbasic" => DiffSyntaxLanguage::VisualBasic,
         "java" => DiffSyntaxLanguage::Java,
         "php" | "phtml" => DiffSyntaxLanguage::Php,
-        "rb" => DiffSyntaxLanguage::Ruby,
+        "rb" | "ruby" => DiffSyntaxLanguage::Ruby,
         "json" => DiffSyntaxLanguage::Json,
         "toml" => DiffSyntaxLanguage::Toml,
         "yaml" | "yml" => DiffSyntaxLanguage::Yaml,
         "sql" => DiffSyntaxLanguage::Sql,
-        "sh" | "bash" | "zsh" => DiffSyntaxLanguage::Bash,
-        _ => {
-            if file_name.eq_ignore_ascii_case("makefile")
-                || file_name.eq_ignore_ascii_case("gnumakefile")
-            {
-                DiffSyntaxLanguage::Makefile
-            } else {
-                return None;
-            }
-        }
+        "sh" | "bash" | "zsh" | "shell" | "console" => DiffSyntaxLanguage::Bash,
+        _ => return None,
     })
+}
+
+pub(in crate::view) fn diff_syntax_language_for_path(
+    path: impl AsRef<std::path::Path>,
+) -> Option<DiffSyntaxLanguage> {
+    let p = path.as_ref();
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    let ext = ascii_lowercase_for_match(ext);
+    diff_syntax_language_for_identifier(ext.as_ref()).or_else(|| {
+        let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let file_name = ascii_lowercase_for_match(file_name);
+        diff_syntax_language_for_identifier(file_name.as_ref())
+    })
+}
+
+pub(in crate::view) fn diff_syntax_language_for_code_fence_info(
+    info: &str,
+) -> Option<DiffSyntaxLanguage> {
+    let token = info
+        .trim()
+        .split(|ch: char| ch.is_ascii_whitespace() || ch == ',')
+        .find(|segment| !segment.is_empty())?;
+    let token = token.trim_matches(|ch| matches!(ch, '{' | '}'));
+    let token = token.trim_start_matches('.');
+    let token = token.strip_prefix("language-").unwrap_or(token);
+    let token = ascii_lowercase_for_match(token);
+    diff_syntax_language_for_identifier(token.as_ref())
 }
 
 pub(super) fn syntax_tokens_for_line(
@@ -1717,7 +1730,7 @@ fn build_incremental_parse_seed(
                 edit_range.old_end_byte,
             ),
             new_end_position: treesitter_point_for_byte(
-                &new_line_starts,
+                new_line_starts,
                 new_input,
                 edit_range.new_end_byte,
             ),
@@ -1939,7 +1952,7 @@ fn syntax_tokens_for_line_treesitter(
 
         TS_PARSER.with(|parser| {
             let mut parser = parser.borrow_mut();
-            parser.set_language(&ts_language).ok()?;
+            parser.set_language(ts_language).ok()?;
             parser.parse(&*input, None)
         })
     })?;
@@ -4011,6 +4024,22 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_info_aliases_are_supported() {
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("rust"),
+            Some(DiffSyntaxLanguage::Rust)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("language-typescript title=\"main.ts\""),
+            Some(DiffSyntaxLanguage::TypeScript)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("{.shell}"),
+            Some(DiffSyntaxLanguage::Bash)
+        );
+    }
+
+    #[test]
     fn markdown_heading_and_inline_code_are_highlighted() {
         let heading = syntax_tokens_for_line(
             "# Hello world",
@@ -4297,7 +4326,9 @@ mod tests {
 
     #[test]
     fn prepared_document_tokens_are_chunked_and_materialized_lazily() {
-        reset_prepared_syntax_cache_metrics();
+        // The prepared-document cache is thread-local and persists across tests on the same worker
+        // thread, so clear it before asserting exact miss/hit behavior.
+        reset_prepared_syntax_cache();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 3))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
@@ -4432,6 +4463,7 @@ mod tests {
     fn prepared_document_chunk_prefetch_shares_one_tree_state_clone() {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
             .map(|ix| format!("let value_{ix} = {ix};"))
             .collect::<Vec<_>>();
@@ -4442,7 +4474,7 @@ mod tests {
         )
         .expect("document should prepare");
 
-        assert_eq!(tree_state_clone_count(), 0);
+        let clones_before_request = tree_state_clone_count();
         assert_eq!(
             request_syntax_tokens_for_prepared_document_line(document, 0),
             Some(PreparedSyntaxLineTokensRequest::Pending),
@@ -4450,7 +4482,7 @@ mod tests {
         );
         assert_eq!(
             tree_state_clone_count(),
-            1,
+            clones_before_request.saturating_add(1),
             "the queued chunk burst should share one cloned tree state"
         );
     }
@@ -4523,8 +4555,9 @@ mod tests {
     fn prepared_document_chunk_hit_does_not_clone_tree_state() {
         let _lock = lock_global_counter_tests();
         reset_deferred_drop_counters();
+        reset_prepared_syntax_cache();
         let lines = (0..(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2))
-            .map(|ix| format!("let value_{ix} = {ix};"))
+            .map(|ix| format!("let chunk_clone_probe_{ix} = {ix};"))
             .collect::<Vec<_>>();
         let document = prepare_treesitter_document(
             DiffSyntaxLanguage::Rust,

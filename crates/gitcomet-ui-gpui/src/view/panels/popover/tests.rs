@@ -1,4 +1,5 @@
 use super::*;
+use crate::test_support::lock_clipboard_test;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use std::path::Path;
@@ -426,9 +427,14 @@ fn commit_file_menu_copy_path_uses_os_native_separators(cx: &mut gpui::TestAppCo
 
 #[gpui::test]
 fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(35);
     let commit_id = CommitId("feedfacefeedface".to_string());
@@ -513,9 +519,14 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
 
 #[gpui::test]
 fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(36);
     let workdir = std::env::temp_dir().join(format!(

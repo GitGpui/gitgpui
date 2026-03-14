@@ -75,8 +75,8 @@ pub(crate) mod benchmarks;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
     DiffSyntaxMode, PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument,
-    PreparedDiffSyntaxLine, diff_syntax_language_for_path,
-    drain_completed_prepared_diff_syntax_chunk_builds,
+    PreparedDiffSyntaxLine, diff_syntax_language_for_code_fence_info,
+    diff_syntax_language_for_path, drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds,
     has_pending_prepared_diff_syntax_chunk_builds_for_document,

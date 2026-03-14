@@ -129,6 +129,68 @@ fn update_line_sources_index_for_range(
     }
 }
 
+fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> usize {
+    let mut preferred_ix = 0usize;
+    for ix in 1..N {
+        if max_scrolls[ix] > max_scrolls[preferred_ix] {
+            preferred_ix = ix;
+        }
+    }
+    preferred_ix
+}
+
+fn clamp_raw_scroll_y(raw_y: Pixels, max_scroll: Pixels) -> Pixels {
+    let max_scroll = max_scroll.max(px(0.0));
+    let magnitude = if raw_y < px(0.0) { -raw_y } else { raw_y };
+    let clamped = magnitude.min(max_scroll);
+    if raw_y < px(0.0) { -clamped } else { clamped }
+}
+
+fn compute_synced_scroll_offsets<const N: usize>(
+    offsets: [Pixels; N],
+    max_scrolls: [Pixels; N],
+    last_synced: [Pixels; N],
+    preferred_ix: usize,
+) -> [Pixels; N] {
+    if N == 0 {
+        return offsets;
+    }
+    if offsets.iter().all(|offset| *offset == offsets[0]) {
+        return offsets;
+    }
+
+    let preferred_ix = preferred_ix.min(N.saturating_sub(1));
+    let mut changed_count = 0usize;
+    let mut sole_changed_ix = preferred_ix;
+    let mut preferred_changed = false;
+    let mut largest_changed_ix = preferred_ix;
+
+    for ix in 0..N {
+        if offsets[ix] == last_synced[ix] {
+            continue;
+        }
+
+        if changed_count == 0 || max_scrolls[ix] > max_scrolls[largest_changed_ix] {
+            largest_changed_ix = ix;
+        }
+        if ix == preferred_ix {
+            preferred_changed = true;
+        }
+        sole_changed_ix = ix;
+        changed_count += 1;
+    }
+
+    let master_ix = match changed_count {
+        0 => preferred_ix,
+        1 => sole_changed_ix,
+        _ if preferred_changed => preferred_ix,
+        _ => largest_changed_ix,
+    };
+    let master_y = offsets[master_ix];
+
+    std::array::from_fn(|ix| clamp_raw_scroll_y(master_y, max_scrolls[ix]))
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -410,11 +472,11 @@ impl MainPaneView {
             layout_details_collapsed: false,
             show_whitespace: false,
             diff_view: DiffViewMode::Split,
-            svg_diff_view_mode: SvgDiffViewMode::Image,
+            rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap: false,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
-            diff_split_last_synced_y: px(0.0),
+            diff_split_last_synced_y: [px(0.0); 2],
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -484,6 +546,13 @@ impl MainPaneView {
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
             syntax_chunk_poll_task: None,
             prepared_syntax_documents: HashMap::default(),
+            file_markdown_preview_cache_repo_id: None,
+            file_markdown_preview_cache_rev: 0,
+            file_markdown_preview_cache_content_signature: None,
+            file_markdown_preview_cache_target: None,
+            file_markdown_preview: Loadable::NotLoaded,
+            file_markdown_preview_seq: 0,
+            file_markdown_preview_inflight: None,
             file_image_diff_cache_repo_id: None,
             file_image_diff_cache_rev: 0,
             file_image_diff_cache_target: None,
@@ -495,6 +564,12 @@ impl MainPaneView {
             worktree_preview_path: None,
             worktree_preview: Loadable::NotLoaded,
             worktree_preview_content_rev: 0,
+            worktree_preview_source_len: 0,
+            worktree_markdown_preview_path: None,
+            worktree_markdown_preview_source_rev: 0,
+            worktree_markdown_preview: Loadable::NotLoaded,
+            worktree_markdown_preview_seq: 0,
+            worktree_markdown_preview_inflight: None,
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_style_cache_epoch: 0,
@@ -534,6 +609,9 @@ impl MainPaneView {
             diff_scroll: UniformListScrollHandle::default(),
             diff_split_right_scroll: UniformListScrollHandle::default(),
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
+            conflict_preview_ours_scroll: UniformListScrollHandle::default(),
+            conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
+            conflict_preview_last_synced_y: [px(0.0); 3],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(HashMap::default()),
@@ -850,7 +928,7 @@ impl MainPaneView {
         syntax_edit: Option<rows::DiffSyntaxEdit>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let _perf_scope = perf::span(ConflictPerfSpan::RecomputeResolvedOutline);
+        let _perf_scope = perf::span(ViewPerfSpan::RecomputeResolvedOutline);
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
@@ -870,7 +948,7 @@ impl MainPaneView {
         let mut meta = match view_mode {
             ConflictResolverViewMode::ThreeWay => {
                 conflict_resolver::compute_resolved_line_provenance_from_text_with_indexed_sources(
-                    &output_text,
+                    output_text,
                     &self.conflict_resolver.three_way_text.base,
                     &self.conflict_resolver.three_way_line_starts.base,
                     &self.conflict_resolver.three_way_text.ours,
@@ -881,7 +959,7 @@ impl MainPaneView {
             }
             ConflictResolverViewMode::TwoWayDiff => {
                 conflict_resolver::compute_resolved_line_provenance_from_text_two_way_rows(
-                    &output_text,
+                    output_text,
                     &self.conflict_resolver.diff_rows,
                 )
             }
@@ -889,19 +967,19 @@ impl MainPaneView {
         apply_conflict_choice_provenance_hints(
             &mut meta,
             &self.conflict_resolver.marker_segments,
-            &output_text,
+            output_text,
             view_mode,
         );
         self.conflict_resolver.resolved_output_line_sources_index =
             conflict_resolver::build_resolved_output_line_sources_index_from_text(
                 &meta,
-                &output_text,
+                output_text,
                 view_mode,
             );
         self.conflict_resolver.resolved_output_conflict_markers =
             build_resolved_output_conflict_markers(
                 &self.conflict_resolver.marker_segments,
-                &output_text,
+                output_text,
                 output_line_count,
             );
         self.conflict_resolver.resolved_line_meta = meta;
@@ -959,13 +1037,13 @@ impl MainPaneView {
 
         let Some(old_block_ranges) = resolved_output_conflict_block_ranges_in_text(
             &self.conflict_resolver.marker_segments,
-            &old_text,
+            old_text,
         ) else {
             return false;
         };
         let Some(new_block_ranges) = resolved_output_conflict_block_ranges_in_text(
             &self.conflict_resolver.marker_segments,
-            &output_text,
+            output_text,
         ) else {
             return false;
         };
@@ -1055,7 +1133,7 @@ impl MainPaneView {
         let mut middle_meta = Vec::with_capacity(new_affected.len());
         for line_ix in new_affected.clone() {
             let output_line =
-                rows::resolved_output_line_text(&output_text, new_line_starts.as_ref(), line_ix);
+                rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
             let (source, input_line) = source_lookup
                 .get(output_line)
                 .copied()
@@ -1089,7 +1167,7 @@ impl MainPaneView {
         apply_conflict_choice_provenance_hints(
             &mut next_meta,
             &self.conflict_resolver.marker_segments,
-            &output_text,
+            output_text,
             view_mode,
         );
 
@@ -1155,7 +1233,7 @@ impl MainPaneView {
             &mut next_sources_index,
             view_mode,
             old_meta.as_slice(),
-            &old_text,
+            old_text,
             old_line_starts.as_ref(),
             old_affected.clone(),
             false,
@@ -1164,7 +1242,7 @@ impl MainPaneView {
             &mut next_sources_index,
             view_mode,
             next_meta.as_slice(),
-            &output_text,
+            output_text,
             new_line_starts.as_ref(),
             new_affected.clone(),
             true,
@@ -1673,6 +1751,11 @@ impl MainPaneView {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.worktree_preview_content_rev = 0;
+            self.worktree_preview_source_len = 0;
+            self.worktree_markdown_preview_path = None;
+            self.worktree_markdown_preview_source_rev = 0;
+            self.worktree_markdown_preview = Loadable::NotLoaded;
+            self.worktree_markdown_preview_inflight = None;
             self.worktree_preview_segments_cache_path = None;
             self.worktree_preview_syntax_language = None;
             self.worktree_preview_segments_cache.clear();
@@ -2211,26 +2294,61 @@ impl MainPaneView {
         let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
         let left_offset = left_handle.offset();
         let right_offset = right_handle.offset();
+        let max_scrolls = [
+            left_handle.max_offset().height.max(px(0.0)),
+            right_handle.max_offset().height.max(px(0.0)),
+        ];
+        let targets = compute_synced_scroll_offsets(
+            [left_offset.y, right_offset.y],
+            max_scrolls,
+            self.diff_split_last_synced_y,
+            preferred_scroll_master_index(max_scrolls),
+        );
 
-        if left_offset.y == right_offset.y {
-            self.diff_split_last_synced_y = left_offset.y;
-            return;
-        }
+        left_handle.set_offset(point(left_offset.x, targets[0]));
+        right_handle.set_offset(point(right_offset.x, targets[1]));
+        self.diff_split_last_synced_y = targets;
+    }
 
-        let last_synced_y = self.diff_split_last_synced_y;
-        let left_changed = left_offset.y != last_synced_y;
-        let right_changed = right_offset.y != last_synced_y;
+    pub(in crate::view) fn sync_conflict_preview_vertical_scroll(&mut self) {
+        let base_handle = self
+            .conflict_resolver_diff_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+        let ours_handle = self
+            .conflict_preview_ours_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
+        let theirs_handle = self
+            .conflict_preview_theirs_scroll
+            .0
+            .borrow()
+            .base_handle
+            .clone();
 
-        let master_y = match (left_changed, right_changed) {
-            (true, false) => left_offset.y,
-            (false, true) => right_offset.y,
-            // If both changed (or neither changed), prefer the left scroll (the vertical scrollbar).
-            _ => left_offset.y,
-        };
+        let base_offset = base_handle.offset();
+        let ours_offset = ours_handle.offset();
+        let theirs_offset = theirs_handle.offset();
+        let max_scrolls = [
+            base_handle.max_offset().height.max(px(0.0)),
+            ours_handle.max_offset().height.max(px(0.0)),
+            theirs_handle.max_offset().height.max(px(0.0)),
+        ];
+        let targets = compute_synced_scroll_offsets(
+            [base_offset.y, ours_offset.y, theirs_offset.y],
+            max_scrolls,
+            self.conflict_preview_last_synced_y,
+            preferred_scroll_master_index(max_scrolls),
+        );
 
-        left_handle.set_offset(point(left_offset.x, master_y));
-        right_handle.set_offset(point(right_offset.x, master_y));
-        self.diff_split_last_synced_y = master_y;
+        base_handle.set_offset(point(base_offset.x, targets[0]));
+        ours_handle.set_offset(point(ours_offset.x, targets[1]));
+        theirs_handle.set_offset(point(theirs_offset.x, targets[2]));
+        self.conflict_preview_last_synced_y = targets;
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
@@ -2243,5 +2361,41 @@ impl MainPaneView {
             self.layout_sidebar_collapsed,
             self.layout_details_collapsed,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_raw_scroll_y_limits_scroll_without_flipping_direction() {
+        assert_eq!(clamp_raw_scroll_y(px(-180.0), px(120.0)), px(-120.0));
+        assert_eq!(clamp_raw_scroll_y(px(180.0), px(120.0)), px(120.0));
+        assert_eq!(clamp_raw_scroll_y(px(-40.0), px(120.0)), px(-40.0));
+    }
+
+    #[test]
+    fn synced_scroll_offsets_keep_longer_pane_as_master_after_shorter_clamps() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-500.0)],
+            [px(100.0), px(500.0)],
+            [px(-90.0), px(-90.0)],
+            1,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-500.0)]);
+    }
+
+    #[test]
+    fn synced_scroll_offsets_follow_shorter_pane_when_user_scrolled_it() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-320.0)],
+            [px(100.0), px(500.0)],
+            [px(-80.0), px(-320.0)],
+            1,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-100.0)]);
     }
 }
