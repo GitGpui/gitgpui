@@ -632,6 +632,13 @@ impl MainPaneView {
             return components::empty_state(theme, "Preview", "Empty file.").into_any_element();
         }
 
+        let scrollbar_markers = match &self.file_markdown_preview {
+            Loadable::Ready(preview) => {
+                crate::view::markdown_preview::scrollbar_markers_for_diff_preview(preview.as_ref())
+            }
+            _ => Vec::new(),
+        };
+
         let empty_column = || {
             div()
                 .flex_1()
@@ -719,6 +726,11 @@ impl MainPaneView {
             self.sync_diff_split_vertical_scroll();
             let left_handle = self.diff_scroll.0.borrow().base_handle.clone();
             let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
+            let vertical_scroll_handle = if new_len > old_len {
+                right_handle.clone()
+            } else {
+                left_handle.clone()
+            };
             let left_list = mk_list!(
                 "diff_markdown_preview_left",
                 old_len,
@@ -742,9 +754,9 @@ impl MainPaneView {
                     "diff_markdown_preview_right",
                     "diff_markdown_preview_right_hscrollbar",
                     right_list,
-                    right_handle,
+                    right_handle.clone(),
                 ),
-                left_handle,
+                vertical_scroll_handle,
             )
         };
 
@@ -775,6 +787,7 @@ impl MainPaneView {
                     "diff_markdown_preview_scrollbar",
                     vertical_scroll_handle,
                 )
+                .markers(scrollbar_markers)
                 .always_visible()
                 .render(theme),
             )

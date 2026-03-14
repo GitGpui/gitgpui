@@ -4,8 +4,8 @@ use super::history_canvas;
 use super::*;
 
 use crate::view::markdown_preview::{
-    MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewDocument, MarkdownPreviewRow,
-    MarkdownPreviewRowKind,
+    MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewDocument,
+    MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 
@@ -140,7 +140,21 @@ impl MainPaneView {
     }
 }
 
-const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 24.0;
+const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 38.0;
+const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
+const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 22.0;
+const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
+const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
+const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
+const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX: f32 = 8.0;
+
+struct MarkdownPreviewRowTypography {
+    font_size: f32,
+    line_height: f32,
+    font_weight: Option<FontWeight>,
+    font_family: Option<&'static str>,
+    text_color: gpui::Rgba,
+}
 
 pub(super) fn render_markdown_preview_document_rows(
     theme: AppTheme,
@@ -169,45 +183,179 @@ fn markdown_preview_row_element(
     bar_color: Option<gpui::Rgba>,
 ) -> AnyElement {
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
+    let typography = markdown_preview_row_typography(theme, row);
     let (display, highlights) = markdown_preview_display_and_highlights(theme, row);
-    let text_color = markdown_preview_row_text_color(theme, row);
     let indent_steps = f32::from(row.indent_level.saturating_sub(1));
-    let indent = px(8.0 + indent_steps * 16.0);
+    let indent =
+        px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX);
 
     let mut content = div()
         .flex_1()
         .min_w(px(0.0))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .whitespace_nowrap()
+        .text_size(px(typography.font_size))
+        .line_height(px(typography.line_height))
+        .text_color(typography.text_color);
+
+    if let Some(font_weight) = typography.font_weight {
+        content = content.font_weight(font_weight);
+    }
+    if let Some(font_family) = typography.font_family {
+        content = content.font_family(font_family);
+    }
+
+    let body = match row.kind {
+        MarkdownPreviewRowKind::ThematicBreak => div()
+            .flex_1()
+            .min_w(px(0.0))
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .child(div().w_full().h(px(1.0)).bg(with_alpha(
+                theme.colors.border,
+                if theme.is_dark { 0.92 } else { 0.88 },
+            )))
+            .into_any_element(),
+        _ => {
+            let text = if highlights.is_empty() {
+                content.child(display).into_any_element()
+            } else {
+                content
+                    .child(gpui::StyledText::new(display).with_highlights(highlights))
+                    .into_any_element()
+            };
+
+            let mut line = div()
+                .flex_1()
+                .min_w(px(0.0))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center();
+            if let Some(marker) = markdown_preview_row_marker(row) {
+                line = line.child(
+                    div()
+                        .flex_none()
+                        .h_full()
+                        .min_w(px(22.0))
+                        .mr(px(10.0))
+                        .flex()
+                        .items_center()
+                        .justify_end()
+                        .text_size(px(MARKDOWN_PREVIEW_BASE_FONT_PX))
+                        .line_height(px(MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX))
+                        .text_color(theme.colors.text_muted)
+                        .child(marker),
+                );
+            }
+            if let Some(alert_title) = markdown_preview_alert_title_label(row) {
+                let alert_color = markdown_preview_alert_color(theme, row.alert_kind.unwrap());
+                line = line.child(
+                    div()
+                        .flex_none()
+                        .mr(px(10.0))
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .rounded(px(2.0))
+                        .bg(with_alpha(
+                            alert_color,
+                            if theme.is_dark { 0.18 } else { 0.12 },
+                        ))
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(alert_color)
+                        .child(alert_title),
+                );
+            }
+            line.child(text).into_any_element()
+        }
+    };
+
+    let mut content_shell = div()
+        .flex_1()
+        .min_w(px(0.0))
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center();
+    content_shell = match row.kind {
+        MarkdownPreviewRowKind::Heading { level: 1 | 2 } => {
+            content_shell.border_b_1().border_color(with_alpha(
+                theme.colors.border,
+                if theme.is_dark { 0.85 } else { 0.92 },
+            ))
+        }
+        MarkdownPreviewRowKind::CodeLine { is_first, is_last } => {
+            let code_border =
+                with_alpha(theme.colors.border, if theme.is_dark { 0.90 } else { 0.80 });
+            let mut shell = content_shell
+                .px(px(12.0))
+                .bg(markdown_preview_code_background(theme))
+                .border_l_1()
+                .border_r_1()
+                .border_color(code_border);
+            if is_first {
+                shell = shell.border_t_1();
+            }
+            if is_last {
+                shell = shell.border_b_1();
+            }
+            shell
+        }
+        MarkdownPreviewRowKind::TableRow { is_header } => {
+            let bg = if is_header {
+                with_alpha(
+                    theme.colors.surface_bg_elevated,
+                    if theme.is_dark { 0.64 } else { 0.86 },
+                )
+            } else {
+                with_alpha(
+                    theme.colors.surface_bg_elevated,
+                    if theme.is_dark { 0.42 } else { 0.72 },
+                )
+            };
+            content_shell
+                .px(px(12.0))
+                .bg(bg)
+                .border_b_1()
+                .border_color(with_alpha(
+                    theme.colors.border,
+                    if theme.is_dark { 0.88 } else { 0.86 },
+                ))
+        }
+        MarkdownPreviewRowKind::PlainFallback => content_shell.px(px(12.0)).bg(with_alpha(
+            theme.colors.warning,
+            if theme.is_dark { 0.12 } else { 0.08 },
+        )),
+        _ => content_shell,
+    };
+    content_shell = content_shell.child(body);
+
+    let mut row_content = div()
+        .flex_1()
+        .min_w(px(0.0))
+        .w_full()
         .h_full()
         .flex()
         .items_center()
         .pl(indent)
-        .pr(px(12.0))
-        .whitespace_nowrap()
-        .text_xs()
-        .text_color(text_color);
-
-    content = match row.kind {
-        MarkdownPreviewRowKind::Heading { level: 1 } => {
-            content.text_sm().font_weight(FontWeight::BOLD)
-        }
-        MarkdownPreviewRowKind::Heading { .. } => content.font_weight(FontWeight::BOLD),
-        MarkdownPreviewRowKind::CodeLine { .. }
-        | MarkdownPreviewRowKind::TableRow
-        | MarkdownPreviewRowKind::PlainFallback => content.font_family(UI_MONOSPACE_FONT_FAMILY),
-        _ => content,
-    };
-
-    let text = if highlights.is_empty() {
-        content.child(display).into_any_element()
-    } else {
-        content
-            .child(gpui::StyledText::new(display).with_highlights(highlights))
-            .into_any_element()
-    };
+        .pr(px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX));
+    if let Some(blockquote_gutter) =
+        markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
+    {
+        row_content = row_content.child(blockquote_gutter);
+    }
+    row_content = row_content.child(content_shell);
 
     div()
         .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
         .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+        .w_full()
         .flex()
         .items_center()
         .when_some(markdown_preview_row_background(theme, row), |div, bg| {
@@ -216,7 +364,7 @@ fn markdown_preview_row_element(
         .when_some(bar_color, |container, color| {
             container.child(div().h_full().w(px(3.0)).bg(color))
         })
-        .child(text)
+        .child(row_content)
         .into_any_element()
 }
 
@@ -238,66 +386,105 @@ fn markdown_preview_display_and_highlights(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
 ) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
-    let prefix = markdown_preview_row_prefix(row);
-    let prefix_len = prefix.len();
-
-    let display: SharedString = if prefix_len == 0 {
-        row.text.clone()
-    } else {
-        let mut buf = String::with_capacity(prefix_len + row.text.len());
-        buf.push_str(&prefix);
-        buf.push_str(row.text.as_ref());
-        buf.into()
-    };
+    if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
+        let styled = build_cached_diff_styled_text(
+            theme,
+            row.text.as_ref(),
+            &[],
+            "",
+            row.code_language,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        return (styled.text, styled.highlights.as_ref().clone());
+    }
 
     let highlights = row
         .inline_spans
         .iter()
         .filter_map(|span| {
             let style = markdown_preview_inline_highlight(theme, span.style);
-            (style != gpui::HighlightStyle::default()).then_some((
-                (prefix_len + span.byte_range.start)..(prefix_len + span.byte_range.end),
-                style,
-            ))
+            (style != gpui::HighlightStyle::default())
+                .then_some((span.byte_range.start..span.byte_range.end, style))
         })
         .collect();
 
-    (display, highlights)
+    (row.text.clone(), highlights)
 }
 
-fn markdown_preview_row_prefix(row: &MarkdownPreviewRow) -> std::borrow::Cow<'static, str> {
-    let suffix = match row.kind {
-        MarkdownPreviewRowKind::ListItem { number: Some(n) } => {
-            return if row.blockquote_level == 0 {
-                format!("{n}. ").into()
-            } else {
-                markdown_preview_row_prefix_with_blockquote(row.blockquote_level, &format!("{n}. "))
-            };
-        }
-        MarkdownPreviewRowKind::ListItem { number: None } => "• ",
-        _ => "",
-    };
-    markdown_preview_row_prefix_with_blockquote(row.blockquote_level, suffix)
-}
-
-fn markdown_preview_row_prefix_with_blockquote(
-    blockquote_level: u8,
-    suffix: &str,
-) -> std::borrow::Cow<'static, str> {
-    match (blockquote_level, suffix) {
-        (0, "") => "".into(),
-        (0, "• ") => "• ".into(),
-        (1, "") => "│ ".into(),
-        _ => {
-            let mut prefix =
-                String::with_capacity(usize::from(blockquote_level) * 4 + suffix.len());
-            for _ in 0..blockquote_level {
-                prefix.push_str("│ ");
-            }
-            prefix.push_str(suffix);
-            prefix.into()
-        }
+fn markdown_preview_row_marker(row: &MarkdownPreviewRow) -> Option<SharedString> {
+    if let Some(label) = row.footnote_label.as_ref() {
+        return Some(format!("[^{}]:", label.as_ref()).into());
     }
+
+    match row.kind {
+        MarkdownPreviewRowKind::ListItem { number: Some(n) } => Some(format!("{n}.").into()),
+        MarkdownPreviewRowKind::ListItem { number: None } => Some("•".into()),
+        _ => None,
+    }
+}
+
+fn markdown_preview_alert_title_label(row: &MarkdownPreviewRow) -> Option<&'static str> {
+    if !row.starts_alert {
+        return None;
+    }
+
+    match row.alert_kind? {
+        MarkdownAlertKind::Note => Some("NOTE"),
+        MarkdownAlertKind::Tip => Some("TIP"),
+        MarkdownAlertKind::Important => Some("IMPORTANT"),
+        MarkdownAlertKind::Warning => Some("WARNING"),
+        MarkdownAlertKind::Caution => Some("CAUTION"),
+    }
+}
+
+fn markdown_preview_alert_color(theme: AppTheme, kind: MarkdownAlertKind) -> gpui::Rgba {
+    match kind {
+        MarkdownAlertKind::Note => theme.colors.accent,
+        MarkdownAlertKind::Tip => theme.colors.success,
+        MarkdownAlertKind::Important => with_alpha(theme.colors.accent, 0.85),
+        MarkdownAlertKind::Warning => theme.colors.warning,
+        MarkdownAlertKind::Caution => theme.colors.danger,
+    }
+}
+
+fn markdown_preview_blockquote_gutter(
+    theme: AppTheme,
+    blockquote_level: u8,
+    alert_kind: Option<MarkdownAlertKind>,
+) -> Option<AnyElement> {
+    if blockquote_level == 0 {
+        return None;
+    }
+
+    let quote_bar_color = with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.86 });
+    let alert_bar_color = alert_kind.map(|kind| markdown_preview_alert_color(theme, kind));
+    let bars = (0..blockquote_level)
+        .map(|ix| {
+            let bar_color = if alert_bar_color.is_some() && ix + 1 == blockquote_level {
+                alert_bar_color.unwrap()
+            } else {
+                quote_bar_color
+            };
+            div()
+                .w(px(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX))
+                .h_full()
+                .bg(bar_color)
+                .rounded(px(2.0))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+
+    Some(
+        div()
+            .flex_none()
+            .h_full()
+            .flex()
+            .gap(px(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX))
+            .mr(px(12.0))
+            .children(bars)
+            .into_any_element(),
+    )
 }
 
 fn markdown_preview_inline_highlight(
@@ -346,17 +533,117 @@ fn markdown_preview_inline_highlight(
             }),
             ..gpui::HighlightStyle::default()
         },
+        MarkdownInlineStyle::Underline => gpui::HighlightStyle {
+            underline: Some(gpui::UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(theme.colors.text.into()),
+                wavy: false,
+            }),
+            ..gpui::HighlightStyle::default()
+        },
     }
 }
 
 fn markdown_preview_row_text_color(theme: AppTheme, row: &MarkdownPreviewRow) -> gpui::Rgba {
+    if row.alert_kind.is_some() {
+        return theme.colors.text;
+    }
+
     match row.kind {
-        MarkdownPreviewRowKind::Heading { level: 1 | 2 } => theme.colors.accent,
-        MarkdownPreviewRowKind::Heading { .. }
-        | MarkdownPreviewRowKind::BlockquoteLine
-        | MarkdownPreviewRowKind::ThematicBreak => theme.colors.text_muted,
+        MarkdownPreviewRowKind::Heading { level: 6 } | MarkdownPreviewRowKind::BlockquoteLine => {
+            theme.colors.text_muted
+        }
+        MarkdownPreviewRowKind::Heading { .. } => theme.colors.text,
+        MarkdownPreviewRowKind::ThematicBreak => theme.colors.text_muted,
         MarkdownPreviewRowKind::PlainFallback => theme.colors.warning,
         _ => theme.colors.text,
+    }
+}
+
+fn markdown_preview_row_typography(
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+) -> MarkdownPreviewRowTypography {
+    let text_color = markdown_preview_row_text_color(theme, row);
+    match row.kind {
+        MarkdownPreviewRowKind::Heading { level: 1 } => MarkdownPreviewRowTypography {
+            font_size: 28.0,
+            line_height: 32.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::Heading { level: 2 } => MarkdownPreviewRowTypography {
+            font_size: 24.0,
+            line_height: 28.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowTypography {
+            font_size: 20.0,
+            line_height: 24.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::Heading { level: 4 } => MarkdownPreviewRowTypography {
+            font_size: 18.0,
+            line_height: 22.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::Heading { level: 5 } => MarkdownPreviewRowTypography {
+            font_size: 16.0,
+            line_height: 20.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::Heading { level: 6 } => MarkdownPreviewRowTypography {
+            font_size: 14.0,
+            line_height: 18.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
+        MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowTypography {
+            font_size: 12.0,
+            line_height: 18.0,
+            font_weight: None,
+            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            text_color,
+        },
+        MarkdownPreviewRowKind::TableRow { is_header } => MarkdownPreviewRowTypography {
+            font_size: 12.0,
+            line_height: 18.0,
+            font_weight: is_header.then_some(FontWeight::BOLD),
+            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            text_color,
+        },
+        MarkdownPreviewRowKind::PlainFallback => MarkdownPreviewRowTypography {
+            font_size: 12.0,
+            line_height: 18.0,
+            font_weight: None,
+            font_family: Some(UI_MONOSPACE_FONT_FAMILY),
+            text_color,
+        },
+        _ => MarkdownPreviewRowTypography {
+            font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
+            line_height: MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX,
+            font_weight: None,
+            font_family: None,
+            text_color,
+        },
+    }
+}
+
+fn markdown_preview_code_background(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        with_alpha(theme.colors.surface_bg_elevated, 0.88)
+    } else {
+        with_alpha(theme.colors.surface_bg, 0.86)
     }
 }
 
@@ -380,21 +667,22 @@ fn markdown_preview_row_background(
             theme.colors.accent,
             if theme.is_dark { 0.18 } else { 0.10 },
         )),
-        Hint::None => match row.kind {
-            Kind::CodeLine { .. } => Some(with_alpha(
-                theme.colors.active_section,
-                if theme.is_dark { 0.58 } else { 0.34 },
-            )),
-            Kind::ThematicBreak => Some(with_alpha(
-                theme.colors.border,
-                if theme.is_dark { 0.60 } else { 0.35 },
-            )),
-            Kind::PlainFallback => Some(with_alpha(
-                theme.colors.warning,
-                if theme.is_dark { 0.08 } else { 0.06 },
-            )),
-            _ => None,
-        },
+        Hint::None => {
+            if let Some(alert_kind) = row.alert_kind {
+                return Some(with_alpha(
+                    markdown_preview_alert_color(theme, alert_kind),
+                    if theme.is_dark { 0.10 } else { 0.06 },
+                ));
+            }
+
+            match row.kind {
+                Kind::PlainFallback => Some(with_alpha(
+                    theme.colors.warning,
+                    if theme.is_dark { 0.08 } else { 0.06 },
+                )),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -823,12 +1111,35 @@ fn working_tree_summary_history_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        MarkdownChangeHint, MarkdownPreviewRow, MarkdownPreviewRowKind, markdown_preview_row_prefix,
+        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
+        markdown_preview_alert_title_label, markdown_preview_display_and_highlights,
+        markdown_preview_inline_highlight, markdown_preview_row_background,
+        markdown_preview_row_marker, markdown_preview_row_typography,
     };
-    use crate::view::{DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
-    use gpui::SharedString;
+    use crate::view::markdown_preview::MarkdownInlineSpan;
+    use crate::view::{
+        AppTheme, DateTimeFormat, Timezone, UI_MONOSPACE_FONT_FAMILY, format_datetime,
+        format_datetime_utc,
+    };
+    use gpui::{FontWeight, SharedString};
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
+
+    fn markdown_row(kind: MarkdownPreviewRowKind) -> MarkdownPreviewRow {
+        MarkdownPreviewRow {
+            kind,
+            text: SharedString::from("text"),
+            inline_spans: Arc::new(Vec::new()),
+            code_language: None,
+            source_line_range: 0..1,
+            change_hint: MarkdownChangeHint::None,
+            indent_level: 1,
+            blockquote_level: 0,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
+        }
+    }
 
     #[test]
     fn commit_date_formats_as_yyyy_mm_dd_utc() {
@@ -924,47 +1235,295 @@ mod tests {
     }
 
     #[test]
-    fn markdown_preview_row_prefix_preserves_ordered_item_number() {
-        let row = MarkdownPreviewRow {
-            kind: MarkdownPreviewRowKind::ListItem { number: Some(7) },
-            text: SharedString::from("item"),
+    fn markdown_preview_heading_typography_scales_above_body_text() {
+        let theme = AppTheme::zed_one_light();
+        let paragraph = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Paragraph,
+            text: SharedString::from("body"),
             inline_spans: Arc::new(Vec::new()),
+            code_language: None,
             source_line_range: 0..1,
             change_hint: MarkdownChangeHint::None,
             indent_level: 1,
             blockquote_level: 0,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
+        };
+        let h1 = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Heading { level: 1 },
+            ..paragraph.clone()
+        };
+        let h2 = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Heading { level: 2 },
+            ..paragraph.clone()
+        };
+        let h6 = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Heading { level: 6 },
+            ..paragraph.clone()
         };
 
-        assert_eq!(markdown_preview_row_prefix(&row), "7. ");
+        let body_typography = markdown_preview_row_typography(theme, &paragraph);
+        let h1_typography = markdown_preview_row_typography(theme, &h1);
+        let h2_typography = markdown_preview_row_typography(theme, &h2);
+        let h6_typography = markdown_preview_row_typography(theme, &h6);
+
+        assert!(h1_typography.font_size > h2_typography.font_size);
+        assert!(h2_typography.font_size > body_typography.font_size);
+        assert!(h6_typography.font_size > body_typography.font_size);
+        assert_eq!(h1_typography.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(h2_typography.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(h6_typography.font_weight, Some(FontWeight::BOLD));
     }
 
     #[test]
-    fn markdown_preview_row_prefix_includes_blockquote_depth() {
+    fn markdown_preview_row_marker_preserves_ordered_item_number() {
+        let row = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::ListItem { number: Some(7) },
+            text: SharedString::from("item"),
+            inline_spans: Arc::new(Vec::new()),
+            code_language: None,
+            source_line_range: 0..1,
+            change_hint: MarkdownChangeHint::None,
+            indent_level: 1,
+            blockquote_level: 0,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
+        };
+
+        assert_eq!(
+            markdown_preview_row_marker(&row)
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some("7.")
+        );
+    }
+
+    #[test]
+    fn markdown_preview_row_marker_is_none_for_blockquotes_without_list_items() {
         let row = MarkdownPreviewRow {
             kind: MarkdownPreviewRowKind::BlockquoteLine,
             text: SharedString::from("quote"),
             inline_spans: Arc::new(Vec::new()),
+            code_language: None,
             source_line_range: 0..1,
             change_hint: MarkdownChangeHint::None,
             indent_level: 1,
             blockquote_level: 2,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
         };
 
-        assert_eq!(markdown_preview_row_prefix(&row), "│ │ ");
+        assert_eq!(markdown_preview_row_marker(&row), None);
     }
 
     #[test]
-    fn markdown_preview_row_prefix_combines_blockquote_and_list_markers() {
+    fn markdown_preview_row_marker_uses_footnote_label_when_present() {
+        let row = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Paragraph,
+            text: SharedString::from("reference"),
+            inline_spans: Arc::new(Vec::new()),
+            code_language: None,
+            source_line_range: 0..1,
+            change_hint: MarkdownChangeHint::None,
+            indent_level: 1,
+            blockquote_level: 0,
+            footnote_label: Some("1".into()),
+            alert_kind: None,
+            starts_alert: false,
+        };
+
+        assert_eq!(
+            markdown_preview_row_marker(&row)
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some("[^1]:")
+        );
+    }
+
+    #[test]
+    fn markdown_preview_row_marker_returns_unordered_bullet_inside_blockquote() {
         let row = MarkdownPreviewRow {
             kind: MarkdownPreviewRowKind::ListItem { number: None },
             text: SharedString::from("item"),
             inline_spans: Arc::new(Vec::new()),
+            code_language: None,
             source_line_range: 0..1,
             change_hint: MarkdownChangeHint::None,
             indent_level: 1,
             blockquote_level: 1,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
         };
 
-        assert_eq!(markdown_preview_row_prefix(&row), "│ • ");
+        assert_eq!(
+            markdown_preview_row_marker(&row)
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some("•")
+        );
+    }
+
+    #[test]
+    fn markdown_preview_alert_title_label_requires_alert_start_row() {
+        for (kind, label) in [
+            (super::MarkdownAlertKind::Note, "NOTE"),
+            (super::MarkdownAlertKind::Tip, "TIP"),
+            (super::MarkdownAlertKind::Important, "IMPORTANT"),
+            (super::MarkdownAlertKind::Warning, "WARNING"),
+            (super::MarkdownAlertKind::Caution, "CAUTION"),
+        ] {
+            let mut row = markdown_row(MarkdownPreviewRowKind::BlockquoteLine);
+            row.alert_kind = Some(kind);
+            row.starts_alert = true;
+            assert_eq!(markdown_preview_alert_title_label(&row), Some(label));
+
+            row.starts_alert = false;
+            assert_eq!(markdown_preview_alert_title_label(&row), None);
+        }
+
+        let mut row = markdown_row(MarkdownPreviewRowKind::BlockquoteLine);
+        row.starts_alert = true;
+        assert_eq!(markdown_preview_alert_title_label(&row), None);
+    }
+
+    #[test]
+    fn markdown_preview_row_background_change_hints_override_alert_and_fallback_states() {
+        let theme = AppTheme::zed_one_light();
+
+        let mut added_row = markdown_row(MarkdownPreviewRowKind::Paragraph);
+        added_row.change_hint = MarkdownChangeHint::Added;
+
+        let mut added_alert_row = added_row.clone();
+        added_alert_row.alert_kind = Some(super::MarkdownAlertKind::Warning);
+        assert_eq!(
+            markdown_preview_row_background(theme, &added_alert_row),
+            markdown_preview_row_background(theme, &added_row)
+        );
+
+        let mut removed_row = markdown_row(MarkdownPreviewRowKind::Paragraph);
+        removed_row.change_hint = MarkdownChangeHint::Removed;
+
+        let mut removed_fallback_row = removed_row.clone();
+        removed_fallback_row.kind = MarkdownPreviewRowKind::PlainFallback;
+        assert_eq!(
+            markdown_preview_row_background(theme, &removed_fallback_row),
+            markdown_preview_row_background(theme, &removed_row)
+        );
+    }
+
+    #[test]
+    fn markdown_preview_row_background_uses_alert_and_fallback_only_when_unchanged() {
+        let theme = AppTheme::zed_ayu_dark();
+
+        let plain_row = markdown_row(MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(markdown_preview_row_background(theme, &plain_row), None);
+
+        let mut alert_row = plain_row.clone();
+        alert_row.alert_kind = Some(super::MarkdownAlertKind::Tip);
+
+        let fallback_row = markdown_row(MarkdownPreviewRowKind::PlainFallback);
+        let alert_bg = markdown_preview_row_background(theme, &alert_row);
+        let fallback_bg = markdown_preview_row_background(theme, &fallback_row);
+
+        assert!(alert_bg.is_some());
+        assert!(fallback_bg.is_some());
+        assert_ne!(alert_bg, fallback_bg);
+    }
+
+    #[test]
+    fn markdown_preview_display_and_highlights_maps_inline_styles_and_skips_normal_spans() {
+        let theme = AppTheme::zed_one_light();
+        let mut row = markdown_row(MarkdownPreviewRowKind::Paragraph);
+        row.text = SharedString::from("link under strike plain");
+        row.inline_spans = Arc::new(vec![
+            MarkdownInlineSpan {
+                byte_range: 0..4,
+                style: MarkdownInlineStyle::Link,
+            },
+            MarkdownInlineSpan {
+                byte_range: 5..10,
+                style: MarkdownInlineStyle::Underline,
+            },
+            MarkdownInlineSpan {
+                byte_range: 11..17,
+                style: MarkdownInlineStyle::Strikethrough,
+            },
+            MarkdownInlineSpan {
+                byte_range: 18..23,
+                style: MarkdownInlineStyle::Normal,
+            },
+        ]);
+
+        let (display, highlights) = markdown_preview_display_and_highlights(theme, &row);
+
+        assert_eq!(display.as_ref(), "link under strike plain");
+        assert_eq!(highlights.len(), 3);
+        assert_eq!(highlights[0].0, 0..4);
+        assert_eq!(
+            highlights[0].1,
+            markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Link)
+        );
+        assert_eq!(highlights[1].0, 5..10);
+        assert_eq!(
+            highlights[1].1,
+            markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Underline)
+        );
+        assert_eq!(highlights[2].0, 11..17);
+        assert_eq!(
+            highlights[2].1,
+            markdown_preview_inline_highlight(theme, MarkdownInlineStyle::Strikethrough)
+        );
+    }
+
+    #[test]
+    fn markdown_preview_table_rows_use_monospace_typography_and_only_headers_are_bold() {
+        let theme = AppTheme::zed_one_light();
+        let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
+        let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
+
+        let header_typography = markdown_preview_row_typography(theme, &header);
+        let body_typography = markdown_preview_row_typography(theme, &body);
+
+        assert_eq!(
+            header_typography.font_family,
+            Some(UI_MONOSPACE_FONT_FAMILY)
+        );
+        assert_eq!(body_typography.font_family, Some(UI_MONOSPACE_FONT_FAMILY));
+        assert_eq!(header_typography.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(body_typography.font_weight, None);
+        assert_eq!(header_typography.font_size, body_typography.font_size);
+        assert_eq!(header_typography.line_height, body_typography.line_height);
+    }
+
+    #[test]
+    fn markdown_preview_code_rows_reuse_diff_syntax_highlighting() {
+        let theme = AppTheme::zed_ayu_dark();
+        let row = MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::CodeLine {
+                is_first: true,
+                is_last: true,
+            },
+            text: SharedString::from("fn\tmain() { let x = 1; }"),
+            inline_spans: Arc::new(Vec::new()),
+            code_language: Some(crate::view::rows::DiffSyntaxLanguage::Rust),
+            source_line_range: 0..1,
+            change_hint: MarkdownChangeHint::None,
+            indent_level: 1,
+            blockquote_level: 0,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
+        };
+
+        let (display, highlights) = markdown_preview_display_and_highlights(theme, &row);
+        assert_eq!(display.as_ref(), "fn    main() { let x = 1; }");
+        assert!(
+            !highlights.is_empty(),
+            "code rows should reuse syntax highlights from the diff text renderer"
+        );
     }
 }

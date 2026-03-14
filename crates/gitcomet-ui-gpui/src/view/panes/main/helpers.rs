@@ -1660,7 +1660,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
-    pub(in crate::view) diff_split_last_synced_y: Pixels,
+    pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
     pub(in crate::view) diff_horizontal_min_width: Pixels,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) diff_cache_rev: u64,
@@ -1799,7 +1799,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_resolver_diff_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_ours_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
-    pub(in crate::view) conflict_preview_last_synced_y: Pixels,
+    pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 3],
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 

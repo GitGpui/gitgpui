@@ -5,7 +5,8 @@ use std::sync::{Arc, OnceLock};
 mod syntax;
 
 pub(in crate::view) use syntax::{
-    DiffSyntaxBudget, DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_path,
+    DiffSyntaxBudget, DiffSyntaxLanguage, DiffSyntaxMode, diff_syntax_language_for_code_fence_info,
+    diff_syntax_language_for_path,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -477,47 +477,64 @@ impl MainPaneView {
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
-
-            if let Some(preview_kind) = rendered_view_toggle_kind {
-                let preview_mode = self.rendered_preview_modes.get(preview_kind);
-                controls = controls
-                    .child(
-                        components::Button::new(
-                            preview_kind.rendered_button_id(),
-                            preview_kind.rendered_label(),
-                        )
-                        .style(if preview_mode == RenderedPreviewMode::Rendered {
-                            components::ButtonStyle::Filled
-                        } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Rendered);
-                            cx.notify();
-                        }),
-                    )
-                    .child(
-                        components::Button::new(
-                            preview_kind.source_button_id(),
-                            preview_kind.source_label(),
-                        )
-                        .style(if preview_mode == RenderedPreviewMode::Source {
-                            components::ButtonStyle::Filled
-                        } else {
-                            components::ButtonStyle::Outlined
-                        })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Source);
-                            cx.notify();
-                        }),
-                    );
-            }
         } else {
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
                 .when_some(next_file_btn, |d, btn| d.child(btn));
+        }
+
+        if !is_conflict_resolver {
+            if let Some(preview_kind) = rendered_view_toggle_kind {
+                let preview_mode = self.rendered_preview_modes.get(preview_kind);
+                controls = controls.child(
+                    div()
+                        .id(preview_kind.toggle_id())
+                        .debug_selector(move || preview_kind.toggle_id().to_string())
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            components::Button::new(
+                                preview_kind.rendered_button_id(),
+                                preview_kind.rendered_label(),
+                            )
+                            .style(if preview_mode == RenderedPreviewMode::Rendered {
+                                components::ButtonStyle::Filled
+                            } else {
+                                components::ButtonStyle::Outlined
+                            })
+                            .on_click(
+                                theme,
+                                cx,
+                                move |this, _e, _w, cx| {
+                                    this.rendered_preview_modes
+                                        .set(preview_kind, RenderedPreviewMode::Rendered);
+                                    cx.notify();
+                                },
+                            ),
+                        )
+                        .child(
+                            components::Button::new(
+                                preview_kind.source_button_id(),
+                                preview_kind.source_label(),
+                            )
+                            .style(if preview_mode == RenderedPreviewMode::Source {
+                                components::ButtonStyle::Filled
+                            } else {
+                                components::ButtonStyle::Outlined
+                            })
+                            .on_click(
+                                theme,
+                                cx,
+                                move |this, _e, _w, cx| {
+                                    this.rendered_preview_modes
+                                        .set(preview_kind, RenderedPreviewMode::Source);
+                                    cx.notify();
+                                },
+                            ),
+                        ),
+                );
+            }
         }
 
         if let Some(repo_id) = repo_id {

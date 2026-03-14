@@ -156,7 +156,7 @@ fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
                 gitcomet_core::domain::RepoStatus {
                     staged: vec![gitcomet_core::domain::FileStatus {
                         path: file_rel.clone(),
-                        kind: status_kind,
+                        kind: status_kind.clone(),
                         conflict: None,
                     }],
                     unstaged: vec![],
@@ -213,6 +213,114 @@ fn assert_file_preview_ctrl_a_ctrl_c_copies_all(
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
+}
+
+fn assert_markdown_file_preview_toggle_visible(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: std::path::PathBuf,
+    file_rel: std::path::PathBuf,
+    status_kind: gitcomet_core::domain::FileStatusKind,
+    old_text: Option<&str>,
+    new_text: Option<&str>,
+    create_worktree_file: bool,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown preview workdir");
+    if create_worktree_file {
+        let contents = new_text.or(old_text).unwrap_or_default();
+        std::fs::write(workdir.join(&file_rel), contents).expect("write markdown preview fixture");
+    }
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: status_kind,
+                        conflict: None,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Staged,
+            });
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path: file_rel.clone(),
+                    old: old_text.map(|text| text.to_string()),
+                    new: new_text.map(|text| text.to_string()),
+                },
+            )));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let rendered_preview_kind = crate::view::diff_target_rendered_preview_kind(
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+        );
+        let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+            false,
+            pane.is_file_preview_active(),
+            rendered_preview_kind,
+        );
+        assert!(
+            pane.is_file_preview_active(),
+            "expected markdown {status_kind:?} target to use single-file preview mode"
+        );
+        assert_eq!(
+            toggle_kind,
+            Some(RenderedPreviewKind::Markdown),
+            "expected markdown {status_kind:?} target to request the main preview toggle"
+        );
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "expected markdown {status_kind:?} target to default to Preview mode"
+        );
+    });
+    assert!(
+        cx.debug_bounds("markdown_diff_view_toggle").is_some(),
+        "expected markdown Preview/Text toggle for {status_kind:?} file preview"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview fixture");
 }
 
 fn focus_diff_panel(
@@ -755,11 +863,6 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
                 this._ui_model.update(cx, |model, cx| {
                     model.set_state(Arc::clone(&next_state), cx);
                 });
-                this.main_pane.update(cx, |pane, cx| {
-                    pane.rendered_preview_modes
-                        .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                    cx.notify();
-                });
             });
         });
     };
@@ -796,6 +899,16 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
     let baseline_seq =
         cx.update(|_window, app| view.read(app).main_pane.read(app).file_markdown_preview_seq);
 
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "markdown diff preview should default to Preview mode"
+        );
+    });
+
     for rev in 2..=6 {
         set_state(cx, rev);
         cx.update(|window, app| {
@@ -826,6 +939,166 @@ fn markdown_diff_preview_cache_does_not_rebuild_when_rev_changes_with_identical_
             );
         });
     }
+}
+
+#[gpui::test]
+fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(62);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_worktree_markdown_diff_default_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/guide.md");
+    let old_text = concat!(
+        "# Guide\n",
+        "\n",
+        "- keep\n",
+        "- before\n",
+        "\n",
+        "```rust\n",
+        "let value = 1;\n",
+        "```\n",
+    );
+    let new_text = concat!(
+        "# Guide\n",
+        "\n",
+        "- keep\n",
+        "- after\n",
+        "\n",
+        "```rust\n",
+        "let value = 2;\n",
+        "```\n",
+        "\n",
+        "| Col | Value |\n",
+        "| --- | --- |\n",
+        "| add | 3 |\n",
+    );
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create commit markdown diff workdir");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path: file_rel.clone(),
+                    old: Some(old_text.to_string()),
+                    new: Some(new_text.to_string()),
+                },
+            )));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "worktree markdown diff target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(old_text, new_text)
+                        .expect("worktree markdown diff preview should parse"),
+                ));
+                pane.file_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(!pane.is_file_preview_active());
+        assert!(
+            pane.is_markdown_preview_active(),
+            "expected worktree markdown diff preview to be active; mode={:?} target_kind={:?} diff_target={:?}",
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            crate::view::diff_target_rendered_preview_kind(
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.as_ref()),
+            ),
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone()),
+        );
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "expected worktree markdown diff to default to Preview mode"
+        );
+    });
+    assert!(
+        cx.debug_bounds("markdown_diff_view_toggle").is_some(),
+        "expected markdown Preview/Text toggle for worktree markdown diff"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup worktree markdown diff fixture");
 }
 
 #[gpui::test]
@@ -2155,6 +2428,163 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
         };
         assert_eq!(lines.as_ref(), &vec!["one".to_string(), "two".to_string()]);
     });
+}
+
+#[gpui::test]
+fn untracked_markdown_file_preview_defaults_to_preview_mode_and_renders_container(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(59);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_untracked_default_preview",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("notes.md");
+    let abs_path = workdir.join(&file_rel);
+    let source = "# Preview title\n\n- first item\n- second item\n";
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create untracked markdown workdir");
+    std::fs::write(&abs_path, source).expect("write untracked markdown fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Untracked,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            });
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_preview_path = Some(abs_path.clone());
+                pane.worktree_preview =
+                    gitcomet_state::model::Loadable::Ready(Arc::clone(&preview_lines));
+                pane.worktree_preview_source_len = source.len();
+                pane.worktree_preview_content_rev = 1;
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = 1;
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(source)
+                        .expect("untracked markdown preview should parse"),
+                ));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.is_file_preview_active());
+        assert!(pane.is_markdown_preview_active());
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered,
+            "expected untracked markdown preview to default to Preview mode"
+        );
+    });
+    assert!(
+        cx.debug_bounds("markdown_diff_view_toggle").is_some(),
+        "expected markdown Preview/Text toggle for untracked markdown preview"
+    );
+    assert!(
+        cx.debug_bounds("worktree_markdown_preview_scroll_container")
+            .is_some(),
+        "expected rendered markdown preview container for untracked markdown preview"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup untracked markdown preview fixture");
+}
+
+#[gpui::test]
+fn staged_added_markdown_file_preview_shows_preview_text_toggle(cx: &mut gpui::TestAppContext) {
+    let repo_id = gitcomet_state::model::RepoId(57);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_added_toggle",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("notes.md");
+
+    assert_markdown_file_preview_toggle_visible(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Added,
+        None,
+        Some("# Added markdown\n\nnew body\n"),
+        true,
+    );
+}
+
+#[gpui::test]
+fn staged_deleted_markdown_file_preview_shows_preview_text_toggle(cx: &mut gpui::TestAppContext) {
+    let repo_id = gitcomet_state::model::RepoId(58);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_deleted_toggle",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("notes.md");
+
+    assert_markdown_file_preview_toggle_visible(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Deleted,
+        Some("# Deleted markdown\n\nold body\n"),
+        None,
+        false,
+    );
 }
 
 #[gpui::test]

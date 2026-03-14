@@ -125,6 +125,68 @@ fn update_line_sources_index_for_range(
     }
 }
 
+fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> usize {
+    let mut preferred_ix = 0usize;
+    for ix in 1..N {
+        if max_scrolls[ix] > max_scrolls[preferred_ix] {
+            preferred_ix = ix;
+        }
+    }
+    preferred_ix
+}
+
+fn clamp_raw_scroll_y(raw_y: Pixels, max_scroll: Pixels) -> Pixels {
+    let max_scroll = max_scroll.max(px(0.0));
+    let magnitude = if raw_y < px(0.0) { -raw_y } else { raw_y };
+    let clamped = magnitude.min(max_scroll);
+    if raw_y < px(0.0) { -clamped } else { clamped }
+}
+
+fn compute_synced_scroll_offsets<const N: usize>(
+    offsets: [Pixels; N],
+    max_scrolls: [Pixels; N],
+    last_synced: [Pixels; N],
+    preferred_ix: usize,
+) -> [Pixels; N] {
+    if N == 0 {
+        return offsets;
+    }
+    if offsets.iter().all(|offset| *offset == offsets[0]) {
+        return offsets;
+    }
+
+    let preferred_ix = preferred_ix.min(N.saturating_sub(1));
+    let mut changed_count = 0usize;
+    let mut sole_changed_ix = preferred_ix;
+    let mut preferred_changed = false;
+    let mut largest_changed_ix = preferred_ix;
+
+    for ix in 0..N {
+        if offsets[ix] == last_synced[ix] {
+            continue;
+        }
+
+        if changed_count == 0 || max_scrolls[ix] > max_scrolls[largest_changed_ix] {
+            largest_changed_ix = ix;
+        }
+        if ix == preferred_ix {
+            preferred_changed = true;
+        }
+        sole_changed_ix = ix;
+        changed_count += 1;
+    }
+
+    let master_ix = match changed_count {
+        0 => preferred_ix,
+        1 => sole_changed_ix,
+        _ if preferred_changed => preferred_ix,
+        _ => largest_changed_ix,
+    };
+    let master_y = offsets[master_ix];
+
+    std::array::from_fn(|ix| clamp_raw_scroll_y(master_y, max_scrolls[ix]))
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -419,7 +481,7 @@ impl MainPaneView {
             diff_word_wrap: false,
             diff_split_ratio: 0.5,
             diff_split_resize: None,
-            diff_split_last_synced_y: px(0.0),
+            diff_split_last_synced_y: [px(0.0); 2],
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
@@ -545,7 +607,7 @@ impl MainPaneView {
             conflict_resolver_diff_scroll: UniformListScrollHandle::default(),
             conflict_preview_ours_scroll: UniformListScrollHandle::default(),
             conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
-            conflict_preview_last_synced_y: px(0.0),
+            conflict_preview_last_synced_y: [px(0.0); 3],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(HashMap::default()),
@@ -1976,26 +2038,20 @@ impl MainPaneView {
         let right_handle = self.diff_split_right_scroll.0.borrow().base_handle.clone();
         let left_offset = left_handle.offset();
         let right_offset = right_handle.offset();
+        let max_scrolls = [
+            left_handle.max_offset().height.max(px(0.0)),
+            right_handle.max_offset().height.max(px(0.0)),
+        ];
+        let targets = compute_synced_scroll_offsets(
+            [left_offset.y, right_offset.y],
+            max_scrolls,
+            self.diff_split_last_synced_y,
+            preferred_scroll_master_index(max_scrolls),
+        );
 
-        if left_offset.y == right_offset.y {
-            self.diff_split_last_synced_y = left_offset.y;
-            return;
-        }
-
-        let last_synced_y = self.diff_split_last_synced_y;
-        let left_changed = left_offset.y != last_synced_y;
-        let right_changed = right_offset.y != last_synced_y;
-
-        let master_y = match (left_changed, right_changed) {
-            (true, false) => left_offset.y,
-            (false, true) => right_offset.y,
-            // If both changed (or neither changed), prefer the left scroll (the vertical scrollbar).
-            _ => left_offset.y,
-        };
-
-        left_handle.set_offset(point(left_offset.x, master_y));
-        right_handle.set_offset(point(right_offset.x, master_y));
-        self.diff_split_last_synced_y = master_y;
+        left_handle.set_offset(point(left_offset.x, targets[0]));
+        right_handle.set_offset(point(right_offset.x, targets[1]));
+        self.diff_split_last_synced_y = targets;
     }
 
     pub(in crate::view) fn sync_conflict_preview_vertical_scroll(&mut self) {
@@ -2021,27 +2077,22 @@ impl MainPaneView {
         let base_offset = base_handle.offset();
         let ours_offset = ours_handle.offset();
         let theirs_offset = theirs_handle.offset();
+        let max_scrolls = [
+            base_handle.max_offset().height.max(px(0.0)),
+            ours_handle.max_offset().height.max(px(0.0)),
+            theirs_handle.max_offset().height.max(px(0.0)),
+        ];
+        let targets = compute_synced_scroll_offsets(
+            [base_offset.y, ours_offset.y, theirs_offset.y],
+            max_scrolls,
+            self.conflict_preview_last_synced_y,
+            preferred_scroll_master_index(max_scrolls),
+        );
 
-        if base_offset.y == ours_offset.y && base_offset.y == theirs_offset.y {
-            self.conflict_preview_last_synced_y = base_offset.y;
-            return;
-        }
-
-        let last_synced_y = self.conflict_preview_last_synced_y;
-        let master_y = if base_offset.y != last_synced_y {
-            base_offset.y
-        } else if ours_offset.y != last_synced_y {
-            ours_offset.y
-        } else if theirs_offset.y != last_synced_y {
-            theirs_offset.y
-        } else {
-            base_offset.y
-        };
-
-        base_handle.set_offset(point(base_offset.x, master_y));
-        ours_handle.set_offset(point(ours_offset.x, master_y));
-        theirs_handle.set_offset(point(theirs_offset.x, master_y));
-        self.conflict_preview_last_synced_y = master_y;
+        base_handle.set_offset(point(base_offset.x, targets[0]));
+        ours_handle.set_offset(point(ours_offset.x, targets[1]));
+        theirs_handle.set_offset(point(theirs_offset.x, targets[2]));
+        self.conflict_preview_last_synced_y = targets;
     }
 
     pub(in crate::view) fn main_pane_content_width(&self, cx: &mut gpui::Context<Self>) -> Pixels {
@@ -2054,5 +2105,41 @@ impl MainPaneView {
             self.layout_sidebar_collapsed,
             self.layout_details_collapsed,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamp_raw_scroll_y_limits_scroll_without_flipping_direction() {
+        assert_eq!(clamp_raw_scroll_y(px(-180.0), px(120.0)), px(-120.0));
+        assert_eq!(clamp_raw_scroll_y(px(180.0), px(120.0)), px(120.0));
+        assert_eq!(clamp_raw_scroll_y(px(-40.0), px(120.0)), px(-40.0));
+    }
+
+    #[test]
+    fn synced_scroll_offsets_keep_longer_pane_as_master_after_shorter_clamps() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-500.0)],
+            [px(100.0), px(500.0)],
+            [px(-90.0), px(-90.0)],
+            1,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-500.0)]);
+    }
+
+    #[test]
+    fn synced_scroll_offsets_follow_shorter_pane_when_user_scrolled_it() {
+        let targets = compute_synced_scroll_offsets(
+            [px(-100.0), px(-320.0)],
+            [px(100.0), px(500.0)],
+            [px(-80.0), px(-320.0)],
+            1,
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-100.0)]);
     }
 }

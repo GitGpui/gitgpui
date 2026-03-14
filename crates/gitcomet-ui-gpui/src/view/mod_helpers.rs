@@ -124,6 +124,13 @@ impl RenderedPreviewKind {
         }
     }
 
+    pub(super) fn toggle_id(self) -> &'static str {
+        match self {
+            Self::Svg => "svg_diff_view_toggle",
+            Self::Markdown => "markdown_diff_view_toggle",
+        }
+    }
+
     pub(super) fn source_button_id(self) -> &'static str {
         match self {
             Self::Svg => "svg_diff_view_code",
@@ -148,7 +155,7 @@ impl Default for RenderedPreviewModes {
     fn default() -> Self {
         Self {
             svg: RenderedPreviewMode::Rendered,
-            markdown: RenderedPreviewMode::Source,
+            markdown: RenderedPreviewMode::Rendered,
         }
     }
 }

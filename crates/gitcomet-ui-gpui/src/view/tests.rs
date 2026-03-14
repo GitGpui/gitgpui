@@ -430,11 +430,11 @@ fn rendered_preview_modes_track_each_kind_independently() {
     );
     assert_eq!(
         modes.get(RenderedPreviewKind::Markdown),
-        RenderedPreviewMode::Source
+        RenderedPreviewMode::Rendered
     );
 
     modes.set(RenderedPreviewKind::Svg, RenderedPreviewMode::Source);
-    modes.set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+    modes.set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
 
     assert_eq!(
         modes.get(RenderedPreviewKind::Svg),
@@ -442,7 +442,7 @@ fn rendered_preview_modes_track_each_kind_independently() {
     );
     assert_eq!(
         modes.get(RenderedPreviewKind::Markdown),
-        RenderedPreviewMode::Rendered
+        RenderedPreviewMode::Source
     );
 }
 

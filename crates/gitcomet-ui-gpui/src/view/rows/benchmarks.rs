@@ -3710,6 +3710,12 @@ fn hash_markdown_preview_document_into(
         row.source_line_range.end.hash(hasher);
         row.indent_level.hash(hasher);
         row.blockquote_level.hash(hasher);
+        row.footnote_label
+            .as_ref()
+            .map(AsRef::<str>::as_ref)
+            .hash(hasher);
+        row.alert_kind.hash(hasher);
+        row.starts_alert.hash(hasher);
         std::mem::discriminant(&row.change_hint).hash(hasher);
         row.inline_spans.len().hash(hasher);
 
