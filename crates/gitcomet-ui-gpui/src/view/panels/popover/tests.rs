@@ -430,6 +430,10 @@ fn commit_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
+
     let repo_id = RepoId(35);
     let commit_id = CommitId("feedfacefeedface".to_string());
     let workdir = std::env::temp_dir().join(format!(
@@ -516,6 +520,10 @@ fn status_file_menu_copy_path_supports_right_button_release(cx: &mut gpui::TestA
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| this.disable_poller_for_tests());
+    });
 
     let repo_id = RepoId(36);
     let workdir = std::env::temp_dir().join(format!(
