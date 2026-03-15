@@ -1278,16 +1278,13 @@ fn build_aligned_table_row_text(
             .map(|cell| cell.text.chars().count())
             .unwrap_or(0);
         let cell_start = text.len();
-        match cell {
-            Some(cell) => {
-                text.push_str(&cell.text);
-                spans.extend(cell.spans.into_iter().map(|span| MarkdownInlineSpan {
-                    byte_range: (cell_start + span.byte_range.start)
-                        ..(cell_start + span.byte_range.end),
-                    style: span.style,
-                }));
-            }
-            None => {}
+        if let Some(cell) = cell {
+            text.push_str(&cell.text);
+            spans.extend(cell.spans.into_iter().map(|span| MarkdownInlineSpan {
+                byte_range: (cell_start + span.byte_range.start)
+                    ..(cell_start + span.byte_range.end),
+                style: span.style,
+            }));
         }
 
         if ix + 1 < column_widths.len() {

@@ -56,43 +56,59 @@ fn build_conflict_cached_diff_styled_text(
 }
 
 fn render_conflict_markdown_preview_rows(
-    this: &MainPaneView,
+    this: &mut MainPaneView,
     range: Range<usize>,
     side: ThreeWayColumn,
+    window: &mut Window,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> Vec<AnyElement> {
     let theme = this.theme;
     let Loadable::Ready(document) = this.conflict_resolver.markdown_preview.document(side) else {
         return Vec::new();
     };
-    super::history::render_markdown_preview_document_rows(theme, document, range, None)
+    let document = Arc::clone(document);
+    this.update_markdown_preview_horizontal_min_width(
+        document.as_ref(),
+        range.clone(),
+        None,
+        window,
+        cx,
+    );
+    super::history::render_markdown_preview_document_rows(
+        theme,
+        document.as_ref(),
+        range,
+        None,
+        this.diff_horizontal_min_width,
+    )
 }
 
 impl MainPaneView {
     pub(in super::super) fn render_conflict_markdown_base_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Base)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Base, window, cx)
     }
 
     pub(in super::super) fn render_conflict_markdown_ours_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Ours)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Ours, window, cx)
     }
 
     pub(in super::super) fn render_conflict_markdown_theirs_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
     pub(in super::super) fn render_conflict_resolver_three_way_rows(

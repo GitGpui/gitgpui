@@ -2106,6 +2106,7 @@ impl MarkdownPreviewFixture {
             document,
             start..end,
             None,
+            px(0.0),
         )
     }
 }

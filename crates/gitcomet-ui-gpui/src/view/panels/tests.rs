@@ -325,6 +325,136 @@ fn assert_markdown_file_preview_toggle_visible(
     std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview fixture");
 }
 
+fn assert_markdown_file_preview_has_horizontal_overflow(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: std::path::PathBuf,
+    file_rel: std::path::PathBuf,
+    status_kind: gitcomet_core::domain::FileStatusKind,
+    old_text: Option<&str>,
+    new_text: Option<&str>,
+    create_worktree_file: bool,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown overflow workdir");
+    if create_worktree_file {
+        let contents = new_text.or(old_text).unwrap_or_default();
+        std::fs::write(workdir.join(&file_rel), contents).expect("write markdown overflow fixture");
+    }
+    let source = new_text.or(old_text).unwrap_or_default().to_string();
+    let preview_lines = Arc::new(
+        source
+            .lines()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>(),
+    );
+    let preview_document = Arc::new(
+        crate::view::markdown_preview::parse_markdown(&source)
+            .expect("markdown overflow preview should parse"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: status_kind.clone(),
+                        conflict: None,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Staged,
+            });
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText {
+                    path: file_rel.clone(),
+                    old: old_text.map(|text| text.to_string()),
+                    new: new_text.map(|text| text.to_string()),
+                },
+            )));
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let abs_path = workdir.join(&file_rel);
+            let preview_lines = Arc::clone(&preview_lines);
+            let preview_document = Arc::clone(&preview_document);
+            let source_len = source.len();
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_preview_path = Some(abs_path.clone());
+                pane.worktree_preview = gitcomet_state::model::Loadable::Ready(preview_lines);
+                pane.worktree_preview_source_len = source_len;
+                pane.worktree_preview_content_rev = 1;
+                pane.worktree_preview_segments_cache_path = None;
+                pane.worktree_preview_segments_cache.clear();
+                pane.worktree_markdown_preview_path = Some(abs_path);
+                pane.worktree_markdown_preview_source_rev = 1;
+                pane.worktree_markdown_preview =
+                    gitcomet_state::model::Loadable::Ready(preview_document);
+                pane.worktree_markdown_preview_inflight = None;
+                pane.worktree_preview_scroll
+                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.is_file_preview_active(),
+            "expected markdown {status_kind:?} target to use file preview mode"
+        );
+        assert!(
+            pane.is_markdown_preview_active(),
+            "expected markdown {status_kind:?} target to render the markdown preview"
+        );
+
+        let max_offset = pane
+            .worktree_preview_scroll
+            .0
+            .borrow()
+            .base_handle
+            .max_offset();
+        assert!(
+            max_offset.width > px(0.0),
+            "expected markdown {status_kind:?} preview to expose horizontal overflow"
+        );
+    });
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown overflow fixture");
+}
+
 fn focus_diff_panel(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -2584,6 +2714,56 @@ fn staged_deleted_markdown_file_preview_shows_preview_text_toggle(cx: &mut gpui:
         file_rel,
         gitcomet_core::domain::FileStatusKind::Deleted,
         Some("# Deleted markdown\n\nold body\n"),
+        None,
+        false,
+    );
+}
+
+#[gpui::test]
+fn staged_added_markdown_file_preview_keeps_horizontal_scrollbar_in_preview_mode(
+    cx: &mut gpui::TestAppContext,
+) {
+    let repo_id = gitcomet_state::model::RepoId(60);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_added_hscroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("notes.md");
+    let long_line = "added_markdown_preview_token_".repeat(24);
+    let new_text = format!("```text\n{long_line}\n```\n");
+
+    assert_markdown_file_preview_has_horizontal_overflow(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Added,
+        None,
+        Some(&new_text),
+        true,
+    );
+}
+
+#[gpui::test]
+fn staged_deleted_markdown_file_preview_keeps_horizontal_scrollbar_in_preview_mode(
+    cx: &mut gpui::TestAppContext,
+) {
+    let repo_id = gitcomet_state::model::RepoId(61);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_deleted_hscroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("notes.md");
+    let long_line = "deleted_markdown_preview_token_".repeat(24);
+    let old_text = format!("```text\n{long_line}\n```\n");
+
+    assert_markdown_file_preview_has_horizontal_overflow(
+        cx,
+        repo_id,
+        workdir,
+        file_rel,
+        gitcomet_core::domain::FileStatusKind::Deleted,
+        Some(&old_text),
         None,
         false,
     );

@@ -98,45 +98,105 @@ impl MainPaneView {
     pub(in super::super) fn render_markdown_preview_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         let Loadable::Ready(document) = &this.worktree_markdown_preview else {
             return Vec::new();
         };
+        let document = Arc::clone(document);
+        let bar_color = worktree_preview_bar_color(this, theme);
+        this.update_markdown_preview_horizontal_min_width(
+            document.as_ref(),
+            range.clone(),
+            bar_color,
+            window,
+            cx,
+        );
         render_markdown_preview_document_rows(
             theme,
-            document,
+            document.as_ref(),
             range,
-            worktree_preview_bar_color(this, theme),
+            bar_color,
+            this.diff_horizontal_min_width,
         )
     }
 
     pub(in super::super) fn render_markdown_diff_left_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
-        render_markdown_preview_document_rows(theme, &preview.old, range, None)
+        let preview = Arc::clone(preview);
+        this.update_markdown_preview_horizontal_min_width(
+            &preview.old,
+            range.clone(),
+            None,
+            window,
+            cx,
+        );
+        render_markdown_preview_document_rows(
+            theme,
+            &preview.old,
+            range,
+            None,
+            this.diff_horizontal_min_width,
+        )
     }
 
     pub(in super::super) fn render_markdown_diff_right_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
-        render_markdown_preview_document_rows(theme, &preview.new, range, None)
+        let preview = Arc::clone(preview);
+        this.update_markdown_preview_horizontal_min_width(
+            &preview.new,
+            range.clone(),
+            None,
+            window,
+            cx,
+        );
+        render_markdown_preview_document_rows(
+            theme,
+            &preview.new,
+            range,
+            None,
+            this.diff_horizontal_min_width,
+        )
+    }
+
+    pub(in crate::view) fn update_markdown_preview_horizontal_min_width(
+        &mut self,
+        document: &MarkdownPreviewDocument,
+        range: Range<usize>,
+        bar_color: Option<gpui::Rgba>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut min_width = self.diff_horizontal_min_width;
+        for row in range.filter_map(|ix| document.rows.get(ix)) {
+            let required = markdown_preview_row_required_width(window, self.theme, row, bar_color);
+            if required > min_width {
+                min_width = required;
+            }
+        }
+
+        if min_width > self.diff_horizontal_min_width {
+            self.diff_horizontal_min_width = min_width;
+            cx.notify();
+        }
     }
 }
 
@@ -145,8 +205,17 @@ const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
 const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 22.0;
 const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
 const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
+const MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX: f32 = 8.0;
+const MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX: f32 = 12.0;
+const MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX: f32 = 22.0;
+const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 10.0;
+const MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX: f32 = 11.0;
+const MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX: f32 = 6.0;
+const MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX: f32 = 10.0;
+const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
+const MARKDOWN_PREVIEW_CODE_BORDER_PX: f32 = 1.0;
 
 struct MarkdownPreviewRowTypography {
     font_size: f32,
@@ -161,12 +230,15 @@ pub(super) fn render_markdown_preview_document_rows(
     document: &MarkdownPreviewDocument,
     range: Range<usize>,
     bar_color: Option<gpui::Rgba>,
+    min_width: Pixels,
 ) -> Vec<AnyElement> {
     let requested_rows = range.len();
     let rows = range
         .filter_map(|ix| {
             let row = document.rows.get(ix)?;
-            Some(markdown_preview_row_element(theme, row, bar_color))
+            Some(markdown_preview_row_element(
+                theme, row, bar_color, min_width,
+            ))
         })
         .collect::<Vec<_>>();
     perf::record_row_batch(
@@ -181,6 +253,7 @@ fn markdown_preview_row_element(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     bar_color: Option<gpui::Rgba>,
+    min_width: Pixels,
 ) -> AnyElement {
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     let typography = markdown_preview_row_typography(theme, row);
@@ -362,10 +435,166 @@ fn markdown_preview_row_element(
             div.bg(bg)
         })
         .when_some(bar_color, |container, color| {
-            container.child(div().h_full().w(px(3.0)).bg(color))
+            container.child(
+                div()
+                    .h_full()
+                    .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                    .bg(color),
+            )
         })
+        .min_w(min_width)
         .child(row_content)
         .into_any_element()
+}
+
+fn markdown_preview_row_required_width(
+    window: &mut Window,
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+    bar_color: Option<gpui::Rgba>,
+) -> Pixels {
+    let typography = markdown_preview_row_typography(theme, row);
+    let base_font_weight = typography.font_weight.unwrap_or(FontWeight::NORMAL);
+    let text_width = if matches!(row.kind, MarkdownPreviewRowKind::ThematicBreak) {
+        px(0.0)
+    } else {
+        let highlights = markdown_preview_width_affecting_highlights(theme, row);
+        markdown_preview_shape_text_width(
+            window,
+            row.text.clone(),
+            typography.font_size,
+            base_font_weight,
+            typography.font_family,
+            &highlights,
+        )
+    };
+
+    let indent_steps = f32::from(row.indent_level.saturating_sub(1));
+    let mut width =
+        px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX);
+    width += px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX);
+    width += text_width;
+
+    if bar_color.is_some() {
+        width += px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX);
+    }
+
+    if row.blockquote_level > 0 {
+        width += px(
+            f32::from(row.blockquote_level) * MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX
+                + f32::from(row.blockquote_level.saturating_sub(1))
+                    * MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX
+                + MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX,
+        );
+    }
+
+    if let Some(marker) = markdown_preview_row_marker(row) {
+        let marker_width = markdown_preview_shape_text_width(
+            window,
+            marker,
+            MARKDOWN_PREVIEW_BASE_FONT_PX,
+            FontWeight::NORMAL,
+            None,
+            &[],
+        );
+        width += marker_width.max(px(MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX));
+        width += px(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX);
+    }
+
+    if let Some(alert_title) = markdown_preview_alert_title_label(row) {
+        let alert_width = markdown_preview_shape_text_width(
+            window,
+            alert_title,
+            MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX,
+            FontWeight::BOLD,
+            None,
+            &[],
+        );
+        width += alert_width + px(MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX * 2.0);
+        width += px(MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX);
+    }
+
+    width += match row.kind {
+        MarkdownPreviewRowKind::CodeLine { .. } => {
+            px(MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0 + MARKDOWN_PREVIEW_CODE_BORDER_PX * 2.0)
+        }
+        MarkdownPreviewRowKind::TableRow { .. } | MarkdownPreviewRowKind::PlainFallback => {
+            px(MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0)
+        }
+        _ => px(0.0),
+    };
+
+    width.round()
+}
+
+fn markdown_preview_width_affecting_highlights(
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    row.inline_spans
+        .iter()
+        .filter_map(|span| {
+            let style = markdown_preview_inline_highlight(theme, span.style);
+            (style.font_weight.is_some() || style.font_style.is_some())
+                .then_some((span.byte_range.start..span.byte_range.end, style))
+        })
+        .collect()
+}
+
+fn markdown_preview_shape_text_width(
+    window: &mut Window,
+    text: impl Into<SharedString>,
+    font_size_px: f32,
+    font_weight: FontWeight,
+    font_family: Option<&'static str>,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Pixels {
+    let text: SharedString = text.into();
+    if text.is_empty() {
+        return px(0.0);
+    }
+
+    let mut style = window.text_style();
+    style.font_weight = font_weight;
+    if let Some(font_family) = font_family {
+        style.font_family = font_family.into();
+    }
+
+    let runs = if highlights.is_empty() {
+        vec![style.to_run(text.len())]
+    } else {
+        markdown_preview_text_runs(text.as_ref(), &style, highlights)
+    };
+
+    window
+        .text_system()
+        .shape_line(text, px(font_size_px), &runs, None)
+        .width
+}
+
+fn markdown_preview_text_runs(
+    text: &str,
+    default_style: &gpui::TextStyle,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Vec<TextRun> {
+    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
+    let mut ix = 0usize;
+    for (range, highlight) in highlights {
+        if ix < range.start {
+            runs.push(default_style.clone().to_run(range.start - ix));
+        }
+        runs.push(
+            default_style
+                .clone()
+                .highlight(*highlight)
+                .to_run(range.len()),
+        );
+        ix = range.end;
+    }
+    if ix < text.len() {
+        runs.push(default_style.clone().to_run(text.len() - ix));
+    }
+    runs
 }
 
 fn worktree_preview_bar_color(this: &MainPaneView, theme: AppTheme) -> Option<gpui::Rgba> {
@@ -481,7 +710,7 @@ fn markdown_preview_blockquote_gutter(
             .h_full()
             .flex()
             .gap(px(MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX))
-            .mr(px(12.0))
+            .mr(px(MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX))
             .children(bars)
             .into_any_element(),
     )

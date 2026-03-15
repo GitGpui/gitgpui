@@ -483,8 +483,8 @@ impl MainPaneView {
                 .when_some(next_file_btn, |d, btn| d.child(btn));
         }
 
-        if !is_conflict_resolver {
-            if let Some(preview_kind) = rendered_view_toggle_kind {
+        if !is_conflict_resolver
+            && let Some(preview_kind) = rendered_view_toggle_kind {
                 let preview_mode = self.rendered_preview_modes.get(preview_kind);
                 controls = controls.child(
                     div()
@@ -535,7 +535,6 @@ impl MainPaneView {
                         ),
                 );
             }
-        }
 
         if let Some(repo_id) = repo_id {
             controls = controls.child(
