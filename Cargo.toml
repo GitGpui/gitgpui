@@ -42,7 +42,7 @@ criterion = "0.8.2"
 gix = { version = "0.80.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame"] }
 gpui = { version = "0.2.2" }
 mimalloc = { version = "0.1.48", features = ["v3"] }
-pulldown-cmark = { version = "0.12", default-features = false, features = ["simd"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.2"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }

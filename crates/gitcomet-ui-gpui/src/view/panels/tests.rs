@@ -3222,6 +3222,71 @@ fn staged_added_missing_target_uses_unified_diff_mode(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn staged_added_gif_target_bypasses_text_file_preview_mode(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(48);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_staged_added_gif",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("anim.GIF");
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+    std::fs::write(workdir.join(&file_rel), b"GIF89a").expect("write gif fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = gitcomet_state::model::RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: file_rel.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Added,
+                        conflict: None,
+                    }],
+                    unstaged: vec![],
+                }
+                .into(),
+            );
+            repo.diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+                path: file_rel.clone(),
+                area: gitcomet_core::domain::DiffArea::Staged,
+            });
+
+            let next_state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+
+            this._ui_model.update(cx, |model, cx| {
+                model.set_state(Arc::clone(&next_state), cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.is_file_preview_active(),
+            "GIF image targets should bypass text file preview mode so the image diff view can open"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup staged-added-gif fixture");
+}
+
+#[gpui::test]
 fn untracked_directory_target_uses_unified_diff_mode(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

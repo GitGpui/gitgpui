@@ -360,6 +360,35 @@ fn is_markdown_path_rejects_non_markdown() {
 }
 
 #[test]
+fn should_bypass_text_file_preview_for_path_detects_supported_image_types() {
+    use std::path::Path;
+
+    for path in [
+        "image.png",
+        "image.JPEG",
+        "image.gif",
+        "image.webp",
+        "image.bmp",
+        "image.ico",
+        "image.svg",
+        "image.tif",
+        "image.tiff",
+    ] {
+        assert!(
+            should_bypass_text_file_preview_for_path(Path::new(path)),
+            "expected {path} to bypass text file preview"
+        );
+    }
+
+    for path in ["image.heic", "README.md", "notes.txt", "image"] {
+        assert!(
+            !should_bypass_text_file_preview_for_path(Path::new(path)),
+            "did not expect {path} to bypass text file preview"
+        );
+    }
+}
+
+#[test]
 fn preview_path_rendered_kind_detects_supported_preview_kinds() {
     use std::path::Path;
 

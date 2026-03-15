@@ -2703,8 +2703,20 @@ mod tests {
             Some(gpui::ImageFormat::Jpeg)
         );
         assert_eq!(
+            MainPaneView::image_format_for_path(Path::new("x.GiF")),
+            Some(gpui::ImageFormat::Gif)
+        );
+        assert_eq!(
             MainPaneView::image_format_for_path(Path::new("x.webp")),
             Some(gpui::ImageFormat::Webp)
+        );
+        assert_eq!(
+            MainPaneView::image_format_for_path(Path::new("x.BMP")),
+            Some(gpui::ImageFormat::Bmp)
+        );
+        assert_eq!(
+            MainPaneView::image_format_for_path(Path::new("x.TiFf")),
+            Some(gpui::ImageFormat::Tiff)
         );
     }
 

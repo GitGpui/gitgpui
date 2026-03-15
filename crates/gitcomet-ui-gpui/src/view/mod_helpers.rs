@@ -79,15 +79,11 @@ pub(super) fn is_existing_regular_file(path: &std::path::Path) -> bool {
 }
 
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
-    let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-        return false;
-    };
-    ext.eq_ignore_ascii_case("png")
-        || ext.eq_ignore_ascii_case("jpg")
-        || ext.eq_ignore_ascii_case("jpeg")
-        || ext.eq_ignore_ascii_case("webp")
-        || ext.eq_ignore_ascii_case("ico")
-        || ext.eq_ignore_ascii_case("svg")
+    image_format_for_path(path).is_some()
+        || path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
