@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream};
+use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream, Worktree};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
@@ -246,6 +246,34 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
         tracked_row.is_some(),
         "expected tracked upstream branch to be listed under Remote section"
     );
+}
+
+#[test]
+fn worktree_tooltip_includes_branch_name() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("main-worktree"),
+        },
+    );
+
+    repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        path: PathBuf::from("linked-worktree"),
+        head: None,
+        branch: Some("feature/tooltip".to_string()),
+        detached: false,
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let row = rows
+        .iter()
+        .find_map(|row| match row {
+            BranchSidebarRow::WorktreeItem { tooltip, .. } => Some(tooltip.as_ref().to_owned()),
+            _ => None,
+        })
+        .expect("expected worktree row");
+
+    assert_eq!(row, "feature/tooltip  linked-worktree");
 }
 
 #[test]
