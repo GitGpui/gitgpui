@@ -151,7 +151,7 @@ jobs:
           cargo wix --package gitcomet-app --profile release --nocapture --no-build --output "dist\$msiName"
 
       - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-release-artifacts
           path: |
@@ -265,7 +265,7 @@ jobs:
             "${appdir}" "dist/gitcomet-v${VERSION}-linux-x86_64.AppImage"
 
       - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-release-artifacts
           path: |
@@ -314,7 +314,7 @@ jobs:
             --out-dir dist
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-release-artifacts-${{ matrix.arch }}
           path: |
@@ -420,7 +420,7 @@ jobs:
             "$sha_file"
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-payload
           path: dist/release/*
