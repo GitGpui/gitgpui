@@ -1306,7 +1306,7 @@ impl MainPaneView {
         let syntax_mode = DiffSyntaxMode::Auto;
         range
             .map(|visible_row_ix| {
-                let Some((row_ix, row, _conflict_ix)) = this
+                let Some(visible_row) = this
                     .conflict_resolver
                     .two_way_split_visible_row(visible_row_ix)
                 else {
@@ -1319,6 +1319,8 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 };
+                let row_ix = visible_row.source_row_ix;
+                let row = visible_row.row;
                 this.render_conflict_compare_split_row(
                     visible_row_ix,
                     row_ix,
@@ -1348,7 +1350,7 @@ impl MainPaneView {
         let syntax_mode = DiffSyntaxMode::Auto;
         let elements: Vec<AnyElement> = range
             .map(|visible_row_ix| {
-                let Some((row_ix, row, conflict_ix)) = this
+                let Some(visible_row) = this
                     .conflict_resolver
                     .two_way_split_visible_row(visible_row_ix)
                 else {
@@ -1363,9 +1365,7 @@ impl MainPaneView {
                 };
                 this.render_conflict_resolver_split_row(
                     visible_row_ix,
-                    row_ix,
-                    row,
-                    conflict_ix,
+                    visible_row,
                     syntax_lang,
                     syntax_mode,
                     cx,
@@ -1665,13 +1665,16 @@ impl MainPaneView {
     fn render_conflict_resolver_split_row(
         &mut self,
         visible_row_ix: usize,
-        row_ix: usize,
-        row: gitcomet_core::file_diff::FileDiffRow,
-        conflict_ix: Option<usize>,
+        visible_row: conflict_resolver::TwoWaySplitVisibleRow,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let conflict_resolver::TwoWaySplitVisibleRow {
+            source_row_ix: row_ix,
+            row,
+            conflict_ix,
+        } = visible_row;
         let theme = self.theme;
         let show_ws = self.show_whitespace;
 

@@ -300,6 +300,9 @@ impl SourceLineKey {
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
 pub type WordHighlights = std::collections::HashMap<usize, Vec<std::ops::Range<usize>>>;
 
+/// Per-line pair of `(old, new)` word-highlight ranges for a two-way diff row.
+pub type TwoWayWordHighlightPair = (Vec<Range<usize>>, Vec<Range<usize>>);
+
 /// Shared context rows kept around each block-local two-way conflict diff.
 ///
 /// This preserves a small amount of unchanged surrounding code in the large-file
@@ -3100,8 +3103,7 @@ fn merge_ranges(
 
 /// Per-line pair of (old, new) word-highlight ranges for two-way diff.
 #[cfg(feature = "benchmarks")]
-pub type TwoWayWordHighlights =
-    Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
+pub type TwoWayWordHighlights = Vec<Option<TwoWayWordHighlightPair>>;
 
 #[cfg(feature = "benchmarks")]
 pub fn compute_two_way_word_highlights(
@@ -3132,7 +3134,7 @@ pub fn compute_two_way_word_highlights(
 /// text differs).
 pub fn compute_word_highlights_for_row(
     row: &gitcomet_core::file_diff::FileDiffRow,
-) -> Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)> {
+) -> Option<TwoWayWordHighlightPair> {
     if row.kind != gitcomet_core::file_diff::FileDiffRowKind::Modify {
         return None;
     }
@@ -4167,6 +4169,14 @@ pub struct TwoWaySplitSpan {
     /// Number of rows in this span.
     pub len: usize,
     /// Conflict index if all rows in this span belong to one block.
+    pub conflict_ix: Option<usize>,
+}
+
+/// Materialized split-view row with its source-row and conflict metadata.
+#[derive(Clone, Debug)]
+pub struct TwoWaySplitVisibleRow {
+    pub source_row_ix: usize,
+    pub row: gitcomet_core::file_diff::FileDiffRow,
     pub conflict_ix: Option<usize>,
 }
 

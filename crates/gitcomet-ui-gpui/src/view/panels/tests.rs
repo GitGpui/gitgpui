@@ -247,7 +247,11 @@ fn conflict_split_row_ix(
     text: &str,
 ) -> Option<usize> {
     (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(|visible_ix| {
-        let (source_ix, row, _conflict_ix) = pane
+        let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+            source_row_ix: source_ix,
+            row,
+            conflict_ix: _conflict_ix,
+        } = pane
             .conflict_resolver
             .two_way_split_visible_row(visible_ix)?;
         match side {
@@ -4267,7 +4271,11 @@ fn assert_streamed_whole_file_two_way_state(pane: &MainPaneView, line_count: usi
     );
 
     let deep_ix = total / 2;
-    let (_source_ix, row, _conflict_ix) = pane
+    let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+        source_row_ix: _source_ix,
+        row,
+        conflict_ix: _conflict_ix,
+    } = pane
         .conflict_resolver
         .two_way_split_visible_row(deep_ix)
         .expect("deep streamed two-way row should resolve on demand");
@@ -5350,7 +5358,11 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
                 pane.conflict_diff_query_segments_cache_split.clear();
 
                 let visible_ix = pane.conflict_resolver.two_way_split_visible_len() / 2;
-                let (_source_ix, row, _conflict_ix) = pane
+                let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+                    source_row_ix: _source_ix,
+                    row,
+                    conflict_ix: _conflict_ix,
+                } = pane
                     .conflict_resolver
                     .two_way_split_visible_row(visible_ix)
                     .expect("deep streamed compare row should resolve through the split provider");
@@ -5511,7 +5523,11 @@ fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
                 let (visible_ix, source_ix, row) =
                     (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(
                         |visible_ix| {
-                        let (source_ix, row, _conflict_ix) = pane
+                        let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+                            source_row_ix: source_ix,
+                            row,
+                            conflict_ix: _conflict_ix,
+                        } = pane
                             .conflict_resolver
                             .two_way_split_visible_row(visible_ix)?;
                         (source_ix != visible_ix && (row.old.is_some() || row.new.is_some()))
@@ -6199,7 +6215,11 @@ fn giant_two_way_paged_provider_generates_rows_on_demand(cx: &mut gpui::TestAppC
 
                 // Generate a deep row on demand without touching earlier rows.
                 let deep_ix = total / 2;
-                let (source_ix, row, _conflict_ix) = pane
+                let crate::view::conflict_resolver::TwoWaySplitVisibleRow {
+                    source_row_ix: source_ix,
+                    row,
+                    conflict_ix: _conflict_ix,
+                } = pane
                     .conflict_resolver
                     .two_way_split_visible_row(deep_ix)
                     .expect("deep visible row should be accessible on demand");

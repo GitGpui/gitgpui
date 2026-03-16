@@ -45,6 +45,9 @@ pub enum ConflictPayload {
     Absent,
 }
 
+/// Tuple form used by staged conflict-file loading: `(raw_bytes, utf8_text)`.
+pub type ConflictStageParts = (Option<Arc<[u8]>>, Option<Arc<str>>);
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ConflictRegionTextStorage {
     Owned(String),
@@ -233,7 +236,7 @@ impl ConflictPayload {
     /// Decompose into the separate bytes/text fields used by `ConflictFileStages`.
     ///
     /// Inverse of [`from_stage_parts`](Self::from_stage_parts).
-    pub fn into_stage_parts(self) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+    pub fn into_stage_parts(self) -> ConflictStageParts {
         match self {
             ConflictPayload::Text(text) => (None, Some(text)),
             ConflictPayload::Binary(bytes) => (Some(bytes), None),

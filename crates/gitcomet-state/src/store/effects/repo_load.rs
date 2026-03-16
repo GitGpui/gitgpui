@@ -1,6 +1,6 @@
 use crate::model::ConflictFileLoadMode;
 use crate::msg::Msg;
-use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
@@ -64,9 +64,7 @@ fn empty_conflict_file_stages(path: PathBuf) -> ConflictFileStages {
     }
 }
 
-fn conflict_file_current_from_session(
-    session: &ConflictSession,
-) -> Option<(Option<Arc<[u8]>>, Option<Arc<str>>)> {
+fn conflict_file_current_from_session(session: &ConflictSession) -> Option<ConflictStageParts> {
     session
         .current
         .as_ref()
@@ -76,7 +74,7 @@ fn conflict_file_current_from_session(
 fn canonicalize_loaded_side(
     bytes: Option<Arc<[u8]>>,
     text: Option<Arc<str>>,
-) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+) -> ConflictStageParts {
     if let Some(text) = text {
         return (None, Some(text));
     }

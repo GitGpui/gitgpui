@@ -934,19 +934,24 @@ impl ConflictResolverUiState {
         }
     }
 
-    /// Retrieve a split row for the given visible index, dispatching between
-    /// the paged index (giant) and the eager `diff_rows` array (small).
-    ///
-    /// Returns `(source_row_ix, row, conflict_ix)`.
+    /// Retrieve a materialized split row for the given visible index,
+    /// dispatching between the paged index (giant) and the eager `diff_rows`
+    /// array (small).
     pub(super) fn two_way_split_visible_row(
         &self,
         visible_ix: usize,
-    ) -> Option<(usize, gitcomet_core::file_diff::FileDiffRow, Option<usize>)> {
+    ) -> Option<conflict_resolver::TwoWaySplitVisibleRow> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => {
-                let (source_ix, conflict_ix) = s.two_way_split_projection.get(visible_ix)?;
-                let row = s.split_row_index.row_at(&self.marker_segments, source_ix)?;
-                Some((source_ix, row, conflict_ix))
+                let (source_row_ix, conflict_ix) = s.two_way_split_projection.get(visible_ix)?;
+                let row = s
+                    .split_row_index
+                    .row_at(&self.marker_segments, source_row_ix)?;
+                Some(conflict_resolver::TwoWaySplitVisibleRow {
+                    source_row_ix,
+                    row,
+                    conflict_ix,
+                })
             }
         }
     }
@@ -1029,7 +1034,7 @@ impl ConflictResolverUiState {
     pub(super) fn two_way_split_word_highlight(
         &self,
         row_ix: usize,
-    ) -> Option<&(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)> {
+    ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
         let _ = row_ix;
         None
     }
@@ -1378,12 +1383,12 @@ mod conflict_resolver_ui_state_tests {
         let visible_ix = streamed
             .two_way_visible_ix_for_conflict(0)
             .expect("streamed visible row should exist for the unresolved conflict");
-        let (source_ix, row, conflict_ix) = streamed
+        let visible_row = streamed
             .two_way_split_visible_row(visible_ix)
             .expect("streamed visible row should resolve through the projection");
-        assert_eq!(conflict_ix, Some(0));
-        assert!(row.old.is_some() || row.new.is_some());
-        assert!(source_ix < streamed.two_way_row_counts().0);
+        assert_eq!(visible_row.conflict_ix, Some(0));
+        assert!(visible_row.row.old.is_some() || visible_row.row.new.is_some());
+        assert!(visible_row.source_row_ix < streamed.two_way_row_counts().0);
     }
 
     #[test]
