@@ -15,7 +15,7 @@ test-support = []
 
 [dependencies]
 regex = { workspace = true }
+rustc-hash = { workspace = true }
 
 [dev-dependencies]
-rustc-hash = { workspace = true }
 tempfile = { workspace = true }

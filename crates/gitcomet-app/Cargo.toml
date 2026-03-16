@@ -24,6 +24,7 @@ gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 mimalloc = { workspace = true }
+rustc-hash = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]

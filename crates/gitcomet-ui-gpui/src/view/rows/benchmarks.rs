@@ -34,7 +34,7 @@ use gitcomet_core::domain::{
     SubmoduleStatus, Upstream, UpstreamDivergence, Worktree,
 };
 use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -79,7 +79,7 @@ impl OpenRepoFixture {
         let branch_heads = HashSet::default();
         let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         rows.len().hash(&mut h);
         graph.len().hash(&mut h);
         graph
@@ -120,7 +120,7 @@ impl BranchSidebarFixture {
 
     pub fn run(&self) -> u64 {
         let rows = GitCometView::branch_sidebar_rows(&self.repo);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         rows.len().hash(&mut h);
         for row in rows.iter().take(256) {
             std::mem::discriminant(row).hash(&mut h);
@@ -238,7 +238,7 @@ impl HistoryGraphFixture {
         }
 
         let graph = history_graph::compute_graph(&self.commits, self.theme, &branch_heads);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         graph.len().hash(&mut h);
         graph
             .iter()
@@ -277,7 +277,7 @@ impl CommitDetailsFixture {
     pub fn run(&self) -> u64 {
         // Approximation of the per-row work done by the commit files list:
         // kind->icon mapping and formatting the displayed path string.
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         self.details.id.as_ref().hash(&mut h);
         self.details.message.len().hash(&mut h);
 
@@ -337,7 +337,7 @@ impl LargeFileDiffScrollFixture {
     pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
         // Approximate "a scroll step": style the newly visible rows in a window.
         let end = (start + window).min(self.lines.len());
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for line in &self.lines[start..end] {
             let styled = super::diff_text::build_cached_diff_styled_text(
                 self.theme,
@@ -393,7 +393,7 @@ impl TextInputPrepaintWindowedFixture {
         let total_rows = viewport_rows
             .saturating_add(self.guard_rows.saturating_mul(2))
             .max(1);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
 
         for row in 0..total_rows {
             let line_ix = start_row.wrapping_add(row) % line_count;
@@ -408,7 +408,7 @@ impl TextInputPrepaintWindowedFixture {
                 text_hash_slice: slice_hash,
             };
             let shaped = *self.shape_cache.entry(key).or_insert_with(|| {
-                let mut shaped_hash = DefaultHasher::new();
+                let mut shaped_hash = FxHasher::default();
                 line_ix.hash(&mut shaped_hash);
                 capped_len.hash(&mut shaped_hash);
                 slice_hash.hash(&mut shaped_hash);
@@ -452,7 +452,7 @@ impl TextInputLongLineCapFixture {
     }
 
     pub fn run_with_cap(&self, max_bytes: usize) -> u64 {
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for nonce in 0..64usize {
             let (slice_hash, capped_len) =
                 hash_text_input_shaping_slice(self.line.as_str(), max_bytes.max(1));
@@ -730,7 +730,7 @@ impl TextModelSnapshotCloneCostFixture {
     pub fn run_snapshot_clone_step(&self, clones: usize) -> u64 {
         let clones = clones.max(1);
         let snapshot = self.model.snapshot();
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         self.model.model_id().hash(&mut h);
         self.model.revision().hash(&mut h);
 
@@ -748,7 +748,7 @@ impl TextModelSnapshotCloneCostFixture {
 
     pub fn run_string_clone_control_step(&self, clones: usize) -> u64 {
         let clones = clones.max(1);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for nonce in 0..clones {
             let cloned = self.string_control.clone();
             nonce.hash(&mut h);
@@ -789,7 +789,7 @@ impl TextModelBulkLoadLargeFixture {
         let _ = model.append_large(&self.text[split..]);
         let snapshot = model.snapshot();
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
         let suffix_start = snapshot.clamp_to_char_boundary(snapshot.len().saturating_sub(96));
@@ -805,7 +805,7 @@ impl TextModelBulkLoadLargeFixture {
 
         let model = TextModel::from_large_text(self.text.as_str());
         let snapshot = model.snapshot();
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
         let prefix_end = snapshot.clamp_to_char_boundary(snapshot.len().min(96));
@@ -825,7 +825,7 @@ impl TextModelBulkLoadLargeFixture {
                 loaded.push_str(chunk_text);
             }
         }
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         loaded.len().hash(&mut h);
         loaded.bytes().take(96).count().hash(&mut h);
         h.finish()
@@ -949,7 +949,7 @@ fn expand_tabbed_dirty_line_range(
 }
 
 fn hash_wrap_rows(row_counts: &[usize]) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     row_counts.len().hash(&mut h);
     for rows in row_counts.iter().take(512) {
         rows.hash(&mut h);
@@ -959,7 +959,7 @@ fn hash_wrap_rows(row_counts: &[usize]) -> u64 {
 
 fn hash_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
     if text.len() <= max_bytes {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.hash(&mut hasher);
         return (hasher.finish(), text.len());
     }
@@ -977,7 +977,7 @@ fn hash_text_input_shaping_slice(text: &str, max_bytes: usize) -> (u64, usize) {
     }
     truncated.push_str(suffix);
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     truncated.hash(&mut hasher);
     (hasher.finish(), truncated.len())
 }
@@ -1032,7 +1032,7 @@ impl PatchDiffPagedRowsFixture {
         let split = build_patch_split_rows(&annotated);
         let theme = AppTheme::zed_ayu_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         annotated.len().hash(&mut hasher);
         split.len().hash(&mut hasher);
         for line in annotated.iter().take(256) {
@@ -1109,7 +1109,7 @@ impl PatchDiffPagedRowsFixture {
         let theme = AppTheme::zed_ayu_dark();
         let language = diff_syntax_language_for_path("src/lib.rs");
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         rows_provider.len_hint().hash(&mut hasher);
         split_provider.len_hint().hash(&mut hasher);
 
@@ -1187,7 +1187,7 @@ impl PatchDiffPagedRowsFixture {
             }
         }
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         visible_indices.len().hash(&mut hasher);
         for src_ix in visible_indices.into_iter().take(512) {
             src_ix.hash(&mut hasher);
@@ -1204,7 +1204,7 @@ impl PatchDiffPagedRowsFixture {
             .collect::<Vec<_>>();
         let visible_map = PatchInlineVisibleMap::from_hidden_flags(hidden_flags.as_slice());
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         visible_map.visible_len().hash(&mut hasher);
         for visible_ix in 0..visible_map.visible_len().min(512) {
             visible_map
@@ -1470,7 +1470,7 @@ impl PatchDiffSearchQueryUpdateFixture {
         let end = (start + window).min(self.visible_row_indices.len());
         let query = self.query_cache_query.clone();
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for visible_ix in start..end {
             let src_ix = self.visible_row_indices[visible_ix];
             src_ix.hash(&mut h);
@@ -1622,7 +1622,7 @@ impl FileDiffSyntaxPrepareFixture {
             metrics.hit.saturating_mul(1000) / total
         };
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         prepared.len().hash(&mut h);
         metrics.hit.hash(&mut h);
         metrics.miss.hash(&mut h);
@@ -1710,7 +1710,7 @@ impl FileDiffSyntaxPrepareFixture {
             )
             .into_inner();
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         lines.len().hash(&mut h);
         line_ix.hash(&mut h);
         styled.text_hash.hash(&mut h);
@@ -1836,7 +1836,7 @@ impl FileDiffSyntaxReparseFixture {
             )
             .into_inner();
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         lines.len().hash(&mut h);
         styled.text_hash.hash(&mut h);
         styled.highlights_hash.hash(&mut h);
@@ -2022,7 +2022,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
         let start = start % self.inline_rows.len();
         let end = (start + window).min(self.inline_rows.len());
         let mut pending = false;
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for row_ix in start..end {
             let Some(line) = self.inline_rows.get(row_ix) else {
                 continue;
@@ -2141,7 +2141,7 @@ impl LargeHtmlSyntaxFixture {
             Arc::clone(&self.line_starts),
         );
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         self.text.len().hash(&mut h);
         self.line_count.hash(&mut h);
         self.source_label().hash(&mut h);
@@ -2287,7 +2287,7 @@ impl LargeHtmlSyntaxFixture {
         window_lines: usize,
         result: &super::diff_text::PreparedDocumentByteRangeHighlights,
     ) -> u64 {
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         start_line.hash(&mut h);
         window_lines.hash(&mut h);
         result.pending.hash(&mut h);
@@ -2425,7 +2425,7 @@ impl WorktreePreviewRenderFixture {
 
         let start = start % self.lines.len();
         let end = (start + window).min(self.lines.len());
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for line_ix in start..end {
             let line = self.lines.get(line_ix).map(String::as_str).unwrap_or("");
             let styled = super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
@@ -2495,7 +2495,7 @@ impl MarkdownPreviewFixture {
         else {
             return 0;
         };
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         hash_markdown_preview_document_into(&preview.old, &mut h);
         hash_markdown_preview_document_into(&preview.new, &mut h);
         h.finish()
@@ -2513,7 +2513,7 @@ impl MarkdownPreviewFixture {
         let left = self.render_window(&self.diff_preview.old, start, window);
         let right = self.render_window(&self.diff_preview.new, start, window);
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         start.hash(&mut h);
         window.hash(&mut h);
         std::hint::black_box(left).len().hash(&mut h);
@@ -2532,7 +2532,7 @@ impl MarkdownPreviewFixture {
         }
 
         let rows = self.render_window(document, start, window);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         start.hash(&mut h);
         window.hash(&mut h);
         std::hint::black_box(rows).len().hash(&mut h);
@@ -2559,6 +2559,8 @@ impl MarkdownPreviewFixture {
             px(0.0),
             "benchmark_markdown_preview",
             None,
+            None,
+            DiffTextRegion::Inline,
         )
     }
 }
@@ -2668,7 +2670,7 @@ impl ConflictThreeWayScrollFixture {
         let start = start % self.visible_map.len();
         let end = (start + window).min(self.visible_map.len());
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for visible_item in &self.visible_map[start..end] {
             let line_ix = match *visible_item {
                 ThreeWayVisibleItem::Line(ix) => ix,
@@ -2729,7 +2731,7 @@ impl ConflictThreeWayScrollFixture {
             mode: DiffSyntaxMode::Auto,
         };
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for visible_item in &self.visible_map[start..end] {
             let line_ix = match *visible_item {
                 ThreeWayVisibleItem::Line(ix) => ix,
@@ -2798,7 +2800,7 @@ impl ConflictThreeWayScrollFixture {
 }
 
 fn hash_three_way_visible_map_items(items: &[ThreeWayVisibleItem]) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     items.len().hash(&mut h);
 
     let mut hash_item = |item: &ThreeWayVisibleItem| match *item {
@@ -3016,7 +3018,7 @@ impl ConflictTwoWaySplitScrollFixture {
         let start = start % self.visible_row_indices.len();
         let end = (start + window).min(self.visible_row_indices.len());
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for &row_ix in &self.visible_row_indices[start..end] {
             self.diff_row_conflict_map
                 .get(row_ix)
@@ -3185,7 +3187,7 @@ impl ConflictLoadDuplicationFixture {
 
     pub fn run_shared_payload_forwarding_step(&self) -> u64 {
         let file = self.build_shared_conflict_file();
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         hash_conflict_file_load(
             &self.session,
             &self.current_text,
@@ -3199,7 +3201,7 @@ impl ConflictLoadDuplicationFixture {
 
     pub fn run_duplicated_payload_forwarding_step(&self) -> u64 {
         let file = self.build_duplicated_conflict_file();
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         hash_conflict_file_load(
             &self.session,
             &self.current_text,
@@ -3282,7 +3284,7 @@ fn hash_conflict_file_load(
     current_bytes: &Arc<[u8]>,
     file: &ConflictFile,
 ) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     file.path.hash(&mut h);
     session.regions.len().hash(&mut h);
     hash_conflict_file_payload(
@@ -3321,7 +3323,7 @@ fn hash_conflict_file_load(
 }
 
 fn hash_conflict_file_payload(
-    h: &mut DefaultHasher,
+    h: &mut FxHasher,
     payload: &ConflictPayload,
     file_bytes: Option<&Arc<[u8]>>,
     file_text: Option<&Arc<str>>,
@@ -3340,7 +3342,7 @@ fn hash_conflict_file_payload(
 }
 
 fn hash_file_diff_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     rows.len().hash(&mut h);
     let step = (rows.len() / 128).max(1);
     for row in rows.iter().step_by(step).take(128) {
@@ -3358,7 +3360,7 @@ fn hash_file_diff_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> u64 {
 }
 
 fn hash_two_way_word_highlights(highlights: &conflict_resolver::TwoWayWordHighlights) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     highlights.len().hash(&mut h);
     let step = (highlights.len() / 128).max(1);
     for highlight in highlights.iter().step_by(step).take(128) {
@@ -3373,7 +3375,7 @@ fn hash_two_way_word_highlights(highlights: &conflict_resolver::TwoWayWordHighli
     h.finish()
 }
 
-fn hash_ranges(ranges: &[Range<usize>], hasher: &mut DefaultHasher) {
+fn hash_ranges(ranges: &[Range<usize>], hasher: &mut FxHasher) {
     ranges.len().hash(hasher);
     for range in ranges.iter().take(32) {
         range.start.hash(hasher);
@@ -3548,7 +3550,7 @@ impl ConflictSearchQueryUpdateFixture {
         let end = (start + window).min(self.visible_row_indices.len());
         let query = self.query_cache_query.as_ref();
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for &row_ix in &self.visible_row_indices[start..end] {
             row_ix.hash(&mut h);
             let Some(row) = self.diff_rows.get(row_ix) else {
@@ -3667,7 +3669,7 @@ impl ConflictSplitResizeStepFixture {
         let (left_col_width, right_col_width) = self.advance_resize_drag_step();
         let styled_hash = self.inner.run_query_update_step(query, start, window);
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         styled_hash.hash(&mut h);
         self.split_ratio.to_bits().hash(&mut h);
         left_col_width.to_bits().hash(&mut h);
@@ -3762,7 +3764,7 @@ impl ConflictResolvedOutputGutterScrollFixture {
         let start = start % self.line_sources.len();
         let end = (start + window).min(self.line_sources.len());
 
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for line_ix in start..end {
             let source = self
                 .line_sources
@@ -4068,7 +4070,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     }
 
     fn hash_outline_state(&self) -> u64 {
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         self.meta.len().hash(&mut h);
         self.markers.len().hash(&mut h);
         self.output_line_starts.len().hash(&mut h);
@@ -4257,13 +4259,13 @@ impl ConflictStreamedProviderFixture {
             &self.segments,
             conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
         );
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         index.total_rows().hash(&mut h);
         h.finish()
     }
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for vi in start..end {
             if let Some((source_ix, _conflict_ix)) = self.two_way_projection.get(vi) {
                 if let Some(row) = self.split_row_index.row_at(&self.segments, source_ix) {
@@ -4313,7 +4315,7 @@ impl ConflictStreamedProviderFixture {
         let matches = self
             .split_row_index
             .search_matching_rows(&self.segments, |line| line.contains(needle));
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         matches.len().hash(&mut h);
         for &row_ix in matches.iter().take(32) {
             row_ix.hash(&mut h);
@@ -4328,7 +4330,7 @@ impl ConflictStreamedProviderFixture {
             &self.segments,
             false,
         );
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         proj.visible_len().hash(&mut h);
         h.finish()
     }
@@ -4384,14 +4386,14 @@ impl ConflictStreamedResolvedOutputFixture {
     /// Benchmark: build the streamed resolved-output projection from scratch.
     pub fn run_projection_build_step(&self) -> u64 {
         let projection = conflict_resolver::ResolvedOutputProjection::from_segments(&self.segments);
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         projection.len().hash(&mut h);
         projection.output_hash().hash(&mut h);
         h.finish()
     }
 
     fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
-        let mut h = DefaultHasher::new();
+        let mut h = FxHasher::default();
         for line_ix in start..end {
             if let Some(line) = self.projection.line_text(&self.segments, line_ix) {
                 line.len().hash(&mut h);
@@ -4985,15 +4987,12 @@ fn push_padded_markdown_line(
 }
 
 fn hash_markdown_preview_document(document: &MarkdownPreviewDocument) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     hash_markdown_preview_document_into(document, &mut h);
     h.finish()
 }
 
-fn hash_markdown_preview_document_into(
-    document: &MarkdownPreviewDocument,
-    hasher: &mut DefaultHasher,
-) {
+fn hash_markdown_preview_document_into(document: &MarkdownPreviewDocument, hasher: &mut FxHasher) {
     document.rows.len().hash(hasher);
     if document.rows.is_empty() {
         return;

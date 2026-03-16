@@ -1,8 +1,9 @@
 use super::super::*;
 use gpui::SharedString;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet, FxHasher};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use tree_sitter::StreamingIterator;
@@ -39,7 +40,7 @@ thread_local! {
     static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
     static TS_DOCUMENT_CACHE: RefCell<TreesitterDocumentCache> = RefCell::new(TreesitterDocumentCache::new());
-    static TS_INJECTION_CACHE: RefCell<HashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(HashMap::new());
+    static TS_INJECTION_CACHE: RefCell<HashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(HashMap::default());
     static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
@@ -461,10 +462,10 @@ fn chunk_line_tokens_by_row(
     line_tokens: Vec<Vec<SyntaxToken>>,
 ) -> HashMap<usize, Vec<Vec<SyntaxToken>>> {
     if line_tokens.is_empty() {
-        return HashMap::new();
+        return HashMap::default();
     }
 
-    let mut chunks = HashMap::new();
+    let mut chunks = HashMap::default();
     let mut chunk_ix = 0usize;
     let mut chunk = Vec::with_capacity(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS);
     for line in line_tokens {
@@ -562,7 +563,7 @@ struct TreesitterDocumentCache {
 impl TreesitterDocumentCache {
     fn new() -> Self {
         Self {
-            by_cache_key: HashMap::new(),
+            by_cache_key: HashMap::default(),
             lru_order: VecDeque::new(),
             pending_chunk_requests: HashSet::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
@@ -1354,7 +1355,6 @@ pub(super) fn benchmark_cache_replacement_drop_step(
     replacements: usize,
     defer_drop: bool,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let payloads = benchmark_line_tokens_payload_batch(lines, tokens_per_line, replacements, 0);
@@ -1364,7 +1364,7 @@ pub(super) fn benchmark_cache_replacement_drop_step(
         SyntaxCacheDropMode::InlineWhenLarge
     };
     let mut cache = TreesitterDocumentCache::new();
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     for (nonce, line_tokens) in payloads.into_iter().enumerate() {
         cache.insert_document_with_mode(
             PreparedSyntaxCacheKey {
@@ -1497,7 +1497,7 @@ fn parse_treesitter_document_core(
     Some(PreparedSyntaxDocumentData {
         cache_key: request.cache_key,
         line_count: request.input.line_starts.len(),
-        line_token_chunks: HashMap::new(),
+        line_token_chunks: HashMap::default(),
         tree_state: Some(PreparedSyntaxTreeState {
             language: request.language,
             text: request.input.text.clone(),
@@ -2012,10 +2012,9 @@ fn treesitter_document_cache_key(
 }
 
 fn treesitter_document_doc_hash(input: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     input.hash(&mut hasher);
     hasher.finish()
 }
@@ -2363,7 +2362,7 @@ fn collect_treesitter_injection_matches_for_line_window(
         return Vec::new();
     }
 
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut injections = Vec::new();
     for pass in &query_passes {
         TS_CURSOR.with(|cursor| {
@@ -2394,9 +2393,8 @@ fn collect_treesitter_injection_matches_for_line_window(
                         byte_start: byte_range.start,
                         byte_end: byte_range.end,
                         content_hash: {
-                            use std::collections::hash_map::DefaultHasher;
                             use std::hash::{Hash, Hasher};
-                            let mut h = DefaultHasher::new();
+                            let mut h = FxHasher::default();
                             input[byte_range.start..byte_range.end].hash(&mut h);
                             h.finish()
                         },

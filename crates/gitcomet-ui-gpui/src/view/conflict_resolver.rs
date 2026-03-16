@@ -1,3 +1,4 @@
+use rustc_hash::FxHashMap;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -298,7 +299,7 @@ impl SourceLineKey {
 }
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
-pub type WordHighlights = std::collections::HashMap<usize, Vec<std::ops::Range<usize>>>;
+pub type WordHighlights = FxHashMap<usize, Vec<Range<usize>>>;
 
 /// Per-line pair of `(old, new)` word-highlight ranges for a two-way diff row.
 pub type TwoWayWordHighlightPair = (Vec<Range<usize>>, Vec<Range<usize>>);
@@ -2896,9 +2897,9 @@ pub fn compute_three_way_word_highlights(
     theirs_line_starts: &[usize],
     marker_segments: &[ConflictSegment],
 ) -> (WordHighlights, WordHighlights, WordHighlights) {
-    let mut wh_base: WordHighlights = WordHighlights::new();
-    let mut wh_ours: WordHighlights = WordHighlights::new();
-    let mut wh_theirs: WordHighlights = WordHighlights::new();
+    let mut wh_base: WordHighlights = WordHighlights::default();
+    let mut wh_ours: WordHighlights = WordHighlights::default();
+    let mut wh_theirs: WordHighlights = WordHighlights::default();
 
     fn merge_line_ranges(
         highlights: &mut WordHighlights,
@@ -3617,8 +3618,7 @@ struct SplitLayoutEntry {
 
 #[derive(Debug, Default)]
 struct ConflictSplitPageCache {
-    pages:
-        std::collections::HashMap<usize, std::sync::Arc<[gitcomet_core::file_diff::FileDiffRow]>>,
+    pages: FxHashMap<usize, std::sync::Arc<[gitcomet_core::file_diff::FileDiffRow]>>,
     lru: std::collections::VecDeque<usize>,
 }
 

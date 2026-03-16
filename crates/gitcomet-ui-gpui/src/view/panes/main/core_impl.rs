@@ -2805,6 +2805,47 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn select_all_diff_text(&mut self) {
+        // Markdown preview (both file preview and diff preview) uses
+        // markdown preview row counts instead of source-text line counts.
+        if self.is_markdown_preview_active() {
+            let Some(count) = self.markdown_preview_row_count() else {
+                return;
+            };
+            if count == 0 {
+                return;
+            }
+            let region = if self.is_file_preview_active() {
+                DiffTextRegion::Inline
+            } else {
+                match self.diff_view {
+                    DiffViewMode::Inline => DiffTextRegion::Inline,
+                    DiffViewMode::Split => self
+                        .diff_text_head
+                        .or(self.diff_text_anchor)
+                        .map(|p| p.region)
+                        .filter(|r| {
+                            matches!(r, DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight)
+                        })
+                        .unwrap_or(DiffTextRegion::SplitLeft),
+                }
+            };
+            let end_visible_ix = count - 1;
+            let end_text = self.diff_text_line_for_region(end_visible_ix, region);
+
+            self.diff_text_selecting = false;
+            self.diff_text_anchor = Some(DiffTextPos {
+                visible_ix: 0,
+                region,
+                offset: 0,
+            });
+            self.diff_text_head = Some(DiffTextPos {
+                visible_ix: end_visible_ix,
+                region,
+                offset: end_text.len(),
+            });
+            return;
+        }
+
         if self.is_file_preview_active() {
             let Some(count) = self.worktree_preview_line_count() else {
                 return;
@@ -2909,6 +2950,36 @@ impl MainPaneView {
         region: DiffTextRegion,
         kind: DiffClickKind,
     ) {
+        // Markdown preview: select the full row on double-click.
+        if self.is_markdown_preview_active() {
+            let Some(count) = self.markdown_preview_row_count() else {
+                return;
+            };
+            if count == 0 {
+                return;
+            }
+            let effective_region = if self.is_file_preview_active() {
+                DiffTextRegion::Inline
+            } else {
+                region
+            };
+            let visible_ix = visible_ix.min(count - 1);
+            let end_text = self.diff_text_line_for_region(visible_ix, effective_region);
+            self.diff_text_selecting = false;
+            self.diff_text_anchor = Some(DiffTextPos {
+                visible_ix,
+                region: effective_region,
+                offset: 0,
+            });
+            self.diff_text_head = Some(DiffTextPos {
+                visible_ix,
+                region: effective_region,
+                offset: end_text.len(),
+            });
+            self.diff_suppress_clicks_remaining = 2;
+            return;
+        }
+
         if self.is_file_preview_active() {
             let Some(count) = self.worktree_preview_line_count() else {
                 return;

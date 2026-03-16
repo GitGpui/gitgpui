@@ -158,7 +158,6 @@ impl Element for DiffTextSelectionOverlay {
         window: &mut Window,
         cx: &mut App,
     ) {
-        use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
         let selection = self.view.read(cx).diff_text_local_selection_range(
@@ -170,7 +169,7 @@ impl Element for DiffTextSelectionOverlay {
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = rustc_hash::FxHasher::default();
         self.text.as_ref().hash(&mut hasher);
         font_size.hash(&mut hasher);
         let layout_key = hasher.finish();

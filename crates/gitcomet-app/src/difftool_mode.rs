@@ -1,5 +1,5 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -129,7 +129,7 @@ impl StagingCopyState {
     fn new(allowed_roots: Vec<PathBuf>) -> Self {
         Self {
             allowed_roots,
-            active_dirs: HashSet::new(),
+            active_dirs: HashSet::default(),
             staged_entries: 0,
             staged_files: 0,
             staged_bytes: 0,

@@ -1,5 +1,7 @@
 use super::super::perf::{self, ViewPerfSpan};
 use super::*;
+use rustc_hash::FxHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 mod syntax;
@@ -578,10 +580,7 @@ fn styled_text_to_cached(
     text: SharedString,
     highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
 ) -> CachedDiffStyledText {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.as_ref().hash(&mut hasher);
     let text_hash = hasher.finish();
 
@@ -811,10 +810,7 @@ pub(super) fn build_cached_diff_query_overlay_styled_text(
 }
 
 fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     for (range, style) in highlights {
         range.hash(&mut hasher);
         style.hash(&mut hasher);
@@ -2150,12 +2146,9 @@ mod tests {
 
     #[test]
     fn query_overlay_reuses_base_when_query_is_empty_or_missing() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let theme = AppTheme::zed_ayu_dark();
         let text: SharedString = "abcdef".into();
-        let mut text_hasher = DefaultHasher::new();
+        let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let mut style = gpui::HighlightStyle::default();
@@ -2178,12 +2171,9 @@ mod tests {
 
     #[test]
     fn query_overlay_adds_background_without_losing_existing_color() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let theme = AppTheme::zed_ayu_dark();
         let text: SharedString = "abcdef".into();
-        let mut text_hasher = DefaultHasher::new();
+        let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let mut style = gpui::HighlightStyle::default();

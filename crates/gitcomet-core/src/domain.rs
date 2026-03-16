@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 #[cfg(test)]
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -251,7 +251,7 @@ impl PagedDiffLineProvider {
         Self {
             lines,
             page_size: page_size.max(1),
-            pages: Mutex::new(HashMap::new()),
+            pages: Mutex::new(HashMap::default()),
         }
     }
 

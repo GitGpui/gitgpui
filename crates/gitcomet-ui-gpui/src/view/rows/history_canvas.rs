@@ -3,7 +3,7 @@ use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, fill, point, px,
     size,
 };
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::cell::RefCell;
 
 const HISTORY_TAG_CHIP_HEIGHT_PX: f32 = 18.0;
@@ -26,11 +26,10 @@ fn shape_truncated_line_cached(
     color: gpui::Rgba,
     font_family: Option<&'static str>,
 ) -> gpui::ShapedLine {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let key = {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         max_width.hash(&mut hasher);
         font_size.hash(&mut hasher);

@@ -1,5 +1,6 @@
 use super::super::path_display;
 use super::*;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -32,7 +33,7 @@ pub(in super::super) struct ActionBarView {
 
 impl ActionBarView {
     fn notify_fingerprint(state: &AppState) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo

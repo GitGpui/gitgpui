@@ -2,6 +2,7 @@ use super::*;
 use crate::view::markdown_preview;
 use crate::view::perf::{self, ViewPerfSpan};
 use gitcomet_core::domain::DiffRowProvider;
+use rustc_hash::FxHasher;
 
 const IMAGE_DIFF_CACHE_FILE_PREFIX: &str = "gitcomet-image-diff-";
 const IMAGE_DIFF_CACHE_MAX_AGE: std::time::Duration =
@@ -48,10 +49,9 @@ fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
 }
 
 fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     file.path.hash(&mut hasher);
     file.old.hash(&mut hasher);
     file.new.hash(&mut hasher);

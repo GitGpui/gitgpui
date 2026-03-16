@@ -149,7 +149,7 @@ fn remote_headers_include_remotes_with_no_branches() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    headers.sort();
+    headers.sort_unstable();
     headers.dedup();
 
     assert!(

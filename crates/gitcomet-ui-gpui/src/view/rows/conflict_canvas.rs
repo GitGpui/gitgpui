@@ -5,7 +5,7 @@ use gpui::{
     App, Bounds, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle, Window, fill,
     point, px, size,
 };
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -549,9 +549,7 @@ fn prepare_conflict_text_for_canvas(
 }
 
 fn hash_text(text: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()
 }
@@ -746,8 +744,7 @@ fn paint_gutter_text(
     let mut style = diff_text_style(window);
     style.color = color.into();
     let key = {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         metrics.font_size.hash(&mut hasher);
         style.font_family.hash(&mut hasher);
@@ -858,9 +855,7 @@ fn conflict_layout_key(
     fg: gpui::Rgba,
     metrics: LineMetrics,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     prepared.text_hash.hash(&mut hasher);
     prepared.highlights_hash.hash(&mut hasher);
     metrics.font_size.hash(&mut hasher);

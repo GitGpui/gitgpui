@@ -214,9 +214,9 @@ fn merge_history_entries(
     sort: bool,
     max_entries: Option<usize>,
 ) -> Vec<HistoryEntry> {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet as HashSet;
 
-    let mut seen_keys: HashSet<String> = HashSet::new();
+    let mut seen_keys: HashSet<String> = HashSet::default();
     let mut merged: Vec<HistoryEntry> = Vec::new();
 
     // Add all "ours" entries.

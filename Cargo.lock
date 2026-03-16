@@ -2250,6 +2250,7 @@ dependencies = [
  "gitcomet-ui",
  "gitcomet-ui-gpui",
  "mimalloc",
+ "rustc-hash 2.1.1",
  "tempfile",
 ]
 

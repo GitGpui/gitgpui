@@ -121,6 +121,8 @@ impl MainPaneView {
             this.diff_horizontal_min_width,
             "worktree_markdown_preview",
             Some(horizontal_scroll_handle),
+            Some(cx.entity().clone()),
+            DiffTextRegion::Inline,
         )
     }
 
@@ -143,6 +145,10 @@ impl MainPaneView {
             window,
             cx,
         );
+        let region = match this.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+        };
         render_markdown_preview_document_rows(
             theme,
             &preview.old,
@@ -151,6 +157,8 @@ impl MainPaneView {
             this.diff_horizontal_min_width,
             "diff_markdown_preview_left",
             Some(horizontal_scroll_handle),
+            Some(cx.entity().clone()),
+            region,
         )
     }
 
@@ -181,6 +189,8 @@ impl MainPaneView {
             this.diff_horizontal_min_width,
             "diff_markdown_preview_inline",
             Some(horizontal_scroll_handle),
+            Some(cx.entity().clone()),
+            DiffTextRegion::Inline,
         )
     }
 
@@ -211,6 +221,8 @@ impl MainPaneView {
             this.diff_horizontal_min_width,
             "diff_markdown_preview_right",
             Some(horizontal_scroll_handle),
+            Some(cx.entity().clone()),
+            DiffTextRegion::SplitRight,
         )
     }
 
@@ -278,6 +290,8 @@ pub(super) fn render_markdown_preview_document_rows(
     min_width: Pixels,
     row_id_prefix: &'static str,
     horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    view: Option<Entity<MainPaneView>>,
+    text_region: DiffTextRegion,
 ) -> Vec<AnyElement> {
     let requested_rows = range.len();
     let rows = range
@@ -291,6 +305,8 @@ pub(super) fn render_markdown_preview_document_rows(
                 min_width,
                 row_id_prefix,
                 horizontal_scroll_handle.clone(),
+                view.clone(),
+                text_region,
             ))
         })
         .collect::<Vec<_>>();
@@ -310,6 +326,8 @@ fn markdown_preview_row_element(
     min_width: Pixels,
     row_id_prefix: &'static str,
     horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    view: Option<Entity<MainPaneView>>,
+    text_region: DiffTextRegion,
 ) -> AnyElement {
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
@@ -503,29 +521,102 @@ fn markdown_preview_row_element(
     }
     row_content = row_content.child(content_shell);
 
-    div()
-        .relative()
-        .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-        .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-        .w_full()
-        .flex()
-        .items_center()
-        .pt(px(row_layout.top_inset_px))
-        .pb(px(row_layout.bottom_inset_px))
-        .when_some(markdown_preview_row_background(theme, row), |div, bg| {
-            div.bg(bg)
-        })
-        .when_some(bar_color, |container, color| {
-            container.child(
-                div()
-                    .h_full()
-                    .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
-                    .bg(color),
-            )
-        })
-        .min_w(min_width)
-        .child(row_content)
-        .into_any_element()
+    let row_text = row.text.clone();
+
+    if let Some(view) = view {
+        // Interactive markdown preview row with text selection + context menu.
+        div()
+            .id(("md_preview_row", row_ix))
+            .relative()
+            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .pt(px(row_layout.top_inset_px))
+            .pb(px(row_layout.bottom_inset_px))
+            .when_some(markdown_preview_row_background(theme, row), |div, bg| {
+                div.bg(bg)
+            })
+            .when_some(bar_color, |container, color| {
+                container.child(
+                    div()
+                        .h_full()
+                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .bg(color),
+                )
+            })
+            .min_w(min_width)
+            .child(row_content)
+            .on_mouse_down(gpui::MouseButton::Left, {
+                let view = view.clone();
+                move |event, window, cx| {
+                    window.focus(&view.read(cx).diff_panel_focus_handle);
+                    let click_count = event.click_count;
+                    let position = event.position;
+                    view.update(cx, |this, cx| {
+                        if click_count >= 2 {
+                            this.double_click_select_diff_text(
+                                row_ix,
+                                text_region,
+                                DiffClickKind::Line,
+                            );
+                        } else {
+                            this.begin_diff_text_selection(row_ix, text_region, position);
+                            this.begin_diff_text_scroll_tracking(position, cx);
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .on_mouse_down(gpui::MouseButton::Right, {
+                let view = view.clone();
+                move |event, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.open_diff_editor_context_menu(
+                            row_ix,
+                            text_region,
+                            event.position,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    });
+                }
+            })
+            .child(DiffTextSelectionOverlay {
+                view,
+                visible_ix: row_ix,
+                region: text_region,
+                text: row_text,
+            })
+            .into_any_element()
+    } else {
+        // Non-interactive markdown preview row (benchmarks, conflict resolver).
+        div()
+            .relative()
+            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .pt(px(row_layout.top_inset_px))
+            .pb(px(row_layout.bottom_inset_px))
+            .when_some(markdown_preview_row_background(theme, row), |div, bg| {
+                div.bg(bg)
+            })
+            .when_some(bar_color, |container, color| {
+                container.child(
+                    div()
+                        .h_full()
+                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .bg(color),
+                )
+            })
+            .min_w(min_width)
+            .child(row_content)
+            .into_any_element()
+    }
 }
 
 fn markdown_preview_row_required_width(

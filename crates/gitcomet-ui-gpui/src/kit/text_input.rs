@@ -8,8 +8,7 @@ use gpui::{
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
     WrappedLine, actions, anchored, deferred, div, fill, hsla, point, px, relative, size,
 };
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -3651,7 +3650,7 @@ impl Render for TextInput {
 }
 
 fn hash_text_slice(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()
 }
@@ -4289,7 +4288,7 @@ fn runs_for_line(
 }
 
 #[cfg(feature = "benchmarks")]
-fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut DefaultHasher) {
+fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHasher) {
     runs.len().hash(hasher);
     let mut total = 0usize;
     for run in runs {
@@ -4309,7 +4308,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
     let base_color = hsla(0.0, 0.0, 1.0, 1.0);
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
         let line_text = line_text_for_index(text, line_starts, line_ix);
@@ -4344,7 +4343,7 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
         visible_line_range,
         highlights,
     );
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     for runs in &line_runs {
         hash_text_runs_for_benchmark(runs.as_slice(), &mut hasher);
     }

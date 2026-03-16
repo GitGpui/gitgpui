@@ -5,7 +5,8 @@
 //! into production code so it can be reused outside ad-hoc test harnesses.
 
 use crate::merge::{MergeOptions, merge_file};
-use std::collections::{BTreeSet, HashSet};
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -335,8 +336,10 @@ pub fn write_fixture_files(
     // Reserve prefixes already present on disk so repeated extraction runs
     // append new fixture sets instead of clobbering existing ones.
     let existing_prefixes = discover_existing_fixture_prefixes(dest_dir)?;
-    let mut used_prefixes: HashSet<String> =
-        HashSet::with_capacity(existing_prefixes.len() + cases.len());
+    let mut used_prefixes: HashSet<String> = HashSet::with_capacity_and_hasher(
+        existing_prefixes.len() + cases.len(),
+        Default::default(),
+    );
     used_prefixes.extend(existing_prefixes);
 
     for case in cases {
@@ -374,7 +377,7 @@ pub fn write_fixture_files(
 fn discover_existing_fixture_prefixes(
     dest_dir: &Path,
 ) -> Result<HashSet<String>, MergeExtractionError> {
-    let mut prefixes = HashSet::new();
+    let mut prefixes = HashSet::default();
     let entries = std::fs::read_dir(dest_dir).map_err(|source| MergeExtractionError::Io {
         action: "read fixture directory",
         path: dest_dir.to_path_buf(),

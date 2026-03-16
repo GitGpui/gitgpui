@@ -97,11 +97,14 @@ fn trace_rendering_mode(
 const CONFLICT_SOURCE_FINGERPRINT_SAMPLE_COUNT: usize = 8;
 const CONFLICT_SOURCE_FINGERPRINT_WINDOW_BYTES: usize = 256;
 
-fn sampled_content_fingerprint(bytes: &[u8], salt: u64) -> u64 {
+// This is a lightweight UI cache key, not a cryptographic hash. Domain labels
+// keep the text/bytes/none cases distinct without opaque numeric seeds.
+fn sampled_content_fingerprint(bytes: &[u8], domain: &str) -> u64 {
     use std::hash::Hasher;
 
     let mut hasher = rustc_hash::FxHasher::default();
-    hasher.write_u64(salt);
+    hasher.write_usize(domain.len());
+    hasher.write(domain.as_bytes());
     hasher.write_usize(bytes.len());
     if bytes.is_empty() {
         return hasher.finish();
@@ -129,37 +132,46 @@ fn sampled_content_fingerprint(bytes: &[u8], salt: u64) -> u64 {
 
 fn shared_text_fingerprint(text: &Option<std::sync::Arc<str>>) -> u64 {
     let Some(text) = text.as_ref() else {
-        return 0x243f_6a88_85a3_08d3;
+        return sampled_content_fingerprint(&[], "conflict-source:text:none");
     };
-    sampled_content_fingerprint(text.as_bytes(), 0xa409_3822_299f_31d0)
+    sampled_content_fingerprint(text.as_bytes(), "conflict-source:text")
 }
 
 fn shared_bytes_fingerprint(bytes: &Option<std::sync::Arc<[u8]>>) -> u64 {
     let Some(bytes) = bytes.as_ref() else {
-        return 0x1319_8a2e_0370_7344;
+        return sampled_content_fingerprint(&[], "conflict-source:bytes:none");
     };
-    sampled_content_fingerprint(bytes.as_ref(), 0x082e_fa98_ec4e_6c89)
+    sampled_content_fingerprint(bytes.as_ref(), "conflict-source:bytes")
 }
 
 fn conflict_file_source_fingerprint(file: &gitcomet_state::model::ConflictFile) -> u64 {
-    let side_fingerprint =
-        |text: &Option<std::sync::Arc<str>>, bytes: &Option<std::sync::Arc<[u8]>>, salt: u64| {
-            let value = if text.is_some() {
-                shared_text_fingerprint(text)
-            } else {
-                shared_bytes_fingerprint(bytes)
-            };
-            salt.rotate_left(7) ^ value.wrapping_mul(0x94d0_49bb_1331_11eb)
+    let side_fingerprint = |text: &Option<std::sync::Arc<str>>,
+                            bytes: &Option<std::sync::Arc<[u8]>>,
+                            side_domain: &str| {
+        let value = if text.is_some() {
+            shared_text_fingerprint(text)
+        } else {
+            shared_bytes_fingerprint(bytes)
         };
+        sampled_content_fingerprint(&value.to_le_bytes(), side_domain)
+    };
 
-    let mut acc: u64 = 0x9e37_79b9_7f4a_7c15;
-    for (salt, text, bytes) in [
-        (0x1001_u64, &file.base, &file.base_bytes),
-        (0x1002_u64, &file.ours, &file.ours_bytes),
-        (0x1003_u64, &file.theirs, &file.theirs_bytes),
-        (0x1004_u64, &file.current, &file.current_bytes),
+    let mut acc = sampled_content_fingerprint(&[], "conflict-source:file");
+    for (side_domain, text, bytes) in [
+        ("conflict-source:side:base", &file.base, &file.base_bytes),
+        ("conflict-source:side:ours", &file.ours, &file.ours_bytes),
+        (
+            "conflict-source:side:theirs",
+            &file.theirs,
+            &file.theirs_bytes,
+        ),
+        (
+            "conflict-source:side:current",
+            &file.current,
+            &file.current_bytes,
+        ),
     ] {
-        acc = acc.rotate_left(13) ^ side_fingerprint(text, bytes, salt);
+        acc = acc.rotate_left(13) ^ side_fingerprint(text, bytes, side_domain);
     }
     acc
 }
@@ -1489,15 +1501,27 @@ impl MainPaneView {
         self.conflict_resolver.view_mode = view_mode;
         self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.hovered_conflict = None;
+        // Clear styled-text caches so the target view mode re-computes
+        // syntax highlighting from the prepared documents on next render.
+        self.clear_conflict_diff_style_caches();
+        self.conflict_three_way_segments_cache.clear();
         if view_mode == ConflictResolverViewMode::ThreeWay
             && self
                 .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full)
         {
+            // Build three-way visible state from the data we already have so
+            // the view shows existing rows (with syntax) while the full file
+            // reloads in the background.
+            self.conflict_resolver.rebuild_three_way_visible_state();
             cx.notify();
             return;
         }
         if view_mode == ConflictResolverViewMode::ThreeWay {
             self.conflict_resolver.rebuild_three_way_visible_state();
+        } else {
+            // Rebuild two-way visible projections so the split view reflects
+            // the current hide_resolved state and resolved conflict choices.
+            self.conflict_resolver.rebuild_two_way_visible_projections();
         }
         let path = self.conflict_resolver.path.clone();
         let output_line_count = if self.conflict_resolved_output_is_streamed() {
@@ -2570,6 +2594,33 @@ mod tests {
             conflict_file_source_fingerprint(&left),
             conflict_file_source_fingerprint(&right),
             "content-identical conflict files should keep the lightweight resync path even when backing Arcs are freshly allocated",
+        );
+    }
+
+    #[test]
+    fn shared_content_fingerprints_keep_domains_distinct() {
+        let none_text = None;
+        let empty_text = Some(std::sync::Arc::<str>::from(""));
+        let text = Some(std::sync::Arc::<str>::from("shared payload"));
+
+        let none_bytes = None;
+        let empty_bytes = Some(std::sync::Arc::<[u8]>::from(b"".as_slice()));
+        let bytes = Some(std::sync::Arc::<[u8]>::from(b"shared payload".as_slice()));
+
+        assert_ne!(
+            shared_text_fingerprint(&none_text),
+            shared_text_fingerprint(&empty_text),
+            "missing text should not collide with an empty text payload",
+        );
+        assert_ne!(
+            shared_bytes_fingerprint(&none_bytes),
+            shared_bytes_fingerprint(&empty_bytes),
+            "missing bytes should not collide with an empty byte payload",
+        );
+        assert_ne!(
+            shared_text_fingerprint(&text),
+            shared_bytes_fingerprint(&bytes),
+            "text and byte payloads use separate fingerprint domains",
         );
     }
 }

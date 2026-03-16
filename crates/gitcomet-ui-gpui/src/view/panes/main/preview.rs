@@ -216,6 +216,74 @@ impl MainPaneView {
         ))
     }
 
+    /// Returns the row count for the active markdown preview, taking the
+    /// current diff view mode into account.  Returns `None` when no markdown
+    /// preview is active.
+    pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
+        if self.is_file_preview_active() {
+            if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
+                return Some(doc.rows.len());
+            }
+            return None;
+        }
+        if let Loadable::Ready(diff) = &self.file_markdown_preview {
+            return Some(match self.diff_view {
+                DiffViewMode::Inline => diff.inline.rows.len(),
+                DiffViewMode::Split => diff.old.rows.len().max(diff.new.rows.len()),
+            });
+        }
+        None
+    }
+
+    /// Returns the text of a markdown preview row at `visible_ix` for the
+    /// given `region`.  For file preview (added/deleted/untracked) only
+    /// `DiffTextRegion::Inline` is meaningful.
+    pub(in crate::view) fn markdown_preview_row_text(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let fallback = SharedString::default();
+
+        if self.is_file_preview_active() {
+            let Loadable::Ready(doc) = &self.worktree_markdown_preview else {
+                return fallback;
+            };
+            return doc
+                .rows
+                .get(visible_ix)
+                .map(|r| r.text.clone())
+                .unwrap_or(fallback);
+        }
+
+        let Loadable::Ready(diff) = &self.file_markdown_preview else {
+            return fallback;
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => diff
+                .inline
+                .rows
+                .get(visible_ix)
+                .map(|r| r.text.clone())
+                .unwrap_or(fallback),
+            DiffViewMode::Split => match region {
+                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => diff
+                    .old
+                    .rows
+                    .get(visible_ix)
+                    .map(|r| r.text.clone())
+                    .unwrap_or(fallback),
+                DiffTextRegion::SplitRight => diff
+                    .new
+                    .rows
+                    .get(visible_ix)
+                    .map(|r| r.text.clone())
+                    .unwrap_or(fallback),
+            },
+        }
+    }
+
     pub(in super::super::super) fn untracked_worktree_preview_path(
         &self,
     ) -> Option<std::path::PathBuf> {

@@ -4,8 +4,9 @@ use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
 };
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -846,8 +847,7 @@ fn paint_gutter_text(
     let mut style = diff_text_style(window);
     style.color = color.into();
     let key = {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         metrics.font_size.hash(&mut hasher);
         style.font_family.hash(&mut hasher);
@@ -976,9 +976,7 @@ fn diff_layout_base_key(
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text_hash.hash(&mut hasher);
     metrics.font_size.hash(&mut hasher);
     base_style.font_family.hash(&mut hasher);
@@ -1003,14 +1001,12 @@ fn ensure_layout_cached(
     window: &mut Window,
     cx: &mut App,
 ) -> (u64, gpui::ShapedLine, Option<gpui::ShapedLine>) {
-    use std::collections::hash_map::DefaultHasher;
-
     let base_key = diff_layout_base_key(text_hash, base_style, base_fg, metrics);
 
     let layout_key = if highlights.is_empty() {
         base_key
     } else {
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         base_key.hash(&mut hasher);
         highlights_hash.hash(&mut hasher);
         highlights.len().hash(&mut hasher);

@@ -119,6 +119,8 @@ fn render_conflict_markdown_preview_rows(
         this.diff_horizontal_min_width,
         row_id_prefix,
         Some(horizontal_scroll_handle),
+        None,
+        DiffTextRegion::Inline,
     )
 }
 
@@ -591,6 +593,7 @@ impl MainPaneView {
                         .text_xs()
                         .text_color(base_fg)
                         .whitespace_nowrap()
+                        .overflow_hidden()
                         .bg(base_bg)
                         .when(base_is_chosen, |d| d.bg(chosen_bg))
                         .child(
@@ -619,6 +622,7 @@ impl MainPaneView {
                         .text_xs()
                         .text_color(ours_fg)
                         .whitespace_nowrap()
+                        .overflow_hidden()
                         .bg(ours_bg)
                         .when(ours_is_chosen, |d| d.bg(chosen_bg))
                         .child(
@@ -648,6 +652,7 @@ impl MainPaneView {
                         .text_xs()
                         .text_color(theirs_fg)
                         .whitespace_nowrap()
+                        .overflow_hidden()
                         .bg(theirs_bg)
                         .when(theirs_is_chosen, |d| d.bg(chosen_bg))
                         .child(
@@ -1605,6 +1610,7 @@ impl MainPaneView {
             .bg(left_bg)
             .text_color(left_fg)
             .whitespace_nowrap()
+            .overflow_hidden()
             .child(
                 div()
                     .w(px(38.0))
@@ -1631,6 +1637,7 @@ impl MainPaneView {
             .bg(right_bg)
             .text_color(right_fg)
             .whitespace_nowrap()
+            .overflow_hidden()
             .child(
                 div()
                     .w(px(38.0))
@@ -1794,6 +1801,7 @@ impl MainPaneView {
             .bg(left_bg)
             .text_color(left_fg)
             .whitespace_nowrap()
+            .overflow_hidden()
             .child(
                 div()
                     .w(px(38.0))
@@ -1872,6 +1880,7 @@ impl MainPaneView {
             .bg(right_bg)
             .text_color(right_fg)
             .whitespace_nowrap()
+            .overflow_hidden()
             .child(
                 div()
                     .w(px(38.0))

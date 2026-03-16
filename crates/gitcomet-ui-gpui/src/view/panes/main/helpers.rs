@@ -961,7 +961,7 @@ pub(super) fn first_output_marker_line_for_conflict(
 pub(super) fn conflict_marker_nav_entries_from_markers(
     markers: &[Option<ResolvedOutputConflictMarker>],
 ) -> Vec<usize> {
-    let mut seen_conflicts = std::collections::HashSet::new();
+    let mut seen_conflicts = HashSet::default();
     markers
         .iter()
         .enumerate()

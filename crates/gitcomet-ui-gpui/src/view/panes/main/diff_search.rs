@@ -763,7 +763,7 @@ mod tests {
             .into_iter()
             .filter_map(|r| proj.source_to_visible(r))
             .collect();
-        source_text_matches.sort();
+        source_text_matches.sort_unstable();
 
         // Row-generation search path (old):
         let mut row_based_matches = Vec::new();

@@ -1316,10 +1316,10 @@ fn find_patience_anchors(
     new_start: usize,
     new_end: usize,
 ) -> Vec<(usize, usize)> {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     // Count occurrences and record position for old lines.
-    let mut old_info: HashMap<&str, (usize, usize)> = HashMap::new();
+    let mut old_info: HashMap<&str, (usize, usize)> = HashMap::default();
     for (i, &line) in old.iter().enumerate().take(old_end).skip(old_start) {
         let entry = old_info.entry(line).or_insert((0, i));
         entry.0 += 1;
@@ -1327,7 +1327,7 @@ fn find_patience_anchors(
     }
 
     // Count occurrences and record position for new lines.
-    let mut new_info: HashMap<&str, (usize, usize)> = HashMap::new();
+    let mut new_info: HashMap<&str, (usize, usize)> = HashMap::default();
     for (j, &line) in new.iter().enumerate().take(new_end).skip(new_start) {
         let entry = new_info.entry(line).or_insert((0, j));
         entry.0 += 1;

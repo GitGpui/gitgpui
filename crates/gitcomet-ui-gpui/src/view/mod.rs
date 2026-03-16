@@ -24,7 +24,7 @@ use gpui::{
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
@@ -1050,7 +1050,7 @@ impl GitCometView {
 
         let mut rows = Vec::new();
         for (remote, mut branches) in grouped {
-            branches.sort();
+            branches.sort_unstable();
             branches.dedup();
             rows.push(RemoteRow::Header(remote.clone()));
             for name in branches {

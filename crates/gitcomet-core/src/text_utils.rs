@@ -8,7 +8,7 @@
 #[cfg(test)]
 use crate::file_diff::{Edit, EditKind, myers_edits};
 #[cfg(test)]
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 #[cfg(test)]
 use std::fmt;
 
@@ -370,7 +370,7 @@ fn index_matching<'a>(a: &[&'a str], b: &[&'a str]) -> (Vec<&'a str>, Vec<usize>
 
 #[cfg(test)]
 fn index_matching_kmers<'a>(a: &[&'a str], b: &[&'a str]) -> (Vec<&'a str>, Vec<usize>) {
-    let mut aset: HashSet<(&str, &str, &str)> = HashSet::new();
+    let mut aset: HashSet<(&str, &str, &str)> = HashSet::default();
     for i in 0..a.len().saturating_sub(2) {
         aset.insert((a[i], a[i + 1], a[i + 2]));
     }

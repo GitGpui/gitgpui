@@ -271,6 +271,13 @@ impl MainPaneView {
             out.into()
         };
 
+        // When markdown rendered preview is active, rows come from the
+        // markdown preview document rather than from source text lines or
+        // patch diff rows.
+        if self.is_markdown_preview_active() {
+            return self.markdown_preview_row_text(visible_ix, region);
+        }
+
         if self.is_file_preview_active() {
             if region != DiffTextRegion::Inline {
                 return fallback;

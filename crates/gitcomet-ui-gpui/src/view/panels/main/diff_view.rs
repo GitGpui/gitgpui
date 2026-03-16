@@ -1550,6 +1550,13 @@ impl MainPaneView {
                                 )
                                 .track_scroll(self.conflict_resolver_diff_scroll.clone());
 
+                                let resolver_diff_scroll_handle = self
+                                    .conflict_resolver_diff_scroll
+                                    .0
+                                    .borrow()
+                                    .base_handle
+                                    .clone();
+
                                 div()
                                     .id("conflict_resolver_diff_scroll")
                                     .relative()
@@ -1561,6 +1568,14 @@ impl MainPaneView {
                                         components::Scrollbar::new(
                                             "conflict_resolver_diff_scrollbar",
                                             self.conflict_resolver_diff_scroll.clone(),
+                                        )
+                                        .always_visible()
+                                        .render(theme),
+                                    )
+                                    .child(
+                                        components::Scrollbar::horizontal(
+                                            "conflict_resolver_diff_hscrollbar",
+                                            resolver_diff_scroll_handle,
                                         )
                                         .always_visible()
                                         .render(theme),
@@ -1814,6 +1829,18 @@ impl MainPaneView {
                                                             components::Scrollbar::new(
                                                                 "conflict_resolver_output_scrollbar",
                                                                 self.conflict_resolved_preview_scroll
+                                                                    .clone(),
+                                                            )
+                                                            .always_visible()
+                                                            .render(theme),
+                                                        )
+                                                        .child(
+                                                            components::Scrollbar::horizontal(
+                                                                "conflict_resolver_output_hscrollbar",
+                                                                self.conflict_resolved_preview_scroll
+                                                                    .0
+                                                                    .borrow()
+                                                                    .base_handle
                                                                     .clone(),
                                                             )
                                                             .always_visible()

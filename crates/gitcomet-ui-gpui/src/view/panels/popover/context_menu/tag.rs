@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
@@ -23,13 +23,13 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             _ => None,
         })
         .unwrap_or_default();
-    remote_names.sort();
+    remote_names.sort_unstable();
     remote_names.dedup();
-    let remote_tags: HashSet<(String, String)> = repo
+    let remote_tags: HashSet<(&str, &str)> = repo
         .and_then(|r| match &r.remote_tags {
             Loadable::Ready(tags) => Some(
                 tags.iter()
-                    .map(|tag| (tag.remote.clone(), tag.name.clone()))
+                    .map(|tag| (tag.remote.as_str(), tag.name.as_str()))
                     .collect::<HashSet<_>>(),
             ),
             _ => None,
@@ -42,7 +42,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         .filter(|t| t.target == *commit_id)
         .map(|t| t.name.clone())
         .collect::<Vec<_>>();
-    tag_names.sort();
+    tag_names.sort_unstable();
 
     if tag_names.is_empty() {
         items.push(ContextMenuItem::Label("No tags".into()));
@@ -77,7 +77,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
                     name: name.clone(),
                 }),
             });
-            if remote_tags.contains(&(remote.clone(), name.clone())) {
+            if remote_tags.contains(&(remote.as_str(), name.as_str())) {
                 items.push(ContextMenuItem::Entry {
                     label: format!("Delete tag {name} from {remote}").into(),
                     icon: Some("🗑".into()),

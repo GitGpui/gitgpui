@@ -1,5 +1,6 @@
 use super::super::path_display;
 use super::*;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
 pub(in super::super) struct RepoTabsBarView {
@@ -52,7 +53,7 @@ struct RepoTabSpinnerDelayState {
 
 impl RepoTabsBarView {
     fn notify_fingerprint(state: &AppState) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
         state.repos.len().hash(&mut hasher);
         for repo in &state.repos {
