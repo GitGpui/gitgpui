@@ -8061,9 +8061,15 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
         .expect("conflict session for BothDeleted");
     assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
     assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
-    assert!(matches!(session.base, ConflictPayload::Text(ref t) if t == "original content\n"));
+    assert!(
+        matches!(session.base, ConflictPayload::Text(ref t) if t.as_ref() == "original content\n")
+    );
     assert!(session.ours.is_absent());
     assert!(session.theirs.is_absent());
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by accepting deletion
@@ -8134,8 +8140,12 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
     assert_eq!(session.conflict_kind, FileConflictKind::AddedByUs);
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.is_absent());
-    assert!(matches!(session.ours, ConflictPayload::Text(ref t) if t == "added by us\n"));
+    assert!(matches!(session.ours, ConflictPayload::Text(ref t) if t.as_ref() == "added by us\n"));
     assert!(session.theirs.is_absent());
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by keeping ours (the added file)
@@ -8220,7 +8230,13 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.is_absent());
     assert!(session.ours.is_absent());
-    assert!(matches!(session.theirs, ConflictPayload::Text(ref t) if t == "added by them\n"));
+    assert!(
+        matches!(session.theirs, ConflictPayload::Text(ref t) if t.as_ref() == "added by them\n")
+    );
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by keeping theirs (the added file)
@@ -8313,7 +8329,7 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.as_text().is_some());
     assert!(
-        matches!(session.ours, ConflictPayload::Text(ref t) if t == "modified by us\n"),
+        matches!(session.ours, ConflictPayload::Text(ref t) if t.as_ref() == "modified by us\n"),
         "ours (modified side) should have text"
     );
     assert!(

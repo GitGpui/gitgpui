@@ -1,8 +1,10 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use gitcomet_ui_gpui::benchmarks::{
-    BranchSidebarFixture, CommitDetailsFixture, ConflictResolvedOutputGutterScrollFixture,
-    ConflictSearchQueryUpdateFixture, ConflictSplitResizeStepFixture,
-    ConflictThreeWayScrollFixture, ConflictThreeWayVisibleMapBuildFixture,
+    BranchSidebarFixture, CommitDetailsFixture, ConflictLoadDuplicationFixture,
+    ConflictResolvedOutputGutterScrollFixture, ConflictSearchQueryUpdateFixture,
+    ConflictSplitResizeStepFixture, ConflictStreamedProviderFixture,
+    ConflictStreamedResolvedOutputFixture, ConflictThreeWayScrollFixture,
+    ConflictThreeWayVisibleMapBuildFixture, ConflictTwoWayDiffBuildFixture,
     ConflictTwoWaySplitScrollFixture, FileDiffInlineSyntaxProjectionFixture,
     FileDiffSyntaxCacheDropFixture, FileDiffSyntaxPrepareFixture, FileDiffSyntaxReparseFixture,
     HistoryGraphFixture, LargeFileDiffScrollFixture, LargeHtmlSyntaxFixture,
@@ -628,7 +630,7 @@ fn bench_large_html_syntax(c: &mut Criterion) {
     let source_label = prepare_fixture.source_label().to_string();
 
     let mut group = c.benchmark_group("large_html_syntax");
-    group.sample_size(6);
+    group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
     group.bench_function(
         BenchmarkId::new(source_label.as_str(), "background_prepare"),
@@ -803,6 +805,31 @@ fn bench_conflict_three_way_scroll(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_conflict_three_way_prepared_syntax_scroll(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
+    let window = env_usize("GITCOMET_BENCH_CONFLICT_WINDOW", 200);
+    let fixture =
+        ConflictThreeWayScrollFixture::new_with_prepared_documents(lines, conflict_blocks);
+
+    let mut group = c.benchmark_group("conflict_three_way_prepared_syntax_scroll");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_with_input(
+        BenchmarkId::new("style_window", window),
+        &window,
+        |b, &window| {
+            let mut start = 0usize;
+            b.iter(|| {
+                let h = fixture.run_prepared_scroll_step(start, window);
+                start = start.wrapping_add(window) % lines.max(1);
+                h
+            })
+        },
+    );
+    group.finish();
+}
+
 fn bench_conflict_three_way_visible_map_build(c: &mut Criterion) {
     let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
     let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
@@ -842,6 +869,78 @@ fn bench_conflict_two_way_split_scroll(c: &mut Criterion) {
                 })
             },
         );
+    }
+    group.finish();
+}
+
+fn bench_conflict_load_duplication(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_MERGETOOL_LINES", 50_000);
+    let low_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_LOW_CONFLICT_BLOCKS", 12);
+    let high_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_HIGH_CONFLICT_BLOCKS", 1_024);
+    let low_density = ConflictLoadDuplicationFixture::new(lines, low_density_blocks);
+    let high_density = ConflictLoadDuplicationFixture::new(lines, high_density_blocks);
+
+    let mut group = c.benchmark_group("conflict_load_duplication");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    for (label, fixture) in [
+        ("low_density", &low_density),
+        ("high_density", &high_density),
+    ] {
+        group.bench_function(BenchmarkId::new("shared_payload_forwarding", label), |b| {
+            b.iter(|| fixture.run_shared_payload_forwarding_step())
+        });
+        group.bench_function(BenchmarkId::new("duplicated_text_and_bytes", label), |b| {
+            b.iter(|| fixture.run_duplicated_payload_forwarding_step())
+        });
+    }
+    group.finish();
+}
+
+fn bench_conflict_two_way_diff_build(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_MERGETOOL_LINES", 50_000);
+    let low_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_LOW_CONFLICT_BLOCKS", 12);
+    let high_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_HIGH_CONFLICT_BLOCKS", 1_024);
+    let low_density = ConflictTwoWayDiffBuildFixture::new(lines, low_density_blocks);
+    let high_density = ConflictTwoWayDiffBuildFixture::new(lines, high_density_blocks);
+
+    let mut group = c.benchmark_group("conflict_two_way_diff_build");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    for (label, fixture) in [
+        ("low_density", &low_density),
+        ("high_density", &high_density),
+    ] {
+        group.bench_function(BenchmarkId::new("full_file", label), |b| {
+            b.iter(|| fixture.run_full_diff_build_step())
+        });
+        group.bench_function(BenchmarkId::new("block_local", label), |b| {
+            b.iter(|| fixture.run_block_local_diff_build_step())
+        });
+    }
+    group.finish();
+}
+
+fn bench_conflict_two_way_word_highlights(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_MERGETOOL_LINES", 50_000);
+    let low_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_LOW_CONFLICT_BLOCKS", 12);
+    let high_density_blocks = env_usize("GITCOMET_BENCH_MERGETOOL_HIGH_CONFLICT_BLOCKS", 1_024);
+    let low_density = ConflictTwoWayDiffBuildFixture::new(lines, low_density_blocks);
+    let high_density = ConflictTwoWayDiffBuildFixture::new(lines, high_density_blocks);
+
+    let mut group = c.benchmark_group("conflict_two_way_word_highlights");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    for (label, fixture) in [
+        ("low_density", &low_density),
+        ("high_density", &high_density),
+    ] {
+        group.bench_function(BenchmarkId::new("full_file", label), |b| {
+            b.iter(|| fixture.run_full_word_highlights_step())
+        });
+        group.bench_function(BenchmarkId::new("block_local", label), |b| {
+            b.iter(|| fixture.run_block_local_word_highlights_step())
+        });
     }
     group.finish();
 }
@@ -976,6 +1075,74 @@ fn bench_conflict_split_resize_step(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_conflict_streamed_provider(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_STREAMED_LINES", 50_000);
+    let window = env_usize("GITCOMET_BENCH_STREAMED_WINDOW", 200);
+
+    let fixture = ConflictStreamedProviderFixture::new(lines);
+
+    let mut group = c.benchmark_group("conflict_streamed_provider");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+
+    group.bench_function(BenchmarkId::from_parameter("index_build"), |b| {
+        b.iter(|| fixture.run_index_build_step())
+    });
+    group.bench_function(BenchmarkId::from_parameter("projection_build"), |b| {
+        b.iter(|| fixture.run_projection_build_step())
+    });
+    group.bench_with_input(BenchmarkId::new("first_page", window), &window, |b, &w| {
+        b.iter(|| fixture.run_first_page_step(w))
+    });
+    fixture.prime_first_page_cache(window);
+    group.bench_with_input(
+        BenchmarkId::new("first_page_cache_hit", window),
+        &window,
+        |b, &w| b.iter(|| fixture.run_first_page_cache_hit_step(w)),
+    );
+    group.bench_with_input(
+        BenchmarkId::new("deep_scroll_50pct", window),
+        &window,
+        |b, &w| b.iter(|| fixture.run_deep_scroll_step(0.5, w)),
+    );
+    group.bench_with_input(
+        BenchmarkId::new("deep_scroll_90pct", window),
+        &window,
+        |b, &w| b.iter(|| fixture.run_deep_scroll_step(0.9, w)),
+    );
+    group.bench_function(BenchmarkId::from_parameter("search_rare_text"), |b| {
+        b.iter(|| fixture.run_search_step("shared_42("))
+    });
+    group.bench_function(BenchmarkId::from_parameter("search_common_text"), |b| {
+        b.iter(|| fixture.run_search_step("compute"))
+    });
+    group.finish();
+}
+
+fn bench_conflict_streamed_resolved_output(c: &mut Criterion) {
+    let lines = env_usize("GITCOMET_BENCH_STREAMED_LINES", 50_000);
+    let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 500);
+    let window = env_usize("GITCOMET_BENCH_STREAMED_WINDOW", 200);
+
+    let fixture = ConflictStreamedResolvedOutputFixture::new(lines, conflict_blocks);
+
+    let mut group = c.benchmark_group("conflict_streamed_resolved_output");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.bench_function(BenchmarkId::from_parameter("projection_build"), |b| {
+        b.iter(|| fixture.run_projection_build_step())
+    });
+    group.bench_with_input(BenchmarkId::new("window", window), &window, |b, &w| {
+        b.iter(|| fixture.run_window_step(w))
+    });
+    group.bench_with_input(
+        BenchmarkId::new("deep_window_90pct", window),
+        &window,
+        |b, &w| b.iter(|| fixture.run_deep_window_step(0.9, w)),
+    );
+    group.finish();
+}
+
 fn bench_resolved_output_recompute_incremental(c: &mut Criterion) {
     let lines = env_usize("GITCOMET_BENCH_CONFLICT_LINES", 10_000);
     let conflict_blocks = env_usize("GITCOMET_BENCH_CONFLICT_BLOCKS", 300);
@@ -1021,13 +1188,19 @@ criterion_group!(
     bench_markdown_preview_parse_build,
     bench_markdown_preview_render,
     bench_conflict_three_way_scroll,
+    bench_conflict_three_way_prepared_syntax_scroll,
     bench_conflict_three_way_visible_map_build,
     bench_conflict_two_way_split_scroll,
+    bench_conflict_load_duplication,
+    bench_conflict_two_way_diff_build,
+    bench_conflict_two_way_word_highlights,
     bench_conflict_resolved_output_gutter_scroll,
     bench_conflict_search_query_update,
     bench_patch_diff_search_query_update,
     bench_patch_diff_paged_rows,
     bench_conflict_split_resize_step,
+    bench_conflict_streamed_provider,
+    bench_conflict_streamed_resolved_output,
     bench_resolved_output_recompute_incremental
 );
 criterion_main!(benches);

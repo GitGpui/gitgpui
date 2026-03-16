@@ -97,29 +97,28 @@ fn build_conflict_session(
         _ => None,
     }?;
 
-    let payload_from = |bytes: &Option<Vec<u8>>, text: &Option<String>| -> ConflictPayload {
-        if let Some(t) = text {
-            ConflictPayload::Text(t.clone())
-        } else if let Some(b) = bytes {
-            ConflictPayload::from_bytes(b.clone())
-        } else {
-            ConflictPayload::Absent
-        }
-    };
-
-    let base = payload_from(&file.base_bytes, &file.base);
-    let ours = payload_from(&file.ours_bytes, &file.ours);
-    let theirs = payload_from(&file.theirs_bytes, &file.theirs);
+    let base = ConflictPayload::from_stage_parts(file.base_bytes.clone(), file.base.clone());
+    let ours = ConflictPayload::from_stage_parts(file.ours_bytes.clone(), file.ours.clone());
+    let theirs = ConflictPayload::from_stage_parts(file.theirs_bytes.clone(), file.theirs.clone());
 
     // If we have merged text with markers, parse regions from it.
-    if let Some(current) = file.current.as_deref() {
-        Some(ConflictSession::from_merged_text(
+    if let Some(current) = file.current.as_ref() {
+        Some(ConflictSession::from_merged_shared_text(
             file.path.clone(),
             conflict_kind,
             base,
             ours,
             theirs,
-            current,
+            current.clone(),
+        ))
+    } else if let Some(current) = file.current_bytes.as_ref() {
+        Some(ConflictSession::new_with_current(
+            file.path.clone(),
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            ConflictPayload::Binary(current.clone()),
         ))
     } else {
         Some(ConflictSession::new(
@@ -885,11 +884,13 @@ mod tests {
             ours_bytes: None,
             theirs_bytes: None,
             current_bytes: None,
-            base: Some("base\n".to_string()),
-            ours: Some("ours\n".to_string()),
-            theirs: Some("theirs\n".to_string()),
+            base: Some("base\n".to_string().into()),
+            ours: Some("ours\n".to_string().into()),
+            theirs: Some("theirs\n".to_string().into()),
             current: Some(
-                "pre\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\npost\n".to_string(),
+                "pre\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\npost\n"
+                    .to_string()
+                    .into(),
             ),
         };
 
@@ -926,9 +927,9 @@ mod tests {
 
         let file = ConflictFile {
             path: path.clone(),
-            base_bytes: Some(vec![0xff, 0x00]),
-            ours_bytes: Some(b"ours\n".to_vec()),
-            theirs_bytes: Some(b"theirs\n".to_vec()),
+            base_bytes: Some(vec![0xff, 0x00].into()),
+            ours_bytes: Some(b"ours\n".to_vec().into()),
+            theirs_bytes: Some(b"theirs\n".to_vec().into()),
             current_bytes: None,
             base: None,
             ours: None,
@@ -958,8 +959,8 @@ mod tests {
             tracked_path.clone(),
             FileConflictKind::BothAdded,
             ConflictPayload::Absent,
-            ConflictPayload::Text("ours\n".to_string()),
-            ConflictPayload::Text("theirs\n".to_string()),
+            ConflictPayload::Text("ours\n".to_string().into()),
+            ConflictPayload::Text("theirs\n".to_string().into()),
         );
 
         conflict_file_loaded(
@@ -1025,8 +1026,8 @@ mod tests {
                 conflict_path.clone(),
                 FileConflictKind::BothAdded,
                 ConflictPayload::Absent,
-                ConflictPayload::Text("ours".to_string()),
-                ConflictPayload::Text("theirs".to_string()),
+                ConflictPayload::Text("ours".to_string().into()),
+                ConflictPayload::Text("theirs".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }
@@ -1447,9 +1448,9 @@ mod tests {
             repo.set_conflict_session(Some(ConflictSession::new(
                 path.clone(),
                 FileConflictKind::BothModified,
-                ConflictPayload::Text("base\n".to_string()),
-                ConflictPayload::Text("ours\n".to_string()),
-                ConflictPayload::Text("theirs\n".to_string()),
+                ConflictPayload::Text("base\n".to_string().into()),
+                ConflictPayload::Text("ours\n".to_string().into()),
+                ConflictPayload::Text("theirs\n".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }
@@ -1481,9 +1482,9 @@ mod tests {
             repo.set_conflict_session(Some(ConflictSession::new(
                 path.clone(),
                 FileConflictKind::BothModified,
-                ConflictPayload::Text("base\n".to_string()),
-                ConflictPayload::Text("ours\n".to_string()),
-                ConflictPayload::Text("theirs\n".to_string()),
+                ConflictPayload::Text("base\n".to_string().into()),
+                ConflictPayload::Text("ours\n".to_string().into()),
+                ConflictPayload::Text("theirs\n".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }

@@ -1,5 +1,8 @@
 use super::*;
 
+static MERGETOOL_TRACE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 #[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     if !super::require_git_shell_for_store_tests() {
@@ -256,9 +259,9 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
             let file = result.unwrap().unwrap();
             assert_eq!(file.path, PathBuf::from("conflict.txt"));
             assert_eq!(file.base_bytes, None);
-            assert_eq!(file.ours_bytes.as_deref(), Some(b"ours\n".as_slice()));
-            assert_eq!(file.theirs_bytes.as_deref(), Some(b"theirs\n".as_slice()));
-            assert_eq!(file.current_bytes.as_deref(), Some(current.as_bytes()));
+            assert_eq!(file.ours_bytes, None);
+            assert_eq!(file.theirs_bytes, None);
+            assert_eq!(file.current_bytes, None);
             assert_eq!(file.base, None);
             assert_eq!(file.ours.as_deref(), Some("ours\n"));
             assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
@@ -267,6 +270,937 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         };
     }
     panic!("timed out waiting for ConflictFileLoaded");
+}
+
+#[test]
+fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetch() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+    use gitcomet_core::services::ConflictFileStages;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        session: ConflictSession,
+        stage_calls: Arc<AtomicUsize>,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
+            self.stage_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+            Ok(Some(self.session.clone()))
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet-conflict-load-session-reuse-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("session_reuse.txt");
+    let base_text = "base\n";
+    let ours_text = "ours\n";
+    let theirs_text = "theirs\n";
+    let current_text = "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n";
+    let stage_calls = Arc::new(AtomicUsize::new(0));
+    let repo_id = RepoId(8);
+    let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
+        session: ConflictSession::from_merged_text(
+            rel.clone(),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text(base_text.to_string().into()),
+            ConflictPayload::Text(ours_text.to_string().into()),
+            ConflictPayload::Text(theirs_text.to_string().into()),
+            current_text,
+        ),
+        stage_calls: stage_calls.clone(),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadConflictFile {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                repo_id: rid,
+                path,
+                result,
+                conflict_session,
+            }) = msg
+        {
+            assert_eq!(rid, repo_id);
+            assert_eq!(path, rel);
+            let session = conflict_session.expect("session should be forwarded from backend");
+            let file = result.unwrap().unwrap();
+            assert_eq!(file.path, rel);
+            assert_eq!(file.base.as_deref(), Some(base_text));
+            assert_eq!(file.ours.as_deref(), Some(ours_text));
+            assert_eq!(file.theirs.as_deref(), Some(theirs_text));
+            assert_eq!(file.current.as_deref(), Some(current_text));
+            assert_eq!(file.base_bytes, None);
+            assert_eq!(file.ours_bytes, None);
+            assert_eq!(file.theirs_bytes, None);
+            assert_eq!(file.current_bytes, None);
+            assert_eq!(stage_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(session.current_text(), Some(current_text));
+            assert!(
+                matches!(&session.base, ConflictPayload::Text(text) if std::sync::Arc::ptr_eq(file.base.as_ref().expect("base text"), text))
+            );
+            assert!(
+                matches!(&session.ours, ConflictPayload::Text(text) if std::sync::Arc::ptr_eq(file.ours.as_ref().expect("ours text"), text))
+            );
+            assert!(
+                matches!(&session.theirs, ConflictPayload::Text(text) if std::sync::Arc::ptr_eq(file.theirs.as_ref().expect("theirs text"), text))
+            );
+            assert!(
+                matches!(
+                    session.current.as_ref(),
+                    Some(ConflictPayload::Text(text))
+                        if std::sync::Arc::ptr_eq(file.current.as_ref().expect("current text"), text)
+                ),
+                "current text should be forwarded from the session without rereading the worktree"
+            );
+            return;
+        }
+    }
+
+    panic!("timed out waiting for ConflictFileLoaded");
+}
+
+#[test]
+fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+    use gitcomet_core::services::ConflictFileStages;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        session: ConflictSession,
+        stage_calls: Arc<AtomicUsize>,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
+            self.stage_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+            Ok(Some(self.session.clone()))
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet-conflict-load-session-reuse-binary-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("session_reuse.bin");
+    let base_bytes = vec![0xff, 0x00, 0x01];
+    let ours_bytes = vec![0xfe, 0x10, 0x11];
+    let theirs_bytes = vec![0xfd, 0x20, 0x21];
+    let current_bytes = vec![0xfc, 0x30, 0x31];
+    let base_payload: Arc<[u8]> = base_bytes.clone().into();
+    let ours_payload: Arc<[u8]> = ours_bytes.clone().into();
+    let theirs_payload: Arc<[u8]> = theirs_bytes.clone().into();
+    let stage_calls = Arc::new(AtomicUsize::new(0));
+    let repo_id = RepoId(9);
+    let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
+        session: ConflictSession::new_with_current(
+            rel.clone(),
+            FileConflictKind::BothModified,
+            ConflictPayload::Binary(base_payload.clone()),
+            ConflictPayload::Binary(ours_payload.clone()),
+            ConflictPayload::Binary(theirs_payload.clone()),
+            ConflictPayload::Binary(current_bytes.clone().into()),
+        ),
+        stage_calls: stage_calls.clone(),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadConflictFile {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                repo_id: rid,
+                path,
+                result,
+                conflict_session,
+            }) = msg
+        {
+            assert_eq!(rid, repo_id);
+            assert_eq!(path, rel);
+            let session = conflict_session.expect("session should be forwarded from backend");
+            let file = result.unwrap().unwrap();
+            assert_eq!(file.path, rel);
+            assert_eq!(file.base_bytes.as_deref(), Some(base_bytes.as_slice()));
+            assert_eq!(file.ours_bytes.as_deref(), Some(ours_bytes.as_slice()));
+            assert_eq!(file.theirs_bytes.as_deref(), Some(theirs_bytes.as_slice()));
+            assert_eq!(
+                file.current_bytes.as_deref(),
+                Some(current_bytes.as_slice())
+            );
+            assert_eq!(file.base, None);
+            assert_eq!(file.ours, None);
+            assert_eq!(file.theirs, None);
+            assert_eq!(file.current, None);
+            assert!(
+                Arc::ptr_eq(file.base_bytes.as_ref().expect("base bytes"), &base_payload,),
+                "base binary bytes should be forwarded from the session without cloning",
+            );
+            assert!(
+                Arc::ptr_eq(file.ours_bytes.as_ref().expect("ours bytes"), &ours_payload,),
+                "ours binary bytes should be forwarded from the session without cloning",
+            );
+            assert!(
+                Arc::ptr_eq(
+                    file.theirs_bytes.as_ref().expect("theirs bytes"),
+                    &theirs_payload,
+                ),
+                "theirs binary bytes should be forwarded from the session without cloning",
+            );
+            assert!(
+                matches!(
+                    session.current.as_ref(),
+                    Some(ConflictPayload::Binary(bytes))
+                        if Arc::ptr_eq(file.current_bytes.as_ref().expect("current bytes"), &bytes)
+                ),
+                "current binary bytes should be forwarded from the session without rereading the worktree",
+            );
+            assert_eq!(stage_calls.load(Ordering::SeqCst), 0);
+            return;
+        }
+    }
+
+    panic!("timed out waiting for ConflictFileLoaded");
+}
+
+#[test]
+fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_worktree() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+    use gitcomet_core::mergetool_trace::{self, MergetoolTraceStage};
+    use gitcomet_core::services::ConflictFileStages;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        session: ConflictSession,
+        stage_calls: Arc<AtomicUsize>,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
+            self.stage_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+            Ok(Some(self.session.clone()))
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    let _trace_lock = MERGETOOL_TRACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _trace = mergetool_trace::capture();
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet-conflict-load-session-reuse-absent-current-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("removed.txt");
+    let base_text = "base\n";
+    let stage_calls = Arc::new(AtomicUsize::new(0));
+    let repo_id = RepoId(10);
+    let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
+        session: ConflictSession::new_with_current(
+            rel.clone(),
+            FileConflictKind::BothDeleted,
+            ConflictPayload::Text(base_text.into()),
+            ConflictPayload::Absent,
+            ConflictPayload::Absent,
+            ConflictPayload::Absent,
+        ),
+        stage_calls: stage_calls.clone(),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadConflictFile {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+            && let Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                repo_id: rid,
+                path,
+                result,
+                conflict_session,
+            }) = msg
+        {
+            assert_eq!(rid, repo_id);
+            assert_eq!(path, rel);
+            let session = conflict_session.expect("session should be forwarded from backend");
+            let file = result.unwrap().unwrap();
+            assert_eq!(file.path, rel);
+            assert_eq!(file.base.as_deref(), Some(base_text));
+            assert_eq!(file.ours, None);
+            assert_eq!(file.theirs, None);
+            assert_eq!(file.current, None);
+            assert_eq!(file.base_bytes, None);
+            assert_eq!(file.ours_bytes, None);
+            assert_eq!(file.theirs_bytes, None);
+            assert_eq!(file.current_bytes, None);
+            assert_eq!(stage_calls.load(Ordering::SeqCst), 0);
+            assert!(matches!(
+                session.current.as_ref(),
+                Some(ConflictPayload::Absent)
+            ));
+
+            let trace = mergetool_trace::snapshot();
+            let path_events: Vec<_> = trace
+                .events
+                .iter()
+                .filter(|event| event.path.as_deref() == Some(rel.as_path()))
+                .collect();
+            assert!(
+                path_events
+                    .iter()
+                    .any(|event| event.stage == MergetoolTraceStage::LoadCurrentReuse),
+                "known-absent current payload should reuse the session value instead of rereading the worktree",
+            );
+            assert!(
+                !path_events
+                    .iter()
+                    .any(|event| event.stage == MergetoolTraceStage::LoadCurrentRead),
+                "known-absent current payload should not fall back to a worktree read",
+            );
+            return;
+        }
+    }
+
+    panic!("timed out waiting for ConflictFileLoaded");
+}
+
+#[test]
+fn load_conflict_file_effect_records_trace_stages_and_sizes() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+    use gitcomet_core::mergetool_trace::{self, MergetoolTraceStage};
+    use gitcomet_core::services::ConflictFileStages;
+
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+        stages: ConflictFileStages,
+        session: ConflictSession,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
+            Ok(Some(self.stages.clone()))
+        }
+        fn conflict_session(&self, _path: &Path) -> Result<Option<ConflictSession>> {
+            Ok(Some(self.session.clone()))
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    fn trace_line_count(text: &str) -> usize {
+        if text.is_empty() {
+            0
+        } else {
+            text.as_bytes()
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count()
+                + 1
+        }
+    }
+
+    let _trace_lock = MERGETOOL_TRACE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _trace = mergetool_trace::capture();
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet-conflict-load-trace-test-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let _ = std::fs::create_dir_all(&base);
+
+    let rel = PathBuf::from("trace_conflict.html");
+    let base_text = "<div>base</div>\n<section>common</section>\n<footer>end</footer>\n";
+    let ours_text = "<div>ours</div>\n<section>common</section>\n<footer>end</footer>\n";
+    let theirs_text = "<div>theirs</div>\n<section>common</section>\n<footer>end</footer>\n";
+    let current_text = [
+        "<<<<<<< ours",
+        "<div>ours</div>",
+        "=======",
+        "<div>theirs</div>",
+        ">>>>>>> theirs",
+        "<section>common</section>",
+        "<footer>end</footer>",
+        "",
+    ]
+    .join("\n");
+    let repo_id = RepoId(7);
+    let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+        spec: RepoSpec {
+            workdir: base.clone(),
+        },
+        stages: ConflictFileStages {
+            path: rel.clone(),
+            base_bytes: Some(base_text.as_bytes().to_vec().into()),
+            ours_bytes: Some(ours_text.as_bytes().to_vec().into()),
+            theirs_bytes: Some(theirs_text.as_bytes().to_vec().into()),
+            base: Some(base_text.to_string().into()),
+            ours: Some(ours_text.to_string().into()),
+            theirs: Some(theirs_text.to_string().into()),
+        },
+        session: ConflictSession::from_merged_text(
+            rel.clone(),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text(base_text.to_string().into()),
+            ConflictPayload::Text(ours_text.to_string().into()),
+            ConflictPayload::Text(theirs_text.to_string().into()),
+            &current_text,
+        ),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadConflictFile {
+            repo_id,
+            path: rel.clone(),
+        },
+    );
+
+    let loaded_file = {
+        let start = Instant::now();
+        loop {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "timed out waiting for ConflictFileLoaded"
+            );
+            match msg_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                    repo_id: rid,
+                    path,
+                    result,
+                    conflict_session,
+                })) if rid == repo_id && path == rel => {
+                    let session = conflict_session.expect("trace test should receive a session");
+                    assert_eq!(session.regions.len(), 1);
+                    break result.unwrap().unwrap();
+                }
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(err) => panic!("channel closed while waiting for conflict load: {err:?}"),
+            }
+        }
+    };
+
+    assert_eq!(loaded_file.path, rel);
+    assert_eq!(loaded_file.base.as_deref(), Some(base_text));
+    assert_eq!(loaded_file.ours.as_deref(), Some(ours_text));
+    assert_eq!(loaded_file.theirs.as_deref(), Some(theirs_text));
+    assert_eq!(loaded_file.current.as_deref(), Some(current_text.as_str()));
+
+    let trace = mergetool_trace::snapshot();
+    let path_events: Vec<_> = trace
+        .events
+        .iter()
+        .filter(|event| event.path.as_deref() == Some(rel.as_path()))
+        .collect();
+    assert_eq!(
+        path_events.len(),
+        3,
+        "expected exactly the three load-stage trace events for the synthetic conflict path"
+    );
+
+    let session_event = path_events
+        .iter()
+        .find(|event| event.stage == MergetoolTraceStage::LoadConflictSession)
+        .copied()
+        .expect("missing conflict-session trace event");
+    assert_eq!(session_event.base.bytes, Some(base_text.len()));
+    assert_eq!(session_event.ours.lines, Some(trace_line_count(ours_text)));
+    assert_eq!(
+        session_event.conflict_block_count,
+        Some(1),
+        "session trace should report the parsed conflict block count"
+    );
+
+    let stages_event = path_events
+        .iter()
+        .find(|event| event.stage == MergetoolTraceStage::LoadConflictFileStages)
+        .copied()
+        .expect("missing conflict-file-stages trace event");
+    assert_eq!(stages_event.base.lines, Some(trace_line_count(base_text)));
+    assert_eq!(stages_event.ours.bytes, Some(ours_text.len()));
+    assert_eq!(stages_event.theirs.bytes, Some(theirs_text.len()));
+
+    let current_event = path_events
+        .iter()
+        .find(|event| event.stage == MergetoolTraceStage::LoadCurrentReuse)
+        .copied()
+        .expect("missing current-reuse trace event");
+    assert_eq!(current_event.current.bytes, Some(current_text.len()));
+    assert_eq!(
+        current_event.current.lines,
+        Some(trace_line_count(&current_text))
+    );
 }
 
 #[test]

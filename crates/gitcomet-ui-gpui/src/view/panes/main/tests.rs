@@ -2,8 +2,8 @@ use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
     ClearDiffSelectionAction, ResolvedOutputConflictMarker, VersionedCachedDiffStyledText,
     apply_conflict_choice_provenance_hints, apply_three_way_empty_base_provenance_hints,
-    build_line_starts, build_resolved_output_conflict_markers,
-    build_resolved_output_syntax_state_for_snapshot,
+    build_focused_mergetool_save_payload, build_line_starts,
+    build_resolved_output_conflict_markers, build_resolved_output_syntax_state_for_snapshot,
     build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
     dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
@@ -51,6 +51,111 @@ fn focused_mergetool_save_exit_code_is_success_when_all_resolved() {
 #[test]
 fn focused_mergetool_save_exit_code_is_canceled_when_unresolved_remain() {
     assert_eq!(focused_mergetool_save_exit_code(3, 2), 1);
+}
+
+fn focused_mergetool_marker_labels() -> gitcomet_core::conflict_output::ConflictMarkerLabels<'static>
+{
+    gitcomet_core::conflict_output::ConflictMarkerLabels {
+        local: "LOCAL",
+        remote: "REMOTE",
+        base: "BASE",
+    }
+}
+
+#[test]
+fn focused_mergetool_save_payload_rehydrates_unedited_materialized_conflicts() {
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: "ours\n".to_string(),
+        theirs: "theirs\n".to_string(),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+
+    let payload = build_focused_mergetool_save_payload(
+        &segments,
+        &[0],
+        Some("ours\n"),
+        focused_mergetool_marker_labels(),
+    );
+
+    assert_eq!(
+        payload.output,
+        "<<<<<<< LOCAL\nours\n=======\ntheirs\n>>>>>>> REMOTE\n"
+    );
+    assert_eq!(payload.total_conflicts, 1);
+    assert_eq!(payload.resolved_conflicts, 0);
+}
+
+#[test]
+fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-1\n".to_string(),
+            theirs: "theirs-1\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+        ConflictSegment::Text("middle\n".to_string()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-2\n".to_string(),
+            theirs: "theirs-2\n".to_string(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+        ConflictSegment::Text("bottom\n".to_string()),
+    ];
+
+    let payload = build_focused_mergetool_save_payload(
+        &segments,
+        &[0, 1],
+        Some("top\nmanual-1\nmiddle\nours-2\nbottom\n"),
+        focused_mergetool_marker_labels(),
+    );
+
+    assert_eq!(
+        payload.output,
+        concat!(
+            "top\n",
+            "manual-1\n",
+            "middle\n",
+            "<<<<<<< LOCAL\n",
+            "ours-2\n",
+            "=======\n",
+            "theirs-2\n",
+            ">>>>>>> REMOTE\n",
+            "bottom\n"
+        )
+    );
+    assert_eq!(payload.total_conflicts, 1);
+    assert_eq!(payload.resolved_conflicts, 0);
+}
+
+#[test]
+fn focused_mergetool_save_payload_marks_manual_output_as_resolved() {
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours: "ours\n".to_string(),
+        theirs: "theirs\n".to_string(),
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+
+    let payload = build_focused_mergetool_save_payload(
+        &segments,
+        &[0],
+        Some("manual\n"),
+        focused_mergetool_marker_labels(),
+    );
+
+    assert_eq!(payload.output, "manual\n");
+    assert_eq!(
+        focused_mergetool_save_exit_code(payload.total_conflicts, payload.resolved_conflicts),
+        0
+    );
 }
 
 #[test]

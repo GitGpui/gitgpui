@@ -82,13 +82,9 @@ pub(super) fn panel(
                     components::Button::new("conflict_stage_anyway", "Stage anyway")
                         .style(components::ButtonStyle::Danger)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let text = this.main_pane.update(cx, |main, cx| {
-                                let text = main
-                                    .conflict_resolver_input
-                                    .read_with(cx, |i, _| i.text().to_string());
-                                main.conflict_resolver_sync_session_resolutions_from_output(&text);
-                                text
-                            });
+                            let text = this
+                                .main_pane
+                                .update(cx, |main, cx| main.conflict_resolver_save_contents(cx));
                             this.store.dispatch(Msg::SaveWorktreeFile {
                                 repo_id,
                                 path: path.clone(),

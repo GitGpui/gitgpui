@@ -17,6 +17,7 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
         base: ConflictPayload::Text("base\n".into()),
         ours: ConflictPayload::Text("ours\n".into()),
         theirs: ConflictPayload::Text("theirs\n".into()),
+        current: None,
         regions,
     }
 }
@@ -50,6 +51,44 @@ fn payload_absent() {
     assert!(p.as_text().is_none());
     assert!(p.as_bytes().is_none());
     assert_eq!(p.byte_len(), None);
+    assert!(!p.is_binary());
+}
+
+#[test]
+fn stage_parts_round_trip_text() {
+    let text: Arc<str> = Arc::from("hello");
+    let p = ConflictPayload::from_stage_parts(None, Some(text.clone()));
+    assert_eq!(p.as_text(), Some("hello"));
+    let (bytes, text_out) = p.into_stage_parts();
+    assert!(bytes.is_none());
+    assert_eq!(text_out.as_deref(), Some("hello"));
+}
+
+#[test]
+fn stage_parts_round_trip_binary() {
+    let bytes: Arc<[u8]> = Arc::from(vec![0xFF, 0xFE]);
+    let p = ConflictPayload::from_stage_parts(Some(bytes.clone()), None);
+    assert!(p.is_binary());
+    let (bytes_out, text_out) = p.into_stage_parts();
+    assert_eq!(bytes_out.as_deref(), Some([0xFF, 0xFE].as_slice()));
+    assert!(text_out.is_none());
+}
+
+#[test]
+fn stage_parts_round_trip_absent() {
+    let p = ConflictPayload::from_stage_parts(None, None);
+    assert!(p.is_absent());
+    let (bytes, text) = p.into_stage_parts();
+    assert!(bytes.is_none());
+    assert!(text.is_none());
+}
+
+#[test]
+fn stage_parts_text_preferred_over_bytes() {
+    let text: Arc<str> = Arc::from("hi");
+    let bytes: Arc<[u8]> = Arc::from(b"hi".to_vec());
+    let p = ConflictPayload::from_stage_parts(Some(bytes), Some(text));
+    assert_eq!(p.as_text(), Some("hi"));
     assert!(!p.is_binary());
 }
 
@@ -831,16 +870,37 @@ fn session_new_text_conflict() {
 
 #[test]
 fn session_side_byte_accessors_expose_all_payload_bytes() {
-    let session = ConflictSession::new(
+    let session = ConflictSession::new_with_current(
         PathBuf::from("file.bin"),
         FileConflictKind::BothModified,
-        ConflictPayload::Binary(vec![0x00, 0x01]),
+        ConflictPayload::Binary(vec![0x00, 0x01].into()),
         ConflictPayload::Text("ours\n".into()),
         ConflictPayload::Absent,
+        ConflictPayload::Binary(vec![0x02, 0x03].into()),
     );
     assert_eq!(session.base_bytes(), Some([0x00_u8, 0x01].as_slice()));
     assert_eq!(session.ours_bytes(), Some("ours\n".as_bytes()));
     assert_eq!(session.theirs_bytes(), None);
+    assert_eq!(session.current_bytes(), Some([0x02_u8, 0x03].as_slice()));
+    assert_eq!(session.current_text(), None);
+}
+
+#[test]
+fn session_new_with_absent_current_preserves_loaded_absence() {
+    let session = ConflictSession::new_with_current(
+        PathBuf::from("deleted.txt"),
+        FileConflictKind::BothDeleted,
+        ConflictPayload::Text("base\n".into()),
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
+    assert_eq!(session.current_bytes(), None);
+    assert_eq!(session.current_text(), None);
 }
 
 #[test]
@@ -848,7 +908,7 @@ fn session_new_binary_conflict() {
     let session = ConflictSession::new(
         PathBuf::from("image.png"),
         FileConflictKind::BothModified,
-        ConflictPayload::Binary(vec![0xFF]),
+        ConflictPayload::Binary(vec![0xFF].into()),
         ConflictPayload::Text("ours".into()),
         ConflictPayload::Text("theirs".into()),
     );
@@ -911,6 +971,7 @@ fn from_merged_text_without_markers_keeps_synthetic_two_way_region() {
     assert_eq!(session.regions[0].base, None);
     assert_eq!(session.regions[0].ours, "ours\n");
     assert_eq!(session.regions[0].theirs, "");
+    assert_eq!(session.current_text(), Some("ours\n"));
 }
 
 #[test]

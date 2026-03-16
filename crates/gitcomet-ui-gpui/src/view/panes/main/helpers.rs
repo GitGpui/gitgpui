@@ -1,6 +1,7 @@
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
+use crate::view::conflict_resolver::ConflictSegment;
 
 #[derive(Default)]
 pub(super) struct ResolvedOutputSyntaxState {
@@ -171,6 +172,15 @@ pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) styled: CachedDiffStyledText,
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::view) struct StashedResolvedOutlineState {
+    pub(in crate::view) text: TextModelSnapshot,
+    pub(in crate::view) line_starts: Arc<[usize]>,
+    pub(in crate::view) marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    pub(in crate::view) view_mode: ConflictResolverViewMode,
+    pub(in crate::view) outline: ResolvedOutlineData,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct FileDiffStyleCacheEpochs {
     pub(in crate::view) split_left: u64,
@@ -241,6 +251,13 @@ pub(super) fn build_line_starts(text: &str) -> Vec<usize> {
     line_starts
 }
 
+pub(super) fn hash_text_bytes(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hasher::write_usize(&mut hasher, text.len());
+    std::hash::Hasher::write(&mut hasher, text.as_bytes());
+    std::hash::Hasher::finish(&mut hasher)
+}
+
 pub(super) fn preview_source_text_from_lines(lines: &[String], source_len: usize) -> SharedString {
     let mut source = lines.join("\n");
     if source.len() < source_len {
@@ -294,6 +311,27 @@ pub(super) fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
 /// Number of logical rows produced by `split('\n')` (always at least 1).
 pub(super) fn split_line_count(text: &str) -> usize {
     count_newlines(text).saturating_add(1)
+}
+
+/// Full resolved-output provenance is much more expensive in three-way mode,
+/// because it builds source-line lookups across all three full documents.
+pub(super) const LARGE_RESOLVED_OUTLINE_THREE_WAY_PROVENANCE_MAX_LINES: usize = 50_000;
+/// Two-way mode still needs a cap, because the source-index alone scales with
+/// output-line count even when the diff-row lookup is small.
+pub(super) const LARGE_RESOLVED_OUTLINE_TWO_WAY_PROVENANCE_MAX_LINES: usize = 200_000;
+
+pub(super) fn should_skip_resolved_outline_provenance(
+    view_mode: ConflictResolverViewMode,
+    output_line_count: usize,
+) -> bool {
+    match view_mode {
+        ConflictResolverViewMode::ThreeWay => {
+            output_line_count > LARGE_RESOLVED_OUTLINE_THREE_WAY_PROVENANCE_MAX_LINES
+        }
+        ConflictResolverViewMode::TwoWayDiff => {
+            output_line_count > LARGE_RESOLVED_OUTLINE_TWO_WAY_PROVENANCE_MAX_LINES
+        }
+    }
 }
 
 /// Byte range of line content at `line_ix` (without trailing newline).
@@ -790,16 +828,28 @@ pub(super) fn build_resolved_output_conflict_markers(
     output_text: &str,
     output_line_count: usize,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
+    let Some(block_ranges) =
+        resolved_output_conflict_block_ranges_in_text(marker_segments, output_text)
+    else {
+        return vec![None; output_line_count];
+    };
+
+    build_resolved_output_conflict_markers_from_ranges(
+        marker_segments,
+        block_ranges.as_slice(),
+        output_line_count,
+    )
+}
+
+pub(super) fn build_resolved_output_conflict_markers_from_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    block_ranges: &[Range<usize>],
+    output_line_count: usize,
+) -> Vec<Option<ResolvedOutputConflictMarker>> {
     let mut markers = vec![None; output_line_count];
     if output_line_count == 0 {
         return markers;
     }
-
-    let Some(block_ranges) =
-        resolved_output_conflict_block_ranges_in_text(marker_segments, output_text)
-    else {
-        return markers;
-    };
 
     for (conflict_ix, (block, range)) in marker_segments
         .iter()
@@ -807,7 +857,7 @@ pub(super) fn build_resolved_output_conflict_markers(
             conflict_resolver::ConflictSegment::Block(block) => Some(block),
             _ => None,
         })
-        .zip(block_ranges.into_iter())
+        .zip(block_ranges.iter().cloned())
         .enumerate()
     {
         let marker_ranges = conflict_marker_ranges_for_block(block, range);
@@ -1071,6 +1121,17 @@ pub(super) fn split_target_conflict_block_into_subchunks(
     *marker_segments = next_segments;
     *conflict_region_indices = next_region_indices;
     true
+}
+
+impl From<conflict_resolver::ConflictChoice> for gitcomet_state::msg::ConflictRegionChoice {
+    fn from(choice: conflict_resolver::ConflictChoice) -> Self {
+        match choice {
+            conflict_resolver::ConflictChoice::Base => Self::Base,
+            conflict_resolver::ConflictChoice::Ours => Self::Ours,
+            conflict_resolver::ConflictChoice::Theirs => Self::Theirs,
+            conflict_resolver::ConflictChoice::Both => Self::Both,
+        }
+    }
 }
 
 pub(super) fn conflict_region_index_is_unique(
@@ -1592,14 +1653,13 @@ pub(super) fn apply_three_way_empty_base_provenance_hints(
     }
 }
 
-pub(super) fn apply_conflict_choice_provenance_hints(
+pub(super) fn apply_conflict_choice_provenance_hints_for_ranges(
     meta: &mut [conflict_resolver::ResolvedLineMeta],
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    block_ranges: &[Range<usize>],
     view_mode: ConflictResolverViewMode,
 ) {
-    let generated = conflict_resolver::generate_resolved_text(marker_segments);
-    if generated != output_text || meta.is_empty() {
+    if meta.is_empty() {
         return;
     }
 
@@ -1675,11 +1735,7 @@ pub(super) fn apply_conflict_choice_provenance_hints(
                     ),
                 };
 
-                if let Some(range) = output_line_range_for_conflict_block_in_text(
-                    marker_segments,
-                    output_text,
-                    block_ix,
-                ) {
+                if let Some(range) = block_ranges.get(block_ix).cloned() {
                     match (view_mode, block.choice) {
                         (
                             ConflictResolverViewMode::ThreeWay,
@@ -1788,6 +1844,31 @@ pub(super) fn apply_conflict_choice_provenance_hints(
     }
 }
 
+pub(super) fn apply_conflict_choice_provenance_hints(
+    meta: &mut [conflict_resolver::ResolvedLineMeta],
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    view_mode: ConflictResolverViewMode,
+) {
+    let generated = conflict_resolver::generate_resolved_text(marker_segments);
+    if generated != output_text {
+        return;
+    }
+
+    let Some(block_ranges) =
+        resolved_output_conflict_block_ranges_in_text(marker_segments, output_text)
+    else {
+        return;
+    };
+
+    apply_conflict_choice_provenance_hints_for_ranges(
+        meta,
+        marker_segments,
+        block_ranges.as_slice(),
+        view_mode,
+    );
+}
+
 pub(super) fn replacement_lines_for_conflict_block(
     block: &conflict_resolver::ConflictBlock,
     choice: conflict_resolver::ConflictChoice,
@@ -1847,6 +1928,72 @@ pub(super) fn focused_mergetool_save_exit_code(
         FOCUSED_MERGETOOL_EXIT_SUCCESS
     } else {
         FOCUSED_MERGETOOL_EXIT_CANCELED
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct FocusedMergetoolSavePayload {
+    pub(super) output: String,
+    pub(super) total_conflicts: usize,
+    pub(super) resolved_conflicts: usize,
+}
+
+pub(super) fn build_focused_mergetool_save_payload(
+    marker_segments: &[ConflictSegment],
+    block_region_indices: &[usize],
+    materialized_output_text: Option<&str>,
+    labels: gitcomet_core::conflict_output::ConflictMarkerLabels<'_>,
+) -> FocusedMergetoolSavePayload {
+    use gitcomet_core::conflict_output::{GenerateResolvedTextOptions, UnresolvedConflictMode};
+
+    let render_preserve_markers = |segments: &[ConflictSegment]| {
+        conflict_resolver::generate_resolved_text_with_options(
+            segments,
+            GenerateResolvedTextOptions {
+                unresolved_mode: UnresolvedConflictMode::PreserveMarkers,
+                labels: Some(labels),
+            },
+        )
+    };
+
+    if let Some(output_text) = materialized_output_text {
+        if let Some(updates) = conflict_resolver::derive_region_resolution_updates_from_output(
+            marker_segments,
+            block_region_indices,
+            output_text,
+        ) {
+            let mut save_segments = marker_segments.to_vec();
+            let ordered_resolutions: Vec<_> = updates
+                .into_iter()
+                .map(|(_, resolution)| resolution)
+                .collect();
+            conflict_resolver::apply_ordered_region_resolutions(
+                &mut save_segments,
+                &ordered_resolutions,
+            );
+            return FocusedMergetoolSavePayload {
+                output: render_preserve_markers(&save_segments),
+                total_conflicts: conflict_resolver::conflict_count(&save_segments),
+                resolved_conflicts: conflict_resolver::resolved_conflict_count(&save_segments),
+            };
+        }
+
+        let total_conflicts = conflict_resolver::conflict_count(marker_segments);
+        return FocusedMergetoolSavePayload {
+            output: output_text.to_string(),
+            total_conflicts,
+            resolved_conflicts: if conflict_resolver::text_contains_conflict_markers(output_text) {
+                0
+            } else {
+                total_conflicts
+            },
+        };
+    }
+
+    FocusedMergetoolSavePayload {
+        output: render_preserve_markers(marker_segments),
+        total_conflicts: conflict_resolver::conflict_count(marker_segments),
+        resolved_conflicts: conflict_resolver::resolved_conflict_count(marker_segments),
     }
 }
 
@@ -2027,8 +2174,16 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
+    /// Prepared full-document syntax trees for each merge-input side (base, ours, theirs).
+    /// When present, three-way rendering uses document-based syntax instead of per-line heuristics.
+    pub(in crate::view) conflict_three_way_prepared_syntax_documents:
+        ThreeWaySides<Option<rows::PreparedDiffSyntaxDocument>>,
+    /// Per-side flag tracking whether a background syntax parse is in-flight.
+    pub(in crate::view) conflict_three_way_syntax_inflight: ThreeWaySides<bool>,
     pub(in crate::view) conflict_resolved_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) conflict_resolved_preview_source_hash: Option<u64>,
+    pub(in crate::view) conflict_resolved_output_projection:
+        Option<conflict_resolver::ResolvedOutputProjection>,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) conflict_resolved_preview_highlight_provider_theme_epoch: u64,
@@ -2039,8 +2194,12 @@ pub(in crate::view) struct MainPaneView {
         Option<ResolvedOutputSyntaxBackgroundKey>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
     pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
+    pub(in crate::view) conflict_resolved_outline_stash: Option<StashedResolvedOutlineState>,
     pub(in crate::view) conflict_resolved_preview_segments_cache:
         HashMap<usize, VersionedCachedDiffStyledText>,
+    #[cfg(test)]
+    pub(in crate::view) conflict_resolved_outline_background_delay_override:
+        Option<std::time::Duration>,
 
     pub(in crate::view) history_view: Entity<super::HistoryView>,
     pub(in crate::view) diff_scroll: UniformListScrollHandle,
@@ -2100,5 +2259,25 @@ mod tests {
 
         assert_eq!(line_starts, vec![0, 6, 11]);
         assert_eq!(indexed_line_count(text, &line_starts), 3);
+    }
+
+    #[test]
+    fn resolved_outline_provenance_skip_thresholds_match_view_mode() {
+        assert!(!should_skip_resolved_outline_provenance(
+            ConflictResolverViewMode::ThreeWay,
+            LARGE_RESOLVED_OUTLINE_THREE_WAY_PROVENANCE_MAX_LINES,
+        ));
+        assert!(should_skip_resolved_outline_provenance(
+            ConflictResolverViewMode::ThreeWay,
+            LARGE_RESOLVED_OUTLINE_THREE_WAY_PROVENANCE_MAX_LINES + 1,
+        ));
+        assert!(!should_skip_resolved_outline_provenance(
+            ConflictResolverViewMode::TwoWayDiff,
+            LARGE_RESOLVED_OUTLINE_TWO_WAY_PROVENANCE_MAX_LINES,
+        ));
+        assert!(should_skip_resolved_outline_provenance(
+            ConflictResolverViewMode::TwoWayDiff,
+            LARGE_RESOLVED_OUTLINE_TWO_WAY_PROVENANCE_MAX_LINES + 1,
+        ));
     }
 }

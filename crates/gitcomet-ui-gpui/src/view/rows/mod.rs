@@ -3,6 +3,7 @@ use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
+pub(in crate::view) const MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX: usize = 20_000;
 const TEXT_LAYOUT_CACHE_PARTIAL_EVICT_DIVISOR: usize = 8;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 

@@ -26,13 +26,14 @@ use crate::view::markdown_preview::{self, MarkdownPreviewDiff, MarkdownPreviewDo
 use crate::view::panes::main::diff_cache::{
     PagedPatchDiffRows, PagedPatchSplitRows, PatchInlineVisibleMap,
 };
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffRowProvider,
     DiffTarget, FileStatusKind, Remote, RemoteBranch, RepoSpec, StashEntry, Submodule,
     SubmoduleStatus, Upstream, UpstreamDivergence, Worktree,
 };
-use gitcomet_state::model::{Loadable, RepoId, RepoState};
+use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -2566,18 +2567,27 @@ pub struct ConflictThreeWayScrollFixture {
     base_word_highlights: conflict_resolver::WordHighlights,
     ours_word_highlights: conflict_resolver::WordHighlights,
     theirs_word_highlights: conflict_resolver::WordHighlights,
-    base_line_conflict_map: Vec<Option<usize>>,
-    ours_line_conflict_map: Vec<Option<usize>>,
-    theirs_line_conflict_map: Vec<Option<usize>>,
+    line_conflict_maps: [Vec<Option<usize>>; 3],
     visible_map: Vec<ThreeWayVisibleItem>,
     conflict_count: usize,
     language: Option<super::diff_text::DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
     theme: AppTheme,
+    base_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+    ours_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
+    theirs_document: Option<super::diff_text::PreparedDiffSyntaxDocument>,
 }
 
 impl ConflictThreeWayScrollFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        Self::build(lines, conflict_blocks, false)
+    }
+
+    pub fn new_with_prepared_documents(lines: usize, conflict_blocks: usize) -> Self {
+        Self::build(lines, conflict_blocks, true)
+    }
+
+    fn build(lines: usize, conflict_blocks: usize, prepare_documents: bool) -> Self {
         let theme = AppTheme::zed_ayu_dark();
         let segments = build_synthetic_three_way_segments(lines, conflict_blocks);
         let (base_text, ours_text, theirs_text) = materialize_three_way_side_texts(&segments);
@@ -2599,7 +2609,7 @@ impl ConflictThreeWayScrollFixture {
         );
         let visible_map = conflict_resolver::build_three_way_visible_map(
             three_way_len,
-            &conflict_maps.conflict_ranges,
+            &conflict_maps.conflict_ranges[1],
             &segments,
             false,
         );
@@ -2613,10 +2623,18 @@ impl ConflictThreeWayScrollFixture {
                 &theirs_line_starts,
                 &segments,
             );
-        let syntax_mode = if three_way_len > 4_000 {
-            DiffSyntaxMode::HeuristicOnly
+        let language = diff_syntax_language_for_path("src/conflict.rs");
+
+        let (base_document, ours_document, theirs_document) = if prepare_documents {
+            let lang = language.unwrap_or(DiffSyntaxLanguage::Rust);
+            let budget = DiffSyntaxBudget::default();
+            (
+                prepare_bench_diff_syntax_document(lang, budget, &base_text, None),
+                prepare_bench_diff_syntax_document(lang, budget, &ours_text, None),
+                prepare_bench_diff_syntax_document(lang, budget, &theirs_text, None),
+            )
         } else {
-            DiffSyntaxMode::Auto
+            (None, None, None)
         };
 
         Self {
@@ -2626,14 +2644,17 @@ impl ConflictThreeWayScrollFixture {
             base_word_highlights,
             ours_word_highlights,
             theirs_word_highlights,
-            base_line_conflict_map: conflict_maps.base_line_conflict_map,
-            ours_line_conflict_map: conflict_maps.ours_line_conflict_map,
-            theirs_line_conflict_map: conflict_maps.theirs_line_conflict_map,
+            line_conflict_maps: conflict_maps.line_conflict_maps,
             visible_map,
-            conflict_count: conflict_maps.conflict_ranges.len(),
-            language: diff_syntax_language_for_path("src/conflict.rs"),
-            syntax_mode,
+            conflict_count: conflict_maps.conflict_ranges[1].len(),
+            language,
+            // The mergetool fallback path now always uses bounded per-line Auto
+            // syntax until any background-prepared document is ready.
+            syntax_mode: DiffSyntaxMode::Auto,
             theme,
+            base_document,
+            ours_document,
+            theirs_document,
         }
     }
 
@@ -2654,60 +2675,28 @@ impl ConflictThreeWayScrollFixture {
                 }
             };
 
-            self.base_line_conflict_map
-                .get(line_ix)
-                .copied()
-                .flatten()
-                .hash(&mut h);
-            self.ours_line_conflict_map
-                .get(line_ix)
-                .copied()
-                .flatten()
-                .hash(&mut h);
-            self.theirs_line_conflict_map
-                .get(line_ix)
-                .copied()
-                .flatten()
-                .hash(&mut h);
+            for map in &self.line_conflict_maps {
+                map.get(line_ix).copied().flatten().hash(&mut h);
+            }
 
-            if let Some(line) = self.base_lines.get(line_ix) {
-                let styled = super::diff_text::build_cached_diff_styled_text(
-                    self.theme,
-                    line.as_ref(),
-                    word_ranges_for_line(&self.base_word_highlights, line_ix),
-                    "",
-                    self.language,
-                    self.syntax_mode,
-                    None,
-                );
-                styled.text_hash.hash(&mut h);
-                styled.highlights_hash.hash(&mut h);
-            }
-            if let Some(line) = self.ours_lines.get(line_ix) {
-                let styled = super::diff_text::build_cached_diff_styled_text(
-                    self.theme,
-                    line.as_ref(),
-                    word_ranges_for_line(&self.ours_word_highlights, line_ix),
-                    "",
-                    self.language,
-                    self.syntax_mode,
-                    None,
-                );
-                styled.text_hash.hash(&mut h);
-                styled.highlights_hash.hash(&mut h);
-            }
-            if let Some(line) = self.theirs_lines.get(line_ix) {
-                let styled = super::diff_text::build_cached_diff_styled_text(
-                    self.theme,
-                    line.as_ref(),
-                    word_ranges_for_line(&self.theirs_word_highlights, line_ix),
-                    "",
-                    self.language,
-                    self.syntax_mode,
-                    None,
-                );
-                styled.text_hash.hash(&mut h);
-                styled.highlights_hash.hash(&mut h);
+            for (lines, highlights) in [
+                (&self.base_lines, &self.base_word_highlights),
+                (&self.ours_lines, &self.ours_word_highlights),
+                (&self.theirs_lines, &self.theirs_word_highlights),
+            ] {
+                if let Some(line) = lines.get(line_ix) {
+                    let styled = super::diff_text::build_cached_diff_styled_text(
+                        self.theme,
+                        line.as_ref(),
+                        word_ranges_for_line(highlights, line_ix),
+                        "",
+                        self.language,
+                        self.syntax_mode,
+                        None,
+                    );
+                    styled.text_hash.hash(&mut h);
+                    styled.highlights_hash.hash(&mut h);
+                }
             }
         }
 
@@ -2720,6 +2709,88 @@ impl ConflictThreeWayScrollFixture {
 
     pub fn conflict_count(&self) -> usize {
         self.conflict_count
+    }
+
+    /// Scroll step using prepared-document syntax rendering for each side.
+    /// This exercises the post-background-parse rendering path that the real
+    /// conflict resolver uses once tree-sitter documents are ready.
+    pub fn run_prepared_scroll_step(&self, start: usize, window: usize) -> u64 {
+        if self.visible_map.is_empty() || window == 0 {
+            return 0;
+        }
+        let start = start % self.visible_map.len();
+        let end = (start + window).min(self.visible_map.len());
+
+        let syntax_config = super::diff_text::DiffSyntaxConfig {
+            language: self.language,
+            mode: DiffSyntaxMode::Auto,
+        };
+
+        let mut h = DefaultHasher::new();
+        for visible_item in &self.visible_map[start..end] {
+            let line_ix = match *visible_item {
+                ThreeWayVisibleItem::Line(ix) => ix,
+                ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
+                    conflict_ix.hash(&mut h);
+                    continue;
+                }
+            };
+
+            for map in &self.line_conflict_maps {
+                map.get(line_ix).copied().flatten().hash(&mut h);
+            }
+
+            for (lines, highlights, document) in [
+                (
+                    &self.base_lines,
+                    &self.base_word_highlights,
+                    self.base_document,
+                ),
+                (
+                    &self.ours_lines,
+                    &self.ours_word_highlights,
+                    self.ours_document,
+                ),
+                (
+                    &self.theirs_lines,
+                    &self.theirs_word_highlights,
+                    self.theirs_document,
+                ),
+            ] {
+                if let Some(line) = lines.get(line_ix) {
+                    let prepared_line =
+                        super::diff_text::PreparedDiffSyntaxLine { document, line_ix };
+                    let result =
+                        super::diff_text::build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                            self.theme,
+                            line.as_ref(),
+                            word_ranges_for_line(highlights, line_ix),
+                            "",
+                            syntax_config,
+                            None,
+                            prepared_line,
+                        );
+                    let (styled, is_pending) = result.into_parts();
+                    is_pending.hash(&mut h);
+                    styled.text_hash.hash(&mut h);
+                    styled.highlights_hash.hash(&mut h);
+                }
+            }
+        }
+
+        h.finish()
+    }
+
+    #[cfg(test)]
+    fn syntax_mode(&self) -> DiffSyntaxMode {
+        self.syntax_mode
+    }
+
+    #[cfg(test)]
+    fn has_prepared_documents(&self) -> bool {
+        self.base_document.is_some()
+            && self.ours_document.is_some()
+            && self.theirs_document.is_some()
     }
 }
 
@@ -2812,11 +2883,12 @@ impl ConflictThreeWayVisibleMapBuildFixture {
             ours_lines.len(),
             theirs_lines.len(),
         );
-        let conflict_count = conflict_maps.conflict_ranges.len();
+        let [_base_ranges, ours_ranges, _theirs_ranges] = conflict_maps.conflict_ranges;
+        let conflict_count = ours_ranges.len();
 
         Self {
             total_lines,
-            conflict_ranges: conflict_maps.conflict_ranges,
+            conflict_ranges: ours_ranges,
             segments,
             conflict_count,
         }
@@ -2884,39 +2956,52 @@ pub struct ConflictTwoWaySplitScrollFixture {
     theme: AppTheme,
 }
 
+struct BlockLocalTwoWayBenchmarkRows {
+    diff_rows: Vec<gitcomet_core::file_diff::FileDiffRow>,
+    diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
+    diff_row_conflict_map: Vec<Option<usize>>,
+    visible_row_indices: Vec<usize>,
+}
+
+fn build_block_local_two_way_benchmark_rows(
+    segments: &[ConflictSegment],
+) -> BlockLocalTwoWayBenchmarkRows {
+    let diff_rows = conflict_resolver::block_local_two_way_diff_rows(segments);
+    let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
+    let (diff_row_conflict_map, _) =
+        conflict_resolver::map_two_way_rows_to_conflicts(segments, &diff_rows, &inline_rows);
+    let visible_row_indices =
+        conflict_resolver::build_two_way_visible_indices(&diff_row_conflict_map, segments, false);
+    let diff_word_highlights_split = conflict_resolver::compute_two_way_word_highlights(&diff_rows);
+
+    BlockLocalTwoWayBenchmarkRows {
+        diff_rows,
+        diff_word_highlights_split,
+        diff_row_conflict_map,
+        visible_row_indices,
+    }
+}
+
 impl ConflictTwoWaySplitScrollFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
         let theme = AppTheme::zed_ayu_dark();
         let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
-        let (ours_text, theirs_text) = materialize_two_way_side_texts(&segments);
-        let diff_rows = gitcomet_core::file_diff::side_by_side_rows(&ours_text, &theirs_text);
-        let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
-        let (diff_row_conflict_map, _) =
-            conflict_resolver::map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
-        let visible_row_indices = conflict_resolver::build_two_way_visible_indices(
-            &diff_row_conflict_map,
-            &segments,
-            false,
-        );
-        let diff_word_highlights_split =
-            conflict_resolver::compute_two_way_word_highlights(&diff_rows);
-        let syntax_mode = if diff_rows.len() > 4_000 {
-            DiffSyntaxMode::HeuristicOnly
-        } else {
-            DiffSyntaxMode::Auto
-        };
+        let conflict_count = conflict_block_count_for_segments(&segments);
+        let BlockLocalTwoWayBenchmarkRows {
+            diff_rows,
+            diff_word_highlights_split,
+            diff_row_conflict_map,
+            visible_row_indices,
+        } = build_block_local_two_way_benchmark_rows(&segments);
 
         Self {
             diff_rows,
             diff_word_highlights_split,
             diff_row_conflict_map,
             visible_row_indices,
-            conflict_count: segments
-                .iter()
-                .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
-                .count(),
+            conflict_count,
             language: diff_syntax_language_for_path("src/conflict.rs"),
-            syntax_mode,
+            syntax_mode: DiffSyntaxMode::Auto,
             theme,
         }
     }
@@ -2980,6 +3065,324 @@ impl ConflictTwoWaySplitScrollFixture {
     pub fn conflict_count(&self) -> usize {
         self.conflict_count
     }
+
+    #[cfg(test)]
+    fn diff_rows(&self) -> usize {
+        self.diff_rows.len()
+    }
+
+    #[cfg(test)]
+    fn syntax_mode(&self) -> DiffSyntaxMode {
+        self.syntax_mode
+    }
+}
+
+pub struct ConflictTwoWayDiffBuildFixture {
+    segments: Vec<ConflictSegment>,
+    ours_text: String,
+    theirs_text: String,
+    full_diff_rows: Vec<gitcomet_core::file_diff::FileDiffRow>,
+    block_local_diff_rows: Vec<gitcomet_core::file_diff::FileDiffRow>,
+    conflict_count: usize,
+}
+
+impl ConflictTwoWayDiffBuildFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
+        let (ours_text, theirs_text) = materialize_two_way_side_texts(&segments);
+        let full_diff_rows = gitcomet_core::file_diff::side_by_side_rows(&ours_text, &theirs_text);
+        let block_local_diff_rows = conflict_resolver::block_local_two_way_diff_rows(&segments);
+        let conflict_count = conflict_block_count_for_segments(&segments);
+
+        Self {
+            segments,
+            ours_text,
+            theirs_text,
+            full_diff_rows,
+            block_local_diff_rows,
+            conflict_count,
+        }
+    }
+
+    pub fn run_full_diff_build_step(&self) -> u64 {
+        let diff_rows =
+            gitcomet_core::file_diff::side_by_side_rows(&self.ours_text, &self.theirs_text);
+        hash_file_diff_rows(&diff_rows)
+    }
+
+    pub fn run_block_local_diff_build_step(&self) -> u64 {
+        let diff_rows = conflict_resolver::block_local_two_way_diff_rows(&self.segments);
+        hash_file_diff_rows(&diff_rows)
+    }
+
+    pub fn run_full_word_highlights_step(&self) -> u64 {
+        let highlights = conflict_resolver::compute_two_way_word_highlights(&self.full_diff_rows);
+        hash_two_way_word_highlights(&highlights)
+    }
+
+    pub fn run_block_local_word_highlights_step(&self) -> u64 {
+        let highlights =
+            conflict_resolver::compute_two_way_word_highlights(&self.block_local_diff_rows);
+        hash_two_way_word_highlights(&highlights)
+    }
+
+    pub fn full_diff_rows(&self) -> usize {
+        self.full_diff_rows.len()
+    }
+
+    pub fn block_local_diff_rows(&self) -> usize {
+        self.block_local_diff_rows.len()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_count
+    }
+}
+
+pub struct ConflictLoadDuplicationFixture {
+    path: std::path::PathBuf,
+    session: ConflictSession,
+    current_text: Arc<str>,
+    current_bytes: Arc<[u8]>,
+    line_count: usize,
+    conflict_count: usize,
+}
+
+impl ConflictLoadDuplicationFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let path = std::path::PathBuf::from("fixtures/large_conflict.html");
+        let (base_text, ours_text, theirs_text, current_text) =
+            build_synthetic_html_conflict_texts(lines, conflict_blocks);
+        let current_text: Arc<str> = current_text.into();
+        let current_bytes = Arc::<[u8]>::from(current_text.as_bytes());
+        let session = ConflictSession::from_merged_text(
+            path.clone(),
+            gitcomet_core::domain::FileConflictKind::BothModified,
+            ConflictPayload::Text(base_text.into()),
+            ConflictPayload::Text(ours_text.into()),
+            ConflictPayload::Text(theirs_text.into()),
+            current_text.as_ref(),
+        );
+        let conflict_count = session.regions.len();
+        let line_count = session
+            .ours
+            .as_text()
+            .map(|text| text.lines().count())
+            .unwrap_or_default();
+
+        Self {
+            path,
+            session,
+            current_text,
+            current_bytes,
+            line_count,
+            conflict_count,
+        }
+    }
+
+    pub fn run_shared_payload_forwarding_step(&self) -> u64 {
+        let file = self.build_shared_conflict_file();
+        let mut h = DefaultHasher::new();
+        hash_conflict_file_load(
+            &self.session,
+            &self.current_text,
+            &self.current_bytes,
+            &file,
+        )
+        .hash(&mut h);
+        self.line_count.hash(&mut h);
+        h.finish()
+    }
+
+    pub fn run_duplicated_payload_forwarding_step(&self) -> u64 {
+        let file = self.build_duplicated_conflict_file();
+        let mut h = DefaultHasher::new();
+        hash_conflict_file_load(
+            &self.session,
+            &self.current_text,
+            &self.current_bytes,
+            &file,
+        )
+        .hash(&mut h);
+        self.line_count.hash(&mut h);
+        h.finish()
+    }
+
+    pub fn conflict_count(&self) -> usize {
+        self.conflict_count
+    }
+
+    fn build_shared_conflict_file(&self) -> ConflictFile {
+        let (base_bytes, base) = shared_conflict_file_side_from_payload(&self.session.base);
+        let (ours_bytes, ours) = shared_conflict_file_side_from_payload(&self.session.ours);
+        let (theirs_bytes, theirs) = shared_conflict_file_side_from_payload(&self.session.theirs);
+
+        ConflictFile {
+            path: self.path.clone(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes: None,
+            base,
+            ours,
+            theirs,
+            current: Some(self.current_text.clone()),
+        }
+    }
+
+    fn build_duplicated_conflict_file(&self) -> ConflictFile {
+        let (base_bytes, base) = duplicated_conflict_file_side_from_payload(&self.session.base);
+        let (ours_bytes, ours) = duplicated_conflict_file_side_from_payload(&self.session.ours);
+        let (theirs_bytes, theirs) =
+            duplicated_conflict_file_side_from_payload(&self.session.theirs);
+
+        ConflictFile {
+            path: self.path.clone(),
+            base_bytes,
+            ours_bytes,
+            theirs_bytes,
+            current_bytes: Some(Arc::<[u8]>::from(self.current_bytes.as_ref())),
+            base,
+            ours,
+            theirs,
+            current: Some(Arc::<str>::from(self.current_text.as_ref())),
+        }
+    }
+}
+
+fn shared_conflict_file_side_from_payload(
+    payload: &ConflictPayload,
+) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+    match payload {
+        ConflictPayload::Text(text) => (None, Some(text.clone())),
+        ConflictPayload::Binary(bytes) => (Some(bytes.clone()), None),
+        ConflictPayload::Absent => (None, None),
+    }
+}
+
+fn duplicated_conflict_file_side_from_payload(
+    payload: &ConflictPayload,
+) -> (Option<Arc<[u8]>>, Option<Arc<str>>) {
+    match payload {
+        ConflictPayload::Text(text) => (
+            Some(Arc::<[u8]>::from(text.as_bytes())),
+            Some(Arc::<str>::from(text.as_ref())),
+        ),
+        ConflictPayload::Binary(bytes) => (Some(Arc::<[u8]>::from(bytes.as_ref())), None),
+        ConflictPayload::Absent => (None, None),
+    }
+}
+
+fn hash_conflict_file_load(
+    session: &ConflictSession,
+    current_text: &Arc<str>,
+    current_bytes: &Arc<[u8]>,
+    file: &ConflictFile,
+) -> u64 {
+    let mut h = DefaultHasher::new();
+    file.path.hash(&mut h);
+    session.regions.len().hash(&mut h);
+    hash_conflict_file_payload(
+        &mut h,
+        &session.base,
+        file.base_bytes.as_ref(),
+        file.base.as_ref(),
+    );
+    hash_conflict_file_payload(
+        &mut h,
+        &session.ours,
+        file.ours_bytes.as_ref(),
+        file.ours.as_ref(),
+    );
+    hash_conflict_file_payload(
+        &mut h,
+        &session.theirs,
+        file.theirs_bytes.as_ref(),
+        file.theirs.as_ref(),
+    );
+
+    file.current_bytes
+        .as_ref()
+        .map(|bytes| bytes.len())
+        .hash(&mut h);
+    file.current.as_ref().map(|text| text.len()).hash(&mut h);
+    file.current
+        .as_ref()
+        .map(|text| Arc::ptr_eq(text, current_text))
+        .hash(&mut h);
+    file.current_bytes
+        .as_ref()
+        .map(|bytes| Arc::ptr_eq(bytes, current_bytes))
+        .hash(&mut h);
+    h.finish()
+}
+
+fn hash_conflict_file_payload(
+    h: &mut DefaultHasher,
+    payload: &ConflictPayload,
+    file_bytes: Option<&Arc<[u8]>>,
+    file_text: Option<&Arc<str>>,
+) {
+    payload.is_binary().hash(h);
+    payload.byte_len().hash(h);
+    file_bytes.map(|bytes| bytes.len()).hash(h);
+    file_text.map(|text| text.len()).hash(h);
+
+    match (payload, file_text) {
+        (ConflictPayload::Text(payload_text), Some(file_text)) => {
+            Arc::ptr_eq(payload_text, file_text).hash(h);
+        }
+        _ => false.hash(h),
+    }
+}
+
+fn hash_file_diff_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> u64 {
+    let mut h = DefaultHasher::new();
+    rows.len().hash(&mut h);
+    let step = (rows.len() / 128).max(1);
+    for row in rows.iter().step_by(step).take(128) {
+        std::mem::discriminant(&row.kind).hash(&mut h);
+        row.old_line.hash(&mut h);
+        row.new_line.hash(&mut h);
+        row.old.as_deref().map(str::len).hash(&mut h);
+        row.new.as_deref().map(str::len).hash(&mut h);
+        row.eof_newline
+            .as_ref()
+            .map(std::mem::discriminant)
+            .hash(&mut h);
+    }
+    h.finish()
+}
+
+fn hash_two_way_word_highlights(highlights: &conflict_resolver::TwoWayWordHighlights) -> u64 {
+    let mut h = DefaultHasher::new();
+    highlights.len().hash(&mut h);
+    let step = (highlights.len() / 128).max(1);
+    for highlight in highlights.iter().step_by(step).take(128) {
+        match highlight {
+            Some((old_ranges, new_ranges)) => {
+                hash_ranges(old_ranges, &mut h);
+                hash_ranges(new_ranges, &mut h);
+            }
+            None => 0usize.hash(&mut h),
+        }
+    }
+    h.finish()
+}
+
+fn hash_ranges(ranges: &[Range<usize>], hasher: &mut DefaultHasher) {
+    ranges.len().hash(hasher);
+    for range in ranges.iter().take(32) {
+        range.start.hash(hasher);
+        range.end.hash(hasher);
+    }
+}
+
+fn conflict_block_count_for_segments(segments: &[ConflictSegment]) -> usize {
+    segments
+        .iter()
+        .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
+        .count()
 }
 
 pub struct ConflictSearchQueryUpdateFixture {
@@ -2999,34 +3402,21 @@ impl ConflictSearchQueryUpdateFixture {
     pub fn new(lines: usize, conflict_blocks: usize) -> Self {
         let theme = AppTheme::zed_ayu_dark();
         let segments = build_synthetic_two_way_segments(lines, conflict_blocks);
-        let (ours_text, theirs_text) = materialize_two_way_side_texts(&segments);
-        let diff_rows = gitcomet_core::file_diff::side_by_side_rows(&ours_text, &theirs_text);
-        let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
-        let (diff_row_conflict_map, _) =
-            conflict_resolver::map_two_way_rows_to_conflicts(&segments, &diff_rows, &inline_rows);
-        let visible_row_indices = conflict_resolver::build_two_way_visible_indices(
-            &diff_row_conflict_map,
-            &segments,
-            false,
-        );
-        let diff_word_highlights_split =
-            conflict_resolver::compute_two_way_word_highlights(&diff_rows);
-        let syntax_mode = if diff_rows.len() > 4_000 {
-            DiffSyntaxMode::HeuristicOnly
-        } else {
-            DiffSyntaxMode::Auto
-        };
+        let conflict_count = conflict_block_count_for_segments(&segments);
+        let BlockLocalTwoWayBenchmarkRows {
+            diff_rows,
+            diff_word_highlights_split,
+            diff_row_conflict_map: _,
+            visible_row_indices,
+        } = build_block_local_two_way_benchmark_rows(&segments);
 
         let mut fixture = Self {
             diff_rows,
             diff_word_highlights_split,
             visible_row_indices,
-            conflict_count: segments
-                .iter()
-                .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
-                .count(),
+            conflict_count,
             language: diff_syntax_language_for_path("src/conflict.rs"),
-            syntax_mode,
+            syntax_mode: DiffSyntaxMode::Auto,
             theme,
             stable_cache: HashMap::default(),
             query_cache: HashMap::default(),
@@ -3219,6 +3609,16 @@ impl ConflictSearchQueryUpdateFixture {
     #[cfg(test)]
     fn query_cache_entries(&self) -> usize {
         self.query_cache.len()
+    }
+
+    #[cfg(test)]
+    fn diff_rows(&self) -> usize {
+        self.diff_rows.len()
+    }
+
+    #[cfg(test)]
+    fn syntax_mode(&self) -> DiffSyntaxMode {
+        self.syntax_mode
     }
 }
 
@@ -3810,6 +4210,293 @@ impl ResolvedOutputRecomputeIncrementalFixture {
     }
 }
 
+/// Benchmark fixture for streamed/paged conflict provider performance.
+///
+/// Creates a single whole-file conflict block with realistic mixed content
+/// (shared lines, insertions, deletions) to exercise the anchor index and
+/// paged row provider at scale.
+pub struct ConflictStreamedProviderFixture {
+    segments: Vec<ConflictSegment>,
+    split_row_index: conflict_resolver::ConflictSplitRowIndex,
+    two_way_projection: conflict_resolver::TwoWaySplitProjection,
+    ours_line_count: usize,
+    theirs_line_count: usize,
+}
+
+impl ConflictStreamedProviderFixture {
+    pub fn new(lines: usize) -> Self {
+        let segments = build_synthetic_whole_file_conflict_segments(lines);
+        let split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
+            &segments,
+            conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
+        );
+        let two_way_projection =
+            conflict_resolver::TwoWaySplitProjection::new(&split_row_index, &segments, false);
+        let (ours_line_count, theirs_line_count) = match &segments[0] {
+            ConflictSegment::Block(block) => {
+                (block.ours.lines().count(), block.theirs.lines().count())
+            }
+            _ => (0, 0),
+        };
+
+        Self {
+            segments,
+            split_row_index,
+            two_way_projection,
+            ours_line_count,
+            theirs_line_count,
+        }
+    }
+
+    /// Benchmark: build the split row index from scratch (includes anchor build).
+    pub fn run_index_build_step(&self) -> u64 {
+        let index = conflict_resolver::ConflictSplitRowIndex::new(
+            &self.segments,
+            conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
+        );
+        let mut h = DefaultHasher::new();
+        index.total_rows().hash(&mut h);
+        h.finish()
+    }
+
+    fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
+        let mut h = DefaultHasher::new();
+        for vi in start..end {
+            if let Some((source_ix, _conflict_ix)) = self.two_way_projection.get(vi) {
+                if let Some(row) = self.split_row_index.row_at(&self.segments, source_ix) {
+                    std::mem::discriminant(&row.kind).hash(&mut h);
+                    row.old.as_deref().map(|s| s.len()).hash(&mut h);
+                    row.new.as_deref().map(|s| s.len()).hash(&mut h);
+                }
+            }
+        }
+        h.finish()
+    }
+
+    /// Benchmark: generate rows for the first viewport window.
+    pub fn run_first_page_step(&self, window: usize) -> u64 {
+        self.split_row_index.clear_cached_pages();
+        let end = window.min(self.two_way_projection.visible_len());
+        self.hash_visible_window(0, end)
+    }
+
+    /// Prime the page cache for the first viewport window (call before benchmarking cache hits).
+    pub fn prime_first_page_cache(&self, window: usize) {
+        let end = window.min(self.two_way_projection.visible_len());
+        let _ = self.hash_visible_window(0, end);
+    }
+
+    /// Benchmark: re-read the first viewport window from a warm page cache.
+    /// Call `prime_first_page_cache` once before entering the timed loop.
+    pub fn run_first_page_cache_hit_step(&self, window: usize) -> u64 {
+        let end = window.min(self.two_way_projection.visible_len());
+        self.hash_visible_window(0, end)
+    }
+
+    /// Benchmark: generate rows for a deep-scroll position.
+    pub fn run_deep_scroll_step(&self, offset_fraction: f64, window: usize) -> u64 {
+        let visible_len = self.two_way_projection.visible_len();
+        if visible_len == 0 || window == 0 {
+            return 0;
+        }
+        let start = ((visible_len as f64 * offset_fraction) as usize).min(visible_len - 1);
+        let end = (start + window).min(visible_len);
+        self.split_row_index.clear_cached_pages();
+        self.hash_visible_window(start, end)
+    }
+
+    /// Benchmark: search for text in the middle of the giant block.
+    pub fn run_search_step(&self, needle: &str) -> u64 {
+        let matches = self
+            .split_row_index
+            .search_matching_rows(&self.segments, |line| line.contains(needle));
+        let mut h = DefaultHasher::new();
+        matches.len().hash(&mut h);
+        for &row_ix in matches.iter().take(32) {
+            row_ix.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Benchmark: build the two-way projection from a pre-built index.
+    pub fn run_projection_build_step(&self) -> u64 {
+        let proj = conflict_resolver::TwoWaySplitProjection::new(
+            &self.split_row_index,
+            &self.segments,
+            false,
+        );
+        let mut h = DefaultHasher::new();
+        proj.visible_len().hash(&mut h);
+        h.finish()
+    }
+
+    pub fn total_rows(&self) -> usize {
+        self.split_row_index.total_rows()
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.two_way_projection.visible_len()
+    }
+
+    pub fn ours_line_count(&self) -> usize {
+        self.ours_line_count
+    }
+
+    pub fn theirs_line_count(&self) -> usize {
+        self.theirs_line_count
+    }
+
+    #[cfg(test)]
+    fn cached_page_count(&self) -> usize {
+        self.split_row_index.cached_page_count()
+    }
+
+    #[cfg(test)]
+    fn anchor_count(&self) -> usize {
+        // Access the single block entry's anchor pair count.
+        match &self.segments[0] {
+            ConflictSegment::Block(block) => {
+                // Rebuild just the anchor index to inspect it.
+                let ours_starts = line_starts_for_text(&block.ours);
+                let theirs_starts = line_starts_for_text(&block.theirs);
+                let anchor = conflict_resolver::ConflictAnchorIndex::build_for_benchmark(
+                    &block.ours,
+                    &ours_starts,
+                    block.ours.lines().count(),
+                    &block.theirs,
+                    &theirs_starts,
+                    block.theirs.lines().count(),
+                );
+                anchor.ours_to_theirs.len()
+            }
+            _ => 0,
+        }
+    }
+
+    /// Total metadata bytes: split row index + two-way projection (excludes page cache
+    /// and source text, which are shared).
+    #[cfg(test)]
+    fn metadata_byte_size(&self) -> usize {
+        self.split_row_index.metadata_byte_size() + self.two_way_projection.metadata_byte_size()
+    }
+}
+
+/// Benchmark fixture for streamed resolved-output projection performance.
+///
+/// Uses many synthetic three-way conflict blocks so the output projection has
+/// to track real conflict-line ranges without materializing a whole output text.
+pub struct ConflictStreamedResolvedOutputFixture {
+    segments: Vec<ConflictSegment>,
+    projection: conflict_resolver::ResolvedOutputProjection,
+}
+
+impl ConflictStreamedResolvedOutputFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let segments = build_synthetic_three_way_segments(lines, conflict_blocks);
+        let projection = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
+        Self {
+            segments,
+            projection,
+        }
+    }
+
+    /// Benchmark: build the streamed resolved-output projection from scratch.
+    pub fn run_projection_build_step(&self) -> u64 {
+        let projection = conflict_resolver::ResolvedOutputProjection::from_segments(&self.segments);
+        let mut h = DefaultHasher::new();
+        projection.len().hash(&mut h);
+        projection.output_hash().hash(&mut h);
+        h.finish()
+    }
+
+    fn hash_visible_window(&self, start: usize, end: usize) -> u64 {
+        let mut h = DefaultHasher::new();
+        for line_ix in start..end {
+            if let Some(line) = self.projection.line_text(&self.segments, line_ix) {
+                line.len().hash(&mut h);
+                line.as_bytes().first().copied().hash(&mut h);
+                line.as_bytes().last().copied().hash(&mut h);
+            }
+        }
+        h.finish()
+    }
+
+    /// Benchmark: resolve the first viewport window of streamed output lines.
+    pub fn run_window_step(&self, window: usize) -> u64 {
+        let end = window.min(self.visible_rows());
+        self.hash_visible_window(0, end)
+    }
+
+    /// Benchmark: resolve a deep-scroll window of streamed output lines.
+    pub fn run_deep_window_step(&self, offset_fraction: f64, window: usize) -> u64 {
+        let visible_len = self.visible_rows();
+        if visible_len == 0 || window == 0 {
+            return 0;
+        }
+        let start = ((visible_len as f64 * offset_fraction) as usize).min(visible_len - 1);
+        let end = (start + window).min(visible_len);
+        self.hash_visible_window(start, end)
+    }
+
+    pub fn visible_rows(&self) -> usize {
+        self.projection.len()
+    }
+
+    #[cfg(test)]
+    fn metadata_byte_size(&self) -> usize {
+        self.projection.metadata_byte_size()
+    }
+}
+
+/// Build a single whole-file conflict block with mixed content patterns.
+///
+/// Ours and theirs share ~60% of lines (anchors), with ~20% insertions in ours
+/// and ~20% insertions in theirs. This gives the anchor index meaningful work.
+fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<ConflictSegment> {
+    let total_lines = total_lines.max(10);
+    let mut ours = String::with_capacity(total_lines * 80);
+    let mut theirs = String::with_capacity(total_lines * 80);
+
+    // Generate shared base lines, with periodic ours-only and theirs-only insertions.
+    let mut shared_ix = 0usize;
+    let mut line_ix = 0usize;
+    while line_ix < total_lines {
+        let phase = shared_ix % 10;
+        match phase {
+            // Shared lines (6 out of 10 phases = ~60% shared)
+            0 | 1 | 3 | 5 | 7 | 9 => {
+                let line =
+                    format!("fn shared_{shared_ix}(x: usize) -> usize {{ x + {shared_ix} }}\n");
+                ours.push_str(&line);
+                theirs.push_str(&line);
+                line_ix += 1;
+            }
+            // Ours-only insertion (2 out of 10 = ~20%)
+            2 | 6 => {
+                let line = format!("let ours_only_{shared_ix} = compute_local({shared_ix});\n");
+                ours.push_str(&line);
+                line_ix += 1;
+            }
+            // Theirs-only insertion (2 out of 10 = ~20%)
+            4 | 8 => {
+                let line = format!("let theirs_only_{shared_ix} = compute_remote({shared_ix});\n");
+                theirs.push_str(&line);
+                line_ix += 1;
+            }
+            _ => unreachable!(),
+        }
+        shared_ix += 1;
+    }
+
+    vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours,
+        theirs,
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })]
+}
+
 fn build_synthetic_repo_state(
     local_branches: usize,
     remote_branches: usize,
@@ -4129,6 +4816,98 @@ fn build_synthetic_large_html_text(line_count: usize, target_line_bytes: usize) 
     lines.push("</html>".to_string());
     lines.truncate(line_count);
     lines.join("\n")
+}
+
+fn build_synthetic_html_conflict_texts(
+    total_lines: usize,
+    requested_conflict_blocks: usize,
+) -> (String, String, String, String) {
+    let header_lines = [
+        "<!doctype html>",
+        "<html lang=\"en\">",
+        "<body class=\"fixture-root\">",
+    ];
+    let total_lines = total_lines.max(header_lines.len().saturating_add(1));
+    let max_conflicts = total_lines.saturating_sub(header_lines.len()).max(1);
+    let conflict_blocks = requested_conflict_blocks.max(1).min(max_conflicts);
+    let context_lines = total_lines
+        .saturating_sub(header_lines.len())
+        .saturating_sub(conflict_blocks);
+    let context_slots = conflict_blocks;
+    let context_per_slot = context_lines / context_slots;
+    let context_remainder = context_lines % context_slots;
+
+    let mut base_lines = header_lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut ours_lines = base_lines.clone();
+    let mut theirs_lines = base_lines.clone();
+    let mut current_lines = base_lines.clone();
+    let mut next_context_row = 0usize;
+
+    for conflict_ix in 0..conflict_blocks {
+        let base_line = format!(
+            r#"<main id="choice-{conflict_ix}" data-side="base"><section class="panel panel-base">base {conflict_ix}</section></main>"#
+        );
+        let ours_line = format!(
+            r#"<main id="choice-{conflict_ix}" data-side="ours"><section class="panel panel-ours">ours {conflict_ix}</section></main>"#
+        );
+        let theirs_line = format!(
+            r#"<main id="choice-{conflict_ix}" data-side="theirs"><section class="panel panel-theirs">theirs {conflict_ix}</section></main>"#
+        );
+
+        base_lines.push(base_line);
+        ours_lines.push(ours_line.clone());
+        theirs_lines.push(theirs_line.clone());
+        current_lines.push("<<<<<<< ours".to_string());
+        current_lines.push(ours_line);
+        current_lines.push("=======".to_string());
+        current_lines.push(theirs_line);
+        current_lines.push(">>>>>>> theirs".to_string());
+
+        let slot_lines = context_per_slot + usize::from(conflict_ix < context_remainder);
+        append_synthetic_html_conflict_context(
+            &mut base_lines,
+            &mut ours_lines,
+            &mut theirs_lines,
+            &mut current_lines,
+            &mut next_context_row,
+            slot_lines,
+        );
+    }
+
+    assert_eq!(base_lines.len(), total_lines);
+    assert_eq!(ours_lines.len(), total_lines);
+    assert_eq!(theirs_lines.len(), total_lines);
+
+    (
+        base_lines.join("\n"),
+        ours_lines.join("\n"),
+        theirs_lines.join("\n"),
+        current_lines.join("\n"),
+    )
+}
+
+fn append_synthetic_html_conflict_context(
+    base_lines: &mut Vec<String>,
+    ours_lines: &mut Vec<String>,
+    theirs_lines: &mut Vec<String>,
+    current_lines: &mut Vec<String>,
+    next_context_row: &mut usize,
+    count: usize,
+) {
+    for _ in 0..count {
+        let row = *next_context_row;
+        let line = format!(
+            r#"<section id="panel-{row}" data-row="{row}"><div class="copy">row {row}</div><span class="hint">shared html benchmark content</span></section>"#
+        );
+        base_lines.push(line.clone());
+        ours_lines.push(line.clone());
+        theirs_lines.push(line.clone());
+        current_lines.push(line);
+        *next_context_row = next_context_row.saturating_add(1);
+    }
 }
 
 fn build_synthetic_markdown_document(
@@ -4644,8 +5423,8 @@ fn word_ranges_for_line(
     line_ix: usize,
 ) -> &[Range<usize>] {
     highlights
-        .get(line_ix)
-        .and_then(|ranges| ranges.as_deref())
+        .get(&line_ix)
+        .map(|v| v.as_slice())
         .unwrap_or(&[])
 }
 
@@ -4680,6 +5459,55 @@ mod tests {
     }
 
     #[test]
+    fn conflict_three_way_fixture_uses_auto_syntax_for_large_inputs() {
+        let fixture = ConflictThreeWayScrollFixture::new(6_000, 24);
+        assert_eq!(fixture.syntax_mode(), DiffSyntaxMode::Auto);
+    }
+
+    #[test]
+    fn conflict_three_way_prepared_fixture_has_documents_for_all_sides() {
+        let fixture = ConflictThreeWayScrollFixture::new_with_prepared_documents(120, 12);
+        assert!(
+            fixture.has_prepared_documents(),
+            "prepared fixture should produce documents for base, ours, and theirs"
+        );
+        assert_eq!(fixture.conflict_count(), 12);
+        assert_eq!(fixture.visible_rows(), 120);
+    }
+
+    #[test]
+    fn conflict_three_way_prepared_fixture_scroll_step_differs_from_fallback() {
+        let prepared = ConflictThreeWayScrollFixture::new_with_prepared_documents(180, 18);
+        let fallback = ConflictThreeWayScrollFixture::new(180, 18);
+        let prepared_hash = prepared.run_prepared_scroll_step(0, 40);
+        let fallback_hash = fallback.run_scroll_step(0, 40);
+        // The prepared-document path includes pending state and uses tree-sitter
+        // highlights, so its hash should generally differ from the per-line
+        // fallback path.
+        assert_ne!(
+            prepared_hash, fallback_hash,
+            "prepared-document and fallback scroll steps should produce different hashes"
+        );
+    }
+
+    #[test]
+    fn conflict_three_way_prepared_fixture_wraps_start_offsets() {
+        let fixture = ConflictThreeWayScrollFixture::new_with_prepared_documents(180, 18);
+        let hash_a = fixture.run_prepared_scroll_step(17, 40);
+        let hash_b = fixture.run_prepared_scroll_step(17 + fixture.visible_rows() * 3, 40);
+        assert_eq!(hash_a, hash_b);
+    }
+
+    #[test]
+    fn conflict_three_way_plain_fixture_has_no_prepared_documents() {
+        let fixture = ConflictThreeWayScrollFixture::new(120, 12);
+        assert!(
+            !fixture.has_prepared_documents(),
+            "plain fixture should not have prepared documents"
+        );
+    }
+
+    #[test]
     fn conflict_three_way_visible_map_fixture_tracks_requested_conflict_blocks() {
         let fixture = ConflictThreeWayVisibleMapBuildFixture::new(120, 12);
         assert_eq!(fixture.conflict_count(), 12);
@@ -4701,6 +5529,15 @@ mod tests {
     }
 
     #[test]
+    fn conflict_two_way_fixture_matches_block_local_rows_and_auto_syntax() {
+        let fixture = ConflictTwoWaySplitScrollFixture::new(1_200, 12);
+        let build_fixture = ConflictTwoWayDiffBuildFixture::new(1_200, 12);
+        assert_eq!(fixture.diff_rows(), build_fixture.block_local_diff_rows());
+        assert!(fixture.diff_rows() < build_fixture.full_diff_rows());
+        assert_eq!(fixture.syntax_mode(), DiffSyntaxMode::Auto);
+    }
+
+    #[test]
     fn conflict_two_way_fixture_wraps_start_offsets() {
         let fixture = ConflictTwoWaySplitScrollFixture::new(180, 18);
         let hash_a = fixture.run_scroll_step(17, 40);
@@ -4709,11 +5546,97 @@ mod tests {
     }
 
     #[test]
+    fn conflict_two_way_diff_build_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictTwoWayDiffBuildFixture::new(120, 12);
+        assert_eq!(fixture.conflict_count(), 12);
+        assert!(fixture.full_diff_rows() >= 120);
+        assert!(fixture.block_local_diff_rows() > 0);
+    }
+
+    #[test]
+    fn conflict_two_way_diff_build_fixture_keeps_block_local_rows_sparse() {
+        let fixture = ConflictTwoWayDiffBuildFixture::new(1_200, 12);
+        assert!(
+            fixture.block_local_diff_rows() < fixture.full_diff_rows(),
+            "block-local rows should stay smaller than the full-file diff for sparse conflicts"
+        );
+    }
+
+    #[test]
+    fn conflict_two_way_diff_build_fixture_runs_build_and_highlight_paths() {
+        let fixture = ConflictTwoWayDiffBuildFixture::new(240, 24);
+        assert_ne!(fixture.run_full_diff_build_step(), 0);
+        assert_ne!(fixture.run_block_local_diff_build_step(), 0);
+        assert_ne!(fixture.run_full_word_highlights_step(), 0);
+        assert_ne!(fixture.run_block_local_word_highlights_step(), 0);
+    }
+
+    #[test]
+    fn conflict_load_duplication_fixture_tracks_requested_conflict_blocks() {
+        let fixture = ConflictLoadDuplicationFixture::new(1_200, 12);
+        assert_eq!(fixture.line_count, 1_200);
+        assert_eq!(fixture.conflict_count(), 12);
+    }
+
+    #[test]
+    fn conflict_load_duplication_fixture_reuses_shared_payloads_only_in_shared_path() {
+        let fixture = ConflictLoadDuplicationFixture::new(240, 24);
+        let shared = fixture.build_shared_conflict_file();
+        let duplicated = fixture.build_duplicated_conflict_file();
+
+        let ConflictPayload::Text(base_payload) = &fixture.session.base else {
+            panic!("synthetic conflict-load fixture should use text payloads");
+        };
+        let shared_base = shared
+            .base
+            .as_ref()
+            .expect("shared conflict file should keep base text");
+        let duplicated_base = duplicated
+            .base
+            .as_ref()
+            .expect("duplicated conflict file should keep base text");
+
+        assert!(Arc::ptr_eq(base_payload, shared_base));
+        assert!(!Arc::ptr_eq(base_payload, duplicated_base));
+        assert!(shared.base_bytes.is_none());
+        assert!(duplicated.base_bytes.is_some());
+
+        let shared_current = shared
+            .current
+            .as_ref()
+            .expect("shared conflict file should keep current text");
+        let duplicated_current = duplicated
+            .current
+            .as_ref()
+            .expect("duplicated conflict file should keep current text");
+        assert!(Arc::ptr_eq(&fixture.current_text, shared_current));
+        assert!(!Arc::ptr_eq(&fixture.current_text, duplicated_current));
+        assert!(shared.current_bytes.is_none());
+        assert!(duplicated.current_bytes.is_some());
+    }
+
+    #[test]
+    fn conflict_load_duplication_fixture_runs_shared_and_duplicated_paths() {
+        let fixture = ConflictLoadDuplicationFixture::new(240, 24);
+        assert_ne!(fixture.run_shared_payload_forwarding_step(), 0);
+        assert_ne!(fixture.run_duplicated_payload_forwarding_step(), 0);
+    }
+
+    #[test]
     fn conflict_search_query_fixture_tracks_requested_conflict_blocks() {
         let fixture = ConflictSearchQueryUpdateFixture::new(120, 12);
         assert_eq!(fixture.conflict_count(), 12);
         assert!(fixture.visible_rows() > 0);
         assert!(fixture.stable_cache_entries() > 0);
+    }
+
+    #[test]
+    fn conflict_search_query_fixture_uses_block_local_rows_and_auto_syntax() {
+        let fixture = ConflictSearchQueryUpdateFixture::new(1_200, 12);
+        let build_fixture = ConflictTwoWayDiffBuildFixture::new(1_200, 12);
+        assert_eq!(fixture.diff_rows(), build_fixture.block_local_diff_rows());
+        assert!(fixture.diff_rows() < build_fixture.full_diff_rows());
+        assert_eq!(fixture.syntax_mode(), DiffSyntaxMode::Auto);
     }
 
     #[test]
@@ -5235,5 +6158,175 @@ mod tests {
         let fixture = MarkdownPreviewFixture::new(96, 112);
         assert_ne!(fixture.run_render_single_step(24, 64), 0);
         assert_ne!(fixture.run_render_diff_step(24, 64), 0);
+    }
+
+    #[test]
+    fn streamed_provider_fixture_builds_with_expected_row_counts() {
+        let fixture = ConflictStreamedProviderFixture::new(1_000);
+        // Total rows should cover all lines (ours + theirs via anchor mapping).
+        assert!(fixture.total_rows() > 0);
+        assert!(fixture.visible_rows() > 0);
+        assert_eq!(fixture.total_rows(), fixture.visible_rows());
+    }
+
+    #[test]
+    fn streamed_provider_fixture_generates_rows_at_all_positions() {
+        let fixture = ConflictStreamedProviderFixture::new(200);
+        assert_ne!(fixture.run_first_page_step(40), 0);
+        assert_ne!(fixture.run_deep_scroll_step(0.5, 40), 0);
+        assert_ne!(fixture.run_deep_scroll_step(0.9, 40), 0);
+    }
+
+    #[test]
+    fn streamed_provider_fixture_search_finds_known_patterns() {
+        let fixture = ConflictStreamedProviderFixture::new(500);
+        // "shared_" lines exist in both ours and theirs.
+        let h = fixture.run_search_step("shared_");
+        assert_ne!(h, 0, "search should find shared lines");
+        // "ours_only_" lines exist only in ours.
+        let h = fixture.run_search_step("ours_only_");
+        assert_ne!(h, 0, "search should find ours-only lines");
+    }
+
+    #[test]
+    fn streamed_provider_fixture_index_build_is_deterministic() {
+        let fixture = ConflictStreamedProviderFixture::new(500);
+        let h1 = fixture.run_index_build_step();
+        let h2 = fixture.run_index_build_step();
+        assert_eq!(h1, h2, "index build should be deterministic");
+    }
+
+    #[test]
+    fn streamed_provider_fixture_has_anchors_for_shared_content() {
+        let fixture = ConflictStreamedProviderFixture::new(1_000);
+        let anchors = fixture.anchor_count();
+        // ~60% of lines are shared, so we should have a meaningful anchor set.
+        assert!(
+            anchors > 0,
+            "whole-file conflict with shared content should produce anchors"
+        );
+    }
+
+    #[test]
+    fn streamed_provider_fixture_projection_build_is_deterministic() {
+        let fixture = ConflictStreamedProviderFixture::new(500);
+        let h1 = fixture.run_projection_build_step();
+        let h2 = fixture.run_projection_build_step();
+        assert_eq!(h1, h2, "projection build should be deterministic");
+    }
+
+    #[test]
+    fn streamed_provider_fixture_reuses_first_page_cache() {
+        let fixture = ConflictStreamedProviderFixture::new(1_000);
+        fixture.prime_first_page_cache(160);
+        assert_ne!(fixture.run_first_page_cache_hit_step(160), 0);
+        assert_eq!(
+            fixture.cached_page_count(),
+            1,
+            "cache-hit benchmark should keep the warmed first page resident"
+        );
+    }
+
+    /// Phase 8 RSS invariant: streamed provider metadata is much smaller than
+    /// what eager mode would allocate.  Verifies that memory scales with
+    /// metadata (anchors, spans, line starts) not with rendered rows.
+    #[test]
+    fn streamed_provider_metadata_is_sublinear_in_line_count() {
+        let small_lines = 2_000;
+        let large_lines = 20_000;
+        let small = ConflictStreamedProviderFixture::new(small_lines);
+        let large = ConflictStreamedProviderFixture::new(large_lines);
+
+        let small_meta = small.metadata_byte_size();
+        let large_meta = large.metadata_byte_size();
+
+        // At 10x the line count, metadata should grow less than 10x.
+        // The split row index stores per-line-start data (O(N)) but NOT
+        // per-rendered-row data; the projection stores O(segments) spans.
+        let growth_ratio = large_meta as f64 / small_meta.max(1) as f64;
+        assert!(
+            growth_ratio < 12.0,
+            "metadata should grow sublinearly vs eager rows: \
+             small({small_lines})={small_meta}B, large({large_lines})={large_meta}B, \
+             ratio={growth_ratio:.1}x (expected <12x for 10x line count)"
+        );
+
+        // The large fixture's metadata should be much smaller than the equivalent
+        // eager allocation: N rows * ~100 bytes/FileDiffRow.
+        let eager_estimate = large.total_rows() * 100;
+        assert!(
+            large_meta < eager_estimate / 2,
+            "streamed metadata ({large_meta}B) should be well under eager estimate ({eager_estimate}B)"
+        );
+    }
+
+    /// Phase 8 RSS invariant: page cache stays bounded regardless of how many
+    /// distinct positions are accessed.
+    #[test]
+    fn streamed_provider_page_cache_stays_bounded() {
+        let fixture = ConflictStreamedProviderFixture::new(10_000);
+        let visible_len = fixture.visible_rows();
+
+        // Access pages at many distinct positions.
+        for pct in [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99] {
+            let _ = fixture.run_deep_scroll_step(pct, 200);
+        }
+
+        let cached = fixture.cached_page_count();
+        // CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES = 8.
+        assert!(
+            cached <= 8,
+            "page cache should be bounded at 8 pages, got {cached} after scrolling \
+             through {visible_len} visible rows"
+        );
+    }
+
+    #[test]
+    fn streamed_resolved_output_fixture_builds_visible_rows() {
+        let fixture = ConflictStreamedResolvedOutputFixture::new(1_000, 200);
+        assert!(fixture.visible_rows() > 0);
+    }
+
+    #[test]
+    fn streamed_resolved_output_fixture_generates_windows_at_all_positions() {
+        let fixture = ConflictStreamedResolvedOutputFixture::new(2_000, 300);
+        assert_ne!(fixture.run_window_step(160), 0);
+        assert_ne!(fixture.run_deep_window_step(0.5, 160), 0);
+        assert_ne!(fixture.run_deep_window_step(0.9, 160), 0);
+    }
+
+    #[test]
+    fn streamed_resolved_output_fixture_projection_build_is_deterministic() {
+        let fixture = ConflictStreamedResolvedOutputFixture::new(2_000, 300);
+        let first = fixture.run_projection_build_step();
+        let second = fixture.run_projection_build_step();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn streamed_resolved_output_metadata_stays_compact() {
+        let small_lines = 2_000;
+        let large_lines = 20_000;
+        let small = ConflictStreamedResolvedOutputFixture::new(small_lines, 200);
+        let large = ConflictStreamedResolvedOutputFixture::new(large_lines, 2_000);
+
+        let small_meta = small.metadata_byte_size();
+        let large_meta = large.metadata_byte_size();
+        let growth_ratio = large_meta as f64 / small_meta.max(1) as f64;
+        assert!(
+            growth_ratio < 12.0,
+            "streamed resolved-output metadata should scale with spans/line starts, not rendered rows: \
+             small({small_lines})={small_meta}B large({large_lines})={large_meta}B \
+             ratio={growth_ratio:.1}x"
+        );
+
+        let materialized_len = conflict_resolver::generate_resolved_text(&large.segments)
+            .len()
+            .max(1);
+        assert!(
+            large_meta < materialized_len,
+            "streamed resolved-output metadata ({large_meta}B) should stay below \
+             the materialized output size ({materialized_len}B)"
+        );
     }
 }

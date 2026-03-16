@@ -7,14 +7,6 @@ use super::diff_text::*;
 use super::*;
 use gitcomet_core::domain::DiffLineKind;
 
-fn conflict_syntax_mode_for_total_rows(total_rows: usize) -> DiffSyntaxMode {
-    if total_rows <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-        DiffSyntaxMode::Auto
-    } else {
-        DiffSyntaxMode::HeuristicOnly
-    }
-}
-
 fn build_conflict_cached_diff_styled_text(
     theme: AppTheme,
     text: &str,
@@ -34,6 +26,64 @@ fn build_conflict_cached_diff_styled_text(
         syntax_mode,
         word_color,
     )
+}
+
+#[derive(Default)]
+struct ConflictRowStyledText {
+    styled: Option<CachedDiffStyledText>,
+    pending: bool,
+}
+
+fn build_conflict_row_base_styled(
+    theme: AppTheme,
+    text: &str,
+    word_ranges: &[Range<usize>],
+    syntax_lang: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    prepared_line: PreparedDiffSyntaxLine,
+) -> PreparedDocumentLineStyledText {
+    if prepared_line.document.is_some() {
+        return build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+            theme,
+            text,
+            word_ranges,
+            "",
+            DiffSyntaxConfig {
+                language: syntax_lang,
+                mode: syntax_mode,
+            },
+            None,
+            prepared_line,
+        );
+    }
+
+    PreparedDocumentLineStyledText::Cacheable(build_conflict_cached_diff_styled_text(
+        theme,
+        text,
+        word_ranges,
+        "",
+        syntax_lang,
+        syntax_mode,
+        None,
+    ))
+}
+
+fn prepared_diff_syntax_line_for_conflict_inline_row(
+    ours_document: Option<PreparedDiffSyntaxDocument>,
+    theirs_document: Option<PreparedDiffSyntaxDocument>,
+    row: &conflict_resolver::ConflictInlineRow,
+) -> PreparedDiffSyntaxLine {
+    match row.kind {
+        DiffLineKind::Remove => {
+            prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line)
+        }
+        DiffLineKind::Add | DiffLineKind::Context => {
+            prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line)
+        }
+        DiffLineKind::Header | DiffLineKind::Hunk => {
+            prepared_diff_syntax_line_for_one_based_line(None, None)
+        }
+    }
 }
 
 fn render_conflict_markdown_preview_rows(
@@ -103,8 +153,8 @@ impl MainPaneView {
         let real_line_indices: Vec<usize> = range
             .clone()
             .filter_map(
-                |vi| match this.conflict_resolver.three_way_visible_map.get(vi) {
-                    Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) => Some(*ix),
+                |vi| match this.conflict_resolver.three_way_visible_item(vi) {
+                    Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) => Some(ix),
                     _ => None,
                 },
             )
@@ -112,22 +162,28 @@ impl MainPaneView {
 
         let word_hl_color = Some(theme.colors.warning);
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
-        let syntax_mode = conflict_syntax_mode_for_total_rows(this.conflict_resolver.three_way_len);
+        let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
 
         // Pre-build styled text cache entries for all visible lines.
+        // When a prepared syntax document exists for a side, use document-based
+        // highlighting. Otherwise fall back to per-line heuristics.
+        let mut needs_chunk_poll = false;
         for &ix in &real_line_indices {
-            for (col, highlights_vec) in [
+            for (col, highlights_vec, prepared_doc) in [
                 (
                     ThreeWayColumn::Base,
                     &this.conflict_resolver.three_way_word_highlights.base,
+                    prepared_docs.base,
                 ),
                 (
                     ThreeWayColumn::Ours,
                     &this.conflict_resolver.three_way_word_highlights.ours,
+                    prepared_docs.ours,
                 ),
                 (
                     ThreeWayColumn::Theirs,
                     &this.conflict_resolver.three_way_word_highlights.theirs,
+                    prepared_docs.theirs,
                 ),
             ] {
                 if this
@@ -136,11 +192,7 @@ impl MainPaneView {
                 {
                     continue;
                 }
-                let word_ranges = highlights_vec
-                    .get(ix)
-                    .and_then(|o| o.as_ref())
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
+                let word_ranges = highlights_vec.get(&ix).map(|v| v.as_slice()).unwrap_or(&[]);
                 let text = this
                     .conflict_resolver
                     .three_way_line_text(col, ix)
@@ -151,18 +203,54 @@ impl MainPaneView {
                 if word_ranges.is_empty() && syntax_lang.is_none() {
                     continue;
                 }
-                let styled = build_conflict_cached_diff_styled_text(
-                    theme,
-                    text,
-                    word_ranges,
-                    "",
-                    syntax_lang,
-                    syntax_mode,
-                    word_hl_color,
-                );
-                this.conflict_three_way_segments_cache
-                    .insert((ix, col), styled);
+
+                if let Some(document) = prepared_doc {
+                    // Use document-based syntax from the prepared tree-sitter parse.
+                    let prepared_line = PreparedDiffSyntaxLine {
+                        document: Some(document),
+                        line_ix: ix,
+                    };
+                    let syntax_config = DiffSyntaxConfig {
+                        language: syntax_lang,
+                        mode: DiffSyntaxMode::Auto,
+                    };
+                    let result =
+                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                            theme,
+                            text,
+                            word_ranges,
+                            "",
+                            syntax_config,
+                            word_hl_color,
+                            prepared_line,
+                        );
+                    let (styled, is_pending) = result.into_parts();
+                    if is_pending {
+                        needs_chunk_poll = true;
+                        // Don't cache — will re-render when chunk completes.
+                    } else {
+                        this.conflict_three_way_segments_cache
+                            .insert((ix, col), styled);
+                    }
+                } else {
+                    // No prepared document yet: use bounded per-line Auto syntax until the
+                    // full background document parse catches up.
+                    let styled = build_conflict_cached_diff_styled_text(
+                        theme,
+                        text,
+                        word_ranges,
+                        "",
+                        syntax_lang,
+                        DiffSyntaxMode::Auto,
+                        word_hl_color,
+                    );
+                    this.conflict_three_way_segments_cache
+                        .insert((ix, col), styled);
+                }
             }
+        }
+        if needs_chunk_poll {
+            this.ensure_prepared_syntax_chunk_poll(cx);
         }
 
         // Background for the selected (chosen) column in a conflict range.
@@ -170,11 +258,11 @@ impl MainPaneView {
 
         let mut elements = Vec::with_capacity(range.len());
         for vi in range {
-            let Some(visible_item) = this.conflict_resolver.three_way_visible_map.get(vi) else {
+            let Some(visible_item) = this.conflict_resolver.three_way_visible_item(vi) else {
                 continue;
             };
 
-            match *visible_item {
+            match visible_item {
                 conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
                     // Render a collapsed summary row for a resolved conflict.
                     let choice_label = conflict_choices
@@ -272,27 +360,15 @@ impl MainPaneView {
                         .three_way_line_text(ThreeWayColumn::Theirs, ix);
                     let base_range_ix = this
                         .conflict_resolver
-                        .three_way_line_conflict_map
-                        .base
-                        .get(ix)
-                        .copied()
-                        .flatten()
+                        .conflict_index_for_side_line(ThreeWayColumn::Base, ix)
                         .filter(|_| base_line.is_some());
                     let ours_range_ix = this
                         .conflict_resolver
-                        .three_way_line_conflict_map
-                        .ours
-                        .get(ix)
-                        .copied()
-                        .flatten()
+                        .conflict_index_for_side_line(ThreeWayColumn::Ours, ix)
                         .filter(|_| ours_line.is_some());
                     let theirs_range_ix = this
                         .conflict_resolver
-                        .three_way_line_conflict_map
-                        .theirs
-                        .get(ix)
-                        .copied()
-                        .flatten()
+                        .conflict_index_for_side_line(ThreeWayColumn::Theirs, ix)
                         .filter(|_| theirs_line.is_some());
                     let is_in_conflict = base_range_ix.is_some()
                         || ours_range_ix.is_some()
@@ -783,14 +859,15 @@ impl MainPaneView {
                         .into_any_element();
                 }
 
-                let source_meta = this.conflict_resolver.resolved_line_meta.get(ix);
+                let source_meta = this.conflict_resolver.resolved_outline.meta.get(ix);
                 let source = source_meta
                     .map(|m| m.source)
                     .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
                 let (_, badge_fg) = resolved_output_source_badge_colors(theme, source);
                 let conflict_marker = this
                     .conflict_resolver
-                    .resolved_output_conflict_markers
+                    .resolved_outline
+                    .markers
                     .get(ix)
                     .copied()
                     .flatten();
@@ -943,6 +1020,86 @@ impl MainPaneView {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
         let requested_rows = range.len();
         let theme = this.theme;
+        if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
+            let unresolved_row_bg =
+                with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
+            let resolved_row_bg = with_alpha(
+                theme.colors.success,
+                if theme.is_dark { 0.12 } else { 0.08 },
+            );
+
+            let elements: Vec<AnyElement> = range
+                .map(|ix| {
+                    if ix >= this.conflict_resolved_preview_line_count {
+                        return div()
+                            .id(("conflict_resolved_output_oob", ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    }
+
+                    let line_text: SharedString = projection
+                        .line_text(&this.conflict_resolver.marker_segments, ix)
+                        .unwrap_or_else(|| std::borrow::Cow::Borrowed(""))
+                        .to_string()
+                        .into();
+
+                    let conflict_marker = this
+                        .conflict_resolver
+                        .resolved_outline
+                        .markers
+                        .get(ix)
+                        .copied()
+                        .flatten();
+                    let row_bg = conflict_marker.map(|marker| {
+                        if marker.unresolved {
+                            unresolved_row_bg
+                        } else {
+                            resolved_row_bg
+                        }
+                    });
+
+                    div()
+                        .id(("conflict_resolved_output_row", ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .text_xs()
+                        .font_family("monospace")
+                        .text_color(theme.colors.text)
+                        .whitespace_nowrap()
+                        .when_some(row_bg, |d, bg| d.bg(bg))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.open_conflict_resolver_output_context_menu_for_line(
+                                    ix, e.position, window, cx,
+                                );
+                            }),
+                        )
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(line_text),
+                        )
+                        .into_any_element()
+                })
+                .collect();
+            perf::record_row_batch(
+                ViewPerfRenderLane::ResolvedPreview,
+                requested_rows,
+                elements.len(),
+            );
+            return elements;
+        }
+
         let syntax_language = this.conflict_resolved_preview_syntax_language;
         let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
@@ -1065,7 +1222,8 @@ impl MainPaneView {
 
                 let conflict_marker = this
                     .conflict_resolver
-                    .resolved_output_conflict_markers
+                    .resolved_outline
+                    .markers
                     .get(ix)
                     .copied()
                     .flatten();
@@ -1119,25 +1277,60 @@ impl MainPaneView {
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
+        // Giant mode already disables prepared syntax at bootstrap, so Auto stays
+        // safe here whether rows come from eager block-local diffs or streamed pages.
+        let syntax_mode = DiffSyntaxMode::Auto;
         match this.diff_view {
-            DiffViewMode::Split => {
-                let syntax_mode =
-                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
-                range
-                    .map(|row_ix| {
-                        this.render_conflict_compare_split_row(row_ix, syntax_lang, syntax_mode, cx)
-                    })
-                    .collect()
-            }
-            DiffViewMode::Inline => {
-                let syntax_mode =
-                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.inline_rows.len());
-                range
-                    .map(|ix| {
-                        this.render_conflict_compare_inline_row(ix, syntax_lang, syntax_mode, cx)
-                    })
-                    .collect()
-            }
+            DiffViewMode::Split => range
+                .map(|visible_row_ix| {
+                    let Some((row_ix, row, _conflict_ix)) = this
+                        .conflict_resolver
+                        .two_way_split_visible_row(visible_row_ix)
+                    else {
+                        return div()
+                            .id(("conflict_compare_split_visible_oob", visible_row_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(this.theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    };
+                    this.render_conflict_compare_split_row(
+                        visible_row_ix,
+                        row_ix,
+                        row,
+                        syntax_lang,
+                        syntax_mode,
+                        cx,
+                    )
+                })
+                .collect(),
+            DiffViewMode::Inline => range
+                .map(|visible_ix| {
+                    let Some((row_ix, row, _conflict_ix)) = this
+                        .conflict_resolver
+                        .two_way_inline_visible_row(visible_ix)
+                    else {
+                        return div()
+                            .id(("conflict_compare_inline_visible_oob", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(this.theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    };
+                    this.render_conflict_compare_inline_row(
+                        visible_ix,
+                        row_ix,
+                        row,
+                        syntax_lang,
+                        syntax_mode,
+                        cx,
+                    )
+                })
+                .collect(),
         }
     }
 
@@ -1153,79 +1346,62 @@ impl MainPaneView {
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
         let syntax_lang = this.conflict_resolver.conflict_syntax_language;
+        // Giant mode already skips prepared syntax, so Auto stays safe for both
+        // eager block-local rows and streamed split pages.
+        let syntax_mode = DiffSyntaxMode::Auto;
         let elements: Vec<AnyElement> = match this.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => {
-                let syntax_mode =
-                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.diff_rows.len());
-                range
-                    .map(|visible_row_ix| {
-                        let Some(&row_ix) = this
-                            .conflict_resolver
-                            .diff_visible_row_indices
-                            .get(visible_row_ix)
-                        else {
-                            return div()
-                                .id(("conflict_diff_split_visible_oob", visible_row_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(this.theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
-                        };
-                        let conflict_ix = this
-                            .conflict_resolver
-                            .diff_row_conflict_map
-                            .get(row_ix)
-                            .copied()
-                            .flatten();
-                        this.render_conflict_resolver_split_row(
-                            visible_row_ix,
-                            row_ix,
-                            conflict_ix,
-                            syntax_lang,
-                            syntax_mode,
-                            cx,
-                        )
-                    })
-                    .collect()
-            }
-            ConflictDiffMode::Inline => {
-                let syntax_mode =
-                    conflict_syntax_mode_for_total_rows(this.conflict_resolver.inline_rows.len());
-                range
-                    .map(|visible_ix| {
-                        let Some(&ix) = this
-                            .conflict_resolver
-                            .inline_visible_row_indices
-                            .get(visible_ix)
-                        else {
-                            return div()
-                                .id(("conflict_diff_inline_visible_oob", visible_ix))
-                                .h(px(20.0))
-                                .px_2()
-                                .text_xs()
-                                .text_color(this.theme.colors.text_muted)
-                                .child("")
-                                .into_any_element();
-                        };
-                        let conflict_ix = this
-                            .conflict_resolver
-                            .inline_row_conflict_map
-                            .get(ix)
-                            .copied()
-                            .flatten();
-                        this.render_conflict_resolver_inline_row(
-                            visible_ix,
-                            ix,
-                            conflict_ix,
-                            syntax_lang,
-                            syntax_mode,
-                            cx,
-                        )
-                    })
-                    .collect()
-            }
+            ConflictDiffMode::Split => range
+                .map(|visible_row_ix| {
+                    let Some((row_ix, row, conflict_ix)) = this
+                        .conflict_resolver
+                        .two_way_split_visible_row(visible_row_ix)
+                    else {
+                        return div()
+                            .id(("conflict_diff_split_visible_oob", visible_row_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(this.theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    };
+                    this.render_conflict_resolver_split_row(
+                        visible_row_ix,
+                        row_ix,
+                        row,
+                        conflict_ix,
+                        syntax_lang,
+                        syntax_mode,
+                        cx,
+                    )
+                })
+                .collect(),
+            ConflictDiffMode::Inline => range
+                .map(|visible_ix| {
+                    let Some((ix, row, conflict_ix)) = this
+                        .conflict_resolver
+                        .two_way_inline_visible_row(visible_ix)
+                    else {
+                        return div()
+                            .id(("conflict_diff_inline_visible_oob", visible_ix))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(this.theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    };
+                    this.render_conflict_resolver_inline_row(
+                        visible_ix,
+                        ix,
+                        row,
+                        conflict_ix,
+                        syntax_lang,
+                        syntax_mode,
+                        cx,
+                    )
+                })
+                .collect(),
         };
         perf::record_row_batch(
             ViewPerfRenderLane::ResolverDiff,
@@ -1233,6 +1409,83 @@ impl MainPaneView {
             elements.len(),
         );
         elements
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn conflict_row_styled<K>(
+        theme: AppTheme,
+        stable_cache: &mut HashMap<K, CachedDiffStyledText>,
+        query_cache: &mut HashMap<K, CachedDiffStyledText>,
+        key: K,
+        text: &str,
+        word_ranges: &[Range<usize>],
+        query: &str,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+        syntax_mode: DiffSyntaxMode,
+        prepared_line: PreparedDiffSyntaxLine,
+    ) -> ConflictRowStyledText
+    where
+        K: Copy + Eq + std::hash::Hash,
+    {
+        let mut result = ConflictRowStyledText::default();
+        if text.is_empty() {
+            return result;
+        }
+
+        let query = query.trim();
+        let query_active = !query.is_empty();
+        let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
+
+        if base_has_style {
+            if let Some(cached) = stable_cache.get(&key) {
+                result.styled = Some(cached.clone());
+            } else {
+                let (styled, pending) = build_conflict_row_base_styled(
+                    theme,
+                    text,
+                    word_ranges,
+                    syntax_lang,
+                    syntax_mode,
+                    prepared_line,
+                )
+                .into_parts();
+                if !pending {
+                    stable_cache.insert(key, styled.clone());
+                }
+                result.styled = Some(styled);
+                result.pending = pending;
+            }
+        }
+
+        if query_active {
+            if !result.pending {
+                if let Some(cached) = query_cache.get(&key) {
+                    result.styled = Some(cached.clone());
+                    return result;
+                }
+            }
+
+            let styled =
+                if let Some(base) = result.styled.as_ref().or_else(|| stable_cache.get(&key)) {
+                    build_cached_diff_query_overlay_styled_text(theme, base, query)
+                } else {
+                    build_conflict_cached_diff_styled_text(
+                        theme,
+                        text,
+                        word_ranges,
+                        query,
+                        syntax_lang,
+                        syntax_mode,
+                        None,
+                    )
+                };
+            if !result.pending {
+                query_cache.insert(key, styled.clone());
+            }
+            result.styled = Some(styled);
+        }
+
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1247,55 +1500,23 @@ impl MainPaneView {
         query: &str,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
-    ) -> Option<CachedDiffStyledText> {
-        let text = text?;
-        if text.is_empty() {
-            return None;
-        }
-
-        let query = query.trim();
-        let query_active = !query.is_empty();
-        let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
-        let key = (row_ix, side);
-
-        if base_has_style {
-            stable_cache.entry(key).or_insert_with(|| {
-                build_conflict_cached_diff_styled_text(
-                    theme,
-                    text,
-                    word_ranges,
-                    "",
-                    syntax_lang,
-                    syntax_mode,
-                    None,
-                )
-            });
-        }
-
-        if query_active {
-            query_cache.entry(key).or_insert_with(|| {
-                if let Some(base) = stable_cache.get(&key) {
-                    build_cached_diff_query_overlay_styled_text(theme, base, query)
-                } else {
-                    build_conflict_cached_diff_styled_text(
-                        theme,
-                        text,
-                        word_ranges,
-                        query,
-                        syntax_lang,
-                        syntax_mode,
-                        None,
-                    )
-                }
-            });
-            return query_cache.get(&key).cloned();
-        }
-
-        if base_has_style {
-            stable_cache.get(&key).cloned()
-        } else {
-            None
-        }
+        prepared_line: PreparedDiffSyntaxLine,
+    ) -> ConflictRowStyledText {
+        let Some(text) = text else {
+            return ConflictRowStyledText::default();
+        };
+        Self::conflict_row_styled(
+            theme,
+            stable_cache,
+            query_cache,
+            (row_ix, side),
+            text,
+            word_ranges,
+            query,
+            syntax_lang,
+            syntax_mode,
+            prepared_line,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1308,83 +1529,42 @@ impl MainPaneView {
         query: &str,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
-    ) -> Option<CachedDiffStyledText> {
-        if text.is_empty() {
-            return None;
-        }
-
-        let query = query.trim();
-        let query_active = !query.is_empty();
-        let base_has_style = syntax_lang.is_some();
-
-        if base_has_style {
-            stable_cache.entry(row_ix).or_insert_with(|| {
-                build_conflict_cached_diff_styled_text(
-                    theme,
-                    text,
-                    &[],
-                    "",
-                    syntax_lang,
-                    syntax_mode,
-                    None,
-                )
-            });
-        }
-
-        if query_active {
-            query_cache.entry(row_ix).or_insert_with(|| {
-                if let Some(base) = stable_cache.get(&row_ix) {
-                    build_cached_diff_query_overlay_styled_text(theme, base, query)
-                } else {
-                    build_conflict_cached_diff_styled_text(
-                        theme,
-                        text,
-                        &[],
-                        query,
-                        syntax_lang,
-                        syntax_mode,
-                        None,
-                    )
-                }
-            });
-            return query_cache.get(&row_ix).cloned();
-        }
-
-        if base_has_style {
-            stable_cache.get(&row_ix).cloned()
-        } else {
-            None
-        }
+        prepared_line: PreparedDiffSyntaxLine,
+    ) -> ConflictRowStyledText {
+        Self::conflict_row_styled(
+            theme,
+            stable_cache,
+            query_cache,
+            row_ix,
+            text,
+            &[],
+            query,
+            syntax_lang,
+            syntax_mode,
+            prepared_line,
+        )
     }
 
     fn render_conflict_compare_split_row(
         &mut self,
+        visible_row_ix: usize,
         row_ix: usize,
+        row: gitcomet_core::file_diff::FileDiffRow,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
-        let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
-            return div()
-                .id(("conflict_compare_split_oob", row_ix))
-                .h(px(20.0))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("")
-                .into_any_element();
-        };
 
         let left_text: SharedString = row.old.clone().unwrap_or_default().into();
         let right_text: SharedString = row.new.clone().unwrap_or_default().into();
+        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
+        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 
-        let word_hl = self
-            .conflict_resolver
-            .diff_word_highlights_split
-            .get(row_ix)
-            .and_then(|o| o.as_ref());
+        let word_hl_computed = conflict_resolver::compute_word_highlights_for_row(&row);
+        let word_hl_precomputed = self.conflict_resolver.two_way_split_word_highlight(row_ix);
+        let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
         let query = self.conflict_diff_query_cache_query.as_ref();
@@ -1399,6 +1579,7 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
         );
         let right_styled = Self::conflict_split_row_styled(
             theme,
@@ -1411,7 +1592,13 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),
         );
+        if left_styled.pending || right_styled.pending {
+            self.ensure_prepared_syntax_chunk_poll(cx);
+        }
+        let left_styled = left_styled.styled;
+        let right_styled = right_styled.styled;
 
         let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
@@ -1433,7 +1620,7 @@ impl MainPaneView {
             return conflict_canvas::split_conflict_row_canvas(
                 theme,
                 cx.entity(),
-                row_ix,
+                visible_row_ix,
                 row_ix,
                 min_width,
                 left_col_w,
@@ -1525,24 +1712,18 @@ impl MainPaneView {
 
     fn render_conflict_compare_inline_row(
         &mut self,
+        visible_ix: usize,
         ix: usize,
+        row: ConflictInlineRow,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
-        let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
-            return div()
-                .id(("conflict_compare_inline_oob", ix))
-                .h(px(20.0))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("")
-                .into_any_element();
-        };
 
+        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
+        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
         let query = self.conflict_diff_query_cache_query.as_ref();
         let styled = Self::conflict_inline_row_styled(
             theme,
@@ -1553,7 +1734,12 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_conflict_inline_row(ours_document, theirs_document, &row),
         );
+        if styled.pending {
+            self.ensure_prepared_syntax_chunk_poll(cx);
+        }
+        let styled = styled.styled;
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
@@ -1569,7 +1755,7 @@ impl MainPaneView {
             return conflict_canvas::inline_conflict_row_canvas(
                 theme,
                 cx.entity(),
-                ix,
+                visible_ix,
                 ix,
                 px(0.0),
                 line_number_string(row.old_line),
@@ -1625,6 +1811,7 @@ impl MainPaneView {
         &mut self,
         visible_row_ix: usize,
         row_ix: usize,
+        row: gitcomet_core::file_diff::FileDiffRow,
         conflict_ix: Option<usize>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
@@ -1632,25 +1819,15 @@ impl MainPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
-        let Some(row) = self.conflict_resolver.diff_rows.get(row_ix) else {
-            return div()
-                .id(("conflict_diff_split_oob", row_ix))
-                .h(px(20.0))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("")
-                .into_any_element();
-        };
 
         let left_text: SharedString = row.old.clone().unwrap_or_default().into();
         let right_text: SharedString = row.new.clone().unwrap_or_default().into();
+        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
+        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 
-        let word_hl = self
-            .conflict_resolver
-            .diff_word_highlights_split
-            .get(row_ix)
-            .and_then(|o| o.as_ref());
+        let word_hl_computed = conflict_resolver::compute_word_highlights_for_row(&row);
+        let word_hl_precomputed = self.conflict_resolver.two_way_split_word_highlight(row_ix);
+        let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
         let query = self.conflict_diff_query_cache_query.as_ref();
@@ -1665,6 +1842,7 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
         );
         let right_styled = Self::conflict_split_row_styled(
             theme,
@@ -1677,7 +1855,13 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),
         );
+        if left_styled.pending || right_styled.pending {
+            self.ensure_prepared_syntax_chunk_poll(cx);
+        }
+        let left_styled = left_styled.styled;
+        let right_styled = right_styled.styled;
 
         let left_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Ours);
         let right_bg = split_cell_bg(theme, row.kind, ConflictPickSide::Theirs);
@@ -1908,6 +2092,7 @@ impl MainPaneView {
         &mut self,
         visible_ix: usize,
         ix: usize,
+        row: ConflictInlineRow,
         conflict_ix: Option<usize>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
@@ -1915,17 +2100,9 @@ impl MainPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         let show_ws = self.show_whitespace;
-        let Some(row) = self.conflict_resolver.inline_rows.get(ix) else {
-            return div()
-                .id(("conflict_diff_inline_oob", ix))
-                .h(px(20.0))
-                .px_2()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("")
-                .into_any_element();
-        };
 
+        let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
+        let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
         let query = self.conflict_diff_query_cache_query.as_ref();
         let styled = Self::conflict_inline_row_styled(
             theme,
@@ -1936,7 +2113,12 @@ impl MainPaneView {
             query,
             syntax_lang,
             syntax_mode,
+            prepared_diff_syntax_line_for_conflict_inline_row(ours_document, theirs_document, &row),
         );
+        if styled.pending {
+            self.ensure_prepared_syntax_chunk_poll(cx);
+        }
+        let styled = styled.styled;
 
         let bg = inline_row_bg(theme, row.kind, row.side);
         let prefix: SharedString = match row.kind {
@@ -2338,22 +2520,6 @@ fn inline_row_bg(theme: AppTheme, kind: DiffLineKind, side: ConflictPickSide) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn conflict_syntax_mode_uses_auto_below_threshold() {
-        assert_eq!(
-            conflict_syntax_mode_for_total_rows(MAX_LINES_FOR_SYNTAX_HIGHLIGHTING),
-            DiffSyntaxMode::Auto
-        );
-    }
-
-    #[test]
-    fn conflict_syntax_mode_downgrades_above_threshold() {
-        assert_eq!(
-            conflict_syntax_mode_for_total_rows(MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1),
-            DiffSyntaxMode::HeuristicOnly
-        );
-    }
 
     #[test]
     fn whitespace_visible_text_and_highlights_remaps_highlight_ranges() {

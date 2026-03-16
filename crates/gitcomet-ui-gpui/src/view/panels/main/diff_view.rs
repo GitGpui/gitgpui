@@ -102,9 +102,11 @@ impl MainPaneView {
         let is_binary_conflict = repo
             .and_then(|r| match &r.conflict_state.conflict_file {
                 Loadable::Ready(Some(file)) => {
-                    let has_non_text = |bytes: &Option<Vec<u8>>, text: &Option<String>| {
-                        bytes.is_some() && text.is_none()
-                    };
+                    let has_non_text =
+                        |bytes: &Option<std::sync::Arc<[u8]>>,
+                         text: &Option<std::sync::Arc<str>>| {
+                            bytes.is_some() && text.is_none()
+                        };
                     Some(
                         has_non_text(&file.base_bytes, &file.base)
                             || has_non_text(&file.ours_bytes, &file.ours)
@@ -217,13 +219,23 @@ impl MainPaneView {
                 })
                 .when_some(next_file_btn, |d, btn| d.child(btn));
 
-            let resolved_output_text = self
-                .conflict_resolver_input
-                .read_with(cx, |i, _| i.text().to_string());
-            let stage_safety = conflict_resolver::conflict_stage_safety_check(
-                &resolved_output_text,
-                &self.conflict_resolver.marker_segments,
-            );
+            let stage_safety = if self.conflict_resolved_output_is_streamed() {
+                // Streamed mode: output is not materialized in the TextInput,
+                // so skip the text-based marker check. Unresolved blocks are
+                // still tracked via segments.
+                conflict_resolver::conflict_stage_safety_check(
+                    "",
+                    &self.conflict_resolver.marker_segments,
+                )
+            } else {
+                let resolved_output_text = self
+                    .conflict_resolver_input
+                    .read_with(cx, |i, _| i.text().to_string());
+                conflict_resolver::conflict_stage_safety_check(
+                    &resolved_output_text,
+                    &self.conflict_resolver.marker_segments,
+                )
+            };
 
             if stage_safety.has_conflict_markers {
                 controls = controls.child(
@@ -255,10 +267,7 @@ impl MainPaneView {
                                     );
                                     return;
                                 }
-                                let text = this
-                                    .conflict_resolver_input
-                                    .read_with(cx, |i, _| i.text().to_string());
-                                this.conflict_resolver_sync_session_resolutions_from_output(&text);
+                                let text = this.conflict_resolver_save_contents(cx);
                                 this.store.dispatch(Msg::SaveWorktreeFile {
                                     repo_id,
                                     path: save_path.clone(),
@@ -273,9 +282,7 @@ impl MainPaneView {
                             components::Button::new("conflict_save_stage", "Save & stage")
                                 .style(components::ButtonStyle::Filled)
                                 .on_click(theme, cx, move |this, e, window, cx| {
-                                    let text = this
-                                        .conflict_resolver_input
-                                        .read_with(cx, |i, _| i.text().to_string());
+                                    let text = this.current_conflict_resolved_output_text(cx);
                                     let stage_safety =
                                         conflict_resolver::conflict_stage_safety_check(
                                             &text,
@@ -295,9 +302,8 @@ impl MainPaneView {
                                             cx,
                                         );
                                     } else {
-                                        this.conflict_resolver_sync_session_resolutions_from_output(
-                                            &text,
-                                        );
+                                        let text =
+                                            this.conflict_resolver_save_contents_from_text(text);
                                         this.store.dispatch(Msg::SaveWorktreeFile {
                                             repo_id,
                                             path: save_path.clone(),
@@ -982,14 +988,14 @@ impl MainPaneView {
 
                             let diff_len = match view_mode {
                                 ConflictResolverViewMode::ThreeWay => {
-                                    self.conflict_resolver.three_way_visible_map.len()
+                                    self.conflict_resolver.three_way_visible_len()
                                 }
                                 ConflictResolverViewMode::TwoWayDiff => match mode {
                                     ConflictDiffMode::Split => {
-                                        self.conflict_resolver.diff_visible_row_indices.len()
+                                        self.conflict_resolver.two_way_split_visible_len()
                                     }
                                     ConflictDiffMode::Inline => {
-                                        self.conflict_resolver.inline_visible_row_indices.len()
+                                        self.conflict_resolver.two_way_inline_visible_len()
                                     }
                                 },
                             };
@@ -1795,20 +1801,26 @@ impl MainPaneView {
                                                                 .min_h(px(0.0))
                                                                 .p_2()
                                                                 .font_family("monospace")
-                                                                .on_mouse_down(
-                                                                    MouseButton::Right,
-                                                                    cx.listener(
-                                                                        |this,
-                                                                         e: &MouseDownEvent,
-                                                                         window,
-                                                                         cx| {
-                                                                            this.open_conflict_resolver_output_context_menu(
-                                                                                e.position,
-                                                                                window,
-                                                                                cx,
-                                                                            );
-                                                                        },
-                                                                    ),
+                                                                .when(
+                                                                    !self
+                                                                        .conflict_resolved_output_is_streamed(),
+                                                                    |d| {
+                                                                        d.on_mouse_down(
+                                                                            MouseButton::Right,
+                                                                            cx.listener(
+                                                                                |this,
+                                                                                 e: &MouseDownEvent,
+                                                                                 window,
+                                                                                 cx| {
+                                                                                    this.open_conflict_resolver_output_context_menu(
+                                                                                        e.position,
+                                                                                        window,
+                                                                                        cx,
+                                                                                    );
+                                                                                },
+                                                                            ),
+                                                                        )
+                                                                    },
                                                                 )
                                                                 .child(
                                                                     div()
@@ -1936,9 +1948,11 @@ impl MainPaneView {
                                 );
 
                                 let diff_len = match self.diff_view {
-                                    DiffViewMode::Split => self.conflict_resolver.diff_rows.len(),
+                                    DiffViewMode::Split => {
+                                        self.conflict_resolver.two_way_split_visible_len()
+                                    }
                                     DiffViewMode::Inline => {
-                                        self.conflict_resolver.inline_rows.len()
+                                        self.conflict_resolver.two_way_inline_visible_len()
                                     }
                                 };
 

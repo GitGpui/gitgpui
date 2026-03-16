@@ -92,12 +92,12 @@ pub fn validate_conflict_resolution_text(text: &str) -> ConflictTextValidation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFileStages {
     pub path: PathBuf,
-    pub base_bytes: Option<Vec<u8>>,
-    pub ours_bytes: Option<Vec<u8>>,
-    pub theirs_bytes: Option<Vec<u8>>,
-    pub base: Option<String>,
-    pub ours: Option<String>,
-    pub theirs: Option<String>,
+    pub base_bytes: Option<Arc<[u8]>>,
+    pub ours_bytes: Option<Arc<[u8]>>,
+    pub theirs_bytes: Option<Arc<[u8]>>,
+    pub base: Option<Arc<str>>,
+    pub ours: Option<Arc<str>>,
+    pub theirs: Option<Arc<str>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

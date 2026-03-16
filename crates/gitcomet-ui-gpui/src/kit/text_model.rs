@@ -838,6 +838,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn replace_range_normalizes_reversed_and_out_of_bounds_ranges() {
         let mut model = TextModel::from_large_text("abcdef");
         let inserted = model.replace_range(128..2, "XY");

@@ -76,7 +76,6 @@ use chrome::{
 };
 use conflict_resolver::{
     ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
-    ResolvedLineMeta, SourceLineKey,
 };
 #[cfg(test)]
 use date_time::format_datetime_utc;

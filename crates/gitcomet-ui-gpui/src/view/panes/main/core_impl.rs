@@ -1,7 +1,11 @@
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
+use gitcomet_core::mergetool_trace::{
+    self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
+};
 use std::sync::Arc;
+use std::time::Instant;
 
 fn line_ranges_intersect(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
@@ -43,6 +47,326 @@ fn diff_syntax_edit_from_outline_delta(delta: ResolvedOutlineDelta) -> rows::Dif
     }
 }
 
+fn record_resolved_outline_trace(
+    path: Option<&std::path::PathBuf>,
+    started: Instant,
+    pane: &MainPaneView,
+    output_line_count: usize,
+) {
+    let path = path.cloned();
+    let elapsed = started.elapsed();
+    let (diff_row_count, inline_row_count) = pane.conflict_resolver.two_way_row_counts();
+    mergetool_trace::record_with(|| {
+        MergetoolTraceEvent::new(MergetoolTraceStage::ResolvedOutlineRecompute, path, elapsed)
+            .with_base(MergetoolTraceSideStats::from_text(Some(
+                pane.conflict_resolver.three_way_text.base.as_ref(),
+            )))
+            .with_ours(MergetoolTraceSideStats::from_text(Some(
+                pane.conflict_resolver.three_way_text.ours.as_ref(),
+            )))
+            .with_theirs(MergetoolTraceSideStats::from_text(Some(
+                pane.conflict_resolver.three_way_text.theirs.as_ref(),
+            )))
+            .with_conflict_block_count(Some(conflict_resolver::conflict_count(
+                &pane.conflict_resolver.marker_segments,
+            )))
+            .with_diff_row_count(Some(diff_row_count))
+            .with_inline_row_count(Some(inline_row_count))
+            .with_resolved_output_line_count(Some(output_line_count))
+    });
+}
+
+struct ResolvedOutlineComputation {
+    output_line_count: usize,
+    outline: ResolvedOutlineData,
+}
+
+enum ResolvedOutlineSourceView<'a> {
+    ThreeWay {
+        base_text: &'a str,
+        base_line_starts: &'a [usize],
+        ours_text: &'a str,
+        ours_line_starts: &'a [usize],
+        theirs_text: &'a str,
+        theirs_line_starts: &'a [usize],
+    },
+    TwoWay {
+        ours_text: &'a str,
+        ours_line_starts: &'a [usize],
+        theirs_text: &'a str,
+        theirs_line_starts: &'a [usize],
+    },
+}
+
+impl ResolvedOutlineSourceView<'_> {
+    fn view_mode(&self) -> ConflictResolverViewMode {
+        match self {
+            Self::ThreeWay { .. } => ConflictResolverViewMode::ThreeWay,
+            Self::TwoWay { .. } => ConflictResolverViewMode::TwoWayDiff,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum OwnedResolvedOutlineSourceData {
+    ThreeWay {
+        base_text: Arc<str>,
+        base_line_starts: Arc<[usize]>,
+        ours_text: Arc<str>,
+        ours_line_starts: Arc<[usize]>,
+        theirs_text: Arc<str>,
+        theirs_line_starts: Arc<[usize]>,
+    },
+    TwoWay {
+        ours_text: Arc<str>,
+        ours_line_starts: Arc<[usize]>,
+        theirs_text: Arc<str>,
+        theirs_line_starts: Arc<[usize]>,
+    },
+}
+
+impl OwnedResolvedOutlineSourceData {
+    fn as_view(&self) -> ResolvedOutlineSourceView<'_> {
+        match self {
+            Self::ThreeWay {
+                base_text,
+                base_line_starts,
+                ours_text,
+                ours_line_starts,
+                theirs_text,
+                theirs_line_starts,
+            } => ResolvedOutlineSourceView::ThreeWay {
+                base_text,
+                base_line_starts,
+                ours_text,
+                ours_line_starts,
+                theirs_text,
+                theirs_line_starts,
+            },
+            Self::TwoWay {
+                ours_text,
+                ours_line_starts,
+                theirs_text,
+                theirs_line_starts,
+            } => ResolvedOutlineSourceView::TwoWay {
+                ours_text,
+                ours_line_starts,
+                theirs_text,
+                theirs_line_starts,
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+struct BackgroundResolvedOutlineRecomputeRequest {
+    output_text: Arc<str>,
+    output_line_count: usize,
+    marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    sources: OwnedResolvedOutlineSourceData,
+}
+
+struct ResolvedOutlineIncrementalBase<'a> {
+    text: &'a TextModelSnapshot,
+    line_starts: &'a Arc<[usize]>,
+    marker_segments: &'a [conflict_resolver::ConflictSegment],
+    view_mode: ConflictResolverViewMode,
+    outline: &'a ResolvedOutlineData,
+}
+
+fn compute_resolved_outline_computation(
+    output_text: &str,
+    output_line_count: usize,
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    sources: ResolvedOutlineSourceView<'_>,
+) -> ResolvedOutlineComputation {
+    let view_mode = sources.view_mode();
+    let markers =
+        build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count);
+    if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
+        return ResolvedOutlineComputation {
+            output_line_count,
+            outline: ResolvedOutlineData {
+                meta: Vec::new(),
+                markers,
+                sources_index: HashSet::default(),
+            },
+        };
+    }
+
+    let mut meta = match sources {
+        ResolvedOutlineSourceView::ThreeWay {
+            base_text,
+            base_line_starts,
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        } => conflict_resolver::compute_resolved_line_provenance_from_text_with_indexed_sources(
+            output_text,
+            base_text,
+            base_line_starts,
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        ),
+        ResolvedOutlineSourceView::TwoWay {
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        } => conflict_resolver::compute_resolved_line_provenance_from_text_two_way_indexed_sources(
+            output_text,
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        ),
+    };
+    apply_conflict_choice_provenance_hints(&mut meta, marker_segments, output_text, view_mode);
+    let sources_index = conflict_resolver::build_resolved_output_line_sources_index_from_text(
+        &meta,
+        output_text,
+        view_mode,
+    );
+
+    ResolvedOutlineComputation {
+        output_line_count,
+        outline: ResolvedOutlineData {
+            meta,
+            markers,
+            sources_index,
+        },
+    }
+}
+
+fn compute_resolved_outline_computation_from_projection(
+    projection: &conflict_resolver::ResolvedOutputProjection,
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    sources: ResolvedOutlineSourceView<'_>,
+) -> ResolvedOutlineComputation {
+    let output_line_count = projection.len();
+    let view_mode = sources.view_mode();
+    let markers = build_resolved_output_conflict_markers_from_ranges(
+        marker_segments,
+        projection.conflict_line_ranges(),
+        output_line_count,
+    );
+    if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
+        return ResolvedOutlineComputation {
+            output_line_count,
+            outline: ResolvedOutlineData {
+                meta: Vec::new(),
+                markers,
+                sources_index: HashSet::default(),
+            },
+        };
+    }
+
+    let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
+        HashMap::default();
+    match sources {
+        ResolvedOutlineSourceView::ThreeWay {
+            base_text,
+            base_line_starts,
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        } => {
+            insert_lookup_from_indexed_text(
+                &mut source_lookup,
+                conflict_resolver::ResolvedLineSource::C,
+                theirs_text,
+                theirs_line_starts,
+            );
+            insert_lookup_from_indexed_text(
+                &mut source_lookup,
+                conflict_resolver::ResolvedLineSource::B,
+                ours_text,
+                ours_line_starts,
+            );
+            insert_lookup_from_indexed_text(
+                &mut source_lookup,
+                conflict_resolver::ResolvedLineSource::A,
+                base_text,
+                base_line_starts,
+            );
+        }
+        ResolvedOutlineSourceView::TwoWay {
+            ours_text,
+            ours_line_starts,
+            theirs_text,
+            theirs_line_starts,
+        } => {
+            insert_lookup_from_indexed_text(
+                &mut source_lookup,
+                conflict_resolver::ResolvedLineSource::B,
+                theirs_text,
+                theirs_line_starts,
+            );
+            insert_lookup_from_indexed_text(
+                &mut source_lookup,
+                conflict_resolver::ResolvedLineSource::A,
+                ours_text,
+                ours_line_starts,
+            );
+        }
+    }
+
+    let mut meta = Vec::with_capacity(output_line_count);
+    for line_ix in 0..output_line_count {
+        let line = projection
+            .line_text(marker_segments, line_ix)
+            .unwrap_or_else(|| std::borrow::Cow::Borrowed(""));
+        let (source, input_line) = source_lookup
+            .get(line.as_ref())
+            .copied()
+            .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+        meta.push(conflict_resolver::ResolvedLineMeta {
+            output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
+            source,
+            input_line,
+        });
+    }
+    apply_conflict_choice_provenance_hints_for_ranges(
+        &mut meta,
+        marker_segments,
+        projection.conflict_line_ranges(),
+        view_mode,
+    );
+
+    let mut sources_index = HashSet::default();
+    sources_index.reserve(meta.len());
+    for (line_ix, line_meta) in meta.iter().enumerate() {
+        if line_meta.source == conflict_resolver::ResolvedLineSource::Manual {
+            continue;
+        }
+        let Some(line_no) = line_meta.input_line else {
+            continue;
+        };
+        let Some(line) = projection.line_text(marker_segments, line_ix) else {
+            continue;
+        };
+        sources_index.insert(conflict_resolver::SourceLineKey::new(
+            view_mode,
+            line_meta.source,
+            line_no,
+            line.as_ref(),
+        ));
+    }
+
+    ResolvedOutlineComputation {
+        output_line_count,
+        outline: ResolvedOutlineData {
+            meta,
+            markers,
+            sources_index,
+        },
+    }
+}
+
 fn insert_lookup_from_indexed_text<'a>(
     lookup: &mut HashMap<&'a str, (conflict_resolver::ResolvedLineSource, Option<u32>)>,
     source: conflict_resolver::ResolvedLineSource,
@@ -59,29 +383,6 @@ fn insert_lookup_from_indexed_text<'a>(
                 Some(u32::try_from(line_ix.saturating_add(1)).unwrap_or(u32::MAX)),
             ),
         );
-    }
-}
-
-fn insert_two_way_side_lookup<'a>(
-    lookup: &mut HashMap<&'a str, (conflict_resolver::ResolvedLineSource, Option<u32>)>,
-    rows: &'a [gitcomet_core::file_diff::FileDiffRow],
-    source: conflict_resolver::ResolvedLineSource,
-    read_text: impl Fn(&'a gitcomet_core::file_diff::FileDiffRow) -> Option<&'a str>,
-) {
-    let mut line_no = rows
-        .iter()
-        .filter_map(&read_text)
-        .count()
-        .min(u32::MAX as usize) as u32;
-    for row in rows.iter().rev() {
-        let Some(text) = read_text(row) else {
-            continue;
-        };
-        if line_no == 0 {
-            continue;
-        }
-        lookup.insert(text, (source, Some(line_no)));
-        line_no = line_no.saturating_sub(1);
     }
 }
 
@@ -247,9 +548,7 @@ impl MainPaneView {
         path: std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
-        use gitcomet_core::conflict_output::{
-            ConflictMarkerLabels, GenerateResolvedTextOptions, UnresolvedConflictMode,
-        };
+        use gitcomet_core::conflict_output::ConflictMarkerLabels;
 
         let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
             self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
@@ -258,17 +557,21 @@ impl MainPaneView {
         };
 
         let labels = self.focused_mergetool_labels_or_default();
-        let output = conflict_resolver::generate_resolved_text_with_options(
+        let materialized_output = (!self.conflict_resolved_output_is_streamed()).then(|| {
+            self.conflict_resolver_input
+                .read_with(cx, |input, _| input.text().to_string())
+        });
+        let save_payload = build_focused_mergetool_save_payload(
             &self.conflict_resolver.marker_segments,
-            GenerateResolvedTextOptions {
-                unresolved_mode: UnresolvedConflictMode::PreserveMarkers,
-                labels: Some(ConflictMarkerLabels {
-                    local: labels.local.as_str(),
-                    remote: labels.remote.as_str(),
-                    base: labels.base.as_str(),
-                }),
+            &self.conflict_resolver.conflict_region_indices,
+            materialized_output.as_deref(),
+            ConflictMarkerLabels {
+                local: labels.local.as_str(),
+                remote: labels.remote.as_str(),
+                base: labels.base.as_str(),
             },
         );
+        let output = save_payload.output;
 
         let full_path = repo.spec.workdir.join(&path);
         if let Some(parent) = full_path.parent().filter(|p| !p.as_os_str().is_empty())
@@ -293,10 +596,10 @@ impl MainPaneView {
             return;
         }
 
-        let total = conflict_resolver::conflict_count(&self.conflict_resolver.marker_segments);
-        let resolved =
-            conflict_resolver::resolved_conflict_count(&self.conflict_resolver.marker_segments);
-        let exit_code = focused_mergetool_save_exit_code(total, resolved);
+        let exit_code = focused_mergetool_save_exit_code(
+            save_payload.total_conflicts,
+            save_payload.resolved_conflicts,
+        );
         self.set_focused_mergetool_exit_code(exit_code);
         cx.quit();
     }
@@ -590,8 +893,11 @@ impl MainPaneView {
             conflict_diff_query_segments_cache_inline: HashMap::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_three_way_segments_cache: HashMap::default(),
+            conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
+            conflict_three_way_syntax_inflight: ThreeWaySides::default(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_hash: None,
+            conflict_resolved_output_projection: None,
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
             conflict_resolved_preview_highlight_provider_theme_epoch: 1,
@@ -600,7 +906,10 @@ impl MainPaneView {
             conflict_resolved_preview_syntax_inflight: None,
             conflict_resolved_preview_line_count: 0,
             conflict_resolved_preview_line_starts: Arc::default(),
+            conflict_resolved_outline_stash: None,
             conflict_resolved_preview_segments_cache: HashMap::default(),
+            #[cfg(test)]
+            conflict_resolved_outline_background_delay_override: None,
             history_view,
             diff_scroll: UniformListScrollHandle::default(),
             diff_split_right_scroll: UniformListScrollHandle::default(),
@@ -655,11 +964,8 @@ impl MainPaneView {
             .max(1);
         self.clear_diff_text_style_caches();
         self.clear_worktree_preview_segments_cache();
-        self.conflict_diff_segments_cache_split.clear();
-        self.conflict_diff_segments_cache_inline.clear();
-        self.conflict_diff_query_segments_cache_split.clear();
-        self.conflict_diff_query_segments_cache_inline.clear();
-        self.conflict_diff_query_cache_query = SharedString::default();
+        self.clear_conflict_diff_style_caches();
+        self.conflict_three_way_segments_cache.clear();
         self.conflict_resolved_preview_segments_cache.clear();
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -667,19 +973,129 @@ impl MainPaneView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.conflict_resolver_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
-        let output_snapshot = self
-            .conflict_resolver_input
-            .read_with(cx, |input, _| input.text_snapshot());
-        self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
-        self.conflict_resolved_preview_line_count =
-            self.conflict_resolved_preview_line_starts.len().max(1);
-        self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
+        if self.conflict_resolved_output_is_streamed() {
+            self.conflict_resolved_preview_syntax_language = self
+                .conflict_resolved_preview_path
+                .as_ref()
+                .and_then(rows::diff_syntax_language_for_path);
+            self.conflict_resolved_preview_prepared_syntax_document = None;
+            self.conflict_resolved_preview_syntax_inflight = None;
+        } else {
+            let output_snapshot = self
+                .conflict_resolver_input
+                .read_with(cx, |input, _| input.text_snapshot());
+            self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
+            self.conflict_resolved_preview_line_count =
+                self.conflict_resolved_preview_line_starts.len().max(1);
+            self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
+        }
         if let Some(input) = &self.diff_hunk_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
         self.history_view
             .update(cx, |view, cx| view.set_theme(theme, cx));
         cx.notify();
+    }
+
+    pub(in crate::view) fn conflict_resolved_output_is_streamed(&self) -> bool {
+        self.conflict_resolved_output_projection.is_some()
+    }
+
+    fn sync_conflict_resolved_preview_projection(
+        &mut self,
+        projection: conflict_resolver::ResolvedOutputProjection,
+        path: Option<&std::path::PathBuf>,
+    ) {
+        self.conflict_resolved_output_projection = Some(projection.clone());
+        self.conflict_resolved_preview_path = path.cloned();
+        self.conflict_resolved_preview_source_hash = Some(projection.output_hash());
+        self.conflict_resolved_preview_text = TextModelSnapshot::default();
+        self.conflict_resolved_preview_syntax_language =
+            path.and_then(rows::diff_syntax_language_for_path);
+        self.conflict_resolved_preview_prepared_syntax_document = None;
+        self.conflict_resolved_preview_syntax_inflight = None;
+        self.conflict_resolved_preview_line_count = projection.len();
+        self.conflict_resolved_preview_line_starts = Arc::default();
+        self.conflict_resolved_outline_stash = None;
+        self.conflict_resolved_preview_segments_cache.clear();
+    }
+
+    pub(in crate::view) fn refresh_streamed_resolved_output_preview_from_projection(
+        &mut self,
+        projection: conflict_resolver::ResolvedOutputProjection,
+        path: Option<&std::path::PathBuf>,
+    ) {
+        let trace_started = Instant::now();
+        let computed = compute_resolved_outline_computation_from_projection(
+            &projection,
+            &self.conflict_resolver.marker_segments,
+            self.resolved_outline_source_view(),
+        );
+        self.sync_conflict_resolved_preview_projection(projection, path);
+        self.apply_resolved_outline_computation(path, trace_started, computed);
+    }
+
+    pub(in crate::view) fn refresh_streamed_resolved_output_preview_from_markers(
+        &mut self,
+        path: Option<&std::path::PathBuf>,
+    ) {
+        let projection = conflict_resolver::ResolvedOutputProjection::from_segments(
+            &self.conflict_resolver.marker_segments,
+        );
+        self.refresh_streamed_resolved_output_preview_from_projection(projection, path);
+    }
+
+    pub(in crate::view) fn ensure_conflict_resolved_output_materialized(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.conflict_resolved_output_is_streamed() {
+            return;
+        }
+
+        let resolved =
+            conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
+        let output_hash = hash_text_bytes(&resolved);
+        let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
+        let theme = self.theme;
+        let path = self.conflict_resolver.path.clone();
+        self.conflict_resolved_output_projection = None;
+        self.conflict_resolved_preview_path = path.clone();
+        self.conflict_resolved_preview_source_hash = Some(output_hash);
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_line_ending(line_ending);
+            input.set_text(resolved.clone(), cx);
+        });
+        self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
+    }
+
+    pub(in crate::view) fn current_conflict_resolved_output_text(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> String {
+        if self.conflict_resolved_output_is_streamed() {
+            conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments)
+        } else {
+            self.conflict_resolver_input
+                .read_with(cx, |input, _| input.text().to_string())
+        }
+    }
+
+    pub(in crate::view) fn conflict_resolver_save_contents_from_text(
+        &mut self,
+        text: String,
+    ) -> String {
+        self.conflict_resolver_sync_session_resolutions_from_output(&text);
+        text
+    }
+
+    pub(in crate::view) fn conflict_resolver_save_contents(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> String {
+        let text = self.current_conflict_resolved_output_text(cx);
+        self.conflict_resolver_save_contents_from_text(text)
     }
 
     pub(in crate::view) fn ensure_prepared_syntax_chunk_poll(
@@ -853,6 +1269,69 @@ impl MainPaneView {
         .detach();
     }
 
+    /// Schedule a background tree-sitter parse for one merge-input side.
+    ///
+    /// When the parse completes, the prepared document is injected into the
+    /// global cache and the three-way styled-text cache is cleared so the next
+    /// render picks up document-based syntax highlighting.
+    pub(in crate::view) fn ensure_conflict_three_way_background_syntax_prepare(
+        &mut self,
+        side: ThreeWayColumn,
+        text: SharedString,
+        line_starts: Arc<[usize]>,
+        language: rows::DiffSyntaxLanguage,
+        source_hash: Option<u64>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if indexed_line_count(text.as_ref(), line_starts.as_ref())
+            > rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
+        {
+            return;
+        }
+        if self.conflict_three_way_syntax_inflight[side] {
+            return;
+        }
+        self.conflict_three_way_syntax_inflight[side] = true;
+        let expected_source_hash = source_hash;
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let parsed = smol::unblock(move || {
+                    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                        language,
+                        rows::DiffSyntaxMode::Auto,
+                        text,
+                        line_starts,
+                        None,
+                        None,
+                    )
+                })
+                .await;
+
+                let _ = view.update(cx, |this, cx| {
+                    this.conflict_three_way_syntax_inflight[side] = false;
+
+                    // Stale: source hash changed while we were parsing.
+                    if this.conflict_resolver.source_hash != expected_source_hash {
+                        return;
+                    }
+
+                    if let Some(parsed) = parsed {
+                        let document =
+                            rows::inject_background_prepared_diff_syntax_document(parsed);
+                        this.conflict_three_way_prepared_syntax_documents[side] = Some(document);
+                        // Invalidate cached styled text so the next render uses
+                        // the prepared document across three-way and two-way
+                        // conflict views instead of per-line fallback styling.
+                        this.clear_conflict_diff_style_caches_preserving_query();
+                        this.conflict_three_way_segments_cache.clear();
+                        cx.notify();
+                    }
+                });
+            },
+        )
+        .detach();
+    }
+
     pub(in crate::view) fn clear_diff_text_query_overlay_cache(&mut self) {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
@@ -880,6 +1359,13 @@ impl MainPaneView {
         self.conflict_diff_query_cache_query = SharedString::default();
     }
 
+    pub(in crate::view) fn clear_conflict_diff_style_caches_preserving_query(&mut self) {
+        self.conflict_diff_segments_cache_split.clear();
+        self.conflict_diff_segments_cache_inline.clear();
+        self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_diff_query_segments_cache_inline.clear();
+    }
+
     pub(in crate::view) fn sync_conflict_diff_query_overlay_caches(&mut self, query: &str) {
         if self.conflict_diff_query_cache_query.as_ref() != query {
             self.conflict_diff_query_cache_query = query.to_string().into();
@@ -889,9 +1375,8 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn clear_conflict_diff_style_caches(&mut self) {
-        self.conflict_diff_segments_cache_split.clear();
-        self.conflict_diff_segments_cache_inline.clear();
-        self.clear_conflict_diff_query_overlay_caches();
+        self.clear_conflict_diff_style_caches_preserving_query();
+        self.conflict_diff_query_cache_query = SharedString::default();
     }
 
     pub(super) fn conflict_resolver_invalidate_resolved_outline(&mut self) {
@@ -901,20 +1386,19 @@ impl MainPaneView {
             .wrapping_add(1);
         self.conflict_resolved_preview_path = None;
         self.conflict_resolved_preview_source_hash = None;
+        self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language = None;
         self.conflict_resolved_preview_prepared_syntax_document = None;
         self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = 0;
         self.conflict_resolved_preview_line_starts = Arc::default();
+        self.conflict_resolved_outline_stash = None;
         self.conflict_resolved_preview_segments_cache.clear();
-        self.conflict_resolver.resolved_line_meta.clear();
-        self.conflict_resolver
-            .resolved_output_conflict_markers
-            .clear();
-        self.conflict_resolver
-            .resolved_output_line_sources_index
-            .clear();
+        self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
+        self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
+        self.conflict_three_way_segments_cache.clear();
+        self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
     }
 
     pub(super) fn recompute_conflict_resolved_outline_and_provenance(
@@ -925,68 +1409,174 @@ impl MainPaneView {
         self.recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(path, None, cx);
     }
 
+    fn resolved_outline_source_view(&self) -> ResolvedOutlineSourceView<'_> {
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => ResolvedOutlineSourceView::ThreeWay {
+                base_text: &self.conflict_resolver.three_way_text.base,
+                base_line_starts: &self.conflict_resolver.three_way_line_starts.base,
+                ours_text: &self.conflict_resolver.three_way_text.ours,
+                ours_line_starts: &self.conflict_resolver.three_way_line_starts.ours,
+                theirs_text: &self.conflict_resolver.three_way_text.theirs,
+                theirs_line_starts: &self.conflict_resolver.three_way_line_starts.theirs,
+            },
+            ConflictResolverViewMode::TwoWayDiff => ResolvedOutlineSourceView::TwoWay {
+                ours_text: &self.conflict_resolver.three_way_text.ours,
+                ours_line_starts: &self.conflict_resolver.three_way_line_starts.ours,
+                theirs_text: &self.conflict_resolver.three_way_text.theirs,
+                theirs_line_starts: &self.conflict_resolver.three_way_line_starts.theirs,
+            },
+        }
+    }
+
+    fn background_resolved_outline_recompute_request(
+        &self,
+        output_snapshot: &TextModelSnapshot,
+    ) -> BackgroundResolvedOutlineRecomputeRequest {
+        let output_text: Arc<str> = output_snapshot.as_shared_string().into();
+        let output_line_count = output_snapshot.shared_line_starts().len().max(1);
+        let sources = match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => OwnedResolvedOutlineSourceData::ThreeWay {
+                base_text: self.conflict_resolver.three_way_text.base.clone().into(),
+                base_line_starts: self.conflict_resolver.three_way_line_starts.base.clone(),
+                ours_text: self.conflict_resolver.three_way_text.ours.clone().into(),
+                ours_line_starts: self.conflict_resolver.three_way_line_starts.ours.clone(),
+                theirs_text: self.conflict_resolver.three_way_text.theirs.clone().into(),
+                theirs_line_starts: self.conflict_resolver.three_way_line_starts.theirs.clone(),
+            },
+            ConflictResolverViewMode::TwoWayDiff => OwnedResolvedOutlineSourceData::TwoWay {
+                ours_text: self.conflict_resolver.three_way_text.ours.clone().into(),
+                ours_line_starts: self.conflict_resolver.three_way_line_starts.ours.clone(),
+                theirs_text: self.conflict_resolver.three_way_text.theirs.clone().into(),
+                theirs_line_starts: self.conflict_resolver.three_way_line_starts.theirs.clone(),
+            },
+        };
+
+        BackgroundResolvedOutlineRecomputeRequest {
+            output_text,
+            output_line_count,
+            marker_segments: self.conflict_resolver.marker_segments.clone(),
+            sources,
+        }
+    }
+
+    fn stash_current_conflict_resolved_outline_state(&mut self) {
+        let line_count = self.conflict_resolved_preview_line_count;
+        if line_count == 0
+            || self.conflict_resolver.resolved_outline.meta.len() != line_count
+            || self.conflict_resolver.resolved_outline.markers.len() != line_count
+        {
+            return;
+        }
+
+        self.conflict_resolved_outline_stash = Some(StashedResolvedOutlineState {
+            text: self.conflict_resolved_preview_text.clone(),
+            line_starts: self.conflict_resolved_preview_line_starts.clone(),
+            marker_segments: self.conflict_resolver.marker_segments.clone(),
+            view_mode: self.conflict_resolver.view_mode,
+            outline: self.conflict_resolver.resolved_outline.clone(),
+        });
+    }
+
+    fn resolved_outline_incremental_base(&self) -> Option<ResolvedOutlineIncrementalBase<'_>> {
+        if self.conflict_resolved_output_is_streamed() {
+            return None;
+        }
+        if let Some(stash) = self.conflict_resolved_outline_stash.as_ref() {
+            return Some(ResolvedOutlineIncrementalBase {
+                text: &stash.text,
+                line_starts: &stash.line_starts,
+                marker_segments: &stash.marker_segments,
+                view_mode: stash.view_mode,
+                outline: &stash.outline,
+            });
+        }
+
+        let line_count = self.conflict_resolved_preview_line_count;
+        if line_count == 0
+            || self.conflict_resolver.resolved_outline.meta.len() != line_count
+            || self.conflict_resolver.resolved_outline.markers.len() != line_count
+        {
+            return None;
+        }
+
+        Some(ResolvedOutlineIncrementalBase {
+            text: &self.conflict_resolved_preview_text,
+            line_starts: &self.conflict_resolved_preview_line_starts,
+            marker_segments: &self.conflict_resolver.marker_segments,
+            view_mode: self.conflict_resolver.view_mode,
+            outline: &self.conflict_resolver.resolved_outline,
+        })
+    }
+
+    fn sync_conflict_resolved_preview_snapshot(
+        &mut self,
+        output_snapshot: &TextModelSnapshot,
+        path: Option<&std::path::PathBuf>,
+        syntax_edit: Option<rows::DiffSyntaxEdit>,
+        clear_outline: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if clear_outline {
+            self.stash_current_conflict_resolved_outline_state();
+        }
+        self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
+        self.conflict_resolved_preview_syntax_language =
+            path.and_then(rows::diff_syntax_language_for_path);
+        self.conflict_resolved_preview_line_count =
+            self.conflict_resolved_preview_line_starts.len().max(1);
+        self.conflict_resolved_preview_segments_cache.clear();
+        self.refresh_conflict_resolved_output_syntax(output_snapshot, syntax_edit, cx);
+        self.conflict_resolved_preview_text = output_snapshot.clone();
+
+        if clear_outline {
+            self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
+        }
+    }
+
+    fn apply_resolved_outline_computation(
+        &mut self,
+        path: Option<&std::path::PathBuf>,
+        trace_started: Instant,
+        computed: ResolvedOutlineComputation,
+    ) {
+        self.conflict_resolved_outline_stash = None;
+        self.conflict_resolver.resolved_outline = computed.outline;
+        record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
+    }
+
     fn recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(
         &mut self,
         path: Option<&std::path::PathBuf>,
         syntax_edit: Option<rows::DiffSyntaxEdit>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolved_output_is_streamed() {
+            let _ = syntax_edit;
+            let _ = cx;
+            self.refresh_streamed_resolved_output_preview_from_markers(path);
+            return;
+        }
         let _perf_scope = perf::span(ViewPerfSpan::RecomputeResolvedOutline);
+        let trace_started = Instant::now();
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         let output_text = output_snapshot.as_ref();
-        let output_line_starts = output_snapshot.shared_line_starts();
-        let output_line_count = output_line_starts.len().max(1);
-        self.conflict_resolved_preview_line_starts = output_line_starts;
-
-        self.conflict_resolved_preview_syntax_language =
-            path.and_then(rows::diff_syntax_language_for_path);
-        self.conflict_resolved_preview_line_count = output_line_count;
-        self.conflict_resolved_preview_segments_cache.clear();
-        self.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
-
-        // Provenance: classify each output line as A/B/C/Manual.
-        let view_mode = self.conflict_resolver.view_mode;
-        let mut meta = match view_mode {
-            ConflictResolverViewMode::ThreeWay => {
-                conflict_resolver::compute_resolved_line_provenance_from_text_with_indexed_sources(
-                    output_text,
-                    &self.conflict_resolver.three_way_text.base,
-                    &self.conflict_resolver.three_way_line_starts.base,
-                    &self.conflict_resolver.three_way_text.ours,
-                    &self.conflict_resolver.three_way_line_starts.ours,
-                    &self.conflict_resolver.three_way_text.theirs,
-                    &self.conflict_resolver.three_way_line_starts.theirs,
-                )
-            }
-            ConflictResolverViewMode::TwoWayDiff => {
-                conflict_resolver::compute_resolved_line_provenance_from_text_two_way_rows(
-                    output_text,
-                    &self.conflict_resolver.diff_rows,
-                )
-            }
-        };
-        apply_conflict_choice_provenance_hints(
-            &mut meta,
-            &self.conflict_resolver.marker_segments,
+        let output_line_count = output_snapshot.shared_line_starts().len().max(1);
+        let computed = compute_resolved_outline_computation(
             output_text,
-            view_mode,
+            output_line_count,
+            &self.conflict_resolver.marker_segments,
+            self.resolved_outline_source_view(),
         );
-        self.conflict_resolver.resolved_output_line_sources_index =
-            conflict_resolver::build_resolved_output_line_sources_index_from_text(
-                &meta,
-                output_text,
-                view_mode,
-            );
-        self.conflict_resolver.resolved_output_conflict_markers =
-            build_resolved_output_conflict_markers(
-                &self.conflict_resolver.marker_segments,
-                output_text,
-                output_line_count,
-            );
-        self.conflict_resolver.resolved_line_meta = meta;
-        self.conflict_resolved_preview_text = output_snapshot;
+        self.sync_conflict_resolved_preview_snapshot(
+            &output_snapshot,
+            path,
+            syntax_edit,
+            false,
+            cx,
+        );
+        self.apply_resolved_outline_computation(path, trace_started, computed);
     }
 
     fn recompute_conflict_resolved_outline_and_provenance_incremental(
@@ -995,26 +1585,36 @@ impl MainPaneView {
         delta: ResolvedOutlineDelta,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let old_snapshot = self.conflict_resolved_preview_text.clone();
-        let old_text = old_snapshot.as_ref();
+        if self.conflict_resolved_output_is_streamed() {
+            let _ = path;
+            let _ = delta;
+            let _ = cx;
+            return false;
+        }
+        let Some(base) = self.resolved_outline_incremental_base() else {
+            return false;
+        };
+        let old_text = base.text.as_ref();
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         let output_text = output_snapshot.as_ref();
-        let old_line_starts = self.conflict_resolved_preview_line_starts.clone();
+        let old_line_starts = base.line_starts.clone();
         let old_line_count = old_line_starts.len().max(1);
         let new_line_starts = output_snapshot.shared_line_starts();
         let new_line_count = new_line_starts.len().max(1);
-        if old_line_starts.is_empty()
-            || self.conflict_resolver.resolved_line_meta.len() != old_line_count
-            || self
-                .conflict_resolver
-                .resolved_output_conflict_markers
-                .len()
-                != old_line_count
-        {
+        if old_line_starts.is_empty() {
             return false;
         }
+        let used_stash = self.conflict_resolved_outline_stash.is_some();
+        let delta = if used_stash {
+            resolved_outline_delta_between_texts(old_text, output_text)
+        } else {
+            Some(delta)
+        };
+        let Some(delta) = delta else {
+            return false;
+        };
         if delta.old_range.start > delta.old_range.end
             || delta.new_range.start > delta.new_range.end
             || delta.old_range.end > old_text.len()
@@ -1038,10 +1638,9 @@ impl MainPaneView {
         new_affected.start = new_affected.start.saturating_sub(1);
         new_affected.end = new_affected.end.saturating_add(1).min(new_line_count);
 
-        let Some(old_block_ranges) = resolved_output_conflict_block_ranges_in_text(
-            &self.conflict_resolver.marker_segments,
-            old_text,
-        ) else {
+        let Some(old_block_ranges) =
+            resolved_output_conflict_block_ranges_in_text(base.marker_segments, old_text)
+        else {
             return false;
         };
         let Some(new_block_ranges) = resolved_output_conflict_block_ranges_in_text(
@@ -1092,10 +1691,11 @@ impl MainPaneView {
             return false;
         }
 
-        let view_mode = self.conflict_resolver.view_mode;
+        let old_view_mode = base.view_mode;
+        let new_view_mode = self.conflict_resolver.view_mode;
         let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
             HashMap::default();
-        match view_mode {
+        match new_view_mode {
             ConflictResolverViewMode::ThreeWay => {
                 insert_lookup_from_indexed_text(
                     &mut source_lookup,
@@ -1117,22 +1717,22 @@ impl MainPaneView {
                 );
             }
             ConflictResolverViewMode::TwoWayDiff => {
-                insert_two_way_side_lookup(
+                insert_lookup_from_indexed_text(
                     &mut source_lookup,
-                    &self.conflict_resolver.diff_rows,
                     conflict_resolver::ResolvedLineSource::B,
-                    |row| row.new.as_deref(),
+                    &self.conflict_resolver.three_way_text.theirs,
+                    &self.conflict_resolver.three_way_line_starts.theirs,
                 );
-                insert_two_way_side_lookup(
+                insert_lookup_from_indexed_text(
                     &mut source_lookup,
-                    &self.conflict_resolver.diff_rows,
                     conflict_resolver::ResolvedLineSource::A,
-                    |row| row.old.as_deref(),
+                    &self.conflict_resolver.three_way_text.ours,
+                    &self.conflict_resolver.three_way_line_starts.ours,
                 );
             }
         }
 
-        let old_meta = self.conflict_resolver.resolved_line_meta.clone();
+        let old_meta = base.outline.meta.to_vec();
         let mut middle_meta = Vec::with_capacity(new_affected.len());
         for line_ix in new_affected.clone() {
             let output_line =
@@ -1171,13 +1771,10 @@ impl MainPaneView {
             &mut next_meta,
             &self.conflict_resolver.marker_segments,
             output_text,
-            view_mode,
+            new_view_mode,
         );
 
-        let old_markers = self
-            .conflict_resolver
-            .resolved_output_conflict_markers
-            .clone();
+        let old_markers = base.outline.markers.to_vec();
         let mut next_markers = vec![None; new_line_count];
         for (line_ix, marker) in old_markers
             .iter()
@@ -1228,13 +1825,10 @@ impl MainPaneView {
             );
         }
 
-        let mut next_sources_index = self
-            .conflict_resolver
-            .resolved_output_line_sources_index
-            .clone();
+        let mut next_sources_index = base.outline.sources_index.clone();
         update_line_sources_index_for_range(
             &mut next_sources_index,
-            view_mode,
+            old_view_mode,
             old_meta.as_slice(),
             old_text,
             old_line_starts.as_ref(),
@@ -1243,7 +1837,7 @@ impl MainPaneView {
         );
         update_line_sources_index_for_range(
             &mut next_sources_index,
-            view_mode,
+            new_view_mode,
             next_meta.as_slice(),
             output_text,
             new_line_starts.as_ref(),
@@ -1255,19 +1849,23 @@ impl MainPaneView {
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count = new_line_count;
         self.conflict_resolved_preview_line_starts = new_line_starts;
-        remap_line_keyed_cache_for_delta(
-            &mut self.conflict_resolved_preview_segments_cache,
-            old_affected,
-            new_affected,
-        );
-        self.refresh_conflict_resolved_output_syntax(
-            &output_snapshot,
-            Some(diff_syntax_edit_from_outline_delta(delta)),
-            cx,
-        );
-        self.conflict_resolver.resolved_line_meta = next_meta;
-        self.conflict_resolver.resolved_output_conflict_markers = next_markers;
-        self.conflict_resolver.resolved_output_line_sources_index = next_sources_index;
+        if used_stash {
+            self.conflict_resolved_preview_segments_cache.clear();
+        } else {
+            remap_line_keyed_cache_for_delta(
+                &mut self.conflict_resolved_preview_segments_cache,
+                old_affected,
+                new_affected,
+            );
+        }
+        let syntax_edit = (!used_stash).then(|| diff_syntax_edit_from_outline_delta(delta));
+        self.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
+        self.conflict_resolved_outline_stash = None;
+        self.conflict_resolver.resolved_outline = ResolvedOutlineData {
+            meta: next_meta,
+            markers: next_markers,
+            sources_index: next_sources_index,
+        };
         self.conflict_resolved_preview_text = output_snapshot;
         true
     }
@@ -1300,6 +1898,13 @@ impl MainPaneView {
         delta: Option<ResolvedOutlineDelta>,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolved_output_is_streamed() {
+            let _ = output_hash;
+            let _ = delta;
+            self.refresh_streamed_resolved_output_preview_from_markers(path.as_ref());
+            cx.notify();
+            return;
+        }
         self.conflict_resolver.resolver_pending_recompute_seq = self
             .conflict_resolver
             .resolver_pending_recompute_seq
@@ -1309,14 +1914,14 @@ impl MainPaneView {
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 Timer::after(Duration::from_millis(CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS)).await;
-                let _ = view.update(cx, |this, cx| {
+                let request = view.update(cx, |this, cx| {
                     if this.conflict_resolver.resolver_pending_recompute_seq != seq {
-                        return;
+                        return None;
                     }
                     if this.conflict_resolved_preview_source_hash != Some(output_hash)
                         || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
                     {
-                        return;
+                        return None;
                     }
                     let did_incremental = delta.clone().is_some_and(|delta| {
                         this.recompute_conflict_resolved_outline_and_provenance_incremental(
@@ -1326,13 +1931,63 @@ impl MainPaneView {
                         )
                     });
                     if !did_incremental {
-                        this.recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(
+                        let trace_started = Instant::now();
+                        let output_snapshot = this
+                            .conflict_resolver_input
+                            .read_with(cx, |input, _| input.text_snapshot());
+                        let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
+                        let request =
+                            this.background_resolved_outline_recompute_request(&output_snapshot);
+                        #[cfg(test)]
+                        let background_delay = this
+                            .conflict_resolved_outline_background_delay_override
+                            .unwrap_or_default();
+                        #[cfg(not(test))]
+                        let background_delay = Duration::default();
+                        this.sync_conflict_resolved_preview_snapshot(
+                            &output_snapshot,
                             path.as_ref(),
-                            delta.clone().map(diff_syntax_edit_from_outline_delta),
+                            syntax_edit,
+                            true,
                             cx,
                         );
+                        cx.notify();
+                        return Some((request, trace_started, background_delay));
                     }
 
+                    cx.notify();
+                    None
+                });
+                let Some((request, trace_started, background_delay)) = request.ok().flatten()
+                else {
+                    return;
+                };
+
+                if !background_delay.is_zero() {
+                    Timer::after(background_delay).await;
+                }
+
+                let computed = smol::unblock(move || {
+                    compute_resolved_outline_computation(
+                        request.output_text.as_ref(),
+                        request.output_line_count,
+                        &request.marker_segments,
+                        request.sources.as_view(),
+                    )
+                })
+                .await;
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolver.resolver_pending_recompute_seq != seq {
+                        return;
+                    }
+                    if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                        || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
+                    {
+                        return;
+                    }
+
+                    this.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
                     cx.notify();
                 });
             },
@@ -1351,6 +2006,14 @@ impl MainPaneView {
             None,
             cx,
         );
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn set_conflict_resolved_outline_background_delay_override_for_tests(
+        &mut self,
+        delay: Duration,
+    ) {
+        self.conflict_resolved_outline_background_delay_override = Some(delay);
     }
 
     pub(in crate::view) fn set_active_context_menu_invoker(
@@ -1559,6 +2222,20 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolved_output_is_streamed() {
+            let context_line =
+                line_ix.min(self.conflict_resolved_preview_line_count.saturating_sub(1));
+            self.open_conflict_resolver_output_context_menu_at_line(
+                context_line,
+                None,
+                String::new(),
+                anchor,
+                window,
+                cx,
+            );
+            return;
+        }
+
         let content = self
             .conflict_resolver_input
             .read_with(cx, |i, _| i.text().to_string());
@@ -1591,11 +2268,21 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(marker) = resolved_output_marker_for_line(
-            &self.conflict_resolver.marker_segments,
-            &content,
-            context_line,
-        ) {
+        let conflict_marker = if self.conflict_resolved_output_is_streamed() {
+            self.conflict_resolver
+                .resolved_outline
+                .markers
+                .get(context_line)
+                .copied()
+                .flatten()
+        } else {
+            resolved_output_marker_for_line(
+                &self.conflict_resolver.marker_segments,
+                &content,
+                context_line,
+            )
+        };
+        if let Some(marker) = conflict_marker {
             let is_three_way = self.conflict_resolver.view_mode
                 == conflict_resolver::ConflictResolverViewMode::ThreeWay;
             let selected_choices =
@@ -1633,23 +2320,16 @@ impl MainPaneView {
                     .three_way_has_line(ThreeWayColumn::Theirs, context_line),
             )
         } else {
-            (
-                context_line < self.conflict_resolver.diff_rows.len()
-                    && self
-                        .conflict_resolver
-                        .diff_rows
-                        .get(context_line)
-                        .and_then(|r| r.old.as_ref())
-                        .is_some(),
-                context_line < self.conflict_resolver.diff_rows.len()
-                    && self
-                        .conflict_resolver
-                        .diff_rows
-                        .get(context_line)
-                        .and_then(|r| r.new.as_ref())
-                        .is_some(),
-                false,
-            )
+            {
+                let row = self
+                    .conflict_resolver
+                    .two_way_split_row_by_source(context_line);
+                (
+                    row.as_ref().and_then(|r| r.old.as_ref()).is_some(),
+                    row.as_ref().and_then(|r| r.new.as_ref()).is_some(),
+                    false,
+                )
+            }
         };
 
         self.open_popover_at(
