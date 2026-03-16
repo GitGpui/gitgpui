@@ -1,7 +1,7 @@
 use super::*;
 
 impl MainPaneView {
-    fn active_conflict_target(
+    pub(in crate::view) fn active_conflict_target(
         &self,
     ) -> Option<(
         std::path::PathBuf,
@@ -61,38 +61,10 @@ impl MainPaneView {
                 }
             }
         } else if let Some((_path, conflict_kind)) = self.active_conflict_target() {
-            let is_conflict_resolver =
-                Self::conflict_resolver_strategy(conflict_kind, false).is_some();
-
-            match (is_conflict_resolver, self.diff_view) {
-                (true, _) => {
-                    let ctx = ConflictResolverSearchContext::from_conflict_resolver(
-                        &self.conflict_resolver,
-                    );
-                    self.diff_search_matches = conflict_resolver_visible_match_indices(query, &ctx);
-                }
-                (false, DiffViewMode::Split) => {
-                    for (ix, row) in self.conflict_resolver.diff_rows().iter().enumerate() {
-                        if row
-                            .old
-                            .as_deref()
-                            .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                            || row
-                                .new
-                                .as_deref()
-                                .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                        {
-                            self.diff_search_matches.push(ix);
-                        }
-                    }
-                }
-                (false, DiffViewMode::Inline) => {
-                    for (ix, row) in self.conflict_resolver.inline_rows().iter().enumerate() {
-                        if contains_ascii_case_insensitive(row.content.as_str(), query) {
-                            self.diff_search_matches.push(ix);
-                        }
-                    }
-                }
+            if conflict_kind.is_some() || self.conflict_resolver.path.is_some() {
+                let ctx =
+                    ConflictResolverSearchContext::from_conflict_resolver(&self.conflict_resolver);
+                self.diff_search_matches = conflict_resolver_visible_match_indices(query, &ctx);
             }
         } else {
             let total = self.diff_visible_len();
@@ -224,7 +196,6 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
 
 #[derive(Clone, Copy)]
 enum ConflictResolverSearchVisibleRows<'a> {
-    Map(&'a [conflict_resolver::ThreeWayVisibleItem]),
     Projection(&'a conflict_resolver::ThreeWayVisibleProjection),
 }
 
@@ -232,22 +203,17 @@ impl<'a> ConflictResolverSearchVisibleRows<'a> {
     fn from_conflict_resolver(
         conflict_resolver: &'a ConflictResolverUiState,
     ) -> ConflictResolverSearchVisibleRows<'a> {
-        match &conflict_resolver.mode_state {
-            ConflictModeState::Eager(s) => Self::Map(&s.three_way_visible_map),
-            ConflictModeState::Streamed(s) => Self::Projection(&s.three_way_visible_projection),
-        }
+        Self::Projection(conflict_resolver.three_way_visible_projection())
     }
 
     fn len(self) -> usize {
         match self {
-            Self::Map(items) => items.len(),
             Self::Projection(projection) => projection.len(),
         }
     }
 
     fn get(self, visible_ix: usize) -> Option<conflict_resolver::ThreeWayVisibleItem> {
         match self {
-            Self::Map(items) => items.get(visible_ix).copied(),
             Self::Projection(projection) => projection.get(visible_ix),
         }
     }
@@ -255,12 +221,6 @@ impl<'a> ConflictResolverSearchVisibleRows<'a> {
 
 #[derive(Clone, Copy)]
 enum ConflictResolverSearchTwoWayRows<'a> {
-    Eager {
-        diff_visible_row_indices: &'a [usize],
-        inline_visible_row_indices: &'a [usize],
-        diff_rows: &'a [gitcomet_core::file_diff::FileDiffRow],
-        inline_rows: &'a [conflict_resolver::ConflictInlineRow],
-    },
     Streamed {
         split_row_index: &'a conflict_resolver::ConflictSplitRowIndex,
         two_way_split_projection: &'a conflict_resolver::TwoWaySplitProjection,
@@ -271,28 +231,28 @@ impl<'a> ConflictResolverSearchTwoWayRows<'a> {
     fn from_conflict_resolver(
         conflict_resolver: &'a ConflictResolverUiState,
     ) -> ConflictResolverSearchTwoWayRows<'a> {
-        match &conflict_resolver.mode_state {
-            ConflictModeState::Eager(s) => Self::Eager {
-                diff_visible_row_indices: &s.diff_visible_row_indices,
-                inline_visible_row_indices: &s.inline_visible_row_indices,
-                diff_rows: &s.diff_rows,
-                inline_rows: &s.inline_rows,
-            },
-            ConflictModeState::Streamed(s) => Self::Streamed {
-                split_row_index: &s.split_row_index,
-                two_way_split_projection: &s.two_way_split_projection,
-            },
+        let split_row_index = conflict_resolver
+            .split_row_index()
+            .expect("streamed conflict resolver must always expose split row index");
+        let two_way_split_projection = conflict_resolver
+            .two_way_split_projection()
+            .expect("streamed conflict resolver must always expose split projection");
+        Self::Streamed {
+            split_row_index,
+            two_way_split_projection,
         }
     }
 }
 
 #[cfg(test)]
 fn empty_conflict_resolver_search_two_way_rows() -> ConflictResolverSearchTwoWayRows<'static> {
-    ConflictResolverSearchTwoWayRows::Eager {
-        diff_visible_row_indices: &[],
-        inline_visible_row_indices: &[],
-        diff_rows: &[],
-        inline_rows: &[],
+    static EMPTY_INDEX: std::sync::LazyLock<conflict_resolver::ConflictSplitRowIndex> =
+        std::sync::LazyLock::new(conflict_resolver::ConflictSplitRowIndex::default);
+    static EMPTY_PROJECTION: std::sync::LazyLock<conflict_resolver::TwoWaySplitProjection> =
+        std::sync::LazyLock::new(conflict_resolver::TwoWaySplitProjection::default);
+    ConflictResolverSearchTwoWayRows::Streamed {
+        split_row_index: &EMPTY_INDEX,
+        two_way_split_projection: &EMPTY_PROJECTION,
     }
 }
 
@@ -312,6 +272,16 @@ struct ConflictResolverSearchContext<'a> {
 
 impl<'a> ConflictResolverSearchContext<'a> {
     fn from_conflict_resolver(conflict_resolver: &'a ConflictResolverUiState) -> Self {
+        let (three_way_base_line_starts, three_way_ours_line_starts, three_way_theirs_line_starts) =
+            if conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay {
+                (
+                    conflict_resolver.three_way_line_starts_ref(ThreeWayColumn::Base),
+                    conflict_resolver.three_way_line_starts_ref(ThreeWayColumn::Ours),
+                    conflict_resolver.three_way_line_starts_ref(ThreeWayColumn::Theirs),
+                )
+            } else {
+                (&[][..], &[][..], &[][..])
+            };
         Self {
             view_mode: conflict_resolver.view_mode,
             diff_mode: conflict_resolver.diff_mode,
@@ -320,11 +290,11 @@ impl<'a> ConflictResolverSearchContext<'a> {
                 conflict_resolver,
             ),
             three_way_base_text: &conflict_resolver.three_way_text.base,
-            three_way_base_line_starts: &conflict_resolver.three_way_line_starts.base,
+            three_way_base_line_starts,
             three_way_ours_text: &conflict_resolver.three_way_text.ours,
-            three_way_ours_line_starts: &conflict_resolver.three_way_line_starts.ours,
+            three_way_ours_line_starts,
             three_way_theirs_text: &conflict_resolver.three_way_text.theirs,
-            three_way_theirs_line_starts: &conflict_resolver.three_way_line_starts.theirs,
+            three_way_theirs_line_starts,
             two_way_rows: ConflictResolverSearchTwoWayRows::from_conflict_resolver(
                 conflict_resolver,
             ),
@@ -349,82 +319,24 @@ fn conflict_resolver_visible_match_indices(
 ) -> Vec<usize> {
     let mut out = Vec::new();
     match ctx.view_mode {
-        ConflictResolverViewMode::ThreeWay => match ctx.three_way_visible {
-            // Streamed mode: iterate spans directly, avoiding per-item O(log n) projection lookup.
-            ConflictResolverSearchVisibleRows::Projection(projection) => {
-                search_three_way_via_spans(projection, ctx, query, &mut out);
-            }
-            // Eager mode: iterate per visible item with O(1) map lookup.
-            ConflictResolverSearchVisibleRows::Map(_) => {
-                for visible_ix in 0..ctx.three_way_visible_len() {
-                    let Some(item) = ctx.three_way_visible_item(visible_ix) else {
-                        continue;
-                    };
-                    if three_way_visible_item_matches_query(item, ctx, query) {
-                        out.push(visible_ix);
-                    }
+        ConflictResolverViewMode::ThreeWay => {
+            let ConflictResolverSearchVisibleRows::Projection(projection) = ctx.three_way_visible;
+            search_three_way_via_spans(projection, ctx, query, &mut out);
+        }
+        ConflictResolverViewMode::TwoWayDiff => {
+            let ConflictResolverSearchTwoWayRows::Streamed {
+                split_row_index,
+                two_way_split_projection,
+            } = ctx.two_way_rows;
+            let matching_rows = split_row_index.search_matching_rows(ctx.marker_segments, |text| {
+                contains_ascii_case_insensitive(text, query)
+            });
+            for source_row in matching_rows {
+                if let Some(vis) = two_way_split_projection.source_to_visible(source_row) {
+                    out.push(vis);
                 }
             }
-        },
-        ConflictResolverViewMode::TwoWayDiff => match ctx.diff_mode {
-            ConflictDiffMode::Split => match ctx.two_way_rows {
-                ConflictResolverSearchTwoWayRows::Streamed {
-                    split_row_index,
-                    two_way_split_projection,
-                } => {
-                    // Giant mode: search source texts directly without FileDiffRow allocation,
-                    // then convert matching source rows to visible indices.
-                    let matching_rows = split_row_index
-                        .search_matching_rows(ctx.marker_segments, |text| {
-                            contains_ascii_case_insensitive(text, query)
-                        });
-                    for source_row in matching_rows {
-                        if let Some(vis) = two_way_split_projection.source_to_visible(source_row) {
-                            out.push(vis);
-                        }
-                    }
-                }
-                ConflictResolverSearchTwoWayRows::Eager {
-                    diff_visible_row_indices,
-                    diff_rows,
-                    ..
-                } => {
-                    for (visible_ix, &row_ix) in diff_visible_row_indices.iter().enumerate() {
-                        let Some(row) = diff_rows.get(row_ix) else {
-                            continue;
-                        };
-                        if row
-                            .old
-                            .as_deref()
-                            .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                            || row
-                                .new
-                                .as_deref()
-                                .is_some_and(|s| contains_ascii_case_insensitive(s, query))
-                        {
-                            out.push(visible_ix);
-                        }
-                    }
-                }
-            },
-            ConflictDiffMode::Inline => {
-                if let ConflictResolverSearchTwoWayRows::Eager {
-                    inline_visible_row_indices,
-                    inline_rows,
-                    ..
-                } = ctx.two_way_rows
-                {
-                    for (visible_ix, &row_ix) in inline_visible_row_indices.iter().enumerate() {
-                        let Some(row) = inline_rows.get(row_ix) else {
-                            continue;
-                        };
-                        if contains_ascii_case_insensitive(row.content.as_str(), query) {
-                            out.push(visible_ix);
-                        }
-                    }
-                }
-            }
-        },
+        }
     }
     out
 }
@@ -584,25 +496,20 @@ mod tests {
         ConflictResolverSearchContext, ConflictResolverSearchTwoWayRows,
         ConflictResolverSearchVisibleRows, conflict_resolver_visible_match_indices,
         contains_ascii_case_insensitive, empty_conflict_resolver_search_two_way_rows,
+        three_way_visible_item_matches_query,
     };
+    use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
         ConflictBlock, ConflictChoice, ConflictDiffMode, ConflictResolverViewMode, ConflictSegment,
-        ConflictSplitRowIndex, ThreeWayVisibleItem, TwoWaySplitProjection,
-        build_three_way_visible_projection,
+        ConflictSplitRowIndex, TwoWaySplitProjection, build_three_way_visible_projection,
     };
     use crate::view::{
-        ConflictModeState, ConflictResolverUiState, EagerConflictState, StreamedConflictState,
-        ThreeWaySides,
+        ConflictModeState, ConflictResolverUiState, StreamedConflictState, ThreeWaySides,
     };
-    use gitcomet_core::domain::DiffLineKind;
-    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
-    use std::sync::Arc;
 
-    /// Helper to build a three-way search context with default view mode (ThreeWay),
-    /// diff mode (Split), and empty two-way rows. Text/line-starts are passed as tuples.
     fn three_way_search_context<'a>(
         marker_segments: &'a [ConflictSegment],
-        visible: ConflictResolverSearchVisibleRows<'a>,
+        visible: &'a conflict_resolver::ThreeWayVisibleProjection,
         base: (&'a str, &'a [usize]),
         ours: (&'a str, &'a [usize]),
         theirs: (&'a str, &'a [usize]),
@@ -611,7 +518,7 @@ mod tests {
             view_mode: ConflictResolverViewMode::ThreeWay,
             diff_mode: ConflictDiffMode::Split,
             marker_segments,
-            three_way_visible: visible,
+            three_way_visible: ConflictResolverSearchVisibleRows::Projection(visible),
             three_way_base_text: base.0,
             three_way_base_line_starts: base.1,
             three_way_ours_text: ours.0,
@@ -643,27 +550,13 @@ mod tests {
     fn conflict_search_three_way_mode_uses_three_way_visible_rows() {
         let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
             base: Some("base".into()),
-            ours: "ours".into(),
-            theirs: "theirs".into(),
+            ours: "needle\n".into(),
+            theirs: "remote\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
         })];
-        let diff_rows = vec![FileDiffRow {
-            kind: FileDiffRowKind::Modify,
-            old_line: Some(1),
-            new_line: Some(1),
-            old: Some("split-only".into()),
-            new: Some("split-only".into()),
-            eof_newline: None,
-        }];
-        let inline_rows = vec![crate::view::conflict_resolver::ConflictInlineRow {
-            side: crate::view::conflict_resolver::ConflictPickSide::Ours,
-            kind: DiffLineKind::Add,
-            old_line: Some(1),
-            new_line: Some(1),
-            content: "inline-only".into(),
-        }];
-        let three_way_visible_map = vec![ThreeWayVisibleItem::Line(0)];
+        let three_way_visible_projection =
+            build_three_way_visible_projection(1, &[0..1], &marker_segments, false);
         let three_way_base_text = "base text\n";
         let three_way_ours_text = "needle\n";
         let three_way_theirs_text = "remote text\n";
@@ -675,19 +568,16 @@ mod tests {
             view_mode: ConflictResolverViewMode::ThreeWay,
             diff_mode: ConflictDiffMode::Split,
             marker_segments: &marker_segments,
-            three_way_visible: ConflictResolverSearchVisibleRows::Map(&three_way_visible_map),
+            three_way_visible: ConflictResolverSearchVisibleRows::Projection(
+                &three_way_visible_projection,
+            ),
             three_way_base_text,
             three_way_base_line_starts: &three_way_base_line_starts,
             three_way_ours_text,
             three_way_ours_line_starts: &three_way_ours_line_starts,
             three_way_theirs_text,
             three_way_theirs_line_starts: &three_way_theirs_line_starts,
-            two_way_rows: ConflictResolverSearchTwoWayRows::Eager {
-                diff_visible_row_indices: &[0],
-                inline_visible_row_indices: &[0],
-                diff_rows: &diff_rows,
-                inline_rows: &inline_rows,
-            },
+            two_way_rows: empty_conflict_resolver_search_two_way_rows(),
         };
 
         assert_eq!(
@@ -699,26 +589,28 @@ mod tests {
             "three-way search should ignore two-way rows",
         );
 
+        let index = ConflictSplitRowIndex::new(&marker_segments, 1);
+        let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
         let two_way_ctx = ConflictResolverSearchContext {
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             diff_mode: ConflictDiffMode::Split,
             marker_segments: &marker_segments,
-            three_way_visible: ConflictResolverSearchVisibleRows::Map(&three_way_visible_map),
+            three_way_visible: ConflictResolverSearchVisibleRows::Projection(
+                &three_way_visible_projection,
+            ),
             three_way_base_text,
             three_way_base_line_starts: &three_way_base_line_starts,
             three_way_ours_text,
             three_way_ours_line_starts: &three_way_ours_line_starts,
             three_way_theirs_text,
             three_way_theirs_line_starts: &three_way_theirs_line_starts,
-            two_way_rows: ConflictResolverSearchTwoWayRows::Eager {
-                diff_visible_row_indices: &[0],
-                inline_visible_row_indices: &[0],
-                diff_rows: &diff_rows,
-                inline_rows: &inline_rows,
+            two_way_rows: ConflictResolverSearchTwoWayRows::Streamed {
+                split_row_index: &index,
+                two_way_split_projection: &projection,
             },
         };
         assert_eq!(
-            conflict_resolver_visible_match_indices("split-only", &two_way_ctx),
+            conflict_resolver_visible_match_indices("needle", &two_way_ctx),
             vec![0]
         );
     }
@@ -732,11 +624,12 @@ mod tests {
             choice: ConflictChoice::Theirs,
             resolved: true,
         })];
-        let three_way_visible_map = vec![ThreeWayVisibleItem::CollapsedBlock(0)];
+        let three_way_visible_projection =
+            build_three_way_visible_projection(1, &[0..1], &marker_segments, true);
 
         let ctx = three_way_search_context(
             &marker_segments,
-            ConflictResolverSearchVisibleRows::Map(&three_way_visible_map),
+            &three_way_visible_projection,
             ("", &[]),
             ("", &[]),
             ("", &[]),
@@ -767,7 +660,7 @@ mod tests {
 
         let ctx = three_way_search_context(
             &marker_segments,
-            ConflictResolverSearchVisibleRows::Projection(&three_way_visible_projection),
+            &three_way_visible_projection,
             ("base\n", &[0]),
             ("needle\n", &[0]),
             ("remote\n", &[0]),
@@ -807,9 +700,6 @@ mod tests {
         let ours_line_starts = vec![0, 7, 18, 30];
         let theirs_line_starts = vec![0, 7, 21, 35];
 
-        // Build both the map and projection for comparison.
-        let three_way_visible_map: Vec<ThreeWayVisibleItem> =
-            (0..three_way_len).map(ThreeWayVisibleItem::Line).collect();
         let projection = build_three_way_visible_projection(
             three_way_len,
             &conflict_ranges,
@@ -817,26 +707,26 @@ mod tests {
             false,
         );
 
-        let map_ctx = three_way_search_context(
+        let projection_ctx = three_way_search_context(
             &marker_segments,
-            ConflictResolverSearchVisibleRows::Map(&three_way_visible_map),
+            &projection,
             (base_text, &base_line_starts),
             (ours_text, &ours_line_starts),
             (theirs_text, &theirs_line_starts),
         );
-        let map_matches = conflict_resolver_visible_match_indices("needle", &map_ctx);
-
-        let proj_ctx = three_way_search_context(
-            &marker_segments,
-            ConflictResolverSearchVisibleRows::Projection(&projection),
-            (base_text, &base_line_starts),
-            (ours_text, &ours_line_starts),
-            (theirs_text, &theirs_line_starts),
-        );
-        let proj_matches = conflict_resolver_visible_match_indices("needle", &proj_ctx);
+        let proj_matches = conflict_resolver_visible_match_indices("needle", &projection_ctx);
+        let manual_matches: Vec<usize> = (0..projection_ctx.three_way_visible_len())
+            .filter(|&visible_ix| {
+                projection_ctx
+                    .three_way_visible_item(visible_ix)
+                    .is_some_and(|item| {
+                        three_way_visible_item_matches_query(item, &projection_ctx, "needle")
+                    })
+            })
+            .collect();
 
         assert_eq!(
-            map_matches, proj_matches,
+            manual_matches, proj_matches,
             "span-based search must produce same results as per-item search"
         );
         assert!(
@@ -923,7 +813,7 @@ mod tests {
 
         let ctx = three_way_search_context(
             &marker_segments,
-            ConflictResolverSearchVisibleRows::Projection(&projection),
+            &projection,
             ("base\n", &[0]),
             ("ours\n", &[0]),
             ("theirs\n", &[0]),
@@ -946,65 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn search_context_from_conflict_resolver_uses_eager_mode_state() {
-        let mut conflict_resolver = ConflictResolverUiState {
-            view_mode: ConflictResolverViewMode::ThreeWay,
-            diff_mode: ConflictDiffMode::Inline,
-            three_way_text: ThreeWaySides {
-                base: "base".into(),
-                ours: "ours".into(),
-                theirs: "theirs".into(),
-            },
-            mode_state: ConflictModeState::Eager(EagerConflictState {
-                three_way_visible_map: vec![ThreeWayVisibleItem::Line(0)],
-                diff_visible_row_indices: vec![2],
-                inline_visible_row_indices: vec![1],
-                diff_rows: vec![FileDiffRow {
-                    kind: FileDiffRowKind::Context,
-                    old_line: Some(1),
-                    new_line: Some(1),
-                    old: Some("old".into()),
-                    new: Some("new".into()),
-                    eof_newline: None,
-                }],
-                inline_rows: vec![crate::view::conflict_resolver::ConflictInlineRow {
-                    side: crate::view::conflict_resolver::ConflictPickSide::Ours,
-                    kind: DiffLineKind::Context,
-                    old_line: Some(1),
-                    new_line: Some(1),
-                    content: "inline".into(),
-                }],
-                ..EagerConflictState::default()
-            }),
-            ..ConflictResolverUiState::default()
-        };
-        conflict_resolver.three_way_line_starts = ThreeWaySides {
-            base: Arc::<[usize]>::from([0]),
-            ours: Arc::<[usize]>::from([0]),
-            theirs: Arc::<[usize]>::from([0]),
-        };
-
-        let ctx = ConflictResolverSearchContext::from_conflict_resolver(&conflict_resolver);
-
-        assert!(matches!(
-            ctx.three_way_visible,
-            ConflictResolverSearchVisibleRows::Map(items) if items.len() == 1
-        ));
-        assert!(matches!(
-            ctx.two_way_rows,
-            ConflictResolverSearchTwoWayRows::Eager {
-                diff_visible_row_indices,
-                inline_visible_row_indices,
-                diff_rows,
-                inline_rows,
-            } if diff_visible_row_indices == [2]
-                && inline_visible_row_indices == [1]
-                && diff_rows.len() == 1
-                && inline_rows.len() == 1
-        ));
-    }
-
-    #[test]
     fn search_context_from_conflict_resolver_uses_streamed_mode_state() {
         let mut conflict_resolver = ConflictResolverUiState {
             view_mode: ConflictResolverViewMode::TwoWayDiff,
@@ -1014,9 +845,9 @@ mod tests {
         };
         conflict_resolver.marker_segments = vec![ConflictSegment::Text("context\n".into())];
         conflict_resolver.three_way_line_starts = ThreeWaySides {
-            base: Arc::<[usize]>::from([]),
-            ours: Arc::<[usize]>::from([0]),
-            theirs: Arc::<[usize]>::from([0]),
+            base: Vec::new().into(),
+            ours: vec![0].into(),
+            theirs: vec![0].into(),
         };
         conflict_resolver.three_way_text = ThreeWaySides {
             base: "".into(),

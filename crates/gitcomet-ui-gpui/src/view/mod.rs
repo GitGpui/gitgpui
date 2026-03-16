@@ -1007,11 +1007,16 @@ impl GitCometView {
             FocusedMergetoolBootstrapAction::SetActiveRepo(repo_id) => {
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
-            FocusedMergetoolBootstrapAction::SelectDiff { repo_id, target } => {
-                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            FocusedMergetoolBootstrapAction::SelectConflictDiff { repo_id, path } => {
+                self.store
+                    .dispatch(Msg::SelectConflictDiff { repo_id, path });
             }
             FocusedMergetoolBootstrapAction::LoadConflictFile { repo_id, path } => {
-                self.store.dispatch(Msg::LoadConflictFile { repo_id, path });
+                self.store.dispatch(Msg::LoadConflictFile {
+                    repo_id,
+                    path,
+                    mode: gitcomet_state::model::ConflictFileLoadMode::CurrentOnly,
+                });
             }
             FocusedMergetoolBootstrapAction::Complete => {
                 self.focused_mergetool_bootstrap = None;

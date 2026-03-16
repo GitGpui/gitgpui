@@ -1,3 +1,4 @@
+use crate::model::ConflictFileLoadMode;
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
@@ -48,6 +49,18 @@ fn conflict_file_stages_from_session(
         base,
         ours,
         theirs,
+    }
+}
+
+fn empty_conflict_file_stages(path: PathBuf) -> ConflictFileStages {
+    ConflictFileStages {
+        path,
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        base: None,
+        ours: None,
+        theirs: None,
     }
 }
 
@@ -423,12 +436,16 @@ pub(super) fn schedule_load_conflict_file(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     path: PathBuf,
+    mode: ConflictFileLoadMode,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let trace_path = path.clone();
+        let load_full = matches!(mode, ConflictFileLoadMode::Full);
 
         let conflict_session_started = Instant::now();
-        let conflict_session = repo.conflict_session(&path).ok().flatten();
+        let conflict_session = load_full
+            .then(|| repo.conflict_session(&path).ok().flatten())
+            .flatten();
         let session_ref = conflict_session.as_ref();
         mergetool_trace::record_with(|| {
             MergetoolTraceEvent::new(
@@ -449,7 +466,9 @@ pub(super) fn schedule_load_conflict_file(
         });
 
         let stages_started = Instant::now();
-        let stages = if let Some(session) = session_ref {
+        let stages = if !load_full {
+            Ok(Some(empty_conflict_file_stages(path.clone())))
+        } else if let Some(session) = session_ref {
             Ok(Some(conflict_file_stages_from_session(
                 path.clone(),
                 session,

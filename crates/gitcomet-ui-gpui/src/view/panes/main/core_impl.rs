@@ -16,10 +16,9 @@ pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_k
     language: rows::DiffSyntaxLanguage,
     document: rows::PreparedDiffSyntaxDocument,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
     theme_epoch.hash(&mut hasher);
     language.hash(&mut hasher);
     document.hash(&mut hasher);
@@ -244,13 +243,14 @@ fn compute_resolved_outline_computation(
 fn compute_resolved_outline_computation_from_projection(
     projection: &conflict_resolver::ResolvedOutputProjection,
     marker_segments: &[conflict_resolver::ConflictSegment],
-    sources: ResolvedOutlineSourceView<'_>,
+    view_mode: ConflictResolverViewMode,
+    sources: Option<ResolvedOutlineSourceView<'_>>,
 ) -> ResolvedOutlineComputation {
     let output_line_count = projection.len();
-    let view_mode = sources.view_mode();
-    let markers = build_resolved_output_conflict_markers_from_ranges(
+    let block_ranges = projection.conflict_line_ranges();
+    let markers = build_resolved_output_conflict_markers_from_block_ranges(
         marker_segments,
-        projection.conflict_line_ranges(),
+        block_ranges,
         output_line_count,
     );
     if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
@@ -264,6 +264,16 @@ fn compute_resolved_outline_computation_from_projection(
         };
     }
 
+    let Some(sources) = sources else {
+        return ResolvedOutlineComputation {
+            output_line_count,
+            outline: ResolvedOutlineData {
+                meta: Vec::new(),
+                markers,
+                sources_index: HashSet::default(),
+            },
+        };
+    };
     let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
         HashMap::default();
     match sources {
@@ -333,7 +343,7 @@ fn compute_resolved_outline_computation_from_projection(
     apply_conflict_choice_provenance_hints_for_ranges(
         &mut meta,
         marker_segments,
-        projection.conflict_line_ranges(),
+        block_ranges,
         view_mode,
     );
 
@@ -486,7 +496,9 @@ fn compute_synced_scroll_offsets<const N: usize>(
 
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = rustc_hash::FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
@@ -674,9 +686,7 @@ impl MainPaneView {
                 let (output_snapshot, edit_delta) = input.update(cx, |input, _| {
                     (input.text_snapshot(), input.take_recent_utf8_edit_delta())
                 });
-                let mut output_hasher = std::collections::hash_map::DefaultHasher::new();
-                output_snapshot.as_ref().hash(&mut output_hasher);
-                let output_hash = output_hasher.finish();
+                let output_hash = hash_text_bytes(output_snapshot.as_ref());
                 let outline_delta = resolved_outline_delta_for_snapshot_transition(
                     &this.conflict_resolved_preview_text,
                     &output_snapshot,
@@ -1026,10 +1036,14 @@ impl MainPaneView {
         path: Option<&std::path::PathBuf>,
     ) {
         let trace_started = Instant::now();
+        let output_line_count = projection.len();
+        let view_mode = self.conflict_resolver.view_mode;
         let computed = compute_resolved_outline_computation_from_projection(
             &projection,
             &self.conflict_resolver.marker_segments,
-            self.resolved_outline_source_view(),
+            view_mode,
+            (!should_skip_resolved_outline_provenance(view_mode, output_line_count))
+                .then(|| self.resolved_outline_source_view()),
         );
         self.sync_conflict_resolved_preview_projection(projection, path);
         self.apply_resolved_outline_computation(path, trace_started, computed);
@@ -1151,14 +1165,9 @@ impl MainPaneView {
         let background_key = if syntax_state.needs_background_prepare {
             self.conflict_resolved_preview_syntax_language
                 .map(|language| {
-                    let source_hash =
-                        self.conflict_resolved_preview_source_hash
-                            .unwrap_or_else(|| {
-                                let mut output_hasher =
-                                    std::collections::hash_map::DefaultHasher::new();
-                                output_snapshot.as_ref().hash(&mut output_hasher);
-                                output_hasher.finish()
-                            });
+                    let source_hash = self
+                        .conflict_resolved_preview_source_hash
+                        .unwrap_or_else(|| hash_text_bytes(output_snapshot.as_ref()));
                     ResolvedOutputSyntaxBackgroundKey {
                         source_hash,
                         language,
@@ -1413,17 +1422,27 @@ impl MainPaneView {
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => ResolvedOutlineSourceView::ThreeWay {
                 base_text: &self.conflict_resolver.three_way_text.base,
-                base_line_starts: &self.conflict_resolver.three_way_line_starts.base,
+                base_line_starts: self
+                    .conflict_resolver
+                    .three_way_line_starts_ref(ThreeWayColumn::Base),
                 ours_text: &self.conflict_resolver.three_way_text.ours,
-                ours_line_starts: &self.conflict_resolver.three_way_line_starts.ours,
+                ours_line_starts: self
+                    .conflict_resolver
+                    .three_way_line_starts_ref(ThreeWayColumn::Ours),
                 theirs_text: &self.conflict_resolver.three_way_text.theirs,
-                theirs_line_starts: &self.conflict_resolver.three_way_line_starts.theirs,
+                theirs_line_starts: self
+                    .conflict_resolver
+                    .three_way_line_starts_ref(ThreeWayColumn::Theirs),
             },
             ConflictResolverViewMode::TwoWayDiff => ResolvedOutlineSourceView::TwoWay {
                 ours_text: &self.conflict_resolver.three_way_text.ours,
-                ours_line_starts: &self.conflict_resolver.three_way_line_starts.ours,
+                ours_line_starts: self
+                    .conflict_resolver
+                    .three_way_line_starts_ref(ThreeWayColumn::Ours),
                 theirs_text: &self.conflict_resolver.three_way_text.theirs,
-                theirs_line_starts: &self.conflict_resolver.three_way_line_starts.theirs,
+                theirs_line_starts: self
+                    .conflict_resolver
+                    .three_way_line_starts_ref(ThreeWayColumn::Theirs),
             },
         }
     }
@@ -1437,17 +1456,27 @@ impl MainPaneView {
         let sources = match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => OwnedResolvedOutlineSourceData::ThreeWay {
                 base_text: self.conflict_resolver.three_way_text.base.clone().into(),
-                base_line_starts: self.conflict_resolver.three_way_line_starts.base.clone(),
+                base_line_starts: self
+                    .conflict_resolver
+                    .three_way_shared_line_starts(ThreeWayColumn::Base),
                 ours_text: self.conflict_resolver.three_way_text.ours.clone().into(),
-                ours_line_starts: self.conflict_resolver.three_way_line_starts.ours.clone(),
+                ours_line_starts: self
+                    .conflict_resolver
+                    .three_way_shared_line_starts(ThreeWayColumn::Ours),
                 theirs_text: self.conflict_resolver.three_way_text.theirs.clone().into(),
-                theirs_line_starts: self.conflict_resolver.three_way_line_starts.theirs.clone(),
+                theirs_line_starts: self
+                    .conflict_resolver
+                    .three_way_shared_line_starts(ThreeWayColumn::Theirs),
             },
             ConflictResolverViewMode::TwoWayDiff => OwnedResolvedOutlineSourceData::TwoWay {
                 ours_text: self.conflict_resolver.three_way_text.ours.clone().into(),
-                ours_line_starts: self.conflict_resolver.three_way_line_starts.ours.clone(),
+                ours_line_starts: self
+                    .conflict_resolver
+                    .three_way_shared_line_starts(ThreeWayColumn::Ours),
                 theirs_text: self.conflict_resolver.three_way_text.theirs.clone().into(),
-                theirs_line_starts: self.conflict_resolver.three_way_line_starts.theirs.clone(),
+                theirs_line_starts: self
+                    .conflict_resolver
+                    .three_way_shared_line_starts(ThreeWayColumn::Theirs),
             },
         };
 
@@ -1701,19 +1730,22 @@ impl MainPaneView {
                     &mut source_lookup,
                     conflict_resolver::ResolvedLineSource::C,
                     &self.conflict_resolver.three_way_text.theirs,
-                    &self.conflict_resolver.three_way_line_starts.theirs,
+                    self.conflict_resolver
+                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
                 );
                 insert_lookup_from_indexed_text(
                     &mut source_lookup,
                     conflict_resolver::ResolvedLineSource::B,
                     &self.conflict_resolver.three_way_text.ours,
-                    &self.conflict_resolver.three_way_line_starts.ours,
+                    self.conflict_resolver
+                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
                 );
                 insert_lookup_from_indexed_text(
                     &mut source_lookup,
                     conflict_resolver::ResolvedLineSource::A,
                     &self.conflict_resolver.three_way_text.base,
-                    &self.conflict_resolver.three_way_line_starts.base,
+                    self.conflict_resolver
+                        .three_way_line_starts_ref(ThreeWayColumn::Base),
                 );
             }
             ConflictResolverViewMode::TwoWayDiff => {
@@ -1721,13 +1753,15 @@ impl MainPaneView {
                     &mut source_lookup,
                     conflict_resolver::ResolvedLineSource::B,
                     &self.conflict_resolver.three_way_text.theirs,
-                    &self.conflict_resolver.three_way_line_starts.theirs,
+                    self.conflict_resolver
+                        .three_way_line_starts_ref(ThreeWayColumn::Theirs),
                 );
                 insert_lookup_from_indexed_text(
                     &mut source_lookup,
                     conflict_resolver::ResolvedLineSource::A,
                     &self.conflict_resolver.three_way_text.ours,
-                    &self.conflict_resolver.three_way_line_starts.ours,
+                    self.conflict_resolver
+                        .three_way_line_starts_ref(ThreeWayColumn::Ours),
                 );
             }
         }
@@ -2477,6 +2511,15 @@ impl MainPaneView {
         // History caches are now managed by HistoryView.
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn apply_state_snapshot_for_tests(
+        &mut self,
+        next: Arc<AppState>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_state_snapshot(next, cx);
+    }
+
     pub(in crate::view) fn cached_path_display(&self, path: &std::path::PathBuf) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
@@ -2601,6 +2644,26 @@ impl MainPaneView {
         } else {
             rows::DiffSyntaxMode::HeuristicOnly
         }
+    }
+
+    pub(in crate::view) fn conflict_row_styling_enabled(&self) -> bool {
+        self.conflict_resolver.three_way_len
+            <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
+    }
+
+    pub(in crate::view) fn conflict_row_syntax_language(&self) -> Option<rows::DiffSyntaxLanguage> {
+        self.conflict_row_styling_enabled()
+            .then_some(self.conflict_resolver.conflict_syntax_language)
+            .flatten()
+    }
+
+    pub(in crate::view) fn conflict_resolved_preview_render_syntax_language(
+        &self,
+    ) -> Option<rows::DiffSyntaxLanguage> {
+        (self.conflict_resolved_preview_line_count
+            <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX)
+            .then_some(self.conflict_resolved_preview_syntax_language)
+            .flatten()
     }
 
     pub(in crate::view) fn worktree_preview_segments_cache_get(

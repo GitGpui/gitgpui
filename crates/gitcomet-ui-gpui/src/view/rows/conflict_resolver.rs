@@ -87,43 +87,87 @@ fn prepared_diff_syntax_line_for_conflict_inline_row(
 }
 
 fn render_conflict_markdown_preview_rows(
-    this: &MainPaneView,
+    this: &mut MainPaneView,
     range: Range<usize>,
     side: ThreeWayColumn,
+    window: &mut Window,
+    cx: &mut gpui::Context<MainPaneView>,
 ) -> Vec<AnyElement> {
     let theme = this.theme;
     let Loadable::Ready(document) = this.conflict_resolver.markdown_preview.document(side) else {
         return Vec::new();
     };
-    super::history::render_markdown_preview_document_rows(theme, document, range, None)
+    let document = Arc::clone(document);
+    let (row_id_prefix, horizontal_scroll_handle) = match side {
+        ThreeWayColumn::Base => (
+            "conflict_markdown_preview_base",
+            this.conflict_resolver_diff_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone(),
+        ),
+        ThreeWayColumn::Ours => (
+            "conflict_markdown_preview_ours",
+            this.conflict_preview_ours_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone(),
+        ),
+        ThreeWayColumn::Theirs => (
+            "conflict_markdown_preview_theirs",
+            this.conflict_preview_theirs_scroll
+                .0
+                .borrow()
+                .base_handle
+                .clone(),
+        ),
+    };
+    this.update_markdown_preview_horizontal_min_width(
+        document.as_ref(),
+        range.clone(),
+        None,
+        window,
+        cx,
+    );
+    super::history::render_markdown_preview_document_rows(
+        theme,
+        document.as_ref(),
+        range,
+        None,
+        this.diff_horizontal_min_width,
+        row_id_prefix,
+        Some(horizontal_scroll_handle),
+    )
 }
 
 impl MainPaneView {
     pub(in super::super) fn render_conflict_markdown_base_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Base)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Base, window, cx)
     }
 
     pub(in super::super) fn render_conflict_markdown_ours_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Ours)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Ours, window, cx)
     }
 
     pub(in super::super) fn render_conflict_markdown_theirs_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs)
+        render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
@@ -161,7 +205,7 @@ impl MainPaneView {
             .collect();
 
         let word_hl_color = Some(theme.colors.warning);
-        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
+        let syntax_lang = this.conflict_row_syntax_language();
         let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
 
         // Pre-build styled text cache entries for all visible lines.
@@ -1100,7 +1144,7 @@ impl MainPaneView {
             return elements;
         }
 
-        let syntax_language = this.conflict_resolved_preview_syntax_language;
+        let syntax_language = this.conflict_resolved_preview_render_syntax_language();
         let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
         let line_starts = &this.conflict_resolved_preview_line_starts;
@@ -1276,62 +1320,35 @@ impl MainPaneView {
         let query = this.diff_search_query_or_empty();
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
-        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
-        // Giant mode already disables prepared syntax at bootstrap, so Auto stays
-        // safe here whether rows come from eager block-local diffs or streamed pages.
+        let syntax_lang = this.conflict_row_syntax_language();
+        // Streamed conflicts may or may not have prepared side documents; Auto
+        // remains the safe fallback when a row is not backed by one.
         let syntax_mode = DiffSyntaxMode::Auto;
-        match this.diff_view {
-            DiffViewMode::Split => range
-                .map(|visible_row_ix| {
-                    let Some((row_ix, row, _conflict_ix)) = this
-                        .conflict_resolver
-                        .two_way_split_visible_row(visible_row_ix)
-                    else {
-                        return div()
-                            .id(("conflict_compare_split_visible_oob", visible_row_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    this.render_conflict_compare_split_row(
-                        visible_row_ix,
-                        row_ix,
-                        row,
-                        syntax_lang,
-                        syntax_mode,
-                        cx,
-                    )
-                })
-                .collect(),
-            DiffViewMode::Inline => range
-                .map(|visible_ix| {
-                    let Some((row_ix, row, _conflict_ix)) = this
-                        .conflict_resolver
-                        .two_way_inline_visible_row(visible_ix)
-                    else {
-                        return div()
-                            .id(("conflict_compare_inline_visible_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    this.render_conflict_compare_inline_row(
-                        visible_ix,
-                        row_ix,
-                        row,
-                        syntax_lang,
-                        syntax_mode,
-                        cx,
-                    )
-                })
-                .collect(),
-        }
+        range
+            .map(|visible_row_ix| {
+                let Some((row_ix, row, _conflict_ix)) = this
+                    .conflict_resolver
+                    .two_way_split_visible_row(visible_row_ix)
+                else {
+                    return div()
+                        .id(("conflict_compare_split_visible_oob", visible_row_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .text_xs()
+                        .text_color(this.theme.colors.text_muted)
+                        .child("")
+                        .into_any_element();
+                };
+                this.render_conflict_compare_split_row(
+                    visible_row_ix,
+                    row_ix,
+                    row,
+                    syntax_lang,
+                    syntax_mode,
+                    cx,
+                )
+            })
+            .collect()
     }
 
     pub(in super::super) fn render_conflict_resolver_diff_rows(
@@ -1345,64 +1362,36 @@ impl MainPaneView {
         let query = this.diff_search_query_or_empty();
         let query = query.as_ref().trim().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str());
-        let syntax_lang = this.conflict_resolver.conflict_syntax_language;
-        // Giant mode already skips prepared syntax, so Auto stays safe for both
-        // eager block-local rows and streamed split pages.
+        let syntax_lang = this.conflict_row_syntax_language();
+        // Streamed conflicts may still fall back to per-line styling, so Auto
+        // remains the safe default for both materialized and streamed rows.
         let syntax_mode = DiffSyntaxMode::Auto;
-        let elements: Vec<AnyElement> = match this.conflict_resolver.diff_mode {
-            ConflictDiffMode::Split => range
-                .map(|visible_row_ix| {
-                    let Some((row_ix, row, conflict_ix)) = this
-                        .conflict_resolver
-                        .two_way_split_visible_row(visible_row_ix)
-                    else {
-                        return div()
-                            .id(("conflict_diff_split_visible_oob", visible_row_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    this.render_conflict_resolver_split_row(
-                        visible_row_ix,
-                        row_ix,
-                        row,
-                        conflict_ix,
-                        syntax_lang,
-                        syntax_mode,
-                        cx,
-                    )
-                })
-                .collect(),
-            ConflictDiffMode::Inline => range
-                .map(|visible_ix| {
-                    let Some((ix, row, conflict_ix)) = this
-                        .conflict_resolver
-                        .two_way_inline_visible_row(visible_ix)
-                    else {
-                        return div()
-                            .id(("conflict_diff_inline_visible_oob", visible_ix))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(this.theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    };
-                    this.render_conflict_resolver_inline_row(
-                        visible_ix,
-                        ix,
-                        row,
-                        conflict_ix,
-                        syntax_lang,
-                        syntax_mode,
-                        cx,
-                    )
-                })
-                .collect(),
-        };
+        let elements: Vec<AnyElement> = range
+            .map(|visible_row_ix| {
+                let Some((row_ix, row, conflict_ix)) = this
+                    .conflict_resolver
+                    .two_way_split_visible_row(visible_row_ix)
+                else {
+                    return div()
+                        .id(("conflict_diff_split_visible_oob", visible_row_ix))
+                        .h(px(20.0))
+                        .px_2()
+                        .text_xs()
+                        .text_color(this.theme.colors.text_muted)
+                        .child("")
+                        .into_any_element();
+                };
+                this.render_conflict_resolver_split_row(
+                    visible_row_ix,
+                    row_ix,
+                    row,
+                    conflict_ix,
+                    syntax_lang,
+                    syntax_mode,
+                    cx,
+                )
+            })
+            .collect();
         perf::record_row_batch(
             ViewPerfRenderLane::ResolverDiff,
             requested_rows,
@@ -1562,8 +1551,17 @@ impl MainPaneView {
         let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
         let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 
-        let word_hl_computed = conflict_resolver::compute_word_highlights_for_row(&row);
-        let word_hl_precomputed = self.conflict_resolver.two_way_split_word_highlight(row_ix);
+        let styling_enabled = self.conflict_row_styling_enabled();
+        let word_hl_computed = if styling_enabled {
+            conflict_resolver::compute_word_highlights_for_row(&row)
+        } else {
+            None
+        };
+        let word_hl_precomputed = if styling_enabled {
+            self.conflict_resolver.two_way_split_word_highlight(row_ix)
+        } else {
+            None
+        };
         let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
@@ -1825,8 +1823,17 @@ impl MainPaneView {
         let ours_document = self.conflict_three_way_prepared_syntax_documents.ours;
         let theirs_document = self.conflict_three_way_prepared_syntax_documents.theirs;
 
-        let word_hl_computed = conflict_resolver::compute_word_highlights_for_row(&row);
-        let word_hl_precomputed = self.conflict_resolver.two_way_split_word_highlight(row_ix);
+        let styling_enabled = self.conflict_row_styling_enabled();
+        let word_hl_computed = if styling_enabled {
+            conflict_resolver::compute_word_highlights_for_row(&row)
+        } else {
+            None
+        };
+        let word_hl_precomputed = if styling_enabled {
+            self.conflict_resolver.two_way_split_word_highlight(row_ix)
+        } else {
+            None
+        };
         let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);

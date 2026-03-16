@@ -21,7 +21,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some((area, target_ix, target_path)) = (|| {
+        let Some((area, target_ix, target_path, is_conflicted)) = (|| {
             let repo = self.active_repo()?;
             let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
             else {
@@ -39,22 +39,32 @@ impl MainPaneView {
 
             let (prev_ix, next_ix) = Self::status_prev_next_indices(entries, path.as_path());
             let target_ix = if direction < 0 { prev_ix } else { next_ix }?;
-            let target_path = entries.get(target_ix)?.path.clone();
+            let entry = entries.get(target_ix)?;
+            let target_path = entry.path.clone();
+            let is_conflicted = area == DiffArea::Unstaged
+                && entry.kind == gitcomet_core::domain::FileStatusKind::Conflicted;
 
-            Some((area, target_ix, target_path))
+            Some((area, target_ix, target_path, is_conflicted))
         })() else {
             return false;
         };
 
         window.focus(&self.diff_panel_focus_handle);
         self.clear_status_multi_selection(repo_id, cx);
-        self.store.dispatch(Msg::SelectDiff {
-            repo_id,
-            target: DiffTarget::WorkingTree {
+        if is_conflicted {
+            self.store.dispatch(Msg::SelectConflictDiff {
+                repo_id,
                 path: target_path,
-                area,
-            },
-        });
+            });
+        } else {
+            self.store.dispatch(Msg::SelectDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: target_path,
+                    area,
+                },
+            });
+        }
         self.scroll_status_list_to_ix(area, target_ix, cx);
 
         true

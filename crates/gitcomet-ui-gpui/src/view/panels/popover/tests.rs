@@ -1830,9 +1830,9 @@ fn status_file_menu_offers_resolve_actions_for_conflicts(cx: &mut gpui::TestAppC
             {
                 matches!(
                     action.as_ref(),
-                    ContextMenuAction::SelectDiff {
+                    ContextMenuAction::SelectConflictDiff {
                         repo_id: rid,
-                        target: DiffTarget::WorkingTree { path: p, area: DiffArea::Unstaged }
+                        path: p
                     } if *rid == repo_id && p.as_path() == path.as_path()
                 )
             }

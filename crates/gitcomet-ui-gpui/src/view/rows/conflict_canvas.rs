@@ -921,10 +921,12 @@ fn paint_gutter_text(
 
         GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            if cache.len() > GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-                cache.clear();
-            }
-            cache.insert(key, shaped.clone());
+            insert_with_partial_cache_eviction(
+                &mut cache,
+                key,
+                shaped.clone(),
+                GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
+            );
         });
 
         shaped
@@ -992,10 +994,12 @@ fn ensure_layout_cached(
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if cache.len() > CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, shaped.clone());
+        insert_with_partial_cache_eviction(
+            &mut cache,
+            key,
+            shaped.clone(),
+            CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES,
+        );
     });
 
     shaped

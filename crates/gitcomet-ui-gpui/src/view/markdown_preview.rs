@@ -1,6 +1,6 @@
 use gpui::SharedString;
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Maximum source size (bytes) for a single markdown preview document.
 pub(super) const MAX_PREVIEW_SOURCE_BYTES: usize = 1_024 * 1_024; // 1 MiB
@@ -25,6 +25,7 @@ pub(super) struct MarkdownPreviewDocument {
 pub(super) struct MarkdownPreviewDiff {
     pub(super) old: MarkdownPreviewDocument,
     pub(super) new: MarkdownPreviewDocument,
+    pub(super) inline: MarkdownPreviewDocument,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,6 +34,7 @@ pub(super) struct MarkdownPreviewRow {
     pub(super) text: SharedString,
     pub(super) inline_spans: Arc<Vec<MarkdownInlineSpan>>,
     pub(super) code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+    pub(super) code_block_horizontal_scroll_hint: bool,
     pub(super) source_line_range: Range<usize>,
     pub(super) change_hint: MarkdownChangeHint,
     pub(super) indent_level: u8,
@@ -40,6 +42,7 @@ pub(super) struct MarkdownPreviewRow {
     pub(super) footnote_label: Option<SharedString>,
     pub(super) alert_kind: Option<MarkdownAlertKind>,
     pub(super) starts_alert: bool,
+    pub(super) measured_width_px: MarkdownPreviewRowWidthCache,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,6 +55,7 @@ pub(super) enum MarkdownPreviewRowKind {
     ThematicBreak,
     TableRow { is_header: bool },
     PlainFallback,
+    Spacer,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -101,6 +105,84 @@ struct MarkdownFootnoteContext {
     label: SharedString,
     emitted_label: bool,
 }
+
+struct MarkdownPreviewRowInput<'a> {
+    kind: MarkdownPreviewRowKind,
+    text: &'a str,
+    inline_spans: &'a [MarkdownInlineSpan],
+    code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+    code_block_horizontal_scroll_hint: bool,
+    source_line_range: Range<usize>,
+    indent_level: u8,
+    blockquote_level: u8,
+}
+
+impl<'a> MarkdownPreviewRowInput<'a> {
+    fn plain(
+        kind: MarkdownPreviewRowKind,
+        text: &'a str,
+        inline_spans: &'a [MarkdownInlineSpan],
+        source_line_range: Range<usize>,
+        indent_level: u8,
+        blockquote_level: u8,
+    ) -> Self {
+        Self {
+            kind,
+            text,
+            inline_spans,
+            code_language: None,
+            code_block_horizontal_scroll_hint: false,
+            source_line_range,
+            indent_level,
+            blockquote_level,
+        }
+    }
+
+    fn code(
+        kind: MarkdownPreviewRowKind,
+        text: &'a str,
+        source_line_range: Range<usize>,
+        code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
+        code_block_horizontal_scroll_hint: bool,
+        indent_level: u8,
+        blockquote_level: u8,
+    ) -> Self {
+        Self {
+            kind,
+            text,
+            inline_spans: &[],
+            code_language,
+            code_block_horizontal_scroll_hint,
+            source_line_range,
+            indent_level,
+            blockquote_level,
+        }
+    }
+}
+
+#[derive(Default)]
+struct MarkdownPreviewRowDecoration {
+    footnote_label: Option<SharedString>,
+    alert_kind: Option<MarkdownAlertKind>,
+    starts_alert: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct MarkdownPreviewRowWidthCache(OnceLock<u32>);
+
+impl MarkdownPreviewRowWidthCache {
+    pub(super) fn get_or_init(&self, compute: impl FnOnce() -> u32) -> u32 {
+        *self.0.get_or_init(compute)
+    }
+}
+
+impl PartialEq for MarkdownPreviewRowWidthCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for MarkdownPreviewRowWidthCache {}
 
 // ── Error messages ──────────────────────────────────────────────────────
 
@@ -175,13 +257,27 @@ pub(super) fn build_markdown_diff_preview(
         new_source.lines().count(),
     );
     annotate_change_hints(&mut old, &mut new, &old_mask, &new_mask);
-    Some(MarkdownPreviewDiff { old, new })
+    align_markdown_diff_rows(
+        &mut old,
+        &mut new,
+        &diff_rows,
+        old_source.lines().count(),
+        new_source.lines().count(),
+    )?;
+    let inline = build_inline_markdown_diff_document(&old, &new);
+    Some(MarkdownPreviewDiff { old, new, inline })
 }
 
 pub(super) fn scrollbar_markers_for_diff_preview(
     preview: &MarkdownPreviewDiff,
 ) -> Vec<crate::view::components::ScrollbarMarker> {
     scrollbar_markers_for_documents(&[&preview.old, &preview.new])
+}
+
+pub(super) fn scrollbar_markers_for_document(
+    document: &MarkdownPreviewDocument,
+) -> Vec<crate::view::components::ScrollbarMarker> {
+    scrollbar_markers_for_documents(&[document])
 }
 
 /// Annotate change hints on a pair of preview documents using diff row data.
@@ -235,6 +331,206 @@ fn build_changed_line_masks(
     }
 
     (old_mask, new_mask)
+}
+
+fn align_markdown_diff_rows(
+    old_doc: &mut MarkdownPreviewDocument,
+    new_doc: &mut MarkdownPreviewDocument,
+    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
+    old_line_count: usize,
+    new_line_count: usize,
+) -> Option<()> {
+    let old_line_to_diff_row = build_line_to_diff_row_map(diff_rows, old_line_count, true);
+    let new_line_to_diff_row = build_line_to_diff_row_map(diff_rows, new_line_count, false);
+
+    let old_rows = std::mem::take(&mut old_doc.rows);
+    let new_rows = std::mem::take(&mut new_doc.rows);
+
+    let (mut old_groups, old_trailing) =
+        markdown_rows_grouped_by_diff_anchor(old_rows, &old_line_to_diff_row, diff_rows.len());
+    let (mut new_groups, new_trailing) =
+        markdown_rows_grouped_by_diff_anchor(new_rows, &new_line_to_diff_row, diff_rows.len());
+
+    let mut old_aligned = Vec::new();
+    let mut new_aligned = Vec::new();
+
+    for diff_ix in 0..diff_rows.len() {
+        let old_group = std::mem::take(&mut old_groups[diff_ix]);
+        let new_group = std::mem::take(&mut new_groups[diff_ix]);
+        push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, old_group, new_group)?;
+    }
+
+    push_aligned_markdown_row_groups(
+        &mut old_aligned,
+        &mut new_aligned,
+        old_trailing,
+        new_trailing,
+    )?;
+
+    old_doc.rows = old_aligned;
+    new_doc.rows = new_aligned;
+    Some(())
+}
+
+fn build_line_to_diff_row_map(
+    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
+    line_count: usize,
+    old_side: bool,
+) -> Vec<Option<usize>> {
+    let mut line_to_diff_row = vec![None; line_count];
+
+    for (diff_ix, row) in diff_rows.iter().enumerate() {
+        let line = if old_side { row.old_line } else { row.new_line };
+        let Some(line) = line else {
+            continue;
+        };
+        let line_ix = line.saturating_sub(1) as usize;
+        if let Some(anchor_ix) = line_to_diff_row.get_mut(line_ix) {
+            *anchor_ix = Some(diff_ix);
+        }
+    }
+
+    line_to_diff_row
+}
+
+fn markdown_rows_grouped_by_diff_anchor(
+    rows: Vec<MarkdownPreviewRow>,
+    line_to_diff_row: &[Option<usize>],
+    diff_row_count: usize,
+) -> (Vec<Vec<MarkdownPreviewRow>>, Vec<MarkdownPreviewRow>) {
+    let mut groups = vec![Vec::new(); diff_row_count];
+    let mut trailing = Vec::new();
+
+    for row in rows {
+        if let Some(anchor_ix) = markdown_row_diff_anchor(&row, line_to_diff_row)
+            && let Some(group) = groups.get_mut(anchor_ix)
+        {
+            group.push(row);
+            continue;
+        }
+        trailing.push(row);
+    }
+
+    (groups, trailing)
+}
+
+fn markdown_row_diff_anchor(
+    row: &MarkdownPreviewRow,
+    line_to_diff_row: &[Option<usize>],
+) -> Option<usize> {
+    if row.source_line_range.is_empty() {
+        return None;
+    }
+
+    let start = row.source_line_range.start.min(line_to_diff_row.len());
+    let end = row.source_line_range.end.min(line_to_diff_row.len());
+    if start >= end {
+        return None;
+    }
+
+    line_to_diff_row[start..end].iter().flatten().copied().min()
+}
+
+fn push_aligned_markdown_row_groups(
+    old_out: &mut Vec<MarkdownPreviewRow>,
+    new_out: &mut Vec<MarkdownPreviewRow>,
+    old_rows: Vec<MarkdownPreviewRow>,
+    new_rows: Vec<MarkdownPreviewRow>,
+) -> Option<()> {
+    let row_count = old_rows.len().max(new_rows.len());
+    let mut old_iter = old_rows.into_iter();
+    let mut new_iter = new_rows.into_iter();
+
+    for _ in 0..row_count {
+        old_out.push(old_iter.next().unwrap_or_else(markdown_preview_spacer_row));
+        new_out.push(new_iter.next().unwrap_or_else(markdown_preview_spacer_row));
+
+        if old_out.len() > MAX_PREVIEW_ROWS || new_out.len() > MAX_PREVIEW_ROWS {
+            return None;
+        }
+    }
+
+    Some(())
+}
+
+fn markdown_preview_spacer_row() -> MarkdownPreviewRow {
+    MarkdownPreviewRow {
+        kind: MarkdownPreviewRowKind::Spacer,
+        text: SharedString::from(""),
+        inline_spans: Arc::new(Vec::new()),
+        code_language: None,
+        code_block_horizontal_scroll_hint: false,
+        source_line_range: 0..0,
+        change_hint: MarkdownChangeHint::None,
+        indent_level: 0,
+        blockquote_level: 0,
+        footnote_label: None,
+        alert_kind: None,
+        starts_alert: false,
+        measured_width_px: MarkdownPreviewRowWidthCache::default(),
+    }
+}
+
+fn build_inline_markdown_diff_document(
+    old_doc: &MarkdownPreviewDocument,
+    new_doc: &MarkdownPreviewDocument,
+) -> MarkdownPreviewDocument {
+    let row_count = old_doc.rows.len().max(new_doc.rows.len());
+    let mut rows = Vec::with_capacity(row_count);
+
+    for row_ix in 0..row_count {
+        let old_row = old_doc.rows.get(row_ix);
+        let new_row = new_doc.rows.get(row_ix);
+
+        match (old_row, new_row) {
+            (Some(old_row), Some(new_row))
+                if markdown_inline_diff_rows_can_merge(old_row, new_row) =>
+            {
+                rows.push(old_row.clone());
+            }
+            (Some(old_row), Some(new_row)) => {
+                if !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer) {
+                    rows.push(old_row.clone());
+                }
+                if !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer) {
+                    rows.push(new_row.clone());
+                }
+            }
+            (Some(old_row), None) => {
+                if !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer) {
+                    rows.push(old_row.clone());
+                }
+            }
+            (None, Some(new_row)) => {
+                if !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer) {
+                    rows.push(new_row.clone());
+                }
+            }
+            (None, None) => {}
+        }
+    }
+
+    MarkdownPreviewDocument { rows }
+}
+
+fn markdown_inline_diff_rows_can_merge(
+    old_row: &MarkdownPreviewRow,
+    new_row: &MarkdownPreviewRow,
+) -> bool {
+    old_row.change_hint == MarkdownChangeHint::None
+        && new_row.change_hint == MarkdownChangeHint::None
+        && !matches!(old_row.kind, MarkdownPreviewRowKind::Spacer)
+        && !matches!(new_row.kind, MarkdownPreviewRowKind::Spacer)
+        && old_row.kind == new_row.kind
+        && old_row.text == new_row.text
+        && old_row.inline_spans == new_row.inline_spans
+        && old_row.code_language == new_row.code_language
+        && old_row.code_block_horizontal_scroll_hint == new_row.code_block_horizontal_scroll_hint
+        && old_row.indent_level == new_row.indent_level
+        && old_row.blockquote_level == new_row.blockquote_level
+        && old_row.footnote_label == new_row.footnote_label
+        && old_row.alert_kind == new_row.alert_kind
+        && old_row.starts_alert == new_row.starts_alert
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────
@@ -406,13 +702,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             Event::End(TagEnd::Heading(level)) => {
                 push_row_with_context(
                     &mut rows,
-                    MarkdownPreviewRowKind::Heading { level: level as u8 },
-                    &text_buf,
-                    &inline_spans,
-                    None,
-                    source_line_range(source_start_byte, event_range.end, line_starts),
-                    indent_level,
-                    in_blockquote,
+                    MarkdownPreviewRowInput::plain(
+                        MarkdownPreviewRowKind::Heading { level: level as u8 },
+                        &text_buf,
+                        &inline_spans,
+                        source_line_range(source_start_byte, event_range.end, line_starts),
+                        indent_level,
+                        in_blockquote,
+                    ),
                     footnote_context.as_mut(),
                     &mut blockquote_stack,
                 )?;
@@ -432,13 +729,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 
                 push_row_with_context(
                     &mut rows,
-                    kind,
-                    &text_buf,
-                    &inline_spans,
-                    None,
-                    source_line_range(source_start_byte, event_range.end, line_starts),
-                    indent_level,
-                    in_blockquote,
+                    MarkdownPreviewRowInput::plain(
+                        kind,
+                        &text_buf,
+                        &inline_spans,
+                        source_line_range(source_start_byte, event_range.end, line_starts),
+                        indent_level,
+                        in_blockquote,
+                    ),
                     footnote_context.as_mut(),
                     &mut blockquote_stack,
                 )?;
@@ -457,13 +755,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         .unwrap_or(MarkdownPreviewRowKind::ListItem { number: None });
                     push_row_with_context(
                         &mut rows,
-                        kind,
-                        &text_buf,
-                        &inline_spans,
-                        None,
-                        source_line_range(source_start_byte, event_range.start, line_starts),
-                        indent_level,
-                        in_blockquote,
+                        MarkdownPreviewRowInput::plain(
+                            kind,
+                            &text_buf,
+                            &inline_spans,
+                            source_line_range(source_start_byte, event_range.start, line_starts),
+                            indent_level,
+                            in_blockquote,
+                        ),
                         footnote_context.as_mut(),
                         &mut blockquote_stack,
                     )?;
@@ -499,13 +798,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         .unwrap_or(MarkdownPreviewRowKind::ListItem { number: None });
                     push_row_with_context(
                         &mut rows,
-                        kind,
-                        &text_buf,
-                        &inline_spans,
-                        None,
-                        source_line_range(source_start_byte, event_range.end, line_starts),
-                        indent_level,
-                        in_blockquote,
+                        MarkdownPreviewRowInput::plain(
+                            kind,
+                            &text_buf,
+                            &inline_spans,
+                            source_line_range(source_start_byte, event_range.end, line_starts),
+                            indent_level,
+                            in_blockquote,
+                        ),
                         footnote_context.as_mut(),
                         &mut blockquote_stack,
                     )?;
@@ -566,21 +866,26 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                 } else {
                     code_text.split('\n').collect()
                 };
+                let code_block_horizontal_scroll_hint = code_lines
+                    .iter()
+                    .any(|line| line.contains('\t') || line.chars().count() > 80);
                 let last_ix = code_lines.len().saturating_sub(1);
                 for (i, line) in code_lines.iter().enumerate() {
                     let line_ix = (content_start_line + i).min(block_end_line);
                     push_row_with_context(
                         &mut rows,
-                        MarkdownPreviewRowKind::CodeLine {
-                            is_first: i == 0,
-                            is_last: i == last_ix,
-                        },
-                        line,
-                        &[],
-                        code_block_language,
-                        line_ix..line_ix + 1,
-                        indent_level,
-                        in_blockquote,
+                        MarkdownPreviewRowInput::code(
+                            MarkdownPreviewRowKind::CodeLine {
+                                is_first: i == 0,
+                                is_last: i == last_ix,
+                            },
+                            line,
+                            line_ix..line_ix + 1,
+                            code_block_language,
+                            code_block_horizontal_scroll_hint,
+                            indent_level,
+                            in_blockquote,
+                        ),
                         footnote_context.as_mut(),
                         &mut blockquote_stack,
                     )?;
@@ -609,15 +914,16 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             Event::End(TagEnd::TableRow) | Event::End(TagEnd::TableHead) => {
                 push_row_with_context(
                     &mut rows,
-                    MarkdownPreviewRowKind::TableRow {
-                        is_header: table_row_is_header,
-                    },
-                    &text_buf,
-                    &inline_spans,
-                    None,
-                    source_line_range(source_start_byte, event_range.end, line_starts),
-                    indent_level,
-                    in_blockquote,
+                    MarkdownPreviewRowInput::plain(
+                        MarkdownPreviewRowKind::TableRow {
+                            is_header: table_row_is_header,
+                        },
+                        &text_buf,
+                        &inline_spans,
+                        source_line_range(source_start_byte, event_range.end, line_starts),
+                        indent_level,
+                        in_blockquote,
+                    ),
                     footnote_context.as_mut(),
                     &mut blockquote_stack,
                 )?;
@@ -694,13 +1000,18 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                     if !text_buf.is_empty() {
                         push_row_with_context(
                             &mut rows,
-                            MarkdownPreviewRowKind::BlockquoteLine,
-                            &text_buf,
-                            &inline_spans,
-                            None,
-                            source_line_range(source_start_byte, event_range.start, line_starts),
-                            indent_level,
-                            in_blockquote,
+                            MarkdownPreviewRowInput::plain(
+                                MarkdownPreviewRowKind::BlockquoteLine,
+                                &text_buf,
+                                &inline_spans,
+                                source_line_range(
+                                    source_start_byte,
+                                    event_range.start,
+                                    line_starts,
+                                ),
+                                indent_level,
+                                in_blockquote,
+                            ),
                             footnote_context.as_mut(),
                             &mut blockquote_stack,
                         )?;
@@ -717,13 +1028,18 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                     if !text_buf.is_empty() {
                         push_row_with_context(
                             &mut rows,
-                            MarkdownPreviewRowKind::BlockquoteLine,
-                            &text_buf,
-                            &inline_spans,
-                            None,
-                            source_line_range(source_start_byte, event_range.start, line_starts),
-                            indent_level,
-                            in_blockquote,
+                            MarkdownPreviewRowInput::plain(
+                                MarkdownPreviewRowKind::BlockquoteLine,
+                                &text_buf,
+                                &inline_spans,
+                                source_line_range(
+                                    source_start_byte,
+                                    event_range.start,
+                                    line_starts,
+                                ),
+                                indent_level,
+                                in_blockquote,
+                            ),
                             footnote_context.as_mut(),
                             &mut blockquote_stack,
                         )?;
@@ -734,13 +1050,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                 } else if !in_code_block && !in_heading && !text_buf.is_empty() {
                     push_row_with_context(
                         &mut rows,
-                        current_row_kind(&list_item_stack, in_blockquote),
-                        &text_buf,
-                        &inline_spans,
-                        None,
-                        source_line_range(source_start_byte, event_range.start, line_starts),
-                        indent_level,
-                        in_blockquote,
+                        MarkdownPreviewRowInput::plain(
+                            current_row_kind(&list_item_stack, in_blockquote),
+                            &text_buf,
+                            &inline_spans,
+                            source_line_range(source_start_byte, event_range.start, line_starts),
+                            indent_level,
+                            in_blockquote,
+                        ),
                         footnote_context.as_mut(),
                         &mut blockquote_stack,
                     )?;
@@ -755,13 +1072,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             Event::Rule => {
                 push_row_with_context(
                     &mut rows,
-                    MarkdownPreviewRowKind::ThematicBreak,
-                    "───",
-                    &[],
-                    None,
-                    source_line_range(event_range.start, event_range.end, line_starts),
-                    indent_level,
-                    in_blockquote,
+                    MarkdownPreviewRowInput::plain(
+                        MarkdownPreviewRowKind::ThematicBreak,
+                        "───",
+                        &[],
+                        source_line_range(event_range.start, event_range.end, line_starts),
+                        indent_level,
+                        in_blockquote,
+                    ),
                     footnote_context.as_mut(),
                     &mut blockquote_stack,
                 )?;
@@ -786,17 +1104,18 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                             if !text_buf.is_empty() {
                                 push_row_with_context(
                                     &mut rows,
-                                    MarkdownPreviewRowKind::BlockquoteLine,
-                                    &text_buf,
-                                    &inline_spans,
-                                    None,
-                                    source_line_range(
-                                        source_start_byte,
-                                        event_range.start,
-                                        line_starts,
+                                    MarkdownPreviewRowInput::plain(
+                                        MarkdownPreviewRowKind::BlockquoteLine,
+                                        &text_buf,
+                                        &inline_spans,
+                                        source_line_range(
+                                            source_start_byte,
+                                            event_range.start,
+                                            line_starts,
+                                        ),
+                                        indent_level,
+                                        in_blockquote,
                                     ),
-                                    indent_level,
-                                    in_blockquote,
                                     footnote_context.as_mut(),
                                     &mut blockquote_stack,
                                 )?;
@@ -809,17 +1128,18 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         if !in_code_block && !in_heading && !text_buf.is_empty() {
                             push_row_with_context(
                                 &mut rows,
-                                current_row_kind(&list_item_stack, in_blockquote),
-                                &text_buf,
-                                &inline_spans,
-                                None,
-                                source_line_range(
-                                    source_start_byte,
-                                    event_range.start,
-                                    line_starts,
+                                MarkdownPreviewRowInput::plain(
+                                    current_row_kind(&list_item_stack, in_blockquote),
+                                    &text_buf,
+                                    &inline_spans,
+                                    source_line_range(
+                                        source_start_byte,
+                                        event_range.start,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
                                 ),
-                                indent_level,
-                                in_blockquote,
                                 footnote_context.as_mut(),
                                 &mut blockquote_stack,
                             )?;
@@ -851,13 +1171,18 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         } else {
                             push_row_with_context(
                                 &mut rows,
-                                current_row_kind(&list_item_stack, in_blockquote),
-                                &text,
-                                &[],
-                                None,
-                                source_line_range(event_range.start, event_range.end, line_starts),
-                                indent_level,
-                                in_blockquote,
+                                MarkdownPreviewRowInput::plain(
+                                    current_row_kind(&list_item_stack, in_blockquote),
+                                    &text,
+                                    &[],
+                                    source_line_range(
+                                        event_range.start,
+                                        event_range.end,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
                                 footnote_context.as_mut(),
                                 &mut blockquote_stack,
                             )?;
@@ -1041,13 +1366,7 @@ fn pop_matching_inline_style(stack: &mut Vec<MarkdownInlineStyle>, style: Markdo
 
 fn push_row_with_context(
     rows: &mut Vec<MarkdownPreviewRow>,
-    kind: MarkdownPreviewRowKind,
-    text: &str,
-    inline_spans: &[MarkdownInlineSpan],
-    code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
-    source_line_range: Range<usize>,
-    indent_level: u8,
-    blockquote_level: u8,
+    row: MarkdownPreviewRowInput<'_>,
     footnote_context: Option<&mut MarkdownFootnoteContext>,
     blockquote_stack: &mut [MarkdownBlockQuoteContext],
 ) -> Option<()> {
@@ -1060,55 +1379,37 @@ fn push_row_with_context(
         }
     });
 
-    let mut alert_kind = None;
-    let mut starts_alert = false;
+    let mut decoration = MarkdownPreviewRowDecoration {
+        footnote_label,
+        ..MarkdownPreviewRowDecoration::default()
+    };
     if let Some(alert_ix) = blockquote_stack
         .iter()
         .rposition(|ctx| ctx.alert_kind.is_some())
     {
         let ctx = &mut blockquote_stack[alert_ix];
-        alert_kind = ctx.alert_kind;
+        decoration.alert_kind = ctx.alert_kind;
         if !ctx.emitted_row {
             ctx.emitted_row = true;
-            starts_alert = true;
+            decoration.starts_alert = true;
         }
     }
 
-    push_row(
-        rows,
-        kind,
-        text,
-        inline_spans,
-        code_language,
-        source_line_range,
-        indent_level,
-        blockquote_level,
-        footnote_label,
-        alert_kind,
-        starts_alert,
-    )
+    push_row(rows, row, decoration)
 }
 
 fn push_row(
     rows: &mut Vec<MarkdownPreviewRow>,
-    kind: MarkdownPreviewRowKind,
-    text: &str,
-    inline_spans: &[MarkdownInlineSpan],
-    code_language: Option<crate::view::rows::DiffSyntaxLanguage>,
-    source_line_range: Range<usize>,
-    indent_level: u8,
-    blockquote_level: u8,
-    footnote_label: Option<SharedString>,
-    alert_kind: Option<MarkdownAlertKind>,
-    starts_alert: bool,
+    row: MarkdownPreviewRowInput<'_>,
+    decoration: MarkdownPreviewRowDecoration,
 ) -> Option<()> {
-    let (row_text, row_spans) = match kind {
+    let (row_text, row_spans) = match row.kind {
         // Paragraph-like rows collapse whitespace, so remap inline spans to
         // the normalized text instead of leaving them pointed at stale bytes.
         MarkdownPreviewRowKind::Paragraph | MarkdownPreviewRowKind::BlockquoteLine => {
-            normalize_whitespace_with_spans(text, inline_spans)
+            normalize_whitespace_with_spans(row.text, row.inline_spans)
         }
-        _ => (text.to_owned(), inline_spans.to_vec()),
+        _ => (row.text.to_owned(), row.inline_spans.to_vec()),
     };
     let spans = if row_spans.len() > MAX_INLINE_SPANS_PER_ROW {
         Arc::new(Vec::new())
@@ -1117,17 +1418,19 @@ fn push_row(
     };
 
     rows.push(MarkdownPreviewRow {
-        kind,
+        kind: row.kind,
         text: SharedString::from(row_text),
         inline_spans: spans,
-        code_language,
-        source_line_range,
+        code_language: row.code_language,
+        code_block_horizontal_scroll_hint: row.code_block_horizontal_scroll_hint,
+        source_line_range: row.source_line_range,
         change_hint: MarkdownChangeHint::None,
-        indent_level,
-        blockquote_level,
-        footnote_label,
-        alert_kind,
-        starts_alert,
+        indent_level: row.indent_level,
+        blockquote_level: row.blockquote_level,
+        footnote_label: decoration.footnote_label,
+        alert_kind: decoration.alert_kind,
+        starts_alert: decoration.starts_alert,
+        measured_width_px: MarkdownPreviewRowWidthCache::default(),
     });
 
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())
@@ -1154,16 +1457,15 @@ fn push_plain_fallback_rows(
         let line_ix = (range.start + ix).min(end_line);
         push_row(
             rows,
-            MarkdownPreviewRowKind::PlainFallback,
-            segment,
-            &[],
-            None,
-            line_ix..line_ix.saturating_add(1),
-            indent_level,
-            blockquote_level,
-            None,
-            None,
-            false,
+            MarkdownPreviewRowInput::plain(
+                MarkdownPreviewRowKind::PlainFallback,
+                segment,
+                &[],
+                line_ix..line_ix.saturating_add(1),
+                indent_level,
+                blockquote_level,
+            ),
+            MarkdownPreviewRowDecoration::default(),
         )?;
     }
 
@@ -1247,10 +1549,14 @@ fn split_markdown_table_cells(
                 .filter_map(|span| {
                     let start = span.byte_range.start.max(range.start);
                     let end = span.byte_range.end.min(range.end);
-                    (start < end).then_some(MarkdownInlineSpan {
-                        byte_range: (start - range.start)..(end - range.start),
-                        style: span.style,
-                    })
+                    if start < end {
+                        Some(MarkdownInlineSpan {
+                            byte_range: (start - range.start)..(end - range.start),
+                            style: span.style,
+                        })
+                    } else {
+                        None
+                    }
                 })
                 .collect();
             MarkdownTableCell {
@@ -1774,6 +2080,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn wide_fenced_code_blocks_set_horizontal_scroll_hints() {
+        let long_line = "scroll_hint_token_".repeat(6);
+        let doc = parse(&format!("```text\n{long_line}\nshort\n```\n"));
+        let code_rows = code_rows(&doc);
+
+        assert_eq!(code_rows.len(), 2);
+        assert!(
+            code_rows
+                .iter()
+                .all(|row| row.code_block_horizontal_scroll_hint)
+        );
+    }
+
     // ── Thematic break ──────────────────────────────────────────────────
 
     #[test]
@@ -1918,6 +2238,43 @@ mod tests {
             &table_rows[1].text.as_ref()[body_links[0].byte_range.clone()],
             "link"
         );
+    }
+
+    #[test]
+    fn table_alignment_handles_inline_spans_in_earlier_cells() {
+        let doc = parse(
+            "| **Header Bold** | B |\n| --- | --- |\n| [link](https://example.com) | plain |\n",
+        );
+        let table_rows: Vec<_> = doc
+            .rows
+            .iter()
+            .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
+            .collect();
+        assert_eq!(table_rows.len(), 2);
+
+        let header_bold = spans_with_style(table_rows[0], MarkdownInlineStyle::Bold);
+        assert_eq!(header_bold.len(), 1);
+        assert_eq!(
+            &table_rows[0].text.as_ref()[header_bold[0].byte_range.clone()],
+            "Header Bold"
+        );
+
+        let body_links = spans_with_style(table_rows[1], MarkdownInlineStyle::Link);
+        assert_eq!(body_links.len(), 1);
+        assert_eq!(
+            &table_rows[1].text.as_ref()[body_links[0].byte_range.clone()],
+            "link"
+        );
+    }
+
+    #[test]
+    fn row_width_cache_does_not_affect_preview_row_equality() {
+        let cached = parse("Paragraph\n").rows.remove(0);
+        let fresh = parse("Paragraph\n").rows.remove(0);
+
+        cached.measured_width_px.get_or_init(|| 123);
+
+        assert_eq!(cached, fresh);
     }
 
     // ── Inline spans ────────────────────────────────────────────────────
@@ -2197,6 +2554,106 @@ mod tests {
         assert_eq!(preview.new.rows.len(), 1);
         assert_eq!(preview.old.rows[0].change_hint, MarkdownChangeHint::Removed);
         assert_eq!(preview.new.rows[0].change_hint, MarkdownChangeHint::Added);
+    }
+
+    #[test]
+    fn diff_preview_inserts_spacer_rows_for_added_markdown_blocks() {
+        let preview = build_markdown_diff_preview("- keep\n", "- keep\n- add me\n").unwrap();
+
+        assert_eq!(preview.old.rows.len(), 2);
+        assert_eq!(preview.new.rows.len(), 2);
+        assert_eq!(preview.old.rows[0].text.as_ref(), "keep");
+        assert_eq!(preview.new.rows[0].text.as_ref(), "keep");
+        assert_eq!(preview.old.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(preview.old.rows[1].change_hint, MarkdownChangeHint::None);
+        assert_eq!(
+            preview.new.rows[1].kind,
+            MarkdownPreviewRowKind::ListItem { number: None }
+        );
+        assert_eq!(preview.new.rows[1].text.as_ref(), "add me");
+        assert_eq!(preview.new.rows[1].change_hint, MarkdownChangeHint::Added);
+    }
+
+    #[test]
+    fn diff_preview_inserts_spacer_rows_for_removed_markdown_blocks() {
+        let preview = build_markdown_diff_preview("keep\n\nremove me\n", "keep\n").unwrap();
+
+        assert_eq!(preview.old.rows.len(), 2);
+        assert_eq!(preview.new.rows.len(), 2);
+        assert_eq!(preview.old.rows[0].text.as_ref(), "keep");
+        assert_eq!(preview.new.rows[0].text.as_ref(), "keep");
+        assert_eq!(preview.old.rows[1].kind, MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(preview.old.rows[1].text.as_ref(), "remove me");
+        assert_eq!(preview.old.rows[1].change_hint, MarkdownChangeHint::Removed);
+        assert_eq!(preview.new.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert_eq!(preview.new.rows[1].change_hint, MarkdownChangeHint::None);
+    }
+
+    #[test]
+    fn diff_preview_builds_inline_document_for_changed_rows() {
+        let preview =
+            build_markdown_diff_preview("keep\n\nremove me\n", "keep\n\nadd me\n").unwrap();
+
+        assert_eq!(preview.inline.rows.len(), 3);
+        assert_eq!(preview.inline.rows[0].text.as_ref(), "keep");
+        assert_eq!(preview.inline.rows[0].change_hint, MarkdownChangeHint::None);
+        assert_eq!(preview.inline.rows[1].text.as_ref(), "remove me");
+        assert_eq!(
+            preview.inline.rows[1].change_hint,
+            MarkdownChangeHint::Removed
+        );
+        assert_eq!(preview.inline.rows[2].text.as_ref(), "add me");
+        assert_eq!(
+            preview.inline.rows[2].change_hint,
+            MarkdownChangeHint::Added
+        );
+    }
+
+    #[test]
+    fn diff_preview_inline_document_merges_unchanged_rows_after_insertions() {
+        let preview = build_markdown_diff_preview("- keep\n", "- add\n- keep\n").unwrap();
+
+        assert_eq!(preview.inline.rows.len(), 2);
+        assert_eq!(preview.inline.rows[0].text.as_ref(), "add");
+        assert_eq!(
+            preview.inline.rows[0].change_hint,
+            MarkdownChangeHint::Added
+        );
+        assert_eq!(preview.inline.rows[1].text.as_ref(), "keep");
+        assert_eq!(preview.inline.rows[1].change_hint, MarkdownChangeHint::None);
+    }
+
+    #[test]
+    fn diff_preview_aligns_added_code_lines_with_spacer_rows() {
+        let preview =
+            build_markdown_diff_preview("```\nkeep\n```\n", "```\nkeep\nadd\n```\n").unwrap();
+
+        assert_eq!(preview.old.rows.len(), 2);
+        assert_eq!(preview.new.rows.len(), 2);
+        assert!(matches!(
+            preview.old.rows[0].kind,
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: true,
+                is_last: true
+            }
+        ));
+        assert!(matches!(
+            preview.new.rows[0].kind,
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: true,
+                is_last: false
+            }
+        ));
+        assert_eq!(preview.old.rows[1].kind, MarkdownPreviewRowKind::Spacer);
+        assert!(matches!(
+            preview.new.rows[1].kind,
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: false,
+                is_last: true
+            }
+        ));
+        assert_eq!(preview.new.rows[1].text.as_ref(), "add");
+        assert_eq!(preview.new.rows[1].change_hint, MarkdownChangeHint::Added);
     }
 
     #[test]

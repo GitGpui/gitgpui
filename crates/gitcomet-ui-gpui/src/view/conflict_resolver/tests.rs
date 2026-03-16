@@ -2773,18 +2773,26 @@ fn three_way_projection_exposes_full_large_unresolved_block() {
 }
 
 #[test]
-fn select_conflict_rendering_mode_stays_eager_for_small_conflicts() {
+fn select_conflict_rendering_mode_streams_non_empty_conflicts() {
     let segments =
         parse_conflict_markers("pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\npost\n");
 
     assert_eq!(
         select_conflict_rendering_mode(&segments, 4),
+        ConflictRenderingMode::StreamedLargeFile
+    );
+}
+
+#[test]
+fn select_conflict_rendering_mode_keeps_empty_inputs_eager() {
+    assert_eq!(
+        select_conflict_rendering_mode(&[], LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 1),
         ConflictRenderingMode::EagerSmallFile
     );
 }
 
 #[test]
-fn select_conflict_rendering_mode_switches_to_streamed_for_large_files_or_blocks() {
+fn select_conflict_rendering_mode_streams_large_files_or_blocks() {
     let small_segments =
         parse_conflict_markers("pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\npost\n");
     assert_eq!(
@@ -3959,7 +3967,7 @@ fn split_row_index_large_block_no_diff_computation() {
 }
 
 #[test]
-fn split_row_index_anchor_alignment_handles_shifted_insertions() {
+fn split_row_index_positional_alignment_handles_shifted_insertions() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
         ours: "header\nbody\ntail\n".into(),
@@ -3977,30 +3985,32 @@ fn split_row_index_anchor_alignment_handles_shifted_insertions() {
     assert_eq!(header.new_line, Some(1));
 
     let inserted = index.row_at(&segments, 1).unwrap();
-    assert_eq!(inserted.old, None);
+    assert_eq!(inserted.old.as_deref(), Some("body"));
     assert_eq!(inserted.new.as_deref(), Some("inserted"));
-    assert_eq!(inserted.old_line, None);
+    assert_eq!(inserted.old_line, Some(2));
     assert_eq!(inserted.new_line, Some(2));
     assert_eq!(
         inserted.kind,
-        gitcomet_core::file_diff::FileDiffRowKind::Add
+        gitcomet_core::file_diff::FileDiffRowKind::Modify
     );
 
     let body = index.row_at(&segments, 2).unwrap();
-    assert_eq!(body.old.as_deref(), Some("body"));
+    assert_eq!(body.old.as_deref(), Some("tail"));
     assert_eq!(body.new.as_deref(), Some("body"));
-    assert_eq!(body.old_line, Some(2));
+    assert_eq!(body.old_line, Some(3));
     assert_eq!(body.new_line, Some(3));
+    assert_eq!(body.kind, gitcomet_core::file_diff::FileDiffRowKind::Modify);
 
     let tail = index.row_at(&segments, 3).unwrap();
-    assert_eq!(tail.old.as_deref(), Some("tail"));
+    assert_eq!(tail.old, None);
     assert_eq!(tail.new.as_deref(), Some("tail"));
-    assert_eq!(tail.old_line, Some(3));
+    assert_eq!(tail.old_line, None);
     assert_eq!(tail.new_line, Some(4));
+    assert_eq!(tail.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
 }
 
 #[test]
-fn split_row_index_anchor_alignment_uses_chunk_signatures_for_repeated_lines() {
+fn split_row_index_positional_alignment_keeps_repeated_lines_reviewable() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
         ours: "repeat\na\nrepeat\na\nrepeat\n".into(),
@@ -4011,29 +4021,57 @@ fn split_row_index_anchor_alignment_uses_chunk_signatures_for_repeated_lines() {
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 6);
 
-    // Gap 0 (before chunk anchor at ours:1/theirs:2) uses local diff
-    // refinement, correctly identifying "x" as an insertion and aligning
-    // "repeat" with its match in theirs rather than positionally pairing it.
-    let row0 = index.row_at(&segments, 0).unwrap();
-    assert_eq!(row0.old, None);
-    assert_eq!(row0.new.as_deref(), Some("x"));
-    assert_eq!(row0.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
-
-    let row1 = index.row_at(&segments, 1).unwrap();
-    assert_eq!(row1.old.as_deref(), Some("repeat"));
-    assert_eq!(row1.new.as_deref(), Some("repeat"));
-    assert_eq!(
-        row1.kind,
-        gitcomet_core::file_diff::FileDiffRowKind::Context
-    );
-
-    let expected_tail = [
-        (2, Some("a"), Some("a"), Some(2), Some(3)),
-        (3, Some("repeat"), Some("repeat"), Some(3), Some(4)),
-        (4, Some("a"), Some("a"), Some(4), Some(5)),
-        (5, Some("repeat"), Some("repeat"), Some(5), Some(6)),
+    let expected_rows = [
+        (
+            0,
+            Some("repeat"),
+            Some("x"),
+            Some(1),
+            Some(1),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify,
+        ),
+        (
+            1,
+            Some("a"),
+            Some("repeat"),
+            Some(2),
+            Some(2),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify,
+        ),
+        (
+            2,
+            Some("repeat"),
+            Some("a"),
+            Some(3),
+            Some(3),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify,
+        ),
+        (
+            3,
+            Some("a"),
+            Some("repeat"),
+            Some(4),
+            Some(4),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify,
+        ),
+        (
+            4,
+            Some("repeat"),
+            Some("a"),
+            Some(5),
+            Some(5),
+            gitcomet_core::file_diff::FileDiffRowKind::Modify,
+        ),
+        (
+            5,
+            None,
+            Some("repeat"),
+            None,
+            Some(6),
+            gitcomet_core::file_diff::FileDiffRowKind::Add,
+        ),
     ];
-    for (row_ix, old, new, old_line, new_line) in expected_tail {
+    for (row_ix, old, new, old_line, new_line, kind) in expected_rows {
         let row = index.row_at(&segments, row_ix).unwrap();
         assert_eq!(
             row.old.as_deref(),
@@ -4053,11 +4091,7 @@ fn split_row_index_anchor_alignment_uses_chunk_signatures_for_repeated_lines() {
             row.new_line, new_line,
             "unexpected new line at row {row_ix}"
         );
-        assert_eq!(
-            row.kind,
-            gitcomet_core::file_diff::FileDiffRowKind::Context,
-            "row {row_ix} should align as context via chunk anchors"
-        );
+        assert_eq!(row.kind, kind, "unexpected row kind at row {row_ix}");
     }
 }
 
@@ -4092,11 +4126,7 @@ fn split_row_index_classifies_modify_vs_context_kinds() {
 }
 
 #[test]
-fn split_row_index_gap_diff_aligns_inserted_block() {
-    // When theirs inserts a block of new lines between matching context,
-    // gap diff refinement should properly identify the insertion and
-    // keep context lines aligned — producing more rows than positional
-    // pairing's max(N, M).
+fn split_row_index_positional_alignment_keeps_inserted_block_reviewable() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
         ours: "alpha\nbeta\ngamma\n".into(),
@@ -4106,10 +4136,6 @@ fn split_row_index_gap_diff_aligns_inserted_block() {
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
-    // With diff refinement the rows should be:
-    //   alpha|alpha (Context), _|new1 (Add), _|new2 (Add), beta|beta (Context), gamma|gamma (Context)
-    // = 5 rows, which is more than positional's max(3, 5) = 5.
-    // (In this case they happen to be equal, but the alignment is different.)
     assert_eq!(index.total_rows(), 5);
 
     let r0 = index.row_at(&segments, 0).unwrap();
@@ -4118,23 +4144,23 @@ fn split_row_index_gap_diff_aligns_inserted_block() {
     assert_eq!(r0.new.as_deref(), Some("alpha"));
 
     let r1 = index.row_at(&segments, 1).unwrap();
-    assert_eq!(r1.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
-    assert_eq!(r1.old, None);
+    assert_eq!(r1.kind, gitcomet_core::file_diff::FileDiffRowKind::Modify);
+    assert_eq!(r1.old.as_deref(), Some("beta"));
     assert_eq!(r1.new.as_deref(), Some("new1"));
 
     let r2 = index.row_at(&segments, 2).unwrap();
-    assert_eq!(r2.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
-    assert_eq!(r2.old, None);
+    assert_eq!(r2.kind, gitcomet_core::file_diff::FileDiffRowKind::Modify);
+    assert_eq!(r2.old.as_deref(), Some("gamma"));
     assert_eq!(r2.new.as_deref(), Some("new2"));
 
     let r3 = index.row_at(&segments, 3).unwrap();
-    assert_eq!(r3.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
-    assert_eq!(r3.old.as_deref(), Some("beta"));
+    assert_eq!(r3.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
+    assert_eq!(r3.old, None);
     assert_eq!(r3.new.as_deref(), Some("beta"));
 
     let r4 = index.row_at(&segments, 4).unwrap();
-    assert_eq!(r4.kind, gitcomet_core::file_diff::FileDiffRowKind::Context);
-    assert_eq!(r4.old.as_deref(), Some("gamma"));
+    assert_eq!(r4.kind, gitcomet_core::file_diff::FileDiffRowKind::Add);
+    assert_eq!(r4.old, None);
     assert_eq!(r4.new.as_deref(), Some("gamma"));
 }
 
@@ -4445,6 +4471,59 @@ fn search_matching_rows_does_not_materialize_split_pages() {
         index.cached_page_count(),
         1,
         "requesting the matched row should materialize exactly one split page"
+    );
+}
+
+#[test]
+fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 4;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("ours_line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("theirs_line_{ix}\n"))
+        .collect();
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours,
+        theirs,
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 0);
+
+    let row_ix = CONFLICT_SPLIT_PAGE_SIZE * 3 + 17;
+    let row = index
+        .row_at(&segments, row_ix)
+        .expect("far row should materialize from sparse checkpoints");
+
+    assert_eq!(row.old_line, Some(u32::try_from(row_ix + 1).unwrap()));
+    assert_eq!(row.new_line, Some(u32::try_from(row_ix + 1).unwrap()));
+    assert_eq!(row.old.as_deref(), Some("ours_line_785"));
+    assert_eq!(row.new.as_deref(), Some("theirs_line_785"));
+}
+
+#[test]
+fn split_row_index_metadata_stays_sparse_for_large_block() {
+    let line_count = CONFLICT_SPLIT_PAGE_SIZE * 16;
+    let ours: String = (0..line_count)
+        .map(|ix| format!("ours_line_{ix}\n"))
+        .collect();
+    let theirs: String = (0..line_count)
+        .map(|ix| format!("theirs_line_{ix}\n"))
+        .collect();
+    let segments = vec![ConflictSegment::Block(ConflictBlock {
+        base: None,
+        ours,
+        theirs,
+        choice: ConflictChoice::Ours,
+        resolved: false,
+    })];
+    let index = ConflictSplitRowIndex::new(&segments, 0);
+
+    assert!(
+        index.metadata_byte_size() < line_count * std::mem::size_of::<usize>() / 4,
+        "split-row metadata should stay sparse instead of storing per-line starts",
     );
 }
 

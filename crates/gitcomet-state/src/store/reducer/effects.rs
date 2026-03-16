@@ -1,5 +1,7 @@
 use super::util::push_diagnostic;
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight};
+use crate::model::{
+    AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
+};
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
@@ -62,9 +64,16 @@ pub(super) fn conflict_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
     {
+        let existing_session = repo_state.conflict_state.conflict_session.as_ref();
         let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
             _ => None,
+        });
+        let session = session.map(|mut session| {
+            if let Some(existing_session) = existing_session {
+                restore_conflict_session_resolutions(existing_session, &mut session);
+            }
+            session
         });
         let value = match result {
             Ok(v) => Loadable::Ready(v),
@@ -77,6 +86,18 @@ pub(super) fn conflict_file_loaded(
         repo_state.set_conflict_session(session);
     }
     Vec::new()
+}
+
+fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut ConflictSession) {
+    if existing.path != next.path {
+        return;
+    }
+
+    for (prev, current) in existing.regions.iter().zip(next.regions.iter_mut()) {
+        if prev.base == current.base && prev.ours == current.ours && prev.theirs == current.theirs {
+            current.resolution = prev.resolution.clone();
+        }
+    }
 }
 
 /// Build a `ConflictSession` from a loaded `ConflictFile` and the current repo status.
@@ -242,15 +263,21 @@ pub(super) fn load_conflict_file(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
+    mode: ConflictFileLoadMode,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     repo_state.set_conflict_file_path(Some(path.clone()));
+    repo_state.set_conflict_file_load_mode(mode);
     repo_state.set_conflict_file(Loadable::Loading);
     repo_state.set_conflict_session(None);
     repo_state.set_conflict_hide_resolved(false);
-    vec![Effect::LoadConflictFile { repo_id, path }]
+    vec![Effect::LoadConflictFile {
+        repo_id,
+        path,
+        mode,
+    }]
 }
 
 pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -453,6 +480,7 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
     }
 
     repo_state.set_conflict_file_path(None);
+    repo_state.set_conflict_file_load_mode(ConflictFileLoadMode::CurrentOnly);
     repo_state.set_conflict_file(Loadable::NotLoaded);
     repo_state.set_conflict_session(None);
     repo_state.set_conflict_hide_resolved(false);
@@ -747,7 +775,15 @@ mod tests {
         assert!(clear_commit_selection(&mut state, repo_id).is_empty());
         assert!(load_stashes(&mut state, repo_id).is_empty());
         assert!(refresh_branches(&mut state, repo_id).is_empty());
-        assert!(load_conflict_file(&mut state, repo_id, path.clone()).is_empty());
+        assert!(
+            load_conflict_file(
+                &mut state,
+                repo_id,
+                path.clone(),
+                ConflictFileLoadMode::CurrentOnly,
+            )
+            .is_empty()
+        );
         assert!(load_reflog(&mut state, repo_id).is_empty());
         assert!(load_file_history(&mut state, repo_id, path.clone(), 25).is_empty());
         assert!(load_blame(&mut state, repo_id, path.clone(), Some("HEAD".to_string())).is_empty());
@@ -1032,11 +1068,20 @@ mod tests {
             repo.set_conflict_hide_resolved(true);
         }
 
-        let effects = load_conflict_file(&mut state, repo_id, conflict_path.clone());
+        let effects = load_conflict_file(
+            &mut state,
+            repo_id,
+            conflict_path.clone(),
+            ConflictFileLoadMode::CurrentOnly,
+        );
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             effects[0],
-            Effect::LoadConflictFile { repo_id: rid, ref path } if rid == repo_id && path == &conflict_path
+            Effect::LoadConflictFile {
+                repo_id: rid,
+                ref path,
+                mode: ConflictFileLoadMode::CurrentOnly
+            } if rid == repo_id && path == &conflict_path
         ));
         {
             let repo = repo_mut(&mut state, repo_id);

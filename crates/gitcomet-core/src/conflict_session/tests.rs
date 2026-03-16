@@ -227,6 +227,11 @@ fn strategy_for_both_deleted_stays_decision_only_when_binary() {
 
 // -- Marker parsing tests --
 
+fn slice_range<'a>(text: &'a str, range: &std::ops::Range<usize>) -> &'a str {
+    text.get(range.clone())
+        .expect("parser produced invalid byte range")
+}
+
 #[test]
 fn parse_regions_two_way_markers() {
     let merged = "before\n<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\nafter\n";
@@ -413,6 +418,125 @@ theirs content
     assert_eq!(regions[0].ours, "ours content\n");
     assert_eq!(regions[0].base.as_deref(), Some("base content\n"));
     assert_eq!(regions[0].theirs, "theirs content\n");
+}
+
+#[test]
+fn parse_conflict_marker_ranges_two_way_markers() {
+    let merged = "before\n<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\nafter\n";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 3);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Conflict(block) => {
+            assert_eq!(
+                &merged[block.marker_start..block.marker_end],
+                "<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\n"
+            );
+            assert_eq!(slice_range(merged, &block.ours), "local 1\n");
+            assert_eq!(block.base, None);
+            assert_eq!(slice_range(merged, &block.theirs), "remote 1\n");
+        }
+        other => panic!("expected conflict segment, got {other:?}"),
+    }
+
+    match &ranges[2] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "after\n");
+        }
+        other => panic!("expected trailing text segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_diff3_markers() {
+    let merged = "\
+<<<<<<< ours
+local line
+||||||| base
+base line
+=======
+remote line
+>>>>>>> theirs
+";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 1);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Conflict(block) => {
+            assert_eq!(
+                &merged[block.marker_start..block.marker_end],
+                "<<<<<<< ours\nlocal line\n||||||| base\nbase line\n=======\nremote line\n>>>>>>> theirs\n"
+            );
+            assert_eq!(slice_range(merged, &block.ours), "local line\n");
+            assert_eq!(
+                block.base.as_ref().map(|range| slice_range(merged, range)),
+                Some("base line\n")
+            );
+            assert_eq!(slice_range(merged, &block.theirs), "remote line\n");
+        }
+        other => panic!("expected conflict segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_preserve_malformed_no_separator_as_text() {
+    let merged = "before\n<<<<<<< ours\nours line 1\nours line 2\n";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 2);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(
+                slice_range(merged, range),
+                "<<<<<<< ours\nours line 1\nours line 2\n"
+            );
+        }
+        other => panic!("expected malformed block to remain text, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_preserve_malformed_diff3_missing_end_as_text() {
+    let merged = "\
+before
+<<<<<<< ours
+ours
+||||||| base
+base
+=======
+theirs
+";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 2);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(
+                slice_range(merged, range),
+                "<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n"
+            );
+        }
+        other => panic!("expected malformed diff3 block to remain text, got {other:?}"),
+    }
 }
 
 #[test]

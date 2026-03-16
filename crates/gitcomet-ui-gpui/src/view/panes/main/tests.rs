@@ -1,29 +1,34 @@
 use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
-    ClearDiffSelectionAction, ResolvedOutputConflictMarker, VersionedCachedDiffStyledText,
-    apply_conflict_choice_provenance_hints, apply_three_way_empty_base_provenance_hints,
-    build_focused_mergetool_save_payload, build_line_starts,
-    build_resolved_output_conflict_markers, build_resolved_output_syntax_state_for_snapshot,
+    ClearDiffSelectionAction, RenderableConflictFile, ResolvedOutputConflictMarker,
+    VersionedCachedDiffStyledText, apply_conflict_choice_provenance_hints,
+    apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
+    build_line_starts, build_resolved_output_conflict_markers,
+    build_resolved_output_conflict_markers_from_block_ranges,
+    build_resolved_output_syntax_state_for_snapshot,
     build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
-    conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
-    dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
-    focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
-    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
-    remap_line_keyed_cache_for_delta, replace_output_lines_in_range,
-    resolved_outline_delta_between_texts, resolved_outline_delta_for_snapshot_transition,
-    resolved_output_conflict_block_ranges_in_text, resolved_output_marker_for_line,
-    resolved_output_markers_for_text, split_target_conflict_block_into_subchunks,
-    versioned_cached_diff_styled_text_is_current,
+    conflict_file_is_binary, conflict_marker_nav_entries_from_markers,
+    conflict_resolver_output_context_line, dirty_byte_range_to_line_range,
+    first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
+    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
+    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta, renderable_conflict_file,
+    replace_output_lines_in_range, resolved_outline_delta_between_texts,
+    resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
+    resolved_output_marker_for_line, resolved_output_markers_for_text,
+    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
 };
 use crate::kit::text_model::TextModel;
 use crate::theme::AppTheme;
-use crate::view::GitCometViewMode;
 use crate::view::conflict_resolver::{
     self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
     ResolvedLineSource, SourceLines,
 };
 use crate::view::rows;
+use crate::view::{ConflictResolverUiState, GitCometViewMode};
+use gitcomet_core::domain::RepoSpec;
+use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
 use rustc_hash::FxHashMap as HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[test]
@@ -60,6 +65,175 @@ fn focused_mergetool_marker_labels() -> gitcomet_core::conflict_output::Conflict
         remote: "REMOTE",
         base: "BASE",
     }
+}
+
+fn repo_with_conflict_file(
+    repo_id: RepoId,
+    target_path: &Path,
+    conflict_file: Loadable<Option<ConflictFile>>,
+) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.conflict_state.conflict_file_path = Some(target_path.to_path_buf());
+    repo.conflict_state.conflict_file = conflict_file;
+    repo
+}
+
+fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {
+    ConflictFile {
+        path: path.to_path_buf(),
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        current_bytes: None,
+        base: Some(Arc::<str>::from("base\n")),
+        ours: Some(Arc::<str>::from("ours\n")),
+        theirs: Some(Arc::<str>::from("theirs\n")),
+        current: Some(Arc::<str>::from(current)),
+    }
+}
+
+fn binary_conflict_file(path: &Path) -> ConflictFile {
+    ConflictFile {
+        path: path.to_path_buf(),
+        base_bytes: Some(Arc::from(&b"base"[..])),
+        ours_bytes: Some(Arc::from(&b"ours"[..])),
+        theirs_bytes: Some(Arc::from(&b"theirs"[..])),
+        current_bytes: None,
+        base: None,
+        ours: None,
+        theirs: None,
+        current: None,
+    }
+}
+
+#[test]
+fn renderable_conflict_file_reuses_cached_loaded_file_while_store_loading_same_target() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let cached_file = text_conflict_file(&target_path, "cached current\n");
+    let repo = repo_with_conflict_file(repo_id, &target_path, Loadable::Loading);
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(target_path.clone()),
+        loaded_file: Some(cached_file),
+        ..ConflictResolverUiState::default()
+    };
+
+    let renderable = renderable_conflict_file(&repo, &conflict_resolver, &target_path);
+
+    assert!(matches!(
+        renderable,
+        RenderableConflictFile::File(file)
+            if file.current.as_deref() == Some("cached current\n")
+    ));
+}
+
+#[test]
+fn renderable_conflict_file_does_not_reuse_cached_file_for_different_path() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let repo = repo_with_conflict_file(repo_id, &target_path, Loadable::Loading);
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(PathBuf::from("other.html")),
+        loaded_file: Some(text_conflict_file(
+            Path::new("other.html"),
+            "cached current\n",
+        )),
+        ..ConflictResolverUiState::default()
+    };
+
+    assert_eq!(
+        renderable_conflict_file(&repo, &conflict_resolver, &target_path),
+        RenderableConflictFile::Loading
+    );
+}
+
+#[test]
+fn renderable_conflict_file_prefers_store_ready_file_over_cached_file() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let store_file = text_conflict_file(&target_path, "store current\n");
+    let repo = repo_with_conflict_file(repo_id, &target_path, Loadable::Ready(Some(store_file)));
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(target_path.clone()),
+        loaded_file: Some(text_conflict_file(&target_path, "cached current\n")),
+        ..ConflictResolverUiState::default()
+    };
+
+    let renderable = renderable_conflict_file(&repo, &conflict_resolver, &target_path);
+
+    assert!(matches!(
+        renderable,
+        RenderableConflictFile::File(file)
+            if file.current.as_deref() == Some("store current\n")
+    ));
+}
+
+#[test]
+fn renderable_conflict_file_preserves_store_error_over_cached_file() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let repo = repo_with_conflict_file(
+        repo_id,
+        &target_path,
+        Loadable::Error("load failed".to_string()),
+    );
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(target_path.clone()),
+        loaded_file: Some(text_conflict_file(&target_path, "cached current\n")),
+        ..ConflictResolverUiState::default()
+    };
+
+    assert_eq!(
+        renderable_conflict_file(&repo, &conflict_resolver, &target_path),
+        RenderableConflictFile::Error("load failed".into())
+    );
+}
+
+#[test]
+fn renderable_conflict_file_preserves_missing_store_result_over_cached_file() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let repo = repo_with_conflict_file(repo_id, &target_path, Loadable::Ready(None));
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(target_path.clone()),
+        loaded_file: Some(text_conflict_file(&target_path, "cached current\n")),
+        ..ConflictResolverUiState::default()
+    };
+
+    assert_eq!(
+        renderable_conflict_file(&repo, &conflict_resolver, &target_path),
+        RenderableConflictFile::Missing
+    );
+}
+
+#[test]
+fn binary_conflict_detection_uses_cached_loaded_file_during_loading() {
+    let repo_id = RepoId(7);
+    let target_path = PathBuf::from("index.html");
+    let repo = repo_with_conflict_file(repo_id, &target_path, Loadable::Loading);
+    let conflict_resolver = ConflictResolverUiState {
+        repo_id: Some(repo_id),
+        path: Some(target_path.clone()),
+        loaded_file: Some(binary_conflict_file(&target_path)),
+        ..ConflictResolverUiState::default()
+    };
+
+    let renderable = renderable_conflict_file(&repo, &conflict_resolver, &target_path);
+
+    assert!(matches!(
+        renderable,
+        RenderableConflictFile::File(file) if conflict_file_is_binary(&file)
+    ));
 }
 
 #[test]
@@ -796,6 +970,7 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     conflict_resolver::populate_block_bases_from_ancestor(&mut segments, base_text);
     let mut region_indices = conflict_resolver::sequential_conflict_region_indices(&segments);
     let output_before = conflict_resolver::generate_resolved_text(&segments);
+    let projection_before = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
 
     let before_markers = resolved_output_markers_for_text(&segments, &output_before);
     let before_starts = before_markers
@@ -806,6 +981,20 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     assert_eq!(
         before_starts, 2,
         "fixture should begin with two close markers"
+    );
+    let streamed_markers_before = build_resolved_output_conflict_markers_from_block_ranges(
+        &segments,
+        projection_before.conflict_line_ranges(),
+        projection_before.len(),
+    );
+    let streamed_starts_before = streamed_markers_before
+        .iter()
+        .flatten()
+        .filter(|m| m.conflict_ix == 0 && m.is_start)
+        .count();
+    assert_eq!(
+        streamed_starts_before, 1,
+        "streamed bootstrap should keep one coarse marker start per unsplit block"
     );
 
     assert!(
@@ -819,6 +1008,21 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     assert_eq!(
         output_after, output_before,
         "split should preserve output text"
+    );
+    let projection_after = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
+    let streamed_markers_after = build_resolved_output_conflict_markers_from_block_ranges(
+        &segments,
+        projection_after.conflict_line_ranges(),
+        projection_after.len(),
+    );
+    let streamed_starts_after = streamed_markers_after
+        .iter()
+        .flatten()
+        .filter(|m| m.is_start)
+        .count();
+    assert_eq!(
+        streamed_starts_after, 2,
+        "lazy split should expose one coarse marker start per resulting subchunk block"
     );
 
     let after_markers = resolved_output_markers_for_text(&segments, &output_after);

@@ -279,7 +279,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
                 } else {
                     worktree.path.display().to_string().into()
                 };
-                let tooltip: SharedString = worktree.path.display().to_string().into();
+                let tooltip = label.clone();
                 rows.push(BranchSidebarRow::WorktreeItem {
                     path: worktree.path.clone(),
                     label,

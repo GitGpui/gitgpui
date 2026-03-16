@@ -240,6 +240,7 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
         Effect::LoadConflictFile {
             repo_id,
             path: rel.clone(),
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         },
     );
 
@@ -263,8 +264,8 @@ fn load_conflict_file_effect_reads_worktree_and_emits_loaded() {
             assert_eq!(file.theirs_bytes, None);
             assert_eq!(file.current_bytes, None);
             assert_eq!(file.base, None);
-            assert_eq!(file.ours.as_deref(), Some("ours\n"));
-            assert_eq!(file.theirs.as_deref(), Some("theirs\n"));
+            assert_eq!(file.ours, None);
+            assert_eq!(file.theirs, None);
             assert_eq!(file.current.as_deref(), Some(current));
             return;
         };
@@ -433,6 +434,7 @@ fn load_conflict_file_effect_reuses_conflict_session_payloads_without_stage_fetc
         Effect::LoadConflictFile {
             repo_id,
             path: rel.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
 
@@ -649,6 +651,7 @@ fn load_conflict_file_effect_preserves_binary_payloads_when_reusing_session() {
         Effect::LoadConflictFile {
             repo_id,
             path: rel.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
 
@@ -873,6 +876,7 @@ fn load_conflict_file_effect_reuses_absent_current_payload_without_rereading_wor
         Effect::LoadConflictFile {
             repo_id,
             path: rel.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
 
@@ -1123,6 +1127,7 @@ fn load_conflict_file_effect_records_trace_stages_and_sizes() {
         Effect::LoadConflictFile {
             repo_id,
             path: rel.clone(),
+            mode: crate::model::ConflictFileLoadMode::Full,
         },
     );
 
@@ -3102,6 +3107,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::LoadConflictFile {
                 repo_id,
                 path: PathBuf::from("conflicted.txt"),
+                mode: crate::model::ConflictFileLoadMode::CurrentOnly,
             },
             1,
         ),

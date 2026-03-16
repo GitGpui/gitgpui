@@ -241,21 +241,32 @@ pub(super) fn count_newlines(text: &str) -> usize {
 }
 
 pub(super) fn build_line_starts(text: &str) -> Vec<usize> {
-    let mut line_starts = Vec::with_capacity(count_newlines(text).saturating_add(1));
+    build_line_starts_with_count(text).0
+}
+
+pub(super) fn build_line_starts_with_count(text: &str) -> (Vec<usize>, usize) {
+    let mut line_starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
     line_starts.push(0usize);
     for (ix, byte) in text.as_bytes().iter().enumerate() {
         if *byte == b'\n' {
             line_starts.push(ix.saturating_add(1));
         }
     }
-    line_starts
+    let line_count = if text.is_empty() {
+        0
+    } else {
+        line_starts.len()
+    };
+    (line_starts, line_count)
 }
 
 pub(super) fn hash_text_bytes(text: &str) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    std::hash::Hasher::write_usize(&mut hasher, text.len());
-    std::hash::Hasher::write(&mut hasher, text.as_bytes());
-    std::hash::Hasher::finish(&mut hasher)
+    use std::hash::Hasher;
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_usize(text.len());
+    hasher.write(text.as_bytes());
+    hasher.finish()
 }
 
 pub(super) fn preview_source_text_from_lines(lines: &[String], source_len: usize) -> SharedString {
@@ -866,6 +877,36 @@ pub(super) fn build_resolved_output_conflict_markers_from_ranges(
             conflict_ix,
             !block.resolved,
             marker_ranges.as_slice(),
+        );
+    }
+
+    markers
+}
+
+pub(super) fn build_resolved_output_conflict_markers_from_block_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    block_ranges: &[Range<usize>],
+    output_line_count: usize,
+) -> Vec<Option<ResolvedOutputConflictMarker>> {
+    let mut markers = vec![None; output_line_count];
+    if output_line_count == 0 {
+        return markers;
+    }
+
+    for (conflict_ix, (block, range)) in marker_segments
+        .iter()
+        .filter_map(|seg| match seg {
+            conflict_resolver::ConflictSegment::Block(block) => Some(block),
+            _ => None,
+        })
+        .zip(block_ranges.iter().cloned())
+        .enumerate()
+    {
+        write_conflict_markers_for_ranges(
+            &mut markers,
+            conflict_ix,
+            !block.resolved,
+            std::slice::from_ref(&range),
         );
     }
 
@@ -2247,16 +2288,18 @@ mod tests {
     #[test]
     fn indexed_line_count_matches_nonempty_line_starts() {
         let text = "alpha\nbeta";
-        let line_starts = build_line_starts(text);
+        let (line_starts, line_count) = build_line_starts_with_count(text);
 
+        assert_eq!(line_count, 2);
         assert_eq!(indexed_line_count(text, &line_starts), 2);
     }
 
     #[test]
     fn indexed_line_count_preserves_trailing_empty_row() {
         let text = "alpha\nbeta\n";
-        let line_starts = build_line_starts(text);
+        let (line_starts, line_count) = build_line_starts_with_count(text);
 
+        assert_eq!(line_count, 3);
         assert_eq!(line_starts, vec![0, 6, 11]);
         assert_eq!(indexed_line_count(text, &line_starts), 3);
     }

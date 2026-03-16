@@ -126,6 +126,13 @@ pub struct ConflictFile {
     pub current: Option<Arc<str>>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ConflictFileLoadMode {
+    #[default]
+    CurrentOnly,
+    Full,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub repos: Vec<RepoState>,
@@ -284,6 +291,7 @@ impl Default for DiffState {
 #[derive(Clone, Debug)]
 pub struct ConflictState {
     pub conflict_file_path: Option<PathBuf>,
+    pub conflict_file_load_mode: ConflictFileLoadMode,
     pub conflict_file: Loadable<Option<ConflictFile>>,
     pub conflict_session: Option<ConflictSession>,
     pub conflict_hide_resolved: bool,
@@ -294,6 +302,7 @@ impl Default for ConflictState {
     fn default() -> Self {
         Self {
             conflict_file_path: None,
+            conflict_file_load_mode: ConflictFileLoadMode::CurrentOnly,
             conflict_file: Loadable::NotLoaded,
             conflict_session: None,
             conflict_hide_resolved: false,
@@ -570,6 +579,14 @@ impl RepoState {
 
     pub(crate) fn set_conflict_file_path(&mut self, v: Option<PathBuf>) {
         self.conflict_state.conflict_file_path = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_conflict_file_load_mode(&mut self, v: ConflictFileLoadMode) {
+        if self.conflict_state.conflict_file_load_mode == v {
+            return;
+        }
+        self.conflict_state.conflict_file_load_mode = v;
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
@@ -859,6 +876,21 @@ mod tests {
         repo.set_conflict_file_path(Some(PathBuf::from("a.rs")));
         repo.set_conflict_file(Loadable::Loading);
         assert_eq!(repo.conflict_state.conflict_rev, before + 2);
+    }
+
+    #[test]
+    fn set_conflict_file_load_mode_bumps_conflict_rev_only_on_change() {
+        let mut repo = new_repo();
+        let before = repo.conflict_state.conflict_rev;
+        repo.set_conflict_file_load_mode(ConflictFileLoadMode::Full);
+        assert_eq!(
+            repo.conflict_state.conflict_file_load_mode,
+            ConflictFileLoadMode::Full
+        );
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
+
+        repo.set_conflict_file_load_mode(ConflictFileLoadMode::Full);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
     }
 
     #[test]

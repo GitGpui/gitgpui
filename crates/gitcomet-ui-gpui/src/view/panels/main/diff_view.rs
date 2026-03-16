@@ -98,21 +98,19 @@ impl MainPaneView {
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
-        // Detect binary from loaded conflict file bytes (has bytes but no text).
-        let is_binary_conflict = repo
-            .and_then(|r| match &r.conflict_state.conflict_file {
-                Loadable::Ready(Some(file)) => {
-                    let has_non_text =
-                        |bytes: &Option<std::sync::Arc<[u8]>>,
-                         text: &Option<std::sync::Arc<str>>| {
-                            bytes.is_some() && text.is_none()
-                        };
-                    Some(
-                        has_non_text(&file.base_bytes, &file.base)
-                            || has_non_text(&file.ours_bytes, &file.ours)
-                            || has_non_text(&file.theirs_bytes, &file.theirs),
-                    )
-                }
+        let conflict_file_state = match (repo, conflict_target_path.as_deref()) {
+            (Some(repo), Some(path)) => Some(renderable_conflict_file(
+                repo,
+                &self.conflict_resolver,
+                path,
+            )),
+            _ => None,
+        };
+        // Detect binary from the renderable conflict file, including the
+        // same-target cached snapshot we keep during transient reloads.
+        let is_binary_conflict = conflict_file_state
+            .and_then(|state| match state {
+                RenderableConflictFile::File(file) => Some(conflict_file_is_binary(&file)),
                 _ => None,
             })
             .unwrap_or(false);
@@ -318,7 +316,7 @@ impl MainPaneView {
         } else if !is_file_preview {
             controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
-            if !is_image_diff_view && !is_markdown_preview_view {
+            if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
                 let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
                 let can_nav_prev =
@@ -682,6 +680,7 @@ impl MainPaneView {
                                         .relative()
                                         .h_full()
                                         .min_h(px(0.0))
+                                        .bg(theme.colors.window_bg)
                                         .child(list)
                                         .child(
                                             components::Scrollbar::new(
@@ -717,6 +716,7 @@ impl MainPaneView {
                         });
                         div()
                             .id("worktree_preview_error_scroll")
+                            .bg(theme.colors.window_bg)
                             .flex()
                             .flex_col()
                             .flex_1()
@@ -749,6 +749,7 @@ impl MainPaneView {
                                 .relative()
                                 .h_full()
                                 .min_h(px(0.0))
+                                .bg(theme.colors.window_bg)
                                 .child(list)
                                 .child(
                                     components::Scrollbar::new(
@@ -783,80 +784,67 @@ impl MainPaneView {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
                     if let Some(repo_id) = repo_id {
-                        match &repo.conflict_state.conflict_file {
-                            Loadable::NotLoaded | Loadable::Loading => {
+                        match renderable_conflict_file(repo, &self.conflict_resolver, &path) {
+                            RenderableConflictFile::Loading => {
                                 components::empty_state(theme, title, "Loading conflict data…")
                                     .into_any_element()
                             }
-                            Loadable::Error(e) => {
-                                components::empty_state(theme, title, e.clone()).into_any_element()
+                            RenderableConflictFile::Error(error) => {
+                                components::empty_state(theme, title, error).into_any_element()
                             }
-                            Loadable::Ready(None) => {
+                            RenderableConflictFile::Missing => {
                                 components::empty_state(theme, title, "No conflict data.")
                                     .into_any_element()
                             }
-                            Loadable::Ready(Some(file))
-                                if self.conflict_resolver.is_binary_conflict =>
+                            RenderableConflictFile::File(file)
+                                if self.conflict_resolver.is_binary_conflict
+                                    || conflict_file_is_binary(&file) =>
                             {
                                 // Binary/non-UTF8 side-pick resolver panel.
-                                let file_clone = file.clone();
                                 self.render_binary_conflict_resolver(
                                     theme,
                                     repo_id,
                                     path,
-                                    &file_clone,
+                                    &file,
                                     cx,
                                 )
                             }
-                            Loadable::Ready(Some(file))
+                            RenderableConflictFile::File(file)
                                 if matches!(
                                     self.conflict_resolver.strategy,
                                     Some(gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete)
                                 ) =>
                             {
                                 // Keep/delete resolver for modify/delete conflicts.
-                                let file_clone = file.clone();
                                 let kind = self.conflict_resolver.conflict_kind.unwrap_or(
                                     gitcomet_core::domain::FileConflictKind::DeletedByUs,
                                 );
                                 self.render_keep_delete_conflict_resolver(
-                                    theme, repo_id, path, &file_clone, kind, cx,
+                                    theme, repo_id, path, &file, kind, cx,
                                 )
                             }
-                            Loadable::Ready(Some(file))
+                            RenderableConflictFile::File(file)
                                 if matches!(
                                     self.conflict_resolver.strategy,
                                     Some(gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly)
                                 ) =>
                             {
                                 // Decision-only resolver for BothDeleted conflicts.
-                                let file_clone = file.clone();
-                                self.render_decision_conflict_resolver(
-                                    theme, repo_id, path, &file_clone, cx,
-                                )
+                                self.render_decision_conflict_resolver(theme, repo_id, path, &file, cx)
                             }
-                            Loadable::Ready(Some(file)) => {
+                            RenderableConflictFile::File(file) => {
                             let base = file.base.clone().unwrap_or_default();
                             let local = file.ours.clone().unwrap_or_default();
                             let remote = file.theirs.clone().unwrap_or_default();
                             let has_current = file.current.is_some();
 
                             let view_mode = self.conflict_resolver.view_mode;
-                            let mode = self.conflict_resolver.diff_mode;
-
                             let toggle_mode_split =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
                                  _w: &mut Window,
                                  cx: &mut gpui::Context<Self>| {
                                     this.conflict_resolver_set_mode(ConflictDiffMode::Split, cx);
-                                };
-                            let toggle_mode_inline =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
                                 };
 
                             let set_view_three_way =
@@ -990,14 +978,9 @@ impl MainPaneView {
                                 ConflictResolverViewMode::ThreeWay => {
                                     self.conflict_resolver.three_way_visible_len()
                                 }
-                                ConflictResolverViewMode::TwoWayDiff => match mode {
-                                    ConflictDiffMode::Split => {
-                                        self.conflict_resolver.two_way_split_visible_len()
-                                    }
-                                    ConflictDiffMode::Inline => {
-                                        self.conflict_resolver.two_way_inline_visible_len()
-                                    }
-                                },
+                                ConflictResolverViewMode::TwoWayDiff => {
+                                    self.conflict_resolver.two_way_split_visible_len()
+                                }
                             };
 
                             let mode_controls = div()
@@ -1015,18 +998,9 @@ impl MainPaneView {
                                     components::Button::new("conflict_mode_split", "Split")
                                         .borderless()
                                         .style(components::ButtonStyle::Subtle)
-                                        .selected(mode == ConflictDiffMode::Split)
+                                        .selected(true)
                                         .selected_bg(view_toggle_selected_bg)
                                         .on_click(theme, cx, toggle_mode_split),
-                                )
-                                .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
-                                .child(
-                                    components::Button::new("conflict_mode_inline", "Inline")
-                                        .borderless()
-                                        .style(components::ButtonStyle::Subtle)
-                                        .selected(mode == ConflictDiffMode::Inline)
-                                        .selected_bg(view_toggle_selected_bg)
-                                        .on_click(theme, cx, toggle_mode_inline),
                                 );
 
                             let conflict_count = self.conflict_resolver_conflict_count();
@@ -1205,6 +1179,9 @@ impl MainPaneView {
                                         .on_click(theme, cx, |this, _e, _w, cx| {
                                             this.conflict_resolver.resolver_preview_mode =
                                                 ConflictResolverPreviewMode::Preview;
+                                            let _ = this.request_conflict_file_load_mode(
+                                                gitcomet_state::model::ConflictFileLoadMode::Full,
+                                            );
                                             cx.notify();
                                         }),
                                     )
@@ -1451,129 +1428,121 @@ impl MainPaneView {
                                     )
                                 })
                                 .when(view_mode == ConflictResolverViewMode::TwoWayDiff, |d| {
-                                    d.when(mode == ConflictDiffMode::Split, |d| {
-                                        let [left_w, right_w] = self.conflict_diff_split_col_widths;
-                                        d.child(
-                                            div()
-                                                .w(left_w)
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_xs()
-                                                .text_color(theme.colors.text_muted)
-                                                .whitespace_nowrap()
-                                                .child(div().w(px(38.0)).flex_shrink_0())
-                                                .child("Local (index :2)"),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("conflict_diff_split_resize_handle")
-                                                .w(handle_w)
-                                                .h_full()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .cursor(CursorStyle::ResizeLeftRight)
-                                                .hover(move |s| {
-                                                    s.bg(with_alpha(theme.colors.hover, 0.65))
-                                                })
-                                                .active(move |s| s.bg(theme.colors.active))
-                                                .child(
-                                                    div()
-                                                        .w(px(1.0))
-                                                        .h_full()
-                                                        .bg(theme.colors.border),
-                                                )
-                                                .on_drag(
-                                                    ConflictDiffSplitResizeHandle::Divider,
-                                                    |_, _, _, cx| {
-                                                        cx.new(|_| {
-                                                            ConflictDiffSplitResizeDragGhost
-                                                        })
-                                                    },
-                                                )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(
-                                                        |this, e: &MouseDownEvent, _w, cx| {
-                                                            cx.stop_propagation();
-                                                            this.conflict_diff_split_resize = Some(
-                                                                ConflictDiffSplitResizeState {
-                                                                    start_x: e.position.x,
-                                                                    start_ratio: this
-                                                                        .conflict_diff_split_ratio,
-                                                                },
-                                                            );
-                                                            cx.notify();
+                                    let [left_w, right_w] = self.conflict_diff_split_col_widths;
+                                    d.child(
+                                        div()
+                                            .w(left_w)
+                                            .min_w(px(0.0))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .child("Local (index :2)"),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("conflict_diff_split_resize_handle")
+                                            .w(handle_w)
+                                            .h_full()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor(CursorStyle::ResizeLeftRight)
+                                            .hover(move |s| {
+                                                s.bg(with_alpha(theme.colors.hover, 0.65))
+                                            })
+                                            .active(move |s| s.bg(theme.colors.active))
+                                            .child(
+                                                div()
+                                                    .w(px(1.0))
+                                                    .h_full()
+                                                    .bg(theme.colors.border),
+                                            )
+                                            .on_drag(
+                                                ConflictDiffSplitResizeHandle::Divider,
+                                                |_, _, _, cx| {
+                                                    cx.new(|_| ConflictDiffSplitResizeDragGhost)
+                                                },
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                                                    cx.stop_propagation();
+                                                    this.conflict_diff_split_resize = Some(
+                                                        ConflictDiffSplitResizeState {
+                                                            start_x: e.position.x,
+                                                            start_ratio: this
+                                                                .conflict_diff_split_ratio,
                                                         },
-                                                    ),
-                                                )
-                                                    .on_drag_move(cx.listener(
-                                                        |this,
-                                                         e: &gpui::DragMoveEvent<
-                                                            ConflictDiffSplitResizeHandle,
-                                                        >,
-                                                         _w,
-                                                         cx| {
-                                                        let Some(state) =
-                                                            this.conflict_diff_split_resize
-                                                        else {
-                                                            return;
-                                                        };
-                                                        let Some(new_ratio) =
-                                                            next_conflict_diff_split_ratio(
-                                                                state,
-                                                                e.event.position.x,
-                                                                this.conflict_diff_split_col_widths,
-                                                            )
-                                                        else {
-                                                            return;
-                                                        };
-                                                        if (this.conflict_diff_split_ratio
-                                                            - new_ratio)
-                                                            .abs()
-                                                            <= f32::EPSILON
-                                                        {
-                                                            return;
-                                                        }
-                                                        this.conflict_diff_split_ratio = new_ratio;
-                                                        cx.notify();
-                                                    },
-                                                ))
-                                                .on_mouse_up(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _e, _w, cx| {
-                                                        this.conflict_diff_split_resize = None;
-                                                        cx.notify();
-                                                    }),
-                                                )
-                                                .on_mouse_up_out(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _e, _w, cx| {
-                                                        this.conflict_diff_split_resize = None;
-                                                        cx.notify();
-                                                    }),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .w(right_w)
-                                                .flex_grow()
-                                                .min_w(px(0.0))
-                                                .px_2()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .text_xs()
-                                                .text_color(theme.colors.text_muted)
-                                                .whitespace_nowrap()
-                                                .child(div().w(px(38.0)).flex_shrink_0())
-                                                .child("Remote (index :3)"),
-                                        )
-                                    })
-                                    .when(mode == ConflictDiffMode::Inline, |d| d)
+                                                    );
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_drag_move(cx.listener(
+                                                |this,
+                                                 e: &gpui::DragMoveEvent<
+                                                    ConflictDiffSplitResizeHandle,
+                                                >,
+                                                 _w,
+                                                 cx| {
+                                                    let Some(state) =
+                                                        this.conflict_diff_split_resize
+                                                    else {
+                                                        return;
+                                                    };
+                                                    let Some(new_ratio) =
+                                                        next_conflict_diff_split_ratio(
+                                                            state,
+                                                            e.event.position.x,
+                                                            this.conflict_diff_split_col_widths,
+                                                        )
+                                                    else {
+                                                        return;
+                                                    };
+                                                    if (this.conflict_diff_split_ratio - new_ratio)
+                                                        .abs()
+                                                        <= f32::EPSILON
+                                                    {
+                                                        return;
+                                                    }
+                                                    this.conflict_diff_split_ratio = new_ratio;
+                                                    cx.notify();
+                                                },
+                                            ))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _e, _w, cx| {
+                                                    this.conflict_diff_split_resize = None;
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .on_mouse_up_out(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _e, _w, cx| {
+                                                    this.conflict_diff_split_resize = None;
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(right_w)
+                                            .flex_grow()
+                                            .min_w(px(0.0))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .whitespace_nowrap()
+                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .child("Remote (index :3)"),
+                                    )
                                 });
 
                             let top_body: AnyElement = if diff_len == 0 {
@@ -1913,109 +1882,89 @@ impl MainPaneView {
                     let title: SharedString =
                         format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
 
-                    match &repo.conflict_state.conflict_file {
-                        Loadable::NotLoaded | Loadable::Loading => {
+                    match renderable_conflict_file(repo, &self.conflict_resolver, &path) {
+                        RenderableConflictFile::Loading => {
                             components::empty_state(theme, title, "Loading conflict data…")
                                 .into_any_element()
                         }
-                        Loadable::Error(e) => {
-                            components::empty_state(theme, title, e.clone()).into_any_element()
+                        RenderableConflictFile::Error(error) => {
+                            components::empty_state(theme, title, error).into_any_element()
                         }
-                        Loadable::Ready(None) => {
+                        RenderableConflictFile::Missing => {
                             components::empty_state(theme, title, "No conflict data.")
                                 .into_any_element()
                         }
-                        Loadable::Ready(Some(file)) => {
-                            if file.path != path {
-                                components::empty_state(theme, title, "Loading conflict data…")
+                        RenderableConflictFile::File(file) => {
+                            let ours_label: SharedString = if file.ours.is_some() {
+                                "Ours".into()
+                            } else {
+                                "Ours (deleted)".into()
+                            };
+                            let theirs_label: SharedString = if file.theirs.is_some() {
+                                "Theirs".into()
+                            } else {
+                                "Theirs (deleted)".into()
+                            };
+
+                            let columns_header =
+                                components::split_columns_header(theme, ours_label, theirs_label);
+
+                            let diff_len = self.conflict_resolver.two_way_split_visible_len();
+
+                            let diff_body: AnyElement = if diff_len == 0 {
+                                components::empty_state(theme, "Diff", "No conflict diff to show.")
                                     .into_any_element()
                             } else {
-                                let ours_label: SharedString = if file.ours.is_some() {
-                                    "Ours".into()
-                                } else {
-                                    "Ours (deleted)".into()
-                                };
-                                let theirs_label: SharedString = if file.theirs.is_some() {
-                                    "Theirs".into()
-                                } else {
-                                    "Theirs (deleted)".into()
-                                };
-
-                                let columns_header = components::split_columns_header(
-                                    theme,
-                                    ours_label,
-                                    theirs_label,
+                                let scroll_handle = self.diff_scroll.0.borrow().base_handle.clone();
+                                let list = uniform_list(
+                                    "conflict_compare_diff",
+                                    diff_len,
+                                    cx.processor(Self::render_conflict_compare_diff_rows),
+                                )
+                                .h_full()
+                                .min_h(px(0.0))
+                                .track_scroll(self.diff_scroll.clone())
+                                .with_horizontal_sizing_behavior(
+                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
                                 );
 
-                                let diff_len = match self.diff_view {
-                                    DiffViewMode::Split => {
-                                        self.conflict_resolver.two_way_split_visible_len()
-                                    }
-                                    DiffViewMode::Inline => {
-                                        self.conflict_resolver.two_way_inline_visible_len()
-                                    }
-                                };
-
-                                let diff_body: AnyElement = if diff_len == 0 {
-                                    components::empty_state(
-                                        theme,
-                                        "Diff",
-                                        "No conflict diff to show.",
-                                    )
-                                    .into_any_element()
-                                } else {
-                                    let scroll_handle =
-                                        self.diff_scroll.0.borrow().base_handle.clone();
-                                    let list = uniform_list(
-                                        "conflict_compare_diff",
-                                        diff_len,
-                                        cx.processor(Self::render_conflict_compare_diff_rows),
-                                    )
+                                div()
+                                    .id("conflict_compare_container")
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .track_scroll(self.diff_scroll.clone())
-                                    .with_horizontal_sizing_behavior(
-                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                    );
-
-                                    div()
-                                        .id("conflict_compare_container")
-                                        .relative()
-                                        .flex()
-                                        .flex_col()
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .bg(theme.colors.window_bg)
-                                        .child(columns_header)
-                                        .child(
-                                            div()
-                                                .id("conflict_compare_scroll_container")
-                                                .relative()
-                                                .flex_1()
-                                                .min_h(px(0.0))
-                                                .child(list)
-                                                .child(
-                                                    components::Scrollbar::new(
-                                                        "conflict_compare_scrollbar",
-                                                        self.diff_scroll.clone(),
-                                                    )
-                                                    .always_visible()
-                                                    .render(theme),
+                                    .bg(theme.colors.window_bg)
+                                    .child(columns_header)
+                                    .child(
+                                        div()
+                                            .id("conflict_compare_scroll_container")
+                                            .relative()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .child(list)
+                                            .child(
+                                                components::Scrollbar::new(
+                                                    "conflict_compare_scrollbar",
+                                                    self.diff_scroll.clone(),
                                                 )
-                                                .child(
-                                                    components::Scrollbar::horizontal(
-                                                        "conflict_compare_hscrollbar",
-                                                        scroll_handle,
-                                                    )
-                                                    .always_visible()
-                                                    .render(theme),
-                                                ),
-                                        )
-                                        .into_any_element()
-                                };
+                                                .always_visible()
+                                                .render(theme),
+                                            )
+                                            .child(
+                                                components::Scrollbar::horizontal(
+                                                    "conflict_compare_hscrollbar",
+                                                    scroll_handle,
+                                                )
+                                                .always_visible()
+                                                .render(theme),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            };
 
-                                diff_body
-                            }
+                            diff_body
                         }
                     }
                 }
@@ -2608,7 +2557,10 @@ impl MainPaneView {
                                 if !conflict_preview_active {
                                     this.conflict_resolver_set_mode(conflict_mode, cx);
                                 }
-                            } else if !markdown_preview_active {
+                            } else if this.active_conflict_target().is_some() {
+                                this.diff_view = DiffViewMode::Split;
+                                this.clear_diff_text_style_caches();
+                            } else if !markdown_preview_active && !this.is_file_preview_active() {
                                 this.diff_view = diff_mode;
                                 this.clear_diff_text_style_caches();
                             }
@@ -2630,11 +2582,11 @@ impl MainPaneView {
                             this.toggle_show_whitespace();
                             handled = true;
                         }
-                        "up" if !markdown_preview_active => {
+                        "up" if !this.is_file_preview_active() => {
                             this.diff_jump_prev();
                             handled = true;
                         }
-                        "down" if !markdown_preview_active => {
+                        "down" if !this.is_file_preview_active() => {
                             this.diff_jump_next();
                             handled = true;
                         }
@@ -2663,7 +2615,7 @@ impl MainPaneView {
                                     }
                                 }
                             }
-                        } else if !markdown_preview_active {
+                        } else if !this.is_file_preview_active() {
                             match direction {
                                 conflict_resolver::ConflictNavDirection::Prev => {
                                     this.diff_jump_prev()

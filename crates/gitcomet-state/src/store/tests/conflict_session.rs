@@ -339,6 +339,7 @@ fn load_conflict_file_clears_previous_session() {
         Msg::LoadConflictFile {
             repo_id,
             path: PathBuf::from("other.txt"),
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         },
     );
     assert!(

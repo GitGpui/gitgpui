@@ -94,6 +94,76 @@ fn trace_rendering_mode(
     }
 }
 
+const CONFLICT_SOURCE_FINGERPRINT_SAMPLE_COUNT: usize = 8;
+const CONFLICT_SOURCE_FINGERPRINT_WINDOW_BYTES: usize = 256;
+
+fn sampled_content_fingerprint(bytes: &[u8], salt: u64) -> u64 {
+    use std::hash::Hasher;
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_u64(salt);
+    hasher.write_usize(bytes.len());
+    if bytes.is_empty() {
+        return hasher.finish();
+    }
+
+    let window_len = CONFLICT_SOURCE_FINGERPRINT_WINDOW_BYTES.min(bytes.len());
+    let sample_count = if bytes.len() <= window_len {
+        1
+    } else {
+        CONFLICT_SOURCE_FINGERPRINT_SAMPLE_COUNT
+    };
+    let max_start = bytes.len().saturating_sub(window_len);
+    let denominator = sample_count.saturating_sub(1).max(1);
+    for sample_ix in 0..sample_count {
+        let start = if sample_count == 1 {
+            0
+        } else {
+            sample_ix.saturating_mul(max_start) / denominator
+        };
+        hasher.write_usize(start);
+        hasher.write(&bytes[start..start.saturating_add(window_len)]);
+    }
+    hasher.finish()
+}
+
+fn shared_text_fingerprint(text: &Option<std::sync::Arc<str>>) -> u64 {
+    let Some(text) = text.as_ref() else {
+        return 0x243f_6a88_85a3_08d3;
+    };
+    sampled_content_fingerprint(text.as_bytes(), 0xa409_3822_299f_31d0)
+}
+
+fn shared_bytes_fingerprint(bytes: &Option<std::sync::Arc<[u8]>>) -> u64 {
+    let Some(bytes) = bytes.as_ref() else {
+        return 0x1319_8a2e_0370_7344;
+    };
+    sampled_content_fingerprint(bytes.as_ref(), 0x082e_fa98_ec4e_6c89)
+}
+
+fn conflict_file_source_fingerprint(file: &gitcomet_state::model::ConflictFile) -> u64 {
+    let side_fingerprint =
+        |text: &Option<std::sync::Arc<str>>, bytes: &Option<std::sync::Arc<[u8]>>, salt: u64| {
+            let value = if text.is_some() {
+                shared_text_fingerprint(text)
+            } else {
+                shared_bytes_fingerprint(bytes)
+            };
+            salt.rotate_left(7) ^ value.wrapping_mul(0x94d0_49bb_1331_11eb)
+        };
+
+    let mut acc: u64 = 0x9e37_79b9_7f4a_7c15;
+    for (salt, text, bytes) in [
+        (0x1001_u64, &file.base, &file.base_bytes),
+        (0x1002_u64, &file.ours, &file.ours_bytes),
+        (0x1003_u64, &file.theirs, &file.theirs_bytes),
+        (0x1004_u64, &file.current, &file.current_bytes),
+    ] {
+        acc = acc.rotate_left(13) ^ side_fingerprint(text, bytes, salt);
+    }
+    acc
+}
+
 impl MainPaneView {
     pub(in crate::view) fn handle_patch_row_click(
         &mut self,
@@ -262,6 +332,43 @@ impl MainPaneView {
         }
     }
 
+    fn markdown_preview_visible_len(&self) -> usize {
+        let Loadable::Ready(preview) = &self.file_markdown_preview else {
+            return 0;
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => preview.inline.rows.len(),
+            DiffViewMode::Split => preview.old.rows.len().max(preview.new.rows.len()),
+        }
+    }
+
+    fn markdown_preview_change_visible_indices(&self) -> Vec<usize> {
+        let Loadable::Ready(preview) = &self.file_markdown_preview else {
+            return Vec::new();
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                diff_navigation::change_block_entries(preview.inline.rows.len(), |visible_ix| {
+                    preview.inline.rows.get(visible_ix).is_some_and(|row| {
+                        row.change_hint != crate::view::markdown_preview::MarkdownChangeHint::None
+                    })
+                })
+            }
+            DiffViewMode::Split => {
+                let visible_len = preview.old.rows.len().max(preview.new.rows.len());
+                diff_navigation::change_block_entries(visible_len, |visible_ix| {
+                    preview.old.rows.get(visible_ix).is_some_and(|row| {
+                        row.change_hint != crate::view::markdown_preview::MarkdownChangeHint::None
+                    }) || preview.new.rows.get(visible_ix).is_some_and(|row| {
+                        row.change_hint != crate::view::markdown_preview::MarkdownChangeHint::None
+                    })
+                })
+            }
+        }
+    }
+
     pub(super) fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         for visible_ix in 0..self.diff_visible_len() {
@@ -295,6 +402,9 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn diff_nav_entries(&self) -> Vec<usize> {
+        if self.is_markdown_preview_active() && !self.is_file_preview_active() {
+            return self.markdown_preview_change_visible_indices();
+        }
         if self.is_file_diff_view_active() {
             return self.file_change_visible_indices();
         }
@@ -620,7 +730,12 @@ impl MainPaneView {
             self.diff_autoscroll_pending = false;
             return;
         }
-        if self.diff_visible_len() == 0 {
+        let visible_len = if self.is_markdown_preview_active() && !self.is_file_preview_active() {
+            self.markdown_preview_visible_len()
+        } else {
+            self.diff_visible_len()
+        };
+        if visible_len == 0 {
             return;
         }
 
@@ -683,7 +798,11 @@ impl MainPaneView {
                 input.set_theme(theme, cx);
                 input.set_text("", cx);
             });
-            self.store.dispatch(Msg::LoadConflictFile { repo_id, path });
+            self.store.dispatch(Msg::LoadConflictFile {
+                repo_id,
+                path,
+                mode: gitcomet_state::model::ConflictFileLoadMode::CurrentOnly,
+            });
             return;
         }
 
@@ -694,12 +813,7 @@ impl MainPaneView {
             return;
         }
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        file.base.hash(&mut hasher);
-        file.ours.hash(&mut hasher);
-        file.theirs.hash(&mut hasher);
-        file.current.hash(&mut hasher);
-        let source_hash = hasher.finish();
+        let source_hash = conflict_file_source_fingerprint(file);
 
         let needs_rebuild = self.conflict_resolver.repo_id != Some(repo_id)
             || self.conflict_resolver.path.as_ref() != Some(&path)
@@ -756,6 +870,7 @@ impl MainPaneView {
             self.conflict_resolver = ConflictResolverUiState {
                 repo_id: Some(repo_id),
                 path: Some(path),
+                loaded_file: Some(file.clone()),
                 conflict_syntax_language,
                 source_hash: Some(source_hash),
                 is_binary_conflict: true,
@@ -779,29 +894,25 @@ impl MainPaneView {
             MergetoolTraceContext::new(trace_path, base_text, ours_text, theirs_text, current_text);
         let is_same_conflict = self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path);
-        let side_line_count = |text: &str| {
-            if text.is_empty() {
-                0
-            } else {
-                count_newlines(text).saturating_add(1)
-            }
+        let three_way_base_len = if base_text.is_empty() {
+            0
+        } else {
+            count_newlines(base_text).saturating_add(1)
         };
-        let three_way_base_len = side_line_count(base_text);
-        let three_way_ours_len = side_line_count(ours_text);
-        let three_way_theirs_len = side_line_count(theirs_text);
+        let three_way_ours_len = if ours_text.is_empty() {
+            0
+        } else {
+            count_newlines(ours_text).saturating_add(1)
+        };
+        let three_way_theirs_len = if theirs_text.is_empty() {
+            0
+        } else {
+            count_newlines(theirs_text).saturating_add(1)
+        };
         let three_way_len = three_way_base_len
             .max(three_way_ours_len)
             .max(three_way_theirs_len);
 
-        let fallback_resolved = if let Some(cur) = current_text {
-            cur.to_string()
-        } else if let Some(ours) = file.ours.as_deref() {
-            ours.to_string()
-        } else if let Some(theirs) = file.theirs.as_deref() {
-            theirs.to_string()
-        } else {
-            String::new()
-        };
         let marker_parse_started = Instant::now();
         let mut marker_segments = if let Some(cur) = current_text {
             let segments = conflict_resolver::parse_conflict_markers(cur);
@@ -815,8 +926,7 @@ impl MainPaneView {
         };
         let rendering_mode =
             conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_len);
-        let full_syntax_parse_requested = !rendering_mode.is_streamed_large_file()
-            && conflict_syntax_language.is_some()
+        let full_syntax_parse_requested = conflict_syntax_language.is_some()
             && [
                 (base_text, three_way_base_len),
                 (ours_text, three_way_ours_len),
@@ -827,10 +937,6 @@ impl MainPaneView {
                 !text.is_empty()
                     && line_count <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
             });
-        debug_assert!(
-            !(rendering_mode.is_streamed_large_file() && full_syntax_parse_requested),
-            "streamed large-file bootstrap must not request full prepared three-way syntax"
-        );
         let mut trace_decisions = MergetoolBootstrapTraceDecisions {
             rendering_mode: Some(trace_rendering_mode(rendering_mode)),
             full_syntax_parse_requested: Some(full_syntax_parse_requested),
@@ -878,7 +984,15 @@ impl MainPaneView {
                 trace_decisions.full_output_generated = Some(true);
                 (
                     Some(if marker_segments.is_empty() {
-                        fallback_resolved
+                        if let Some(cur) = current_text {
+                            cur.to_string()
+                        } else if let Some(ours) = file.ours.as_deref() {
+                            ours.to_string()
+                        } else if let Some(theirs) = file.theirs.as_deref() {
+                            theirs.to_string()
+                        } else {
+                            String::new()
+                        }
                     } else {
                         conflict_resolver::generate_resolved_text(&marker_segments)
                     }),
@@ -921,104 +1035,43 @@ impl MainPaneView {
                 .map(SharedString::new)
                 .unwrap_or_default(),
         };
-        let three_way_line_starts: ThreeWaySides<Arc<[usize]>> = ThreeWaySides {
-            base: build_line_starts(base_text).into(),
-            ours: build_line_starts(ours_text).into(),
-            theirs: build_line_starts(theirs_text).into(),
+        let three_way_line_starts: ThreeWaySides<DeferredLineStarts> = ThreeWaySides {
+            base: DeferredLineStarts::with_line_count(three_way_base_len),
+            ours: DeferredLineStarts::with_line_count(three_way_ours_len),
+            theirs: DeferredLineStarts::with_line_count(three_way_theirs_len),
         };
 
-        // Two-way split/inline rows: in giant mode build a lazy index,
-        // otherwise use the eager block-local diff path.
-        // Conflict maps and visible projections are deferred to
-        // `rebuild_two_way_visible_projections()` after state construction.
+        // Conflicts now always use the streamed split index. Bootstrap only
+        // records the lazy row count here; visible projections are rebuilt
+        // after state construction.
         let diff_rows_started = Instant::now();
-        let (mode_state, diff_row_count, inline_row_count) =
-            if rendering_mode.is_streamed_large_file() {
-                let index = conflict_resolver::ConflictSplitRowIndex::new(
-                    &marker_segments,
-                    conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
-                );
-                trace_decisions.whole_block_diff_ran = Some(false);
-                let total = index.total_rows();
-                mergetool_trace::record_with(|| {
-                    trace_ctx
-                        .bootstrap_event(
-                            MergetoolTraceStage::SideBySideRows,
-                            diff_rows_started,
-                            trace_decisions,
-                        )
-                        .with_conflict_block_count(Some(conflict_block_count))
-                        .with_diff_row_count(Some(total))
-                });
-                (
-                    ConflictModeState::Streamed(StreamedConflictState {
-                        split_row_index: index,
-                        ..StreamedConflictState::default()
-                    }),
-                    total,
-                    0,
+        let index = conflict_resolver::ConflictSplitRowIndex::new(
+            &marker_segments,
+            conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
+        );
+        trace_decisions.whole_block_diff_ran = Some(false);
+        let diff_row_count = index.total_rows();
+        mergetool_trace::record_with(|| {
+            trace_ctx
+                .bootstrap_event(
+                    MergetoolTraceStage::SideBySideRows,
+                    diff_rows_started,
+                    trace_decisions,
                 )
-            } else {
-                let (diff_rows, diff_stats) =
-                    conflict_resolver::block_local_two_way_diff_rows_with_stats(&marker_segments);
-                trace_decisions.whole_block_diff_ran = Some(diff_stats.whole_block_diff_ran);
-                debug_assert!(
-                    !diff_stats.whole_block_diff_ran,
-                    "eager bootstrap must not diff a whole giant conflict block"
-                );
-                let diff_row_count = diff_rows.len();
-                mergetool_trace::record_with(|| {
-                    trace_ctx
-                        .bootstrap_event(
-                            MergetoolTraceStage::SideBySideRows,
-                            diff_rows_started,
-                            trace_decisions,
-                        )
-                        .with_conflict_block_count(Some(conflict_block_count))
-                        .with_diff_row_count(Some(diff_row_count))
-                });
+                .with_conflict_block_count(Some(conflict_block_count))
+                .with_diff_row_count(Some(diff_row_count))
+        });
+        let mode_state = ConflictModeState::Streamed(StreamedConflictState {
+            split_row_index: index,
+            ..StreamedConflictState::default()
+        });
+        let inline_row_count = 0;
 
-                let inline_rows_started = Instant::now();
-                let inline_rows = conflict_resolver::build_inline_rows(&diff_rows);
-                let inline_row_count = inline_rows.len();
-                mergetool_trace::record_with(|| {
-                    trace_ctx
-                        .bootstrap_event(
-                            MergetoolTraceStage::BuildInlineRows,
-                            inline_rows_started,
-                            trace_decisions,
-                        )
-                        .with_conflict_block_count(Some(conflict_block_count))
-                        .with_diff_row_count(Some(diff_row_count))
-                        .with_inline_row_count(Some(inline_row_count))
-                });
-
-                (
-                    ConflictModeState::Eager(EagerConflictState {
-                        diff_rows,
-                        inline_rows,
-                        ..EagerConflictState::default()
-                    }),
-                    diff_row_count,
-                    inline_row_count,
-                )
-            };
-
-        // Three-way word highlights use sparse HashMap storage, so they
-        // scale with conflict-block line count, not total file line count.
+        // Streamed mode must avoid bootstrap diff work entirely. Three-way word
+        // highlights still depend on side_by_side_rows/myers, so keep them
+        // empty here and reserve that quality improvement for a later lazy path.
         let three_way_word_highlights_started = Instant::now();
-        let three_way_word_highlights = {
-            let (base, ours, theirs) = conflict_resolver::compute_three_way_word_highlights(
-                &three_way_text.base,
-                &three_way_line_starts.base,
-                &three_way_text.ours,
-                &three_way_line_starts.ours,
-                &three_way_text.theirs,
-                &three_way_line_starts.theirs,
-                &marker_segments,
-            );
-            ThreeWaySides { base, ours, theirs }
-        };
+        let three_way_word_highlights = ThreeWaySides::default();
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -1030,12 +1083,7 @@ impl MainPaneView {
         });
 
         let two_way_word_highlights_started = Instant::now();
-        let diff_word_highlights_split = match &mode_state {
-            ConflictModeState::Eager(s) => {
-                conflict_resolver::compute_two_way_word_highlights(&s.diff_rows)
-            }
-            ConflictModeState::Streamed(_) => Vec::new(),
-        };
+        let diff_word_highlights_split = Vec::new();
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -1067,11 +1115,6 @@ impl MainPaneView {
         } else {
             repo.conflict_state.conflict_hide_resolved
         };
-        let diff_mode = if is_same_conflict {
-            self.conflict_resolver.diff_mode
-        } else {
-            ConflictDiffMode::Split
-        };
         let nav_anchor = if is_same_conflict {
             self.conflict_resolver.nav_anchor
         } else {
@@ -1101,21 +1144,19 @@ impl MainPaneView {
         let mut three_way_prepared_docs =
             ThreeWaySides::<Option<rows::PreparedDiffSyntaxDocument>>::default();
         let mut three_way_needs_background = ThreeWaySides::<bool>::default();
-        if !rendering_mode.is_streamed_large_file()
-            && let Some(language) = conflict_syntax_language
-        {
+        if let Some(language) = conflict_syntax_language {
             for side in ThreeWayColumn::ALL {
                 let text = &three_way_text[side];
-                let line_starts = &three_way_line_starts[side];
                 let doc_slot = &mut three_way_prepared_docs[side];
                 let bg_slot = &mut three_way_needs_background[side];
                 if text.is_empty() {
                     continue;
                 }
-                let line_count = indexed_line_count(text, line_starts.as_ref());
+                let line_count = three_way_line_starts[side].line_count();
                 if line_count > rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX {
                     continue;
                 }
+                let line_starts = three_way_line_starts[side].shared_starts(text.as_ref());
                 match rows::prepare_diff_syntax_document_with_budget_reuse_text(
                     language,
                     rows::DiffSyntaxMode::Auto,
@@ -1138,18 +1179,14 @@ impl MainPaneView {
         self.conflict_three_way_prepared_syntax_documents = three_way_prepared_docs;
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
 
-        // Giant mode forces split diff mode (inline is not supported).
-        let diff_mode = if matches!(mode_state, ConflictModeState::Streamed(_)) {
-            ConflictDiffMode::Split
-        } else {
-            diff_mode
-        };
+        let diff_mode = ConflictDiffMode::Split;
 
         // Build state with core/shared fields; mode-dependent visible state
         // is populated by the rebuild methods below.
         self.conflict_resolver = ConflictResolverUiState {
             repo_id: Some(repo_id),
             path: Some(path),
+            loaded_file: Some(file.clone()),
             conflict_syntax_language,
             source_hash: Some(source_hash),
             current: file.current.clone(),
@@ -1162,6 +1199,7 @@ impl MainPaneView {
             three_way_text,
             three_way_line_starts,
             three_way_len,
+            three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             conflict_has_base: Vec::new(),
             three_way_word_highlights,
@@ -1183,7 +1221,12 @@ impl MainPaneView {
         // Populate mode-dependent visible state using the same code path as
         // later rebuilds (hide-resolved toggle, conflict picks, etc.).
         let three_way_rebuild_started = Instant::now();
-        self.conflict_resolver.rebuild_three_way_visible_state();
+        if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay {
+            self.conflict_resolver.rebuild_three_way_visible_state();
+        } else {
+            self.conflict_resolver
+                .refresh_conflict_has_base_from_segments();
+        }
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -1258,7 +1301,7 @@ impl MainPaneView {
                     (
                         side,
                         self.conflict_resolver.three_way_text[side].clone(),
-                        self.conflict_resolver.three_way_line_starts[side].clone(),
+                        self.conflict_resolver.three_way_shared_line_starts(side),
                     )
                 })
                 .collect();
@@ -1365,6 +1408,7 @@ impl MainPaneView {
             .path
             .as_ref()
             .and_then(rows::diff_syntax_language_for_path);
+        self.conflict_resolver.loaded_file = Some(file.clone());
         self.conflict_resolver.conflict_rev = new_rev;
 
         // Clear segment caches since marker_segments changed.
@@ -1400,6 +1444,8 @@ impl MainPaneView {
         mode: ConflictDiffMode,
         cx: &mut gpui::Context<Self>,
     ) {
+        let _ = mode;
+        let mode = ConflictDiffMode::Split;
         if self.conflict_resolver.diff_mode == mode {
             return;
         }
@@ -1411,17 +1457,62 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn request_conflict_file_load_mode(
+        &mut self,
+        mode: gitcomet_state::model::ConflictFileLoadMode,
+    ) -> bool {
+        let Some(repo_id) = self.active_repo_id() else {
+            return false;
+        };
+        let Some(path) = self.conflict_resolver.path.clone() else {
+            return false;
+        };
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return false;
+        };
+        if repo.conflict_state.conflict_file_path.as_ref() != Some(&path) {
+            return false;
+        }
+        if repo.conflict_state.conflict_file_load_mode == mode
+            || matches!(repo.conflict_state.conflict_file, Loadable::Loading)
+        {
+            return false;
+        }
+
+        self.store.dispatch(Msg::LoadConflictFile {
+            repo_id,
+            path,
+            mode,
+        });
+        true
+    }
+
     pub(in crate::view) fn conflict_resolver_set_view_mode(
         &mut self,
         view_mode: ConflictResolverViewMode,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.conflict_resolver.view_mode == view_mode {
+            if view_mode == ConflictResolverViewMode::ThreeWay {
+                let _ = self.request_conflict_file_load_mode(
+                    gitcomet_state::model::ConflictFileLoadMode::Full,
+                );
+            }
             return;
         }
         self.conflict_resolver.view_mode = view_mode;
         self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.hovered_conflict = None;
+        if view_mode == ConflictResolverViewMode::ThreeWay
+            && self
+                .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full)
+        {
+            cx.notify();
+            return;
+        }
+        if view_mode == ConflictResolverViewMode::ThreeWay {
+            self.conflict_resolver.rebuild_three_way_visible_state();
+        }
         let path = self.conflict_resolver.path.clone();
         let output_line_count = if self.conflict_resolved_output_is_streamed() {
             self.conflict_resolved_preview_line_count.max(1)
@@ -1480,7 +1571,14 @@ impl MainPaneView {
     }
 
     pub(super) fn conflict_resolver_rebuild_visible_map(&mut self) {
-        self.conflict_resolver.rebuild_three_way_visible_state();
+        if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+            || self.conflict_resolver.has_three_way_visible_state_ready()
+        {
+            self.conflict_resolver.rebuild_three_way_visible_state();
+        } else {
+            self.conflict_resolver
+                .refresh_conflict_has_base_from_segments();
+        }
         let block_count = self
             .conflict_resolver
             .marker_segments
@@ -1584,18 +1682,9 @@ impl MainPaneView {
                 return fallback_conflict_ix;
             };
             let target_conflict_ix = marker.conflict_ix;
-            let marker_count_for_conflict = self
-                .conflict_resolver
-                .resolved_outline
-                .markers
-                .iter()
-                .flatten()
-                .filter(|marker| marker.conflict_ix == target_conflict_ix && marker.is_start)
-                .count();
-            if marker_count_for_conflict <= 1 {
-                return target_conflict_ix;
-            }
-
+            // Streamed bootstrap now keeps one coarse marker range per block.
+            // If the user explicitly interacts with a line inside that block,
+            // split it lazily and then remap the click to the new subchunk.
             if !split_target_conflict_block_into_subchunks(
                 &mut self.conflict_resolver.marker_segments,
                 &mut self.conflict_resolver.conflict_region_indices,
@@ -2512,5 +2601,36 @@ impl MainPaneView {
             });
         }
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {
+        let make_file = || gitcomet_state::model::ConflictFile {
+            path: std::path::PathBuf::from("index.html"),
+            base_bytes: Some(std::sync::Arc::<[u8]>::from(b"base\nbytes\n".as_slice())),
+            ours_bytes: None,
+            theirs_bytes: Some(std::sync::Arc::<[u8]>::from(b"theirs\nbytes\n".as_slice())),
+            current_bytes: None,
+            base: Some(std::sync::Arc::<str>::from("base\ntext\n")),
+            ours: Some(std::sync::Arc::<str>::from("ours\ntext\n")),
+            theirs: Some(std::sync::Arc::<str>::from("theirs\ntext\n")),
+            current: Some(std::sync::Arc::<str>::from(
+                "<<<<<<< ours\nbody\n=======\nbody\n>>>>>>> theirs\n",
+            )),
+        };
+
+        let left = make_file();
+        let right = make_file();
+
+        assert_eq!(
+            conflict_file_source_fingerprint(&left),
+            conflict_file_source_fingerprint(&right),
+            "content-identical conflict files should keep the lightweight resync path even when backing Arcs are freshly allocated",
+        );
     }
 }

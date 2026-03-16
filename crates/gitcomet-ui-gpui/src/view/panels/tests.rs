@@ -257,6 +257,21 @@ fn conflict_split_row_ix(
                 row.new.as_deref() == Some(text)
             }
         })
+        .or_else(|| {
+            (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(|visible_ix| {
+                let (source_ix, row, _conflict_ix) = pane
+                    .conflict_resolver
+                    .two_way_split_visible_row(visible_ix)?;
+                match side {
+                    crate::view::conflict_resolver::ConflictPickSide::Ours => {
+                        (row.old.as_deref() == Some(text)).then_some(source_ix)
+                    }
+                    crate::view::conflict_resolver::ConflictPickSide::Theirs => {
+                        (row.new.as_deref() == Some(text)).then_some(source_ix)
+                    }
+                }
+            })
+        })
 }
 
 fn conflict_split_cached_styled<'a>(
@@ -266,26 +281,6 @@ fn conflict_split_cached_styled<'a>(
 ) -> Option<&'a super::CachedDiffStyledText> {
     let row_ix = conflict_split_row_ix(pane, side, text)?;
     pane.conflict_diff_segments_cache_split.get(&(row_ix, side))
-}
-
-fn conflict_inline_ix(
-    pane: &MainPaneView,
-    kind: gitcomet_core::domain::DiffLineKind,
-    text: &str,
-) -> Option<usize> {
-    pane.conflict_resolver
-        .inline_rows()
-        .iter()
-        .position(|row| row.kind == kind && row.content == text)
-}
-
-fn conflict_inline_cached_styled<'a>(
-    pane: &'a MainPaneView,
-    kind: gitcomet_core::domain::DiffLineKind,
-    text: &str,
-) -> Option<&'a super::CachedDiffStyledText> {
-    let row_ix = conflict_inline_ix(pane, kind, text)?;
-    pane.conflict_diff_segments_cache_inline.get(&row_ix)
 }
 
 fn styled_has_leading_muted_highlight(
@@ -4597,11 +4592,10 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
     fixture.cleanup();
 }
 
-/// Verifies block-local two-way diff rows: the resolver produces diff rows
-/// only for conflict blocks plus a small context window, populates inline
-/// rows and word highlights, and keeps three-way data correct.
+/// Verifies huge conflicts stay on the streamed split path and avoid
+/// bootstrap diff/highlight work.
 #[gpui::test]
-fn large_conflict_bootstrap_uses_block_local_diff_for_huge_files(cx: &mut gpui::TestAppContext) {
+fn large_conflict_bootstrap_stays_streamed_for_huge_files(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -4631,17 +4625,16 @@ fn large_conflict_bootstrap_uses_block_local_diff_for_huge_files(cx: &mut gpui::
         });
     });
 
-    // Wait for the conflict resolver to be populated with block-local diff rows
-    // (or paged index for giant mode).
+    // Wait for the conflict resolver to be populated with the streamed split
+    // index used for giant files.
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "large conflict block-local diff bootstrap",
+        "large conflict streamed bootstrap",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
-                && (!pane.conflict_resolver.diff_rows().is_empty()
-                    || pane.conflict_resolver.split_row_index().is_some())
+                && pane.conflict_resolver.split_row_index().is_some()
         },
         |pane| {
             format!(
@@ -4657,92 +4650,37 @@ fn large_conflict_bootstrap_uses_block_local_diff_for_huge_files(cx: &mut gpui::
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, _cx| {
-                if let Some(index) = pane.conflict_resolver.split_row_index() {
-                    // Giant mode: paged index, no eager diff_rows.
-                    assert!(
-                        pane.conflict_resolver.diff_rows().is_empty(),
-                        "giant mode should not have eager diff_rows",
-                    );
-                    assert!(
-                        index.total_rows() > 0,
-                        "paged split row index should have rows",
-                    );
-                    assert!(
-                        pane.conflict_resolver.two_way_split_projection().is_some(),
-                        "giant mode should have a split projection",
-                    );
-                } else {
-                    let max_rows_per_block =
-                        (crate::view::conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES * 2) + 2;
-                    let diff_row_count = pane.conflict_resolver.diff_rows().len();
-                    assert!(
-                        diff_row_count > 0 && diff_row_count <= max_rows_per_block,
-                        "block-local diff should stay bounded by one conflict block plus a small context window, got {}",
-                        diff_row_count,
-                    );
-
-                    let inline_row_count = pane.conflict_resolver.inline_rows().len();
-                    assert!(
-                        inline_row_count > 0 && inline_row_count < 10,
-                        "inline_rows should be populated from block-local diff, got {}",
-                        inline_row_count,
-                    );
-
-                    // Conflict map should map all rows to the single conflict block.
-                    assert_eq!(
-                        pane.conflict_resolver.diff_row_conflict_map().len(),
-                        diff_row_count,
-                        "diff_row_conflict_map should have one entry per diff row",
-                    );
-                    assert!(
-                        pane.conflict_resolver
-                            .diff_row_conflict_map()
-                            .iter()
-                            .any(|entry| *entry == Some(0)),
-                        "block-local rows should still include the conflict block itself",
-                    );
-                    assert!(
-                        pane.conflict_resolver
-                            .diff_row_conflict_map()
-                            .iter()
-                            .any(|entry| entry.is_none()),
-                        "boundary context rows should stay outside the conflict mapping",
-                    );
-                    for (ix, (row, conflict_ix)) in pane
-                        .conflict_resolver
-                        .diff_rows()
-                        .iter()
-                        .zip(pane.conflict_resolver.diff_row_conflict_map().iter())
-                        .enumerate()
-                    {
-                        if conflict_ix.is_none() {
-                            assert_eq!(
-                                row.kind,
-                                gitcomet_core::file_diff::FileDiffRowKind::Context,
-                                "unmapped row {} should be shared context, got {:?}",
-                                ix,
-                                row.kind,
-                            );
-                        }
-                    }
-
-                    assert_eq!(
-                        pane.conflict_resolver.diff_word_highlights_split.len(),
-                        diff_row_count,
-                        "two-way word highlights should have one entry per diff row",
-                    );
-                }
-
-                // Three-way word highlights use sparse storage (HashMap)
-                // so they work for all file sizes without O(file_lines) memory.
-                // They should contain entries only for conflict-block lines.
+                let index = pane
+                    .conflict_resolver
+                    .split_row_index()
+                    .expect("huge conflict should stay on streamed split index");
                 assert!(
-                    !pane
+                    pane.conflict_resolver.diff_rows().is_empty(),
+                    "streamed huge-file bootstrap should not build eager diff_rows",
+                );
+                assert!(
+                    pane.conflict_resolver.inline_rows().is_empty(),
+                    "streamed huge-file bootstrap should not build eager inline_rows",
+                );
+                assert!(
+                    pane
                         .conflict_resolver
                         .three_way_word_highlights
                         .ours
                         .is_empty(),
-                    "three-way word highlights should be populated for conflict lines",
+                    "streamed huge-file bootstrap should skip three-way word diff computation",
+                );
+                assert!(
+                    pane.conflict_resolver.diff_word_highlights_split.is_empty(),
+                    "streamed huge-file bootstrap should skip eager two-way word highlights",
+                );
+                assert!(
+                    index.total_rows() > 0,
+                    "paged split row index should have rows",
+                );
+                assert!(
+                    pane.conflict_resolver.two_way_split_projection().is_some(),
+                    "giant mode should have a split projection",
                 );
 
                 // View mode should NOT be forced to ThreeWay — two-way now has data.
@@ -5403,46 +5341,33 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_mode(ConflictDiffMode::Inline, cx);
-                pane.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
         });
     });
 
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "two-way inline syntax upgrade after background preparation",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            conflict_inline_cached_styled(
-                pane,
-                gitcomet_core::domain::DiffLineKind::Remove,
-                ours_comment_line,
-            )
-            .is_some_and(|styled| {
-                styled_has_leading_muted_highlight(
-                    styled,
-                    comment_prefix_end,
-                    pane.theme.colors.text_muted.into(),
-                )
-            })
-        },
-        |pane| {
-            let inline_cached = conflict_inline_cached_styled(
-                pane,
-                gitcomet_core::domain::DiffLineKind::Remove,
-                ours_comment_line,
-            )
-            .map(styled_debug_info_with_styles);
-            format!(
-                "inline_cached={inline_cached:?} ours_doc={:?} theirs_doc={:?}",
-                pane.conflict_three_way_prepared_syntax_documents.ours,
-                pane.conflict_three_way_prepared_syntax_documents.theirs,
-            )
-        },
-    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.conflict_resolver.diff_mode,
+            ConflictDiffMode::Split,
+            "streamed conflict compare should clamp the unsupported inline mode back to split",
+        );
+        let styled = conflict_split_cached_styled(
+            &pane,
+            crate::view::conflict_resolver::ConflictPickSide::Ours,
+            ours_comment_line,
+        )
+        .expect("split cache should stay available after an inline-mode toggle attempt");
+        assert!(
+            styled_has_leading_muted_highlight(
+                styled,
+                comment_prefix_end,
+                pane.theme.colors.text_muted.into(),
+            ),
+            "prepared syntax should continue to drive split-row styling after inline-mode toggle attempts",
+        );
+    });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup fixture");
 }
@@ -5512,7 +5437,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
                 pane.conflict_diff_query_segments_cache_split.clear();
 
                 let visible_ix = pane.conflict_resolver.two_way_split_visible_len() / 2;
-                let (source_ix, row, _conflict_ix) = pane
+                let (_source_ix, row, _conflict_ix) = pane
                     .conflict_resolver
                     .two_way_split_visible_row(visible_ix)
                     .expect("deep streamed compare row should resolve through the split provider");
@@ -5530,22 +5455,14 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
                 );
                 assert_eq!(elements.len(), 1);
 
-                let ours = pane
-                    .conflict_diff_segments_cache_split
-                    .get(&(
-                        source_ix,
-                        crate::view::conflict_resolver::ConflictPickSide::Ours,
-                    ))
-                    .expect("streamed compare render should cache the resolved ours row");
-                let theirs = pane
-                    .conflict_diff_segments_cache_split
-                    .get(&(
-                        source_ix,
-                        crate::view::conflict_resolver::ConflictPickSide::Theirs,
-                    ))
-                    .expect("streamed compare render should cache the resolved theirs row");
-                assert_eq!(ours.text.as_ref(), row.old.as_deref().unwrap_or(""));
-                assert_eq!(theirs.text.as_ref(), row.new.as_deref().unwrap_or(""));
+                assert!(
+                    pane.conflict_diff_segments_cache_split.is_empty(),
+                    "large streamed compare render should skip per-row style caching and render plain text",
+                );
+                assert!(
+                    row.old.is_some() || row.new.is_some(),
+                    "deep streamed compare row should still expose real source text",
+                );
             });
         });
     });
@@ -5554,7 +5471,7 @@ fn conflict_compare_split_renderer_uses_streamed_visible_rows_for_large_conflict
 }
 
 #[gpui::test]
-fn conflict_compare_inline_renderer_uses_visible_projection_when_rows_are_hidden(
+fn conflict_compare_split_renderer_uses_visible_projection_when_rows_are_hidden(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -5565,10 +5482,10 @@ fn conflict_compare_inline_renderer_uses_visible_projection_when_rows_are_hidden
 
     let repo_id = gitcomet_state::model::RepoId(177);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_conflict_compare_inline_hidden",
+        "gitcomet_ui_test_{}_conflict_compare_split_hidden",
         std::process::id()
     ));
-    let file_rel = std::path::PathBuf::from("src/conflict_compare_inline_hidden.rs");
+    let file_rel = std::path::PathBuf::from("src/conflict_compare_split_hidden.rs");
     let abs_path = workdir.join(&file_rel);
 
     let base_text = [
@@ -5638,20 +5555,20 @@ fn conflict_compare_inline_renderer_uses_visible_projection_when_rows_are_hidden
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "inline compare eager bootstrap",
+        "split compare streamed bootstrap",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&file_rel)
                 && pane.conflict_resolver.rendering_mode()
-                    == crate::view::conflict_resolver::ConflictRenderingMode::EagerSmallFile
-                && !pane.conflict_resolver.inline_rows().is_empty()
+                    == crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile
+                && pane.conflict_resolver.split_row_index().is_some()
         },
         |pane| {
             format!(
-                "path={:?} rendering_mode={:?} inline_rows={}",
+                "path={:?} rendering_mode={:?} split_row_index={}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.rendering_mode(),
-                pane.conflict_resolver.inline_rows().len(),
+                pane.conflict_resolver.split_row_index().is_some(),
             )
         },
     );
@@ -5674,23 +5591,21 @@ fn conflict_compare_inline_renderer_uses_visible_projection_when_rows_are_hidden
                 pane.conflict_resolver.hide_resolved = true;
                 pane.conflict_resolver.rebuild_three_way_visible_state();
                 pane.conflict_resolver.rebuild_two_way_visible_state();
-                pane.diff_view = DiffViewMode::Inline;
-                pane.conflict_diff_segments_cache_inline.clear();
-                pane.conflict_diff_query_segments_cache_inline.clear();
+                pane.diff_view = DiffViewMode::Split;
+                pane.conflict_diff_segments_cache_split.clear();
+                pane.conflict_diff_query_segments_cache_split.clear();
 
-                let (visible_ix, source_ix, expected_text) =
-                    (0..pane.conflict_resolver.two_way_inline_visible_len())
-                        .find_map(|visible_ix| {
-                            let (source_ix, row, _conflict_ix) = pane
-                                .conflict_resolver
-                                .two_way_inline_visible_row(visible_ix)?;
-                            (source_ix != visible_ix && !row.content.is_empty()).then_some((
-                                visible_ix,
-                                source_ix,
-                                row.content,
-                            ))
-                        })
-                        .expect("hide-resolved compare view should remap at least one inline row");
+                let (visible_ix, source_ix, row) =
+                    (0..pane.conflict_resolver.two_way_split_visible_len()).find_map(
+                        |visible_ix| {
+                        let (source_ix, row, _conflict_ix) = pane
+                            .conflict_resolver
+                            .two_way_split_visible_row(visible_ix)?;
+                        (source_ix != visible_ix && (row.old.is_some() || row.new.is_some()))
+                            .then_some((visible_ix, source_ix, row))
+                    },
+                    )
+                    .expect("hide-resolved compare view should remap at least one split row");
 
                 let elements = MainPaneView::render_conflict_compare_diff_rows(
                     pane,
@@ -5700,17 +5615,36 @@ fn conflict_compare_inline_renderer_uses_visible_projection_when_rows_are_hidden
                 );
                 assert_eq!(elements.len(), 1);
 
-                let styled = pane
-                    .conflict_diff_segments_cache_inline
-                    .get(&source_ix)
-                    .expect("compare inline render should cache the remapped source row");
-                assert_eq!(styled.text.as_ref(), expected_text);
-                assert!(
-                    !pane
-                        .conflict_diff_segments_cache_inline
-                        .contains_key(&visible_ix),
-                    "compare inline render should cache by source row index, not visible row index",
-                );
+                if let Some(expected_text) = row.old.as_deref() {
+                    if let Some(styled) = pane.conflict_diff_segments_cache_split.get(&(
+                        source_ix,
+                        crate::view::conflict_resolver::ConflictPickSide::Ours,
+                    )) {
+                        assert_eq!(styled.text.as_ref(), expected_text);
+                    }
+                    assert!(
+                        !pane.conflict_diff_segments_cache_split.contains_key(&(
+                            visible_ix,
+                            crate::view::conflict_resolver::ConflictPickSide::Ours,
+                        )),
+                        "compare split render should cache ours styling by source row index, not visible row index",
+                    );
+                }
+                if let Some(expected_text) = row.new.as_deref() {
+                    if let Some(styled) = pane.conflict_diff_segments_cache_split.get(&(
+                        source_ix,
+                        crate::view::conflict_resolver::ConflictPickSide::Theirs,
+                    )) {
+                        assert_eq!(styled.text.as_ref(), expected_text);
+                    }
+                    assert!(
+                        !pane.conflict_diff_segments_cache_split.contains_key(&(
+                            visible_ix,
+                            crate::view::conflict_resolver::ConflictPickSide::Theirs,
+                        )),
+                        "compare split render should cache theirs styling by source row index, not visible row index",
+                    );
+                }
             });
         });
     });
@@ -6132,6 +6066,34 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
                 pane.conflict_resolved_preview_line_count,
                 pane.conflict_resolver.resolved_outline.meta.len(),
                 pane.conflict_resolver.resolved_outline.markers.len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.ensure_conflict_resolved_output_materialized(cx);
+            });
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolved outline pending incremental materialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
+                && pane.conflict_resolved_output_projection.is_none()
+                && pane.conflict_resolved_preview_line_count == expected_resolved_line_count
+        },
+        |pane| {
+            format!(
+                "path={:?} projection_present={} preview_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolved_output_projection.is_some(),
+                pane.conflict_resolved_preview_line_count,
             )
         },
     );
@@ -8399,7 +8361,11 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert_eq!(pane.conflict_resolver.diff_mode, ConflictDiffMode::Inline);
+        assert_eq!(
+            pane.conflict_resolver.diff_mode,
+            ConflictDiffMode::Split,
+            "streamed conflict markdown preview should ignore unsupported inline-mode toggles",
+        );
         assert!(!pane.show_whitespace);
         assert_eq!(pane.conflict_resolver.active_conflict, 1);
     });

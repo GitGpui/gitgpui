@@ -456,7 +456,7 @@ pub(super) fn worktree_preview_row_canvas(
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
-            window.paint_quad(fill(bounds, theme.colors.surface_bg));
+            window.paint_quad(fill(bounds, theme.colors.window_bg));
             if let Some(color) = bar_color
                 && prepaint.bar_w > px(0.0)
             {

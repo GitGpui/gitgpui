@@ -24,7 +24,8 @@ pub use autosolve::{
 };
 pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
-    ParsedConflictBlock, ParsedConflictSegment, parse_conflict_marker_segments,
+    ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
+    ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
 };
 pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 

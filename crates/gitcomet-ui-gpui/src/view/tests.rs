@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream};
+use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream, Worktree};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
@@ -249,6 +249,34 @@ fn remote_section_includes_tracked_upstream_without_remote_tracking_ref() {
 }
 
 #[test]
+fn worktree_tooltip_includes_branch_name() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("main-worktree"),
+        },
+    );
+
+    repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        path: PathBuf::from("linked-worktree"),
+        head: None,
+        branch: Some("feature/tooltip".to_string()),
+        detached: false,
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let row = rows
+        .iter()
+        .find_map(|row| match row {
+            BranchSidebarRow::WorktreeItem { tooltip, .. } => Some(tooltip.as_ref().to_owned()),
+            _ => None,
+        })
+        .expect("expected worktree row");
+
+    assert_eq!(row, "feature/tooltip  linked-worktree");
+}
+
+#[test]
 fn resize_edge_detects_edges_and_corners() {
     let window_size = size(px(100.0), px(100.0));
     let tiling = Tiling::default();
@@ -357,6 +385,35 @@ fn is_markdown_path_rejects_non_markdown() {
     assert!(!is_markdown_path(Path::new("file.txt")));
     assert!(!is_markdown_path(Path::new("file.rs")));
     assert!(!is_markdown_path(Path::new("file")));
+}
+
+#[test]
+fn should_bypass_text_file_preview_for_path_detects_supported_image_types() {
+    use std::path::Path;
+
+    for path in [
+        "image.png",
+        "image.JPEG",
+        "image.gif",
+        "image.webp",
+        "image.bmp",
+        "image.ico",
+        "image.svg",
+        "image.tif",
+        "image.tiff",
+    ] {
+        assert!(
+            should_bypass_text_file_preview_for_path(Path::new(path)),
+            "expected {path} to bypass text file preview"
+        );
+    }
+
+    for path in ["image.heic", "README.md", "notes.txt", "image"] {
+        assert!(
+            !should_bypass_text_file_preview_for_path(Path::new(path)),
+            "did not expect {path} to bypass text file preview"
+        );
+    }
 }
 
 #[test]
@@ -511,12 +568,9 @@ fn focused_mergetool_bootstrap_selects_worktree_diff_target() {
 
     assert_eq!(
         focused_mergetool_bootstrap_action(&state, &bootstrap),
-        Some(FocusedMergetoolBootstrapAction::SelectDiff {
+        Some(FocusedMergetoolBootstrapAction::SelectConflictDiff {
             repo_id: RepoId(1),
-            target: DiffTarget::WorkingTree {
-                area: DiffArea::Unstaged,
-                path: PathBuf::from("src/conflict.txt"),
-            },
+            path: PathBuf::from("src/conflict.txt"),
         })
     );
 }

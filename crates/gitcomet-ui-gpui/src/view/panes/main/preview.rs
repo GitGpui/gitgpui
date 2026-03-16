@@ -120,6 +120,13 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn ensure_conflict_markdown_preview_cache(&mut self) {
+        if self.is_conflict_rendered_preview_active()
+            && self
+                .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full)
+        {
+            return;
+        }
+
         let Some(source_hash) = self.conflict_resolver.source_hash else {
             self.conflict_resolver.markdown_preview =
                 ConflictResolverMarkdownPreviewState::default();

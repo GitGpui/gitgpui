@@ -9,6 +9,10 @@ enum ContextMenuAction {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    SelectConflictDiff {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
     OpenFile {
         repo_id: RepoId,
         path: std::path::PathBuf,
