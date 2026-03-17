@@ -136,11 +136,16 @@ class Gitcomet < Formula
   end
 
   def install
-    bin.install Dir["**/gitcomet-app"].fetch(0)
+    if OS.mac?
+      libexec.install "GitComet.app"
+      bin.install_symlink libexec/"GitComet.app/Contents/MacOS/gitcomet"
+    else
+      bin.install "gitcomet"
+    end
   end
 
   test do
-    assert_match "Usage", shell_output("#{bin}/gitcomet-app --help")
+    assert_match "Usage", shell_output("#{bin}/gitcomet --help")
   end
 end
 EOF2

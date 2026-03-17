@@ -684,7 +684,7 @@ mod tests {
             "/tmp/target/debug/gitcomet_ui_gpui-3ad1b0fd3f0c0d3e"
         )));
         assert!(!looks_like_test_binary(Path::new(
-            "/tmp/target/debug/gitcomet-app"
+            "/tmp/target/debug/gitcomet"
         )));
     }
 

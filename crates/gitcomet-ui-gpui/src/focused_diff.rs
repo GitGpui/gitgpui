@@ -1,4 +1,4 @@
-//! Focused diff window for standalone `gitcomet-app difftool` invocation.
+//! Focused diff window for standalone `gitcomet difftool` invocation.
 //!
 //! Opens a GPUI window that displays a unified diff with color-coded lines.
 //! The user reviews the diff and closes the window (exit 0).

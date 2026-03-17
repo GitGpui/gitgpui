@@ -1,5 +1,5 @@
 [package]
-name = "gitcomet-app"
+name = "gitcomet"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

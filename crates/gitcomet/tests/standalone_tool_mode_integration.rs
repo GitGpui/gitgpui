@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use std::sync::OnceLock;
 
 fn gitcomet_bin() -> PathBuf {
-    for env_key in ["CARGO_BIN_EXE_gitcomet-app", "CARGO_BIN_EXE_gitcomet_app"] {
+    for env_key in ["CARGO_BIN_EXE_gitcomet"] {
         if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
             if path.is_file() {
                 return path;
@@ -19,8 +19,7 @@ fn gitcomet_bin() -> PathBuf {
     }
 
     panic!(
-        "gitcomet-app binary path was not found. Tried CARGO_BIN_EXE_gitcomet-app, \
-CARGO_BIN_EXE_gitcomet_app, and a fallback relative to current test executable"
+        "gitcomet binary path was not found. Tried CARGO_BIN_EXE_gitcomet and a fallback relative to current test executable"
     );
 }
 
@@ -30,7 +29,7 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet-app", "gitcomet_app"] {
+    for bin_name in ["gitcomet"] {
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
             return Some(candidate);
@@ -48,7 +47,7 @@ where
     Command::new(gitcomet_bin())
         .args(args)
         .output()
-        .expect("gitcomet-app command to run")
+        .expect("gitcomet command to run")
 }
 
 fn run_gitcomet_in_dir<I, S>(dir: &Path, args: I) -> Output
@@ -60,7 +59,7 @@ where
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("gitcomet-app command to run")
+        .expect("gitcomet command to run")
 }
 
 fn run_gitcomet_in_dir_with_global_env<I, S>(
@@ -78,7 +77,7 @@ where
         .current_dir(dir)
         .args(args)
         .output()
-        .expect("gitcomet-app command to run")
+        .expect("gitcomet command to run")
 }
 
 fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
@@ -2447,7 +2446,7 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
 
 // ── Setup E2E integration ────────────────────────────────────────────
 //
-// These tests verify that `gitcomet-app setup --local` produces config that
+// These tests verify that `gitcomet setup --local` produces config that
 // actually works when Git invokes `git mergetool` / `git difftool`.  This
 // closes the gap between "config keys are written" and "the configured tool
 // is invoked end-to-end" — directly validating acceptance criteria 2-3 from
@@ -2592,12 +2591,12 @@ fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Opti
     }
 }
 
-/// After `gitcomet-app setup --local`, `git mergetool` should invoke
-/// gitcomet-app's built-in 3-way merge for conflicted files.
+/// After `gitcomet setup --local`, `git mergetool` should invoke
+/// gitcomet's built-in 3-way merge for conflicted files.
 ///
-/// For a true content conflict, gitcomet-app exits 1 and git mergetool
+/// For a true content conflict, gitcomet exits 1 and git mergetool
 /// restores the original file (expected behavior with trustExitCode=true).
-/// We verify the tool was invoked by checking for gitcomet-app's specific
+/// We verify the tool was invoked by checking for gitcomet's specific
 /// stderr messages, which differ from git's own merge output.
 #[test]
 fn setup_local_enables_git_mergetool_end_to_end() {
@@ -2631,33 +2630,33 @@ fn setup_local_enables_git_mergetool_end_to_end() {
         "expected merge conflict but git merge succeeded"
     );
 
-    // 3. Run `git mergetool` — should invoke gitcomet-app via setup config.
+    // 3. Run `git mergetool` — should invoke gitcomet via setup config.
     //    DISPLAY is removed so guiDefault=auto selects the headless tool.
     let mt = setup_e2e_git_capture(repo, &["mergetool"]);
     let mt_stderr = String::from_utf8_lossy(&mt.stderr);
 
-    // 4. Verify gitcomet-app was invoked by checking for its specific stderr
-    //    messages.  "conflict(s) remain" is emitted by gitcomet-app's mergetool
+    // 4. Verify gitcomet was invoked by checking for its specific stderr
+    //    messages.  "conflict(s) remain" is emitted by gitcomet's mergetool
     //    mode and is NOT part of git's own output (git says "fix conflicts and
     //    then commit the result" instead).
     assert!(
         mt_stderr.contains("conflict(s) remain"),
-        "expected gitcomet-app's conflict message in mergetool stderr\n\
+        "expected gitcomet's conflict message in mergetool stderr\n\
          stdout: {}\nstderr: {}",
         String::from_utf8_lossy(&mt.stdout),
         mt_stderr,
     );
 
-    // Also verify gitcomet-app's "CONFLICT (content)" message is present.
+    // Also verify gitcomet's "CONFLICT (content)" message is present.
     assert!(
         mt_stderr.contains("CONFLICT (content)"),
-        "expected CONFLICT marker from gitcomet-app\nstderr: {}",
+        "expected CONFLICT marker from gitcomet\nstderr: {}",
         mt_stderr,
     );
 }
 
-/// After `gitcomet-app setup --local`, `git difftool` should invoke
-/// gitcomet-app's built-in diff and produce unified diff output.
+/// After `gitcomet setup --local`, `git difftool` should invoke
+/// gitcomet's built-in diff and produce unified diff output.
 #[test]
 fn setup_local_enables_git_difftool_end_to_end() {
     if !require_git_shell_for_setup_integration_tests() {
@@ -2677,7 +2676,7 @@ fn setup_local_enables_git_difftool_end_to_end() {
     setup_e2e_commit(repo, "initial");
     write_file(&repo.join("file.txt"), "line1\nMODIFIED\nline3\n");
 
-    // 3. Run `git difftool` — should invoke gitcomet-app difftool.
+    // 3. Run `git difftool` — should invoke gitcomet difftool.
     //    DISPLAY is removed so guiDefault=auto selects the headless tool.
     let dt = setup_e2e_git_capture(repo, &["difftool"]);
     let dt_text = output_text(&dt);
@@ -2688,7 +2687,7 @@ fn setup_local_enables_git_difftool_end_to_end() {
         "git difftool should exit 0\n{dt_text}"
     );
 
-    // gitcomet-app difftool produces unified diff output.
+    // gitcomet difftool produces unified diff output.
     let stdout = String::from_utf8_lossy(&dt.stdout);
     assert!(
         stdout.contains("@@"),
@@ -2704,7 +2703,7 @@ fn setup_local_enables_git_difftool_end_to_end() {
     );
 }
 
-/// After `gitcomet-app setup --local`, quoted stage variables in the generated
+/// After `gitcomet setup --local`, quoted stage variables in the generated
 /// mergetool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
@@ -2760,7 +2759,7 @@ fn setup_local_mergetool_handles_spaced_unicode_path_end_to_end() {
     );
 }
 
-/// After `gitcomet-app setup --local`, quoted stage variables in the generated
+/// After `gitcomet setup --local`, quoted stage variables in the generated
 /// difftool command must preserve paths containing spaces/unicode.
 #[test]
 fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
@@ -2808,7 +2807,7 @@ fn setup_local_difftool_handles_spaced_unicode_path_end_to_end() {
     );
 }
 
-/// `gitcomet-app setup` (global scope) should configure an isolated global
+/// `gitcomet setup` (global scope) should configure an isolated global
 /// gitconfig so `git mergetool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
@@ -2885,7 +2884,7 @@ fn setup_global_enables_git_mergetool_end_to_end_with_isolated_global_config() {
     );
 }
 
-/// `gitcomet-app setup` (global scope) should configure an isolated global
+/// `gitcomet setup` (global scope) should configure an isolated global
 /// gitconfig so `git difftool` works end-to-end without local repo config.
 #[test]
 fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
@@ -2942,7 +2941,7 @@ fn setup_global_enables_git_difftool_end_to_end_with_isolated_global_config() {
     );
 }
 
-/// `gitcomet-app setup` (global scope) should make both headless and GUI
+/// `gitcomet setup` (global scope) should make both headless and GUI
 /// mergetool entries discoverable via `git mergetool --tool-help`.
 #[test]
 fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
@@ -2994,7 +2993,7 @@ fn setup_global_mergetool_tool_help_lists_headless_and_gui_entries() {
     );
 }
 
-/// `gitcomet-app setup` (global scope) should make both headless and GUI
+/// `gitcomet setup` (global scope) should make both headless and GUI
 /// difftool entries discoverable via `git difftool --tool-help`.
 #[test]
 fn setup_global_difftool_tool_help_lists_headless_and_gui_entries() {
@@ -3058,7 +3057,7 @@ fn help_flag_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("gitcomet-app"),
+        stdout.contains("gitcomet"),
         "help output should mention the binary name"
     );
 }
@@ -3073,7 +3072,7 @@ fn version_flag_exits_zero() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("gitcomet-app"),
+        stdout.contains("gitcomet"),
         "version output should mention the binary name"
     );
 }

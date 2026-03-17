@@ -16,7 +16,7 @@ fn main() {
     let Some(install_dir) = current_exe.parent() else {
         return;
     };
-    let app_exe = install_dir.join("gitcomet-app.exe");
+    let app_exe = install_dir.join("gitcomet.exe");
 
     let mut cmd = Command::new(app_exe);
     cmd.current_dir(install_dir);

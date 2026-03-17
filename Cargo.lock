@@ -2239,7 +2239,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "gitcomet-app"
+name = "gitcomet"
 version = "0.1.1"
 dependencies = [
  "clap",

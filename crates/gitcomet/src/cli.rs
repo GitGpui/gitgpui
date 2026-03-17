@@ -1,4 +1,4 @@
-//! CLI argument parsing for gitcomet-app.
+//! CLI argument parsing for gitcomet.
 //!
 //! Supports six modes:
 //! - Default (no subcommand): open the full repository browser
@@ -29,7 +29,7 @@ pub mod exit_code {
 // ── Raw CLI argument structs (clap) ──────────────────────────────────
 
 #[derive(Parser, Debug)]
-#[command(name = "gitcomet-app", about = "Git GUI built with GPUI", version)]
+#[command(name = "gitcomet", about = "Git GUI built with GPUI", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,

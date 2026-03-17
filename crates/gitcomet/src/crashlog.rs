@@ -568,7 +568,7 @@ mod tests {
     fn parse_crash_log_extracts_fields() {
         let log = r#"=== GitComet crash (panic) ===
 timestamp_unix_ms=123
-crate=gitcomet-app version=0.1.0
+crate=gitcomet version=0.1.0
 thread=main
 location=src/main.rs#L42
 message=boom happened
@@ -580,7 +580,7 @@ frame 2
 
         let parsed = parse_crash_log(log);
         assert_eq!(parsed.timestamp_unix_ms.as_deref(), Some("123"));
-        assert_eq!(parsed.crate_name.as_deref(), Some("gitcomet-app"));
+        assert_eq!(parsed.crate_name.as_deref(), Some("gitcomet"));
         assert_eq!(parsed.crate_version.as_deref(), Some("0.1.0"));
         assert_eq!(parsed.thread.as_deref(), Some("main"));
         assert_eq!(parsed.location.as_deref(), Some("src/main.rs#L42"));
@@ -602,7 +602,7 @@ frame 2
     #[test]
     fn build_startup_report_populates_issue_url_and_summary() {
         let log = r#"timestamp_unix_ms=123
-crate=gitcomet-app version=0.1.0
+crate=gitcomet version=0.1.0
 thread=main
 location=src/main.rs#L42
 message=boom happened
@@ -633,7 +633,7 @@ frame 2
         let dir = tempdir().expect("temp dir");
         let crash_log_path = dir.path().join("panic.log");
         let crash_log = r#"timestamp_unix_ms=123
-crate=gitcomet-app version=0.1.0
+crate=gitcomet version=0.1.0
 thread=main
 location=src/main.rs#L42
 message=boom happened

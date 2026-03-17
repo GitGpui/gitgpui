@@ -148,7 +148,7 @@ fn main() {
             #[cfg(not(feature = "ui-gpui-runtime"))]
             if config.gui {
                 eprintln!(
-                    "GUI difftool mode is unavailable in this build. Rebuild with `-p gitcomet-app --features ui-gpui`."
+                    "GUI difftool mode is unavailable in this build. Rebuild with `-p gitcomet --features ui-gpui`."
                 );
                 std::process::exit(exit_code::ERROR);
             }
@@ -234,7 +234,7 @@ fn main() {
             #[cfg(not(feature = "ui"))]
             {
                 let _ = path;
-                eprintln!("GitComet UI is disabled. Build with `-p gitcomet-app --features ui`.");
+                eprintln!("GitComet UI is disabled. Build with `-p gitcomet --features ui`.");
                 std::process::exit(exit_code::ERROR);
             }
         }
@@ -242,7 +242,7 @@ fn main() {
             #[cfg(not(feature = "ui-gpui-runtime"))]
             if config.gui {
                 eprintln!(
-                    "GUI mergetool mode is unavailable in this build. Rebuild with `-p gitcomet-app --features ui-gpui`."
+                    "GUI mergetool mode is unavailable in this build. Rebuild with `-p gitcomet --features ui-gpui`."
                 );
                 std::process::exit(exit_code::ERROR);
             }
@@ -284,6 +284,16 @@ const MACOS_BUNDLE_RELAUNCH_ENV: &str = "GITCOMET_SKIP_APP_BUNDLE_RELAUNCH";
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 const MACOS_APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/gitcomet-512.png");
 
+#[cfg(feature = "ui-gpui-runtime")]
+fn resolve_executable_path_for_bundle_detection(path: &std::path::Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(feature = "ui-gpui-runtime")]
+fn is_macos_app_bundle_executable(path: &std::path::Path) -> bool {
+    path.to_string_lossy().contains(".app/Contents/MacOS/")
+}
+
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
     if std::env::var_os(MACOS_BUNDLE_RELAUNCH_ENV).is_some() {
@@ -293,21 +303,19 @@ fn maybe_relaunch_browser_from_macos_app_bundle() -> bool {
     let Ok(current_exe) = std::env::current_exe() else {
         return false;
     };
-    if current_exe
-        .to_string_lossy()
-        .contains(".app/Contents/MacOS/")
-    {
+    let resolved_exe = resolve_executable_path_for_bundle_detection(&current_exe);
+    if is_macos_app_bundle_executable(&resolved_exe) {
         return false;
     }
 
-    let Some(bin_dir) = current_exe.parent() else {
+    let Some(bin_dir) = resolved_exe.parent() else {
         return false;
     };
     let app_bundle = bin_dir.join("GitComet.app");
-    let app_exe = match ensure_macos_dev_app_bundle(&current_exe, &app_bundle) {
+    let app_exe = match ensure_macos_dev_app_bundle(&resolved_exe, &app_bundle) {
         Ok(path) => path,
         Err(err) => {
-            eprintln!("Failed to prepare macOS app bundle icon: {err}");
+            eprintln!("Failed to prepare macOS app bundle: {err}");
             return false;
         }
     };
@@ -336,7 +344,7 @@ fn ensure_macos_dev_app_bundle(
     std::fs::create_dir_all(&resources)
         .map_err(|e| format!("failed to create Resources dir: {e}"))?;
 
-    let app_exe = macos.join("gitcomet-app");
+    let app_exe = macos.join("gitcomet");
     std::fs::copy(current_exe, &app_exe)
         .map_err(|e| format!("failed to copy executable into bundle: {e}"))?;
 
@@ -372,7 +380,7 @@ fn ensure_macos_dev_app_bundle(
   <key>CFBundleDisplayName</key>
   <string>GitComet</string>
   <key>CFBundleExecutable</key>
-  <string>gitcomet-app</string>
+  <string>gitcomet</string>
   <key>CFBundleIdentifier</key>
   <string>ai.autoexplore.gitcomet.dev</string>
   <key>CFBundleIconFile</key>
@@ -678,6 +686,39 @@ mod tests {
 
         assert!(err.contains("Failed to locate repository root"));
         assert!(err.contains(&merged.display().to_string()));
+    }
+
+    #[test]
+    #[cfg(feature = "ui-gpui-runtime")]
+    fn detects_macos_app_bundle_executable_paths() {
+        assert!(is_macos_app_bundle_executable(std::path::Path::new(
+            "/tmp/GitComet.app/Contents/MacOS/gitcomet"
+        )));
+        assert!(!is_macos_app_bundle_executable(std::path::Path::new(
+            "/opt/homebrew/bin/gitcomet"
+        )));
+    }
+
+    #[test]
+    #[cfg(all(feature = "ui-gpui-runtime", unix))]
+    fn canonicalized_symlink_resolves_to_macos_app_bundle_executable() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let app_exe = temp.path().join("GitComet.app/Contents/MacOS/gitcomet");
+        fs::create_dir_all(app_exe.parent().unwrap()).unwrap();
+        fs::write(&app_exe, b"#!/bin/sh\n").unwrap();
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let symlink_path = bin_dir.join("gitcomet");
+        symlink(&app_exe, &symlink_path).unwrap();
+
+        assert!(!is_macos_app_bundle_executable(&symlink_path));
+
+        let resolved = resolve_executable_path_for_bundle_detection(&symlink_path);
+        assert_eq!(resolved, app_exe);
+        assert!(is_macos_app_bundle_executable(&resolved));
     }
 
     #[test]

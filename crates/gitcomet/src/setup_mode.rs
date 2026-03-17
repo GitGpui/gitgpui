@@ -1,4 +1,4 @@
-//! `gitcomet-app setup` / `gitcomet-app uninstall` support.
+//! `gitcomet setup` / `gitcomet uninstall` support.
 //!
 //! Setup writes the recommended global (or local) git config entries so that
 //! `git difftool` and `git mergetool` invoke gitcomet automatically.
@@ -91,7 +91,7 @@ fn shell_single_quote(value: &str) -> String {
 fn current_exe_path() -> Result<PathBuf, String> {
     std::env::current_exe()
         .and_then(|p| p.canonicalize())
-        .map_err(|e| format!("Cannot determine gitcomet-app binary path: {e}"))
+        .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
 }
 
 fn executable_path_for_shell(bin_path: &Path) -> Result<String, String> {
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn build_config_entries_contains_all_required_keys() {
-        let entries = build_config_entries("/usr/bin/gitcomet-app");
+        let entries = build_config_entries("/usr/bin/gitcomet");
         let keys: Vec<&str> = entries.iter().map(|e| e.key).collect();
 
         // Headless tool
@@ -948,7 +948,7 @@ mod tests {
 
     #[test]
     fn gui_tool_uses_separate_tool_name() {
-        let entries = build_config_entries("/usr/bin/gitcomet-app");
+        let entries = build_config_entries("/usr/bin/gitcomet");
         let merge_guitool = entries.iter().find(|e| e.key == "merge.guitool").unwrap();
         let diff_guitool = entries.iter().find(|e| e.key == "diff.guitool").unwrap();
 
@@ -1021,14 +1021,14 @@ mod tests {
 
     #[test]
     fn mergetool_cmd_escapes_single_quote_in_binary_path() {
-        let entries = build_config_entries("/tmp/it's/gitcomet-app");
+        let entries = build_config_entries("/tmp/it's/gitcomet");
         let cmd = entries
             .iter()
             .find(|e| e.key == "mergetool.gitcomet.cmd")
             .unwrap();
 
         assert!(
-            cmd.value.starts_with("'/tmp/it'\"'\"'s/gitcomet-app'"),
+            cmd.value.starts_with("'/tmp/it'\"'\"'s/gitcomet'"),
             "unexpected cmd quoting: {}",
             cmd.value
         );
@@ -1076,7 +1076,7 @@ mod tests {
 
     #[test]
     fn format_commands_global_scope() {
-        let entries = build_config_entries("/bin/gitcomet-app");
+        let entries = build_config_entries("/bin/gitcomet");
         let output = format_commands(&entries, "--global");
 
         // Headless mergetool entries
@@ -1109,14 +1109,14 @@ mod tests {
         assert!(output.contains("git config --global difftool.guiDefault"));
 
         assert!(
-            !output.contains("''/bin/gitcomet-app'"),
+            !output.contains("''/bin/gitcomet'"),
             "dry-run output should not contain broken nested quoting:\n{output}"
         );
     }
 
     #[test]
     fn format_commands_local_scope() {
-        let entries = build_config_entries("/bin/gitcomet-app");
+        let entries = build_config_entries("/bin/gitcomet");
         let output = format_commands(&entries, "--local");
 
         assert!(output.contains("git config --local merge.tool"));
@@ -1155,7 +1155,7 @@ mod tests {
             .unwrap();
         assert!(init.status.success());
 
-        let entries = build_config_entries("/test/gitcomet-app");
+        let entries = build_config_entries("/test/gitcomet");
         let result = std::process::Command::new("git")
             .arg("-C")
             .arg(dir.path())

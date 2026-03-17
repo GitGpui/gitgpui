@@ -18,7 +18,7 @@ appdir="${XDG_DATA_HOME:-${HOME}/.local/share}/applications"
 iconsroot="${XDG_DATA_HOME:-${HOME}/.local/share}/icons/hicolor"
 icon_sizes=(32 48 128 256 512)
 
-rm -f "${bindir}/gitcomet-app"
+rm -f "${bindir}/gitcomet"
 rm -f "${appdir}/gitcomet.desktop"
 for size in "${icon_sizes[@]}"; do
   rm -f "${iconsroot}/${size}x${size}/apps/gitcomet.png"

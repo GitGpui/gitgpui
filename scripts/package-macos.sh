@@ -94,14 +94,14 @@ if [[ "$arch" != "$host_arch" ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-bin_src="${repo_root}/target/${mode}/gitcomet-app"
+bin_src="${repo_root}/target/${mode}/gitcomet"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
   cargo_mode_flag=()
   if [[ "$mode" == "release" ]]; then
     cargo_mode_flag=(--release)
   fi
-  (cd "$repo_root" && cargo build -p gitcomet-app "${cargo_mode_flag[@]}" --locked --features ui-gpui,gix --bins)
+  (cd "$repo_root" && cargo build -p gitcomet "${cargo_mode_flag[@]}" --locked --features ui-gpui,gix --bins)
 fi
 
 if [[ ! -x "$bin_src" ]]; then
@@ -129,8 +129,8 @@ resources_dir="${contents_dir}/Resources"
 rm -rf "$release_dir"
 mkdir -p "$macos_dir" "$resources_dir"
 
-install -m755 "$bin_src" "${macos_dir}/gitcomet-app"
-install -m755 "$bin_src" "${release_dir}/gitcomet-app"
+install -m755 "$bin_src" "${macos_dir}/gitcomet"
+install -m755 "$bin_src" "${release_dir}/gitcomet"
 install -m644 "${repo_root}/README.md" "${release_dir}/README.md"
 install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${release_dir}/LICENSE-AGPL-3.0"
 install -m644 "${repo_root}/NOTICE" "${release_dir}/NOTICE"
@@ -158,7 +158,7 @@ cat > "${contents_dir}/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key>
   <string>GitComet</string>
   <key>CFBundleExecutable</key>
-  <string>gitcomet-app</string>
+  <string>gitcomet</string>
   <key>CFBundleIdentifier</key>
   <string>ai.autoexplore.gitcomet</string>
   <key>CFBundleIconFile</key>

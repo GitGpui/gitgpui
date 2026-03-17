@@ -54,7 +54,7 @@ fn install_linux_script_does_not_use_invalid_debug_flag() {
         .unwrap_or_else(|err| panic!("failed to read {}: {err}", script_path.display()));
 
     assert!(
-        !script.contains("cargo build -p gitcomet-app --${mode}"),
+        !script.contains("cargo build -p gitcomet --${mode}"),
         "install script should not forward mode directly as a cargo flag"
     );
 }
@@ -68,7 +68,7 @@ fn parse_mode_mergetool_drops_empty_base_value_before_clap() {
 
     let mode = parse_mode_for_test(
         vec![
-            "gitcomet-app".into(),
+            "gitcomet".into(),
             "mergetool".into(),
             "--base".into(),
             "".into(),
@@ -100,7 +100,7 @@ fn parse_mode_mergetool_drops_empty_attached_base_value_before_clap() {
 
     let mode = parse_mode_for_test(
         vec![
-            "gitcomet-app".into(),
+            "gitcomet".into(),
             "mergetool".into(),
             "--base=".into(),
             "--local".into(),
@@ -1437,7 +1437,7 @@ fn mergetool_env_only_resolution_without_base() {
 #[test]
 fn clap_parses_difftool_subcommand() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "difftool",
         "--local",
         "/tmp/a",
@@ -1461,7 +1461,7 @@ fn clap_parses_difftool_subcommand() {
 #[test]
 fn clap_parses_mergetool_subcommand() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "mergetool",
         "--merged",
         "/tmp/m",
@@ -1498,7 +1498,7 @@ fn clap_parses_mergetool_subcommand() {
 fn clap_parses_mergetool_output_aliases() {
     for merged_flag in ["-o", "--output", "--out"] {
         let cli = Cli::try_parse_from([
-            "gitcomet-app",
+            "gitcomet",
             "mergetool",
             merged_flag,
             "/tmp/m",
@@ -1523,7 +1523,7 @@ fn clap_parses_mergetool_output_aliases() {
 #[test]
 fn clap_parses_mergetool_kdiff3_label_aliases() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "mergetool",
         "--merged",
         "/tmp/m",
@@ -1552,7 +1552,7 @@ fn clap_parses_mergetool_kdiff3_label_aliases() {
 
 #[test]
 fn clap_parses_setup_subcommand() {
-    let cli = Cli::try_parse_from(["gitcomet-app", "setup", "--dry-run", "--local"]).unwrap();
+    let cli = Cli::try_parse_from(["gitcomet", "setup", "--dry-run", "--local"]).unwrap();
 
     match cli.command {
         Some(Command::Setup(args)) => {
@@ -1565,7 +1565,7 @@ fn clap_parses_setup_subcommand() {
 
 #[test]
 fn clap_parses_uninstall_subcommand() {
-    let cli = Cli::try_parse_from(["gitcomet-app", "uninstall", "--dry-run", "--local"]).unwrap();
+    let cli = Cli::try_parse_from(["gitcomet", "uninstall", "--dry-run", "--local"]).unwrap();
 
     match cli.command {
         Some(Command::Uninstall(args)) => {
@@ -1581,7 +1581,7 @@ fn uninstall_mode_resolves_into_app_mode() {
     let env = TestEnv::new();
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("uninstall"),
             OsString::from("--dry-run"),
             OsString::from("--local"),
@@ -1601,14 +1601,14 @@ fn uninstall_mode_resolves_into_app_mode() {
 
 #[test]
 fn clap_parses_no_subcommand_as_browser() {
-    let cli = Cli::try_parse_from(["gitcomet-app"]).unwrap();
+    let cli = Cli::try_parse_from(["gitcomet"]).unwrap();
     assert!(cli.command.is_none());
     assert!(cli.path.is_none());
 }
 
 #[test]
 fn clap_parses_path_argument() {
-    let cli = Cli::try_parse_from(["gitcomet-app", "/some/repo"]).unwrap();
+    let cli = Cli::try_parse_from(["gitcomet", "/some/repo"]).unwrap();
     assert!(cli.command.is_none());
     assert_eq!(
         cli.path.as_deref(),
@@ -1625,7 +1625,7 @@ fn compat_parses_positional_difftool_invocation() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             local.into_os_string(),
             remote.into_os_string(),
         ],
@@ -1653,7 +1653,7 @@ fn compat_parses_kdiff3_style_difftool_labels() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--L1"),
             OsString::from("LEFT_LABEL"),
             OsString::from("--L2"),
@@ -1683,7 +1683,7 @@ fn compat_parses_kdiff3_style_difftool_short_numbered_equals_labels() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("-L1=LEFT_LABEL"),
             OsString::from("-L2=RIGHT_LABEL"),
             local.into_os_string(),
@@ -1711,7 +1711,7 @@ fn compat_parses_meld_style_difftool_short_labels() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("-L"),
             OsString::from("LEFT_LABEL"),
             OsString::from("--label"),
@@ -1741,7 +1741,7 @@ fn compat_parses_meld_style_difftool_attached_labels() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("-LLEFT_LABEL"),
             OsString::from("--label=RIGHT_LABEL"),
             local.into_os_string(),
@@ -1771,7 +1771,7 @@ fn compat_parses_kdiff3_style_mergetool_with_base() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("--L1"),
             OsString::from("BASE_LABEL"),
@@ -1814,7 +1814,7 @@ fn compat_parses_kdiff3_style_mergetool_with_base_flag() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("--L1=BASE_LABEL"),
             OsString::from("--L2=LOCAL_LABEL"),
@@ -1855,7 +1855,7 @@ fn compat_parses_kdiff3_style_mergetool_with_short_numbered_label_flags() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("-L1"),
             OsString::from("BASE_LABEL"),
@@ -1898,7 +1898,7 @@ fn compat_parses_kdiff3_style_mergetool_with_attached_short_numbered_label_flags
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("-L1BASE_LABEL"),
             OsString::from("-L2=LOCAL_LABEL"),
@@ -1938,7 +1938,7 @@ fn compat_parses_kdiff3_style_mergetool_with_attached_output_and_base_flags() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("--L1=BASE_LABEL"),
             OsString::from("--L2=LOCAL_LABEL"),
@@ -1976,7 +1976,7 @@ fn compat_parses_kdiff3_style_mergetool_without_base() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("--L1"),
             OsString::from("LOCAL_LABEL"),
@@ -2016,7 +2016,7 @@ fn compat_mergetool_applies_merge_conflictstyle_from_git_config() {
 
     let mode = parse_mode_for_test_with_config(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("-o"),
             merged.into_os_string(),
@@ -2052,7 +2052,7 @@ fn compat_mergetool_applies_diff_algorithm_from_git_config() {
 
     let mode = parse_mode_for_test_with_config(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             OsString::from("-o"),
             merged.into_os_string(),
@@ -2088,7 +2088,7 @@ fn compat_parses_meld_style_mergetool_with_output() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--output"),
             merged.clone().into_os_string(),
             local.clone().into_os_string(),
@@ -2124,7 +2124,7 @@ fn compat_parses_meld_style_mergetool_labels() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--output"),
             merged.clone().into_os_string(),
             OsString::from("--label=LOCAL_LABEL"),
@@ -2164,7 +2164,7 @@ fn compat_parses_meld_style_mergetool_with_auto_merge_flag() {
 
     let mode = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto-merge"),
             OsString::from("--output"),
             merged.clone().into_os_string(),
@@ -2197,7 +2197,7 @@ fn compat_auto_merge_requires_output_path() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto-merge"),
             local.into_os_string(),
             base.into_os_string(),
@@ -2224,7 +2224,7 @@ fn compat_rejects_too_many_label_flags() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--output"),
             merged.into_os_string(),
             OsString::from("--label"),
@@ -2258,7 +2258,7 @@ fn compat_auto_requires_output_path() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--auto"),
             local.into_os_string(),
             remote.into_os_string(),
@@ -2282,7 +2282,7 @@ fn compat_merge_requires_two_or_three_positionals_after_output_flag() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--output"),
             merged.into_os_string(),
             local.into_os_string(),
@@ -2309,7 +2309,7 @@ fn compat_merge_rejects_too_many_positionals() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--out"),
             merged.into_os_string(),
             base.into_os_string(),
@@ -2338,7 +2338,7 @@ fn compat_merge_rejects_base_flag_with_extra_positionals() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--base"),
             base.into_os_string(),
             OsString::from("--out"),
@@ -2368,7 +2368,7 @@ fn compat_merge_without_base_rejects_l3_label() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--out"),
             merged.into_os_string(),
             OsString::from("--L3"),
@@ -2395,7 +2395,7 @@ fn compat_diff_rejects_l3_without_output_path() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--L3"),
             OsString::from("REMOTE"),
             local.into_os_string(),
@@ -2421,7 +2421,7 @@ fn compat_diff_rejects_base_without_output_path() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--base"),
             base.into_os_string(),
             local.into_os_string(),
@@ -2447,7 +2447,7 @@ fn compat_diff_rejects_too_many_positionals() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             local.into_os_string(),
             remote.into_os_string(),
             extra.into_os_string(),
@@ -2594,7 +2594,7 @@ fn compat_base_flag_requires_two_positionals_when_output_present() {
 
     let err = parse_mode_for_test(
         vec![
-            OsString::from("gitcomet-app"),
+            OsString::from("gitcomet"),
             OsString::from("--base"),
             base.into_os_string(),
             OsString::from("--out"),
@@ -2834,7 +2834,7 @@ fn mergetool_marker_size_zero_errors() {
 #[test]
 fn clap_parses_conflict_style_and_diff_algorithm() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "mergetool",
         "--merged",
         "/tmp/m",
@@ -2996,7 +2996,7 @@ fn git_config_fallback_combined_style_and_algorithm() {
 #[test]
 fn clap_parses_mergetool_auto_flag() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "mergetool",
         "--merged",
         "/tmp/m",
@@ -3019,7 +3019,7 @@ fn clap_parses_mergetool_auto_flag() {
 #[test]
 fn clap_parses_mergetool_auto_merge_alias_flag() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "mergetool",
         "--merged",
         "/tmp/m",
@@ -3133,7 +3133,7 @@ fn compat_auto_merge_flag_propagates_to_config() {
 #[test]
 fn clap_parses_extract_merge_fixtures_subcommand() {
     let cli = Cli::try_parse_from([
-        "gitcomet-app",
+        "gitcomet",
         "extract-merge-fixtures",
         "--repo",
         "/tmp/repo",
@@ -3162,7 +3162,7 @@ fn extract_merge_fixtures_mode_resolves_into_app_mode() {
     let env = TestEnv::new();
     let mode = parse_mode_for_test(
         vec![
-            "gitcomet-app".into(),
+            "gitcomet".into(),
             "extract-merge-fixtures".into(),
             "--repo".into(),
             "/tmp/repo".into(),

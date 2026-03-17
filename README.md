@@ -76,8 +76,8 @@ Measured on Linux 6.19.6-zen (x64), Ryzen 5950x, 128GB DDR4. Detailed test steps
 ### Build from source
 
 ```bash
-cargo build -p gitcomet-app --features ui-gpui,gix
-cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
+cargo build -p gitcomet --features ui-gpui,gix
+cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
 
 ### Contributing
@@ -92,10 +92,10 @@ GitComet can be used as a standalone diff and merge tool invoked by `git difftoo
 
 ```bash
 # Configure Git globally to use GitComet for both difftool + mergetool
-gitcomet-app setup
+gitcomet setup
 
 # Remove GitComet integration safely
-gitcomet-app uninstall
+gitcomet uninstall
 ```
 
 - Use `--local` to target only the current repository instead of global config.
@@ -110,7 +110,7 @@ This setup registers both headless and GUI variants with `guiDefault=auto`, so G
 Built-in `setup` writes these Git config entries:
 
 ```bash
-GITCOMET_BIN="/absolute/path/to/gitcomet-app"
+GITCOMET_BIN="/absolute/path/to/gitcomet"
 
 # Headless tool: algorithm-only merge/diff for CI, scripts, and no-display environments
 git config --global merge.tool gitcomet
@@ -153,7 +153,7 @@ Built-in `uninstall` restores those backups only when the key still has the setu
 **Difftool:**
 
 ```bash
-gitcomet-app difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
+gitcomet difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
@@ -161,7 +161,7 @@ Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
 **Mergetool:**
 
 ```bash
-gitcomet-app mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
+gitcomet mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
 ```
 
 Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional for add/add conflicts.

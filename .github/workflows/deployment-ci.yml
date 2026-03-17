@@ -93,6 +93,9 @@ jobs:
           ruby -c dist/deployment-ci/gitcomet.rb
           grep -q "on_linux do" dist/deployment-ci/gitcomet.rb
           grep -q "gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" dist/deployment-ci/gitcomet.rb
+          grep -q 'libexec.install "GitComet.app"' dist/deployment-ci/gitcomet.rb
+          grep -q 'bin.install_symlink libexec/"GitComet.app/Contents/MacOS/gitcomet"' dist/deployment-ci/gitcomet.rb
+          grep -q 'bin.install "gitcomet"' dist/deployment-ci/gitcomet.rb
 
       - name: Validate Homebrew tap initial publish detection
         run: |
@@ -135,8 +138,8 @@ jobs:
           pkg_root="dist/apt-ci/pkg"
           mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
 
-          printf '%s\n' '#!/usr/bin/env bash' 'echo "GitComet CI"' > "${pkg_root}/usr/bin/gitcomet-app"
-          chmod +x "${pkg_root}/usr/bin/gitcomet-app"
+          printf '%s\n' '#!/usr/bin/env bash' 'echo "GitComet CI"' > "${pkg_root}/usr/bin/gitcomet"
+          chmod +x "${pkg_root}/usr/bin/gitcomet"
 
           {
             echo "Package: gitcomet"
@@ -231,7 +234,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build -p gitcomet-app --release --locked --features ui-gpui,gix --bins
+        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bins
 
       - name: Package macOS artifacts
         run: |
@@ -248,7 +251,7 @@ jobs:
           set -euo pipefail
           tarball="dist/gitcomet-v0.0.0-ci-macos-${{ matrix.arch }}.tar.gz"
           test -f "$tarball"
-          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet-app$"
+          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet$"
 
       - name: Verify DMG launches binary
         run: |
@@ -262,5 +265,5 @@ jobs:
             exit 1
           fi
 
-          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet-app" --help >/dev/null
+          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet" --help >/dev/null
           hdiutil detach "$mount_point"

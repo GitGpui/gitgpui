@@ -17,7 +17,7 @@ fn apply_isolated_git_config_env(cmd: &mut Command) {
 }
 
 fn gitcomet_bin() -> PathBuf {
-    for env_key in ["CARGO_BIN_EXE_gitcomet-app", "CARGO_BIN_EXE_gitcomet_app"] {
+    for env_key in ["CARGO_BIN_EXE_gitcomet"] {
         if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
             if path.is_file() {
                 return path;
@@ -30,8 +30,7 @@ fn gitcomet_bin() -> PathBuf {
     }
 
     panic!(
-        "gitcomet-app binary path was not found. Tried CARGO_BIN_EXE_gitcomet-app, \
-CARGO_BIN_EXE_gitcomet_app, and a fallback relative to current test executable"
+        "gitcomet binary path was not found. Tried CARGO_BIN_EXE_gitcomet and a fallback relative to current test executable"
     );
 }
 
@@ -41,7 +40,7 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet-app", "gitcomet_app"] {
+    for bin_name in ["gitcomet"] {
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
             return Some(candidate);
@@ -59,7 +58,7 @@ where
     Command::new(gitcomet_bin())
         .args(args)
         .output()
-        .expect("gitcomet-app command to run")
+        .expect("gitcomet command to run")
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-  "crates/gitcomet-app",
+  "crates/gitcomet",
   "crates/gitcomet-core",
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
@@ -11,7 +11,7 @@ members = [
 ]
 
 default-members = [
-  "crates/gitcomet-app",
+  "crates/gitcomet",
   "crates/gitcomet-core",
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",

@@ -8,7 +8,7 @@
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
 - `crates/gitcomet-ui`: UI model/state (toolkit-independent).
 - `crates/gitcomet-ui-gpui`: gpui views/components (focused diff/merge windows, conflict resolver, word diff).
-- `crates/gitcomet-app`: binary entrypoint, CLI (clap), difftool/mergetool/setup/uninstall modes.
+- `crates/gitcomet`: binary entrypoint, CLI (clap), difftool/mergetool/setup/uninstall modes.
 
 ### Getting started
 
@@ -28,19 +28,19 @@ cargo build
 To build the actual app you'll enable features (requires network for dependencies):
 
 ```bash
-cargo build -p gitcomet-app --features ui,gix
+cargo build -p gitcomet --features ui,gix
 ```
 
 To also compile the gpui-based UI crate:
 
 ```bash
-cargo build -p gitcomet-app --features ui-gpui,gix
+cargo build -p gitcomet --features ui-gpui,gix
 ```
 
 Run (opens the repo passed as the first arg, or falls back to the current directory):
 
 ```bash
-cargo run -p gitcomet-app --features ui-gpui,gix -- /path/to/repo
+cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
 
 ### Testing

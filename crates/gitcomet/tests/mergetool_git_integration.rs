@@ -62,7 +62,7 @@ fn require_git_shell_for_tool_tests() -> bool {
 }
 
 fn gitcomet_bin() -> PathBuf {
-    for env_key in ["CARGO_BIN_EXE_gitcomet-app", "CARGO_BIN_EXE_gitcomet_app"] {
+    for env_key in ["CARGO_BIN_EXE_gitcomet"] {
         if let Some(path) = std::env::var_os(env_key).map(PathBuf::from) {
             if path.is_file() {
                 return path;
@@ -75,8 +75,7 @@ fn gitcomet_bin() -> PathBuf {
     }
 
     panic!(
-        "gitcomet-app binary path was not found. Tried CARGO_BIN_EXE_gitcomet-app, \
-CARGO_BIN_EXE_gitcomet_app, and a fallback relative to current test executable"
+        "gitcomet binary path was not found. Tried CARGO_BIN_EXE_gitcomet and a fallback relative to current test executable"
     );
 }
 
@@ -86,7 +85,7 @@ fn gitcomet_bin_from_current_exe() -> Option<PathBuf> {
     let profile_dir = deps_dir.parent()?;
     let exe_suffix = std::env::consts::EXE_SUFFIX;
 
-    for bin_name in ["gitcomet-app", "gitcomet_app"] {
+    for bin_name in ["gitcomet"] {
         let candidate = profile_dir.join(format!("{bin_name}{exe_suffix}"));
         if candidate.is_file() {
             return Some(candidate);
@@ -650,11 +649,11 @@ fn git_mergetool_accepts_kdiff3_alias_flags_in_cmd() {
             && !text.contains("unexpected argument '--L1'")
             && !text.contains("unexpected argument '--L2'")
             && !text.contains("unexpected argument '--L3'"),
-        "expected alias flags to be accepted by gitcomet-app mergetool\noutput:\n{text}"
+        "expected alias flags to be accepted by gitcomet mergetool\noutput:\n{text}"
     );
     assert!(
         text.contains("Auto-merging file.txt"),
-        "expected gitcomet-app mergetool to run\noutput:\n{text}"
+        "expected gitcomet mergetool to run\noutput:\n{text}"
     );
     assert!(
         merged.contains("LOCAL") || merged.contains("REMOTE") || merged.contains("<<<<<<<"),
@@ -1180,7 +1179,7 @@ fn git_mergetool_trust_exit_code_conflict_preserves_unmerged_state() {
     }
     // When our tool exits 1 (unresolved conflict) with trustExitCode=true,
     // git should leave the file as unmerged. This verifies the exit code
-    // contract between gitcomet-app and git mergetool.
+    // contract between gitcomet and git mergetool.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path();
 
@@ -3677,7 +3676,7 @@ fn gitcomet_mergetool_reads_conflictstyle_from_repo_when_cwd_is_outside_repo() {
         .arg("--merged")
         .arg(&merged)
         .output()
-        .expect("gitcomet-app mergetool command to run");
+        .expect("gitcomet mergetool command to run");
 
     let text = output_text(&output);
     let merged_text = fs::read_to_string(&merged).unwrap_or_else(|e| {
