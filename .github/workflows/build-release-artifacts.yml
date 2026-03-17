@@ -357,6 +357,11 @@ jobs:
       RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
       ENABLE_KEYLESS_SIGNING: ${{ vars.ENABLE_KEYLESS_SIGNING }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v8
         with:
           name: windows-release-artifacts
