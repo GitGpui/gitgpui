@@ -7,6 +7,11 @@ on:
         description: "Release version (e.g. 0.2.0 or v0.2.0)"
         required: true
         type: string
+      deb_revision:
+        description: "Debian package revision suffix appended to the upstream version (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       prerelease:
         description: "Mark GitHub release as prerelease"
         required: true
@@ -147,6 +152,7 @@ jobs:
     with:
       tag: ${{ needs.validate.outputs.tag }}
       version: ${{ needs.validate.outputs.version }}
+      deb_revision: ${{ github.event.inputs.deb_revision }}
       release_id: ${{ needs.create_release.outputs.release_id }}
     secrets: inherit
 
@@ -178,6 +184,28 @@ jobs:
       version: ${{ needs.validate.outputs.version }}
       tap_repo: ${{ vars.HOMEBREW_TAP_REPO }}
       tap_branch: ${{ vars.HOMEBREW_TAP_BRANCH }}
+      dry_run: false
+    secrets: inherit
+
+  deploy_apt_repo:
+    name: Deploy Azure APT repository
+    needs: [validate, build_and_upload, publish_release]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
+    uses: ./.github/workflows/deploy-apt-repo.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      storage_account: ${{ vars.APT_STORAGE_ACCOUNT }}
+      storage_container: ${{ vars.APT_STORAGE_CONTAINER }}
+      storage_prefix: ${{ vars.APT_STORAGE_PREFIX }}
+      repo_base_url: ${{ vars.APT_REPO_BASE_URL }}
+      distribution: ${{ vars.APT_REPO_DISTRIBUTION }}
+      component: ${{ vars.APT_REPO_COMPONENT }}
+      architecture: "amd64"
+      repo_origin: ${{ vars.APT_REPO_ORIGIN }}
+      repo_label: ${{ vars.APT_REPO_LABEL }}
+      repo_description: ${{ vars.APT_REPO_DESCRIPTION }}
+      container_public_access: ${{ vars.APT_STORAGE_PUBLIC_ACCESS }}
       dry_run: false
     secrets: inherit
 
