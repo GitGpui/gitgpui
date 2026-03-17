@@ -9,9 +9,11 @@ use gitcomet_core::services::{CommandOutput, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+// Used by test-only helpers below.
 #[cfg(test)]
 use gitcomet_core::domain::RemoteBranch;
 #[cfg(test)]
@@ -21,6 +23,16 @@ const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
 const GIT_COMMAND_TIMEOUT_DEFAULT_SECS: u64 = 300;
 const GIT_COMMAND_WAIT_POLL: Duration = Duration::from_millis(100);
 const GITCOMET_ASKPASS_PROMPT_LOG_ENV: &str = "GITCOMET_ASKPASS_PROMPT_LOG";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TestGitCommandEnvironment {
+    pub(crate) global_config: PathBuf,
+    pub(crate) home_dir: PathBuf,
+    pub(crate) xdg_config_home: PathBuf,
+    pub(crate) gnupg_home: PathBuf,
+}
+
+static TEST_GIT_COMMAND_ENVIRONMENT: OnceLock<TestGitCommandEnvironment> = OnceLock::new();
 
 struct AskPassScript {
     _dir: tempfile::TempDir,
@@ -58,8 +70,33 @@ fn configure_non_interactive_git(cmd: &mut Command) {
     cmd.stdin(Stdio::null());
 }
 
+pub(crate) fn install_test_git_command_environment(env: TestGitCommandEnvironment) {
+    if let Some(existing) = TEST_GIT_COMMAND_ENVIRONMENT.get() {
+        assert_eq!(
+            existing, &env,
+            "test git command environment already initialized"
+        );
+        return;
+    }
+    let _ = TEST_GIT_COMMAND_ENVIRONMENT.set(env);
+}
+
+fn apply_test_git_command_environment(cmd: &mut Command) {
+    let Some(env) = TEST_GIT_COMMAND_ENVIRONMENT.get() else {
+        return;
+    };
+
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+    cmd.env("HOME", &env.home_dir);
+    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+    cmd.env("GNUPGHOME", &env.gnupg_home);
+    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+}
+
 pub(crate) fn git_workdir_cmd_for(workdir: &Path) -> Command {
     let mut cmd = Command::new("git");
+    apply_test_git_command_environment(&mut cmd);
     cmd.arg("-C").arg(workdir);
     cmd
 }
@@ -400,6 +437,7 @@ pub(crate) fn path_buf_from_git_bytes(path_bytes: &[u8], context: &str) -> Resul
     }
 }
 
+// Test helper: constructs a git stage:path blob spec for index stage testing.
 #[cfg(test)]
 pub(crate) fn git_stage_blob_spec(stage: u8, path: &Path) -> Result<OsString> {
     git_revision_with_path(&format!(":{stage}:"), path, "build conflict stage revision")
@@ -594,14 +632,14 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
 
         let parent_ids = parents
             .split_whitespace()
-            .map(|p| CommitId(p.to_string()))
+            .map(|p| CommitId(p.into()))
             .collect::<Vec<_>>();
 
         commits.push(Commit {
-            id: CommitId(id),
+            id: CommitId(id.into()),
             parent_ids,
-            summary,
-            author,
+            summary: summary.into(),
+            author: author.into(),
             time,
         });
     }
@@ -624,6 +662,7 @@ pub(crate) fn unix_seconds_to_system_time_or_epoch(seconds: i64) -> SystemTime {
     unix_seconds_to_system_time(seconds).unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
+// Test helper: parses `git branch -r` output for remote branch integration tests.
 #[cfg(test)]
 pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
     let approx_branches = output
@@ -654,7 +693,7 @@ pub(crate) fn parse_remote_branches(output: &str) -> Vec<RemoteBranch> {
         branches.push(RemoteBranch {
             remote: remote.to_string(),
             name: name.to_string(),
-            target: CommitId(sha.to_string()),
+            target: CommitId(sha.into()),
         });
     }
     branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
@@ -889,12 +928,12 @@ mod tests {
                 RemoteBranch {
                     remote: "origin".to_string(),
                     name: "main".to_string(),
-                    target: CommitId("1111111".to_string())
+                    target: CommitId("1111111".into())
                 },
                 RemoteBranch {
                     remote: "upstream".to_string(),
                     name: "feature/foo".to_string(),
-                    target: CommitId("2222222".to_string())
+                    target: CommitId("2222222".into())
                 },
             ]
         );
@@ -929,7 +968,7 @@ mod tests {
         assert_eq!(branches.len(), 1);
         assert_eq!(branches[0].remote, "origin");
         assert_eq!(branches[0].name, "refactoring/feature1");
-        assert_eq!(branches[0].target, CommitId(oid.to_string()));
+        assert_eq!(branches[0].target, CommitId(oid.to_string().into()));
     }
 
     #[test]
@@ -942,16 +981,14 @@ mod tests {
         let commit = &page.commits[0];
         assert_eq!(
             commit.id,
-            CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".to_string())
+            CommitId("4c8124ffcf4039d292442eeccabdeca5af5c5017".into())
         );
         assert_eq!(
             commit.parent_ids,
-            vec![CommitId(
-                "634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string()
-            )]
+            vec![CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())]
         );
-        assert_eq!(commit.author, "Tom Preston-Werner");
-        assert_eq!(commit.summary, "implement Grit#heads");
+        assert_eq!(&*commit.author, "Tom Preston-Werner");
+        assert_eq!(&*commit.summary, "implement Grit#heads");
         assert_eq!(
             commit.time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_999_972)
@@ -972,11 +1009,11 @@ mod tests {
 
         assert_eq!(
             page.commits[1].id,
-            CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".to_string())
+            CommitId("634396b2f541a9f2d58b00be1a07f0c358b999b3".into())
         );
         assert!(page.commits[1].parent_ids.is_empty());
-        assert_eq!(page.commits[1].author, "Tom Preston-Werner");
-        assert_eq!(page.commits[1].summary, "initial grit setup");
+        assert_eq!(&*page.commits[1].author, "Tom Preston-Werner");
+        assert_eq!(&*page.commits[1].summary, "initial grit setup");
         assert_eq!(
             page.commits[1].time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_997_100)
@@ -1007,7 +1044,7 @@ mod tests {
         assert_eq!(branches.len(), 6);
         assert_eq!(
             branches[0].target,
-            CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".to_string())
+            CommitId("c2e3c20affa3e2b61a05fdc9ee3061dd416d915e".into())
         );
     }
 

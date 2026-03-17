@@ -70,20 +70,50 @@ pub(super) fn is_svg_path(path: &std::path::Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
 }
 
-pub(super) fn is_existing_directory(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_dir())
-}
-
-pub(super) fn is_existing_regular_file(path: &std::path::Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
-}
-
 pub(super) fn should_bypass_text_file_preview_for_path(path: &std::path::Path) -> bool {
     image_format_for_path(path).is_some()
         || path
             .extension()
             .and_then(|s| s.to_str())
             .is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum RenderableConflictFile {
+    Loading,
+    Error(SharedString),
+    Missing,
+    File(gitcomet_state::model::ConflictFile),
+}
+
+pub(super) fn conflict_file_is_binary(file: &gitcomet_state::model::ConflictFile) -> bool {
+    let has_non_text = |bytes: &Option<std::sync::Arc<[u8]>>,
+                        text: &Option<std::sync::Arc<str>>| {
+        bytes.is_some() && text.is_none()
+    };
+    has_non_text(&file.base_bytes, &file.base)
+        || has_non_text(&file.ours_bytes, &file.ours)
+        || has_non_text(&file.theirs_bytes, &file.theirs)
+}
+
+pub(super) fn renderable_conflict_file(
+    repo: &RepoState,
+    conflict_resolver: &ConflictResolverUiState,
+    target_path: &std::path::Path,
+) -> RenderableConflictFile {
+    match &repo.conflict_state.conflict_file {
+        Loadable::Ready(Some(file)) if file.path == target_path => {
+            RenderableConflictFile::File(file.clone())
+        }
+        Loadable::Ready(Some(_)) => RenderableConflictFile::Loading,
+        Loadable::Loading | Loadable::NotLoaded => conflict_resolver
+            .cached_loaded_file_for_target(repo.id, target_path)
+            .cloned()
+            .map(RenderableConflictFile::File)
+            .unwrap_or(RenderableConflictFile::Loading),
+        Loadable::Error(error) => RenderableConflictFile::Error(error.clone().into()),
+        Loadable::Ready(None) => RenderableConflictFile::Missing,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -327,23 +357,6 @@ mod resize_drag_ghost_tests {
     }
 }
 
-#[cfg(test)]
-mod directory_path_tests {
-    use super::is_existing_directory;
-
-    #[test]
-    fn detects_existing_directory_paths() {
-        let tmp = std::env::temp_dir().join(format!("gitcomet_is_dir_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).expect("create temp directory");
-
-        assert!(is_existing_directory(&tmp));
-        assert!(!is_existing_directory(&tmp.join("missing")));
-
-        std::fs::remove_dir_all(&tmp).expect("cleanup temp directory");
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub(super) enum DiffTextRegion {
     Inline,
@@ -451,11 +464,121 @@ pub(super) enum ThreeWayColumn {
     Theirs,
 }
 
+impl ThreeWayColumn {
+    pub(super) const ALL: [ThreeWayColumn; 3] = [
+        ThreeWayColumn::Base,
+        ThreeWayColumn::Ours,
+        ThreeWayColumn::Theirs,
+    ];
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct ThreeWaySides<T> {
     pub(super) base: T,
     pub(super) ours: T,
     pub(super) theirs: T,
+}
+
+impl<T> std::ops::Index<ThreeWayColumn> for ThreeWaySides<T> {
+    type Output = T;
+    fn index(&self, side: ThreeWayColumn) -> &T {
+        match side {
+            ThreeWayColumn::Base => &self.base,
+            ThreeWayColumn::Ours => &self.ours,
+            ThreeWayColumn::Theirs => &self.theirs,
+        }
+    }
+}
+
+impl<T> std::ops::IndexMut<ThreeWayColumn> for ThreeWaySides<T> {
+    fn index_mut(&mut self, side: ThreeWayColumn) -> &mut T {
+        match side {
+            ThreeWayColumn::Base => &mut self.base,
+            ThreeWayColumn::Ours => &mut self.ours,
+            ThreeWayColumn::Theirs => &mut self.theirs,
+        }
+    }
+}
+
+fn deferred_line_starts_for_text(text: &str) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
+    starts.push(0);
+    for (ix, byte) in text.as_bytes().iter().enumerate() {
+        if *byte == b'\n' {
+            starts.push(ix.saturating_add(1));
+        }
+    }
+    starts
+}
+
+/// Lazily materialized line starts for one merge-input side.
+///
+/// Large conflict bootstrap only needs stable line counts up front. The full
+/// byte-offset index is built on demand when a consumer actually needs random
+/// line access for that side.
+#[derive(Clone, Debug, Default)]
+pub(super) struct DeferredLineStarts {
+    line_count: usize,
+    starts: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<[usize]>>>,
+}
+
+impl DeferredLineStarts {
+    pub(super) fn with_line_count(line_count: usize) -> Self {
+        Self {
+            line_count,
+            starts: std::sync::Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    pub(super) fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.line_count == 0
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_materialized(&self) -> bool {
+        self.starts.get().is_some()
+    }
+
+    pub(super) fn starts<'a>(&'a self, text: &str) -> &'a [usize] {
+        self.starts
+            .get_or_init(|| std::sync::Arc::from(deferred_line_starts_for_text(text)))
+            .as_ref()
+    }
+
+    pub(super) fn shared_starts(&self, text: &str) -> std::sync::Arc<[usize]> {
+        std::sync::Arc::clone(
+            self.starts
+                .get_or_init(|| std::sync::Arc::from(deferred_line_starts_for_text(text))),
+        )
+    }
+
+    fn materialized_with_count(line_starts: std::sync::Arc<[usize]>, line_count: usize) -> Self {
+        let starts = std::sync::OnceLock::new();
+        let _ = starts.set(line_starts);
+        Self {
+            line_count,
+            starts: std::sync::Arc::new(starts),
+        }
+    }
+}
+
+impl From<Vec<usize>> for DeferredLineStarts {
+    fn from(starts: Vec<usize>) -> Self {
+        let line_count = starts.len();
+        Self::materialized_with_count(std::sync::Arc::from(starts), line_count)
+    }
+}
+
+impl From<std::sync::Arc<[usize]>> for DeferredLineStarts {
+    fn from(starts: std::sync::Arc<[usize]>) -> Self {
+        let line_count = starts.len();
+        Self::materialized_with_count(starts, line_count)
+    }
 }
 
 pub(super) type LoadableMarkdownDoc =
@@ -485,11 +608,7 @@ impl Default for ConflictResolverMarkdownPreviewState {
 
 impl ConflictResolverMarkdownPreviewState {
     pub(super) fn document(&self, side: ThreeWayColumn) -> &LoadableMarkdownDoc {
-        match side {
-            ThreeWayColumn::Base => &self.documents.base,
-            ThreeWayColumn::Ours => &self.documents.ours,
-            ThreeWayColumn::Theirs => &self.documents.theirs,
-        }
+        &self.documents[side]
     }
 }
 
@@ -503,39 +622,79 @@ pub(super) struct ResolvedOutputConflictMarker {
     pub(super) unresolved: bool,
 }
 
+/// Resolved-output outline metadata: per-line provenance, conflict markers, and source index.
+/// Shared between visible state (`ConflictResolverUiState`) and incremental-recompute stash.
+#[derive(Clone, Debug, Default)]
+pub(super) struct ResolvedOutlineData {
+    /// Per-line provenance metadata.
+    pub(super) meta: Vec<conflict_resolver::ResolvedLineMeta>,
+    /// Per-line conflict marker metadata for gutter markers.
+    pub(super) markers: Vec<Option<ResolvedOutputConflictMarker>>,
+    /// Source line keys currently represented in resolved output (for dedupe/plus-icon).
+    pub(super) sources_index: HashSet<conflict_resolver::SourceLineKey>,
+}
+
+/// Mode-specific state for streamed (giant-file) conflict resolution.
+///
+/// Uses lazy paged access and span-based projections instead of
+/// eagerly materializing all rows.
+#[derive(Clone, Debug, Default)]
+pub(super) struct StreamedConflictState {
+    pub(super) three_way_visible_projection: conflict_resolver::ThreeWayVisibleProjection,
+    pub(super) split_row_index: conflict_resolver::ConflictSplitRowIndex,
+    pub(super) two_way_split_projection: conflict_resolver::TwoWaySplitProjection,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ConflictModeState {
+    Streamed(StreamedConflictState),
+}
+
+impl Default for ConflictModeState {
+    fn default() -> Self {
+        Self::Streamed(StreamedConflictState::default())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverUiState {
     pub(super) repo_id: Option<RepoId>,
     pub(super) path: Option<std::path::PathBuf>,
+    pub(super) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(super) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(super) source_hash: Option<u64>,
-    pub(super) current: Option<String>,
+    pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
     pub(super) active_conflict: usize,
     pub(super) hovered_conflict: Option<(usize, ThreeWayColumn)>,
+    /// Streamed conflict state for the single conflict rendering/runtime path.
+    pub(super) mode_state: ConflictModeState,
     pub(super) view_mode: ConflictResolverViewMode,
-    pub(super) diff_rows: Vec<FileDiffRow>,
-    pub(super) inline_rows: Vec<ConflictInlineRow>,
     /// Backing text for each three-way source side.
     pub(super) three_way_text: ThreeWaySides<SharedString>,
-    /// Per-side line start offsets into `three_way_text`.
-    pub(super) three_way_line_starts: ThreeWaySides<Vec<usize>>,
+    /// Per-side line start offsets into `three_way_text`, materialized lazily.
+    pub(super) three_way_line_starts: ThreeWaySides<DeferredLineStarts>,
     pub(super) three_way_len: usize,
-    pub(super) three_way_conflict_ranges: Vec<Range<usize>>,
-    pub(super) three_way_line_conflict_map: ThreeWaySides<Vec<Option<usize>>>,
+    /// Whether the three-way visible projection/ranges have been built at
+    /// least once for the current conflict source.
+    pub(super) three_way_visible_state_ready: bool,
+    /// Per-side conflict ranges for O(log n) binary-search lookups and
+    /// conflict-to-visible mapping. The ours ranges remain the anchor space for
+    /// legacy three-way visible projections.
+    pub(super) three_way_conflict_ranges: ThreeWaySides<Vec<Range<usize>>>,
+    /// Visible-row indices used to measure horizontal width for each three-way input column.
+    pub(super) three_way_horizontal_measure_rows: [usize; 3],
     pub(super) conflict_has_base: Vec<bool>,
+    /// Current choice for each conflict block, cached to avoid rebuilding it
+    /// from `marker_segments` on every render.
+    pub(super) conflict_choices: Vec<conflict_resolver::ConflictChoice>,
+    /// Visible-row indices used to measure horizontal width for the two-way split inputs.
+    pub(super) two_way_horizontal_measure_rows: [usize; 2],
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
-    pub(super) diff_word_highlights_split: conflict_resolver::TwoWayWordHighlights,
-    pub(super) diff_mode: ConflictDiffMode,
     pub(super) nav_anchor: Option<usize>,
     pub(super) hide_resolved: bool,
-    pub(super) three_way_visible_map: Vec<conflict_resolver::ThreeWayVisibleItem>,
-    pub(super) diff_row_conflict_map: Vec<Option<usize>>,
-    pub(super) inline_row_conflict_map: Vec<Option<usize>>,
-    pub(super) diff_visible_row_indices: Vec<usize>,
-    pub(super) inline_visible_row_indices: Vec<usize>,
     /// True when any conflict side contains non-UTF8 binary data.
     pub(super) is_binary_conflict: bool,
     /// Byte sizes of the three conflict sides (for binary UI display).
@@ -552,12 +711,8 @@ pub(super) struct ConflictResolverUiState {
     pub(super) conflict_rev: u64,
     /// Sequence token for debounced resolved-output outline recompute tasks.
     pub(super) resolver_pending_recompute_seq: u64,
-    /// Per-line provenance metadata for the resolved output outline.
-    pub(super) resolved_line_meta: Vec<ResolvedLineMeta>,
-    /// Per-line conflict marker metadata for resolved output gutter markers.
-    pub(super) resolved_output_conflict_markers: Vec<Option<ResolvedOutputConflictMarker>>,
-    /// Set of source line keys currently represented in resolved output (for dedupe/plus-icon).
-    pub(super) resolved_output_line_sources_index: HashSet<SourceLineKey>,
+    /// Resolved-output outline metadata (provenance, conflict markers, source index).
+    pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Preview mode for the merge-input pane (Text vs rendered Preview).
@@ -569,6 +724,7 @@ impl Default for ConflictResolverUiState {
         Self {
             repo_id: None,
             path: None,
+            loaded_file: None,
             conflict_syntax_language: None,
             source_hash: None,
             current: None,
@@ -576,25 +732,20 @@ impl Default for ConflictResolverUiState {
             conflict_region_indices: Vec::new(),
             active_conflict: 0,
             hovered_conflict: None,
+            mode_state: ConflictModeState::default(),
             view_mode: ConflictResolverViewMode::TwoWayDiff,
-            diff_rows: Vec::new(),
-            inline_rows: Vec::new(),
             three_way_text: ThreeWaySides::default(),
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
-            three_way_conflict_ranges: Vec::new(),
-            three_way_line_conflict_map: ThreeWaySides::default(),
+            three_way_visible_state_ready: false,
+            three_way_conflict_ranges: ThreeWaySides::default(),
+            three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
+            conflict_choices: Vec::new(),
+            two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
-            diff_word_highlights_split: Vec::new(),
-            diff_mode: ConflictDiffMode::Split,
             nav_anchor: None,
             hide_resolved: false,
-            three_way_visible_map: Vec::new(),
-            diff_row_conflict_map: Vec::new(),
-            inline_row_conflict_map: Vec::new(),
-            diff_visible_row_indices: Vec::new(),
-            inline_visible_row_indices: Vec::new(),
             is_binary_conflict: false,
             binary_side_sizes: [None; 3],
             strategy: None,
@@ -602,20 +753,10 @@ impl Default for ConflictResolverUiState {
             last_autosolve_summary: None,
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
-            resolved_line_meta: Vec::new(),
-            resolved_output_conflict_markers: Vec::new(),
-            resolved_output_line_sources_index: HashSet::default(),
+            resolved_outline: ResolvedOutlineData::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
         }
-    }
-}
-
-fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        line_starts.len()
     }
 }
 
@@ -640,49 +781,534 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
 }
 
 impl ConflictResolverUiState {
-    pub(super) fn three_way_line_count(&self, side: ThreeWayColumn) -> usize {
-        match side {
-            ThreeWayColumn::Base => {
-                indexed_line_count(&self.three_way_text.base, &self.three_way_line_starts.base)
-            }
-            ThreeWayColumn::Ours => {
-                indexed_line_count(&self.three_way_text.ours, &self.three_way_line_starts.ours)
-            }
-            ThreeWayColumn::Theirs => indexed_line_count(
-                &self.three_way_text.theirs,
-                &self.three_way_line_starts.theirs,
-            ),
+    pub(super) fn matches_target(&self, repo_id: RepoId, path: &std::path::Path) -> bool {
+        self.repo_id == Some(repo_id) && self.path.as_deref() == Some(path)
+    }
+
+    pub(super) fn cached_loaded_file_for_target(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+    ) -> Option<&gitcomet_state::model::ConflictFile> {
+        self.matches_target(repo_id, path)
+            .then_some(self.loaded_file.as_ref())
+            .flatten()
+    }
+
+    // ----- Mode accessors -----
+
+    /// Return the rendering mode enum (for tracing / external APIs that expect it).
+    #[cfg(test)]
+    pub(super) fn rendering_mode(&self) -> conflict_resolver::ConflictRenderingMode {
+        conflict_resolver::ConflictRenderingMode::StreamedLargeFile
+    }
+
+    /// Access the streamed conflict state.
+    #[cfg(test)]
+    #[track_caller]
+    pub(super) fn streamed(&self) -> &StreamedConflictState {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s,
         }
     }
 
-    pub(super) fn three_way_line_text(&self, side: ThreeWayColumn, line_ix: usize) -> Option<&str> {
-        match side {
-            ThreeWayColumn::Base => indexed_line_text(
-                &self.three_way_text.base,
-                &self.three_way_line_starts.base,
-                line_ix,
-            ),
-            ThreeWayColumn::Ours => indexed_line_text(
-                &self.three_way_text.ours,
-                &self.three_way_line_starts.ours,
-                line_ix,
-            ),
-            ThreeWayColumn::Theirs => indexed_line_text(
-                &self.three_way_text.theirs,
-                &self.three_way_line_starts.theirs,
-                line_ix,
-            ),
+    /// Mutably access the streamed conflict state.
+    #[cfg(test)]
+    #[track_caller]
+    pub(super) fn streamed_mut(&mut self) -> &mut StreamedConflictState {
+        match &mut self.mode_state {
+            ConflictModeState::Streamed(s) => s,
         }
+    }
+
+    pub(super) fn split_row_index(&self) -> Option<&conflict_resolver::ConflictSplitRowIndex> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => Some(&s.split_row_index),
+        }
+    }
+
+    pub(super) fn two_way_split_projection(
+        &self,
+    ) -> Option<&conflict_resolver::TwoWaySplitProjection> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => Some(&s.two_way_split_projection),
+        }
+    }
+
+    pub(super) fn three_way_visible_projection(
+        &self,
+    ) -> &conflict_resolver::ThreeWayVisibleProjection {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => &s.three_way_visible_projection,
+        }
+    }
+
+    #[track_caller]
+    pub(super) fn debug_assert_rendering_mode_invariants(&self) {
+        let _ = self;
+    }
+
+    pub(super) fn three_way_line_count(&self, side: ThreeWayColumn) -> usize {
+        self.three_way_line_starts[side].line_count()
+    }
+
+    pub(super) fn three_way_line_starts_ref(&self, side: ThreeWayColumn) -> &[usize] {
+        self.three_way_line_starts[side].starts(self.three_way_text[side].as_ref())
+    }
+
+    pub(super) fn three_way_shared_line_starts(&self, side: ThreeWayColumn) -> Arc<[usize]> {
+        self.three_way_line_starts[side].shared_starts(self.three_way_text[side].as_ref())
+    }
+
+    pub(super) fn three_way_line_text(&self, side: ThreeWayColumn, line_ix: usize) -> Option<&str> {
+        indexed_line_text(
+            &self.three_way_text[side],
+            self.three_way_line_starts_ref(side),
+            line_ix,
+        )
     }
 
     pub(super) fn three_way_has_line(&self, side: ThreeWayColumn, line_ix: usize) -> bool {
         self.three_way_line_text(side, line_ix).is_some()
     }
+
+    /// Return source-pane text for a conflict pick choice at a global line index.
+    ///
+    /// This reads from the indexed merge-input texts directly so callers do not
+    /// depend on eager diff rows or streamed page generation.
+    pub(super) fn source_line_text_for_choice(
+        &self,
+        choice: conflict_resolver::ConflictChoice,
+        line_ix: usize,
+    ) -> Option<&str> {
+        match choice {
+            conflict_resolver::ConflictChoice::Base
+                if self.view_mode == ConflictResolverViewMode::ThreeWay =>
+            {
+                self.three_way_line_text(ThreeWayColumn::Base, line_ix)
+            }
+            conflict_resolver::ConflictChoice::Ours => {
+                self.three_way_line_text(ThreeWayColumn::Ours, line_ix)
+            }
+            conflict_resolver::ConflictChoice::Theirs => {
+                self.three_way_line_text(ThreeWayColumn::Theirs, line_ix)
+            }
+            conflict_resolver::ConflictChoice::Base | conflict_resolver::ConflictChoice::Both => {
+                None
+            }
+        }
+    }
+
+    /// Look up the visible item at `visible_ix`, dispatching between the eager
+    /// map (small files) and the span-based projection (giant files).
+    pub(super) fn three_way_visible_item(
+        &self,
+        visible_ix: usize,
+    ) -> Option<conflict_resolver::ThreeWayVisibleItem> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s.three_way_visible_projection.get(visible_ix),
+        }
+    }
+
+    /// Number of visible rows in the three-way view.
+    pub(super) fn three_way_visible_len(&self) -> usize {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s.three_way_visible_projection.len(),
+        }
+    }
+
+    /// Look up the conflict index for a given line on a given side.
+    /// Uses binary search on per-side ranges in giant mode, O(1) array lookup otherwise.
+    pub(super) fn conflict_index_for_side_line(
+        &self,
+        side: ThreeWayColumn,
+        line_ix: usize,
+    ) -> Option<usize> {
+        let ranges = &self.three_way_conflict_ranges[side];
+        conflict_resolver::conflict_index_for_line(ranges, line_ix)
+    }
+
+    /// Find the visible index for a conflict range, using the projection in giant mode.
+    pub(super) fn visible_index_for_conflict(&self, range_ix: usize) -> Option<usize> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                s.three_way_visible_projection.visible_index_for_conflict(
+                    &self.three_way_conflict_ranges[ThreeWayColumn::Ours],
+                    range_ix,
+                )
+            }
+        }
+    }
+
+    // ----- Two-way split dispatch (giant vs eager) -----
+
+    /// Number of visible rows in the two-way split view.
+    pub(super) fn two_way_split_visible_len(&self) -> usize {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s.two_way_split_projection.visible_len(),
+        }
+    }
+
+    /// Retrieve a materialized split row for the given visible index,
+    /// dispatching between the paged index (giant) and the eager `diff_rows`
+    /// array (small).
+    pub(super) fn two_way_split_visible_row(
+        &self,
+        visible_ix: usize,
+    ) -> Option<conflict_resolver::TwoWaySplitVisibleRow> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                let (source_row_ix, conflict_ix) = s.two_way_split_projection.get(visible_ix)?;
+                let row = s
+                    .split_row_index
+                    .row_at(&self.marker_segments, source_row_ix)?;
+                Some(conflict_resolver::TwoWaySplitVisibleRow {
+                    source_row_ix,
+                    row,
+                    conflict_ix,
+                })
+            }
+        }
+    }
+
+    /// Retrieve a split row by source row index (not visible index).
+    pub(super) fn two_way_split_row_by_source(
+        &self,
+        row_ix: usize,
+    ) -> Option<gitcomet_core::file_diff::FileDiffRow> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                s.split_row_index.row_at(&self.marker_segments, row_ix)
+            }
+        }
+    }
+
+    /// Find the first visible index for a conflict in two-way split view.
+    pub(super) fn two_way_split_visible_ix_for_conflict(
+        &self,
+        conflict_ix: usize,
+    ) -> Option<usize> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s
+                .two_way_split_projection
+                .visible_index_for_conflict(conflict_ix),
+        }
+    }
+
+    /// Map a two-way split visible index back to its conflict index.
+    pub(super) fn two_way_split_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => s
+                .two_way_split_projection
+                .get(visible_ix)
+                .and_then(|(_, ci)| ci),
+        }
+    }
+
+    /// Build unresolved conflict navigation entries for two-way split view.
+    pub(super) fn two_way_split_nav_entries(&self) -> Vec<usize> {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                conflict_resolver::unresolved_conflict_indices(&self.marker_segments)
+                    .into_iter()
+                    .filter_map(|ci| s.two_way_split_projection.visible_index_for_conflict(ci))
+                    .collect()
+            }
+        }
+    }
+
+    // ----- Unified two-way dispatch (Split + Inline, giant vs eager) -----
+
+    /// Build unresolved conflict navigation entries for the current two-way
+    /// conflict diff view.
+    pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
+        self.two_way_split_nav_entries()
+    }
+
+    /// Map a two-way visible index to its conflict index.
+    pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
+        self.two_way_split_conflict_ix_for_visible(visible_ix)
+    }
+
+    /// Find the first visible index for a conflict in the current two-way diff
+    /// view.
+    pub(super) fn two_way_visible_ix_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
+        self.two_way_split_visible_ix_for_conflict(conflict_ix)
+    }
+
+    /// Return (diff_row_count, inline_row_count) for trace recording.
+    pub(super) fn two_way_row_counts(&self) -> (usize, usize) {
+        match &self.mode_state {
+            ConflictModeState::Streamed(s) => (s.split_row_index.total_rows(), 0),
+        }
+    }
+
+    pub(super) fn three_way_horizontal_measure_row(&self, side: ThreeWayColumn) -> usize {
+        match side {
+            ThreeWayColumn::Base => self.three_way_horizontal_measure_rows[0],
+            ThreeWayColumn::Ours => self.three_way_horizontal_measure_rows[1],
+            ThreeWayColumn::Theirs => self.three_way_horizontal_measure_rows[2],
+        }
+    }
+
+    pub(super) fn two_way_horizontal_measure_row(
+        &self,
+        side: conflict_resolver::ConflictPickSide,
+    ) -> usize {
+        match side {
+            conflict_resolver::ConflictPickSide::Ours => self.two_way_horizontal_measure_rows[0],
+            conflict_resolver::ConflictPickSide::Theirs => self.two_way_horizontal_measure_rows[1],
+        }
+    }
+
+    fn refresh_three_way_horizontal_measure_rows(&mut self) {
+        self.three_way_horizontal_measure_rows = self.compute_three_way_horizontal_measure_rows();
+    }
+
+    fn refresh_two_way_horizontal_measure_rows(&mut self) {
+        self.two_way_horizontal_measure_rows = self.compute_two_way_horizontal_measure_rows();
+    }
+
+    fn compute_three_way_horizontal_measure_rows(&self) -> [usize; 3] {
+        let has_hidden_resolved_blocks = self.hide_resolved
+            && self.marker_segments.iter().any(|segment| {
+                matches!(
+                    segment,
+                    conflict_resolver::ConflictSegment::Block(block) if block.resolved
+                )
+            });
+        if has_hidden_resolved_blocks {
+            return self.compute_three_way_horizontal_measure_rows_from_visible_projection();
+        }
+
+        let mut best_rows = [0usize; 3];
+        let mut best_lens = [0usize; 3];
+        let mut base_line = 0usize;
+        let mut ours_line = 0usize;
+        let mut theirs_line = 0usize;
+
+        let mut update_best = |slot: usize, row_ix: usize, width: usize| {
+            if width > best_lens[slot] {
+                best_lens[slot] = width;
+                best_rows[slot] = row_ix;
+            }
+        };
+
+        for segment in &self.marker_segments {
+            match segment {
+                conflict_resolver::ConflictSegment::Text(text) => {
+                    let stats = conflict_resolver::scan_text_line_stats(text.as_ref());
+                    if let Some((line_ix, width)) = stats.widest_line() {
+                        update_best(0, base_line + line_ix, width);
+                        update_best(1, ours_line + line_ix, width);
+                        update_best(2, theirs_line + line_ix, width);
+                    }
+                    base_line = base_line.saturating_add(stats.line_count);
+                    ours_line = ours_line.saturating_add(stats.line_count);
+                    theirs_line = theirs_line.saturating_add(stats.line_count);
+                }
+                conflict_resolver::ConflictSegment::Block(block) => {
+                    if let Some(base) = block.base.as_deref() {
+                        let stats = conflict_resolver::scan_text_line_stats(base);
+                        if let Some((line_ix, width)) = stats.widest_line() {
+                            update_best(0, base_line + line_ix, width);
+                        }
+                        base_line = base_line.saturating_add(stats.line_count);
+                    }
+
+                    let ours_stats = conflict_resolver::scan_text_line_stats(block.ours.as_ref());
+                    if let Some((line_ix, width)) = ours_stats.widest_line() {
+                        update_best(1, ours_line + line_ix, width);
+                    }
+                    ours_line = ours_line.saturating_add(ours_stats.line_count);
+
+                    let theirs_stats =
+                        conflict_resolver::scan_text_line_stats(block.theirs.as_ref());
+                    if let Some((line_ix, width)) = theirs_stats.widest_line() {
+                        update_best(2, theirs_line + line_ix, width);
+                    }
+                    theirs_line = theirs_line.saturating_add(theirs_stats.line_count);
+                }
+            }
+        }
+
+        best_rows
+    }
+
+    fn compute_three_way_horizontal_measure_rows_from_visible_projection(&self) -> [usize; 3] {
+        let mut best_rows = [0usize; 3];
+        let mut best_lens = [0usize; 3];
+
+        for span in self.three_way_visible_projection().spans() {
+            let conflict_resolver::ThreeWayVisibleSpan::Lines {
+                visible_start,
+                source_line_start,
+                len,
+            } = *span
+            else {
+                continue;
+            };
+
+            for offset in 0..len {
+                let visible_ix = visible_start + offset;
+                let line_ix = source_line_start + offset;
+
+                for (slot, side) in [
+                    ThreeWayColumn::Base,
+                    ThreeWayColumn::Ours,
+                    ThreeWayColumn::Theirs,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let width = self.three_way_line_text(side, line_ix).map_or(0, str::len);
+                    if width > best_lens[slot] {
+                        best_lens[slot] = width;
+                        best_rows[slot] = visible_ix;
+                    }
+                }
+            }
+        }
+
+        best_rows
+    }
+
+    fn compute_two_way_horizontal_measure_rows(&self) -> [usize; 2] {
+        let Some(split_row_index) = self.split_row_index() else {
+            return [0; 2];
+        };
+        let Some(projection) = self.two_way_split_projection() else {
+            return [0; 2];
+        };
+
+        let [ours_source_row, theirs_source_row] = split_row_index
+            .widest_source_rows_by_text_len(&self.marker_segments, self.hide_resolved);
+
+        [
+            ours_source_row
+                .and_then(|row_ix| projection.source_to_visible(row_ix))
+                .unwrap_or(0),
+            theirs_source_row
+                .and_then(|row_ix| projection.source_to_visible(row_ix))
+                .unwrap_or(0),
+        ]
+    }
+
+    /// Pre-computed word highlights for a source row in the two-way split view.
+    /// Returns `None` in giant mode (word highlights are computed on-the-fly
+    /// via `compute_word_highlights_for_row` at render time instead).
+    pub(super) fn two_way_split_word_highlight(
+        &self,
+        row_ix: usize,
+    ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
+        let _ = row_ix;
+        None
+    }
+
+    /// Rebuild three-way visible state (conflict maps + visible map/projection)
+    /// from current marker segments and line counts.
+    pub(super) fn rebuild_three_way_visible_state(&mut self) {
+        let maps = conflict_resolver::build_three_way_conflict_maps_without_line_maps(
+            &self.marker_segments,
+            self.three_way_line_count(ThreeWayColumn::Base),
+            self.three_way_line_count(ThreeWayColumn::Ours),
+            self.three_way_line_count(ThreeWayColumn::Theirs),
+        );
+        self.apply_three_way_conflict_maps(maps);
+        match &mut self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                s.three_way_visible_projection =
+                    conflict_resolver::build_three_way_visible_projection(
+                        self.three_way_len,
+                        &self.three_way_conflict_ranges[ThreeWayColumn::Ours],
+                        &self.marker_segments,
+                        self.hide_resolved,
+                    );
+            }
+        }
+        self.three_way_visible_state_ready = true;
+        self.refresh_three_way_horizontal_measure_rows();
+    }
+
+    /// Rebuild two-way visible state from current marker segments.
+    /// Rebuilds the streamed split row index and projection.
+    pub(super) fn rebuild_two_way_visible_state(&mut self) {
+        let ConflictModeState::Streamed(s) = &mut self.mode_state;
+        s.split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
+            &self.marker_segments,
+            conflict_resolver::BLOCK_LOCAL_DIFF_CONTEXT_LINES,
+        );
+        self.rebuild_two_way_visible_projections();
+    }
+
+    /// Rebuild streamed two-way visible projections from the current split-row index.
+    pub(super) fn rebuild_two_way_visible_projections(&mut self) {
+        match &mut self.mode_state {
+            ConflictModeState::Streamed(s) => {
+                s.two_way_split_projection = conflict_resolver::TwoWaySplitProjection::new(
+                    &s.split_row_index,
+                    &self.marker_segments,
+                    self.hide_resolved,
+                );
+            }
+        }
+        self.debug_assert_rendering_mode_invariants();
+        self.refresh_two_way_horizontal_measure_rows();
+    }
+
+    /// Apply three-way conflict maps to state fields.
+    pub(super) fn apply_three_way_conflict_maps(
+        &mut self,
+        maps: conflict_resolver::ThreeWayConflictMaps,
+    ) {
+        let [base_ranges, ours_ranges, theirs_ranges] = maps.conflict_ranges;
+        self.three_way_conflict_ranges = ThreeWaySides {
+            base: base_ranges,
+            ours: ours_ranges,
+            theirs: theirs_ranges,
+        };
+        self.conflict_has_base = maps.conflict_has_base;
+        self.refresh_conflict_choices_from_segments();
+    }
+
+    pub(super) fn refresh_conflict_has_base_from_segments(&mut self) {
+        self.conflict_has_base = self
+            .marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.base.is_some()),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .collect();
+        self.refresh_conflict_choices_from_segments();
+    }
+
+    pub(super) fn refresh_conflict_choices_from_segments(&mut self) {
+        self.conflict_choices = self
+            .marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.choice),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .collect();
+    }
+
+    pub(super) fn has_three_way_visible_state_ready(&self) -> bool {
+        self.three_way_visible_state_ready
+    }
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
-    use super::{ConflictResolverUiState, Loadable, ThreeWaySides};
+    use super::{
+        ConflictResolverUiState, DeferredLineStarts, Loadable, ThreeWayColumn, ThreeWaySides,
+    };
+    use crate::view::conflict_resolver::{
+        self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
+        ConflictSplitRowIndex, ThreeWayVisibleItem, TwoWaySplitProjection,
+    };
 
     #[test]
     fn default_groups_three_way_side_fields() {
@@ -691,28 +1317,16 @@ mod conflict_resolver_ui_state_tests {
         assert!(state.three_way_text.base.is_empty());
         assert!(state.three_way_text.ours.is_empty());
         assert!(state.three_way_text.theirs.is_empty());
+        assert!(state.rendering_mode().is_streamed_large_file());
         assert!(state.three_way_line_starts.base.is_empty());
         assert!(state.three_way_line_starts.ours.is_empty());
         assert!(state.three_way_line_starts.theirs.is_empty());
-
-        assert!(state.three_way_line_conflict_map.base.is_empty());
-        assert!(state.three_way_line_conflict_map.ours.is_empty());
-        assert!(state.three_way_line_conflict_map.theirs.is_empty());
-
+        assert!(state.three_way_conflict_ranges.base.is_empty());
         assert!(state.three_way_word_highlights.base.is_empty());
-        assert!(state.three_way_word_highlights.ours.is_empty());
-        assert!(state.three_way_word_highlights.theirs.is_empty());
-
+        assert!(state.split_row_index().is_some());
+        assert!(state.two_way_split_projection().is_some());
         assert!(matches!(
             state.markdown_preview.documents.base,
-            Loadable::NotLoaded
-        ));
-        assert!(matches!(
-            state.markdown_preview.documents.ours,
-            Loadable::NotLoaded
-        ));
-        assert!(matches!(
-            state.markdown_preview.documents.theirs,
             Loadable::NotLoaded
         ));
     }
@@ -733,6 +1347,373 @@ mod conflict_resolver_ui_state_tests {
         assert_eq!(sides.ours, vec![2, 20]);
         assert_eq!(sides.theirs, vec![3, 30]);
     }
+
+    #[test]
+    fn three_way_sides_index_by_column() {
+        let mut sides = ThreeWaySides {
+            base: 10,
+            ours: 20,
+            theirs: 30,
+        };
+
+        assert_eq!(sides[ThreeWayColumn::Base], 10);
+        assert_eq!(sides[ThreeWayColumn::Ours], 20);
+        assert_eq!(sides[ThreeWayColumn::Theirs], 30);
+
+        sides[ThreeWayColumn::Ours] = 42;
+        assert_eq!(sides.ours, 42);
+    }
+
+    #[test]
+    fn source_line_text_for_choice_reads_two_way_inputs_from_indexed_text() {
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::TwoWayDiff,
+            ..Default::default()
+        };
+        state.three_way_text.ours = "o0\no1\n".into();
+        state.three_way_text.theirs = "t0\nt1\n".into();
+        state.three_way_line_starts.ours = vec![0, 3].into();
+        state.three_way_line_starts.theirs = vec![0, 3].into();
+
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Ours, 1),
+            Some("o1")
+        );
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Theirs, 0),
+            Some("t0")
+        );
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Base, 0),
+            None
+        );
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Both, 0),
+            None
+        );
+    }
+
+    #[test]
+    fn source_line_text_for_choice_reads_base_only_in_three_way_mode() {
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            ..Default::default()
+        };
+        state.three_way_text.base = "b0\nb1\n".into();
+        state.three_way_text.ours = "o0\no1\n".into();
+        state.three_way_text.theirs = "t0\nt1\n".into();
+        state.three_way_line_starts.base = vec![0, 3].into();
+        state.three_way_line_starts.ours = vec![0, 3].into();
+        state.three_way_line_starts.theirs = vec![0, 3].into();
+
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Base, 1),
+            Some("b1")
+        );
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Ours, 0),
+            Some("o0")
+        );
+        assert_eq!(
+            state.source_line_text_for_choice(ConflictChoice::Theirs, 1),
+            Some("t1")
+        );
+    }
+
+    #[test]
+    fn apply_three_way_conflict_maps_distributes_ranges_and_flags() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: Some("base\n".into()),
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            choice: ConflictChoice::Theirs,
+            resolved: true,
+        })];
+        let maps = conflict_resolver::ThreeWayConflictMaps {
+            conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
+            line_conflict_maps: [vec![Some(0); 3], vec![Some(0); 5], vec![Some(0); 4]],
+            conflict_has_base: vec![true],
+        };
+        state.apply_three_way_conflict_maps(maps.clone());
+
+        assert_eq!(
+            state.three_way_conflict_ranges.base,
+            maps.conflict_ranges[0]
+        );
+        assert_eq!(
+            state.three_way_conflict_ranges.ours,
+            maps.conflict_ranges[1]
+        );
+        assert_eq!(
+            state.three_way_conflict_ranges.theirs,
+            maps.conflict_ranges[2]
+        );
+        assert_eq!(state.conflict_has_base, maps.conflict_has_base);
+        assert_eq!(state.conflict_choices, vec![ConflictChoice::Theirs]);
+    }
+
+    #[test]
+    fn refresh_conflict_has_base_from_segments_refreshes_choice_cache() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "ours\n".into(),
+                theirs: "theirs\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base\n".into()),
+                ours: "ours2\n".into(),
+                theirs: "theirs2\n".into(),
+                choice: ConflictChoice::Both,
+                resolved: true,
+            }),
+        ];
+
+        state.refresh_conflict_has_base_from_segments();
+
+        assert_eq!(state.conflict_has_base, vec![false, true]);
+        assert_eq!(
+            state.conflict_choices,
+            vec![ConflictChoice::Ours, ConflictChoice::Both]
+        );
+    }
+
+    #[test]
+    fn rebuild_three_way_visible_state_streamed_mode() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\nb\n".into(),
+            theirs: "c\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        state.three_way_text.ours = "a\nb\n".into();
+        state.three_way_text.theirs = "c\n".into();
+        state.three_way_line_starts.ours = vec![0, 2].into();
+        state.three_way_line_starts.theirs = vec![0].into();
+        state.three_way_len = 2;
+
+        state.rebuild_three_way_visible_state();
+
+        assert!(state.streamed().three_way_visible_projection.len() > 0);
+        assert_eq!(
+            state.three_way_visible_len(),
+            state.streamed().three_way_visible_projection.len()
+        );
+        assert!(!state.three_way_conflict_ranges.ours.is_empty());
+    }
+
+    #[test]
+    fn three_way_measure_rows_do_not_materialize_deferred_line_starts() {
+        let mut state = ConflictResolverUiState::default();
+        let base_text = "ctx\nbase 1234567890\nend\n";
+        let ours_text = "ctx\nours abcdefghij\nend\n";
+        let theirs_text = "ctx\ntheirs klmnopqrstuv\nend\n";
+
+        state.marker_segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: Some("base 1234567890\n".into()),
+                ours: "ours abcdefghij\n".into(),
+                theirs: "theirs klmnopqrstuv\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+            ConflictSegment::Text("end\n".into()),
+        ];
+        state.three_way_text = ThreeWaySides {
+            base: base_text.into(),
+            ours: ours_text.into(),
+            theirs: theirs_text.into(),
+        };
+        state.three_way_line_starts = ThreeWaySides {
+            base: DeferredLineStarts::with_line_count(3),
+            ours: DeferredLineStarts::with_line_count(3),
+            theirs: DeferredLineStarts::with_line_count(3),
+        };
+        state.three_way_len = 3;
+
+        state.rebuild_three_way_visible_state();
+
+        assert_eq!(
+            state.three_way_horizontal_measure_row(ThreeWayColumn::Base),
+            1
+        );
+        assert_eq!(
+            state.three_way_horizontal_measure_row(ThreeWayColumn::Ours),
+            1
+        );
+        assert_eq!(
+            state.three_way_horizontal_measure_row(ThreeWayColumn::Theirs),
+            1
+        );
+        assert!(
+            !state.three_way_line_starts.base.is_materialized(),
+            "base line starts should stay deferred when selecting measure rows"
+        );
+        assert!(
+            !state.three_way_line_starts.ours.is_materialized(),
+            "ours line starts should stay deferred when selecting measure rows"
+        );
+        assert!(
+            !state.three_way_line_starts.theirs.is_materialized(),
+            "theirs line starts should stay deferred when selecting measure rows"
+        );
+    }
+
+    #[test]
+    fn streamed_conflict_index_for_side_line_uses_grouped_side_ranges() {
+        let mut state = ConflictResolverUiState::default();
+        state.three_way_conflict_ranges = ThreeWaySides {
+            base: vec![0..1, 4..6],
+            ours: vec![2..5, 8..9],
+            theirs: vec![1..3, 7..10],
+        };
+
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Base, 4),
+            Some(1)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 3),
+            Some(0)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Theirs, 8),
+            Some(1)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Base, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn streamed_mode_dispatch_uses_projection() {
+        let mut state = ConflictResolverUiState::default();
+        let segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\nb\nc\nd\ne\n".into(),
+            theirs: "a\nb\nc\nd\ne\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let ranges = vec![0..5];
+        state.streamed_mut().three_way_visible_projection =
+            conflict_resolver::build_three_way_visible_projection(5, &ranges, &segments, false);
+
+        assert_eq!(state.three_way_visible_len(), 5);
+        assert_eq!(
+            state.three_way_visible_item(2),
+            Some(ThreeWayVisibleItem::Line(2))
+        );
+    }
+
+    fn streamed_state_with_one_conflict() -> ConflictResolverUiState {
+        let segments = vec![
+            ConflictSegment::Text("ctx\n".into()),
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "a\nb\n".into(),
+                theirs: "c\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            }),
+        ];
+        let index = ConflictSplitRowIndex::new(&segments, 3);
+        let projection = TwoWaySplitProjection::new(&index, &segments, false);
+
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = segments;
+        state.mode_state = super::ConflictModeState::Streamed(super::StreamedConflictState {
+            split_row_index: index,
+            two_way_split_projection: projection,
+            ..super::StreamedConflictState::default()
+        });
+        state
+    }
+
+    #[test]
+    fn two_way_row_counts_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        let (diff_count, inline_count) = streamed.two_way_row_counts();
+        assert!(diff_count > 0);
+        assert_eq!(inline_count, 0);
+    }
+
+    #[test]
+    fn two_way_split_conflict_ix_for_visible_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        let vis_len = streamed.two_way_split_visible_len();
+        let mut found_conflict = false;
+        for ix in 0..vis_len {
+            if streamed.two_way_split_conflict_ix_for_visible(ix) == Some(0) {
+                found_conflict = true;
+                break;
+            }
+        }
+        assert!(found_conflict);
+    }
+
+    #[test]
+    fn two_way_split_visible_row_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        let visible_ix = streamed
+            .two_way_visible_ix_for_conflict(0)
+            .expect("streamed visible row should exist for the unresolved conflict");
+        let visible_row = streamed
+            .two_way_split_visible_row(visible_ix)
+            .expect("streamed visible row should resolve through the projection");
+        assert_eq!(visible_row.conflict_ix, Some(0));
+        assert!(visible_row.row.old.is_some() || visible_row.row.new.is_some());
+        assert!(visible_row.source_row_ix < streamed.two_way_row_counts().0);
+    }
+
+    #[test]
+    fn two_way_split_nav_entries_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        assert_eq!(streamed.two_way_split_nav_entries().len(), 1);
+    }
+
+    #[test]
+    fn two_way_nav_entries_uses_split_projection() {
+        let streamed = streamed_state_with_one_conflict();
+        assert_eq!(streamed.two_way_nav_entries().len(), 1);
+    }
+
+    #[test]
+    fn two_way_conflict_ix_for_visible_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        let vis_len = streamed.two_way_split_visible_len();
+        let mut found = false;
+        for ix in 0..vis_len {
+            if streamed.two_way_conflict_ix_for_visible(ix) == Some(0) {
+                found = true;
+                break;
+            }
+        }
+        assert!(found);
+    }
+
+    #[test]
+    fn two_way_visible_ix_for_conflict_dispatch() {
+        let streamed = streamed_state_with_one_conflict();
+        assert!(streamed.two_way_visible_ix_for_conflict(0).is_some());
+        assert_eq!(streamed.two_way_visible_ix_for_conflict(99), None);
+    }
+
+    #[test]
+    fn default_mode_state_is_streamed() {
+        let state = ConflictResolverUiState::default();
+        assert!(state.rendering_mode().is_streamed_large_file());
+        assert!(state.split_row_index().is_some());
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -747,8 +1728,6 @@ pub(super) enum ResolverPickTarget {
         row_ix: usize,
         side: conflict_resolver::ConflictPickSide,
     },
-    /// Append a specific line from the 2-way inline resolver pane.
-    TwoWayInlineLine { row_ix: usize },
     /// Pick a full conflict chunk for the requested side.
     Chunk {
         conflict_ix: usize,
@@ -998,7 +1977,6 @@ pub(super) enum PatchSplitRow {
 pub enum GitCometViewMode {
     #[default]
     Normal,
-    #[allow(dead_code)]
     FocusedMergetool,
 }
 
@@ -1068,9 +2046,9 @@ impl FocusedMergetoolBootstrap {
 pub(super) enum FocusedMergetoolBootstrapAction {
     OpenRepo(std::path::PathBuf),
     SetActiveRepo(RepoId),
-    SelectDiff {
+    SelectConflictDiff {
         repo_id: RepoId,
-        target: DiffTarget,
+        path: std::path::PathBuf,
     },
     LoadConflictFile {
         repo_id: RepoId,
@@ -1175,9 +2153,9 @@ pub(super) fn focused_mergetool_bootstrap_action(
         path: bootstrap.target_path.clone(),
     };
     if repo.diff_state.diff_target.as_ref() != Some(&target) {
-        return Some(FocusedMergetoolBootstrapAction::SelectDiff {
+        return Some(FocusedMergetoolBootstrapAction::SelectConflictDiff {
             repo_id: repo.id,
-            target,
+            path: bootstrap.target_path.clone(),
         });
     }
 

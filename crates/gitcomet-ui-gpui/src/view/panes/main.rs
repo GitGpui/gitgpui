@@ -1,7 +1,6 @@
 use super::super::path_display;
 use super::super::perf::{self, ViewPerfSpan};
 use super::super::*;
-use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 mod actions_impl;
@@ -15,7 +14,6 @@ mod preview;
 pub(in crate::view) use helpers::*;
 
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
-const CONFLICT_RESOLVED_OUTLINE_AUTO_SYNTAX_MAX_LINES: usize = 4_000;
 const CONFLICT_RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
 const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;

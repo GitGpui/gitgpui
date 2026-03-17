@@ -1,7 +1,8 @@
 use super::util::{
     dedup_paths_in_order, diff_reload_effects, format_failure_summary,
     handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effects, refresh_primary_effects,
+    refresh_full_effects, refresh_primary_effects, selected_conflict_target_path,
+    start_conflict_target_reload,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, DiagnosticKind, Loadable, RepoId,
@@ -182,7 +183,11 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     // Reload the selected diff when switching repos; steady-state refreshes rely on the
     // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
     if changed && let Some(target) = repo_state.diff_state.diff_target.clone() {
-        effects.extend(diff_reload_effects(repo_id, target));
+        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+        } else {
+            effects.extend(diff_reload_effects(repo_id, target));
+        }
     }
     if let Some(effect) = persist_effect {
         effects.push(effect);

@@ -17,19 +17,17 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_min_width;
-        let query = if this.diff_search_active {
-            this.diff_search_query.as_ref()
-        } else {
-            ""
-        };
+        let query = this.diff_search_query_or_empty();
 
         let theme = this.theme;
         let Some(path) = this.worktree_preview_path.as_ref() else {
             return Vec::new();
         };
-        let Loadable::Ready(lines) = &this.worktree_preview else {
+        let Some(line_count) = this.worktree_preview_line_count() else {
             return Vec::new();
         };
+        let source_text = this.worktree_preview_text.clone();
+        let line_starts = Arc::clone(&this.worktree_preview_line_starts);
 
         let should_clear_cache = match this.worktree_preview_segments_cache_path.as_ref() {
             Some(p) => p != path,
@@ -41,34 +39,24 @@ impl MainPaneView {
             this.worktree_preview_segments_cache.clear();
         }
 
-        let configured_syntax_mode = if lines.len() <= MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-            DiffSyntaxMode::Auto
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
         let language = this.worktree_preview_syntax_language;
         let syntax_document = this.worktree_preview_prepared_syntax_document();
-        let syntax_mode = if syntax_document.is_some() {
-            configured_syntax_mode
-        } else {
-            DiffSyntaxMode::HeuristicOnly
-        };
+        let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
 
         let bar_color = worktree_preview_bar_color(this, theme);
 
         range
+            .take_while(|ix| *ix < line_count)
             .map(|ix| {
-                let line = lines.get(ix).map(String::as_str).unwrap_or("");
-
-                let styled = this
-                    .worktree_preview_segments_cache
-                    .entry(ix)
-                    .or_insert_with(|| {
-                        build_cached_diff_styled_text_for_prepared_document_line(
+                let line = rows::resolved_output_line_text(source_text.as_ref(), &line_starts, ix);
+                let mut pending_styled = None;
+                if this.worktree_preview_segments_cache_get(ix).is_none() {
+                    let (styled, is_pending) =
+                        build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                             theme,
                             line,
                             &[],
-                            query,
+                            query.as_ref(),
                             DiffSyntaxConfig {
                                 language,
                                 mode: syntax_mode,
@@ -79,7 +67,17 @@ impl MainPaneView {
                                 line_ix: ix,
                             },
                         )
-                    });
+                        .into_parts();
+                    if is_pending {
+                        this.ensure_prepared_syntax_chunk_poll(cx);
+                        pending_styled = Some(styled);
+                    } else {
+                        this.worktree_preview_segments_cache_set(ix, styled);
+                    }
+                }
+
+                let cached_styled = this.worktree_preview_segments_cache_get(ix);
+                let styled = pending_styled.as_ref().or(cached_styled);
 
                 let line_no = line_number_string(u32::try_from(ix + 1).ok());
                 diff_canvas::worktree_preview_row_canvas(
@@ -89,7 +87,7 @@ impl MainPaneView {
                     min_width,
                     bar_color,
                     line_no,
-                    styled,
+                    styled.expect("worktree preview row style should exist after populate"),
                 )
             })
             .collect()
@@ -116,13 +114,17 @@ impl MainPaneView {
             cx,
         );
         render_markdown_preview_document_rows(
-            theme,
             document.as_ref(),
             range,
-            bar_color,
-            this.diff_horizontal_min_width,
-            "worktree_markdown_preview",
-            Some(horizontal_scroll_handle),
+            &MarkdownPreviewRenderContext {
+                theme,
+                bar_color,
+                min_width: this.diff_horizontal_min_width,
+                row_id_prefix: "worktree_markdown_preview",
+                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                view: Some(cx.entity().clone()),
+                text_region: DiffTextRegion::Inline,
+            },
         )
     }
 
@@ -145,14 +147,22 @@ impl MainPaneView {
             window,
             cx,
         );
+        let region = match this.diff_view {
+            DiffViewMode::Inline => DiffTextRegion::Inline,
+            DiffViewMode::Split => DiffTextRegion::SplitLeft,
+        };
         render_markdown_preview_document_rows(
-            theme,
             &preview.old,
             range,
-            None,
-            this.diff_horizontal_min_width,
-            "diff_markdown_preview_left",
-            Some(horizontal_scroll_handle),
+            &MarkdownPreviewRenderContext {
+                theme,
+                bar_color: None,
+                min_width: this.diff_horizontal_min_width,
+                row_id_prefix: "diff_markdown_preview_left",
+                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                view: Some(cx.entity().clone()),
+                text_region: region,
+            },
         )
     }
 
@@ -176,13 +186,17 @@ impl MainPaneView {
             cx,
         );
         render_markdown_preview_document_rows(
-            theme,
             &preview.inline,
             range,
-            None,
-            this.diff_horizontal_min_width,
-            "diff_markdown_preview_inline",
-            Some(horizontal_scroll_handle),
+            &MarkdownPreviewRenderContext {
+                theme,
+                bar_color: None,
+                min_width: this.diff_horizontal_min_width,
+                row_id_prefix: "diff_markdown_preview_inline",
+                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                view: Some(cx.entity().clone()),
+                text_region: DiffTextRegion::Inline,
+            },
         )
     }
 
@@ -206,13 +220,17 @@ impl MainPaneView {
             cx,
         );
         render_markdown_preview_document_rows(
-            theme,
             &preview.new,
             range,
-            None,
-            this.diff_horizontal_min_width,
-            "diff_markdown_preview_right",
-            Some(horizontal_scroll_handle),
+            &MarkdownPreviewRenderContext {
+                theme,
+                bar_color: None,
+                min_width: this.diff_horizontal_min_width,
+                row_id_prefix: "diff_markdown_preview_right",
+                horizontal_scroll_handle: Some(horizontal_scroll_handle),
+                view: Some(cx.entity().clone()),
+                text_region: DiffTextRegion::SplitRight,
+            },
         )
     }
 
@@ -272,28 +290,32 @@ struct MarkdownPreviewRowLayout {
     shell_bottom_inset_px: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MarkdownPreviewRowHorizontalPadding {
+    left_px: f32,
+    right_px: f32,
+}
+
+pub(super) struct MarkdownPreviewRenderContext {
+    pub(super) theme: AppTheme,
+    pub(super) bar_color: Option<gpui::Rgba>,
+    pub(super) min_width: Pixels,
+    pub(super) row_id_prefix: &'static str,
+    pub(super) horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    pub(super) view: Option<Entity<MainPaneView>>,
+    pub(super) text_region: DiffTextRegion,
+}
+
 pub(super) fn render_markdown_preview_document_rows(
-    theme: AppTheme,
     document: &MarkdownPreviewDocument,
     range: Range<usize>,
-    bar_color: Option<gpui::Rgba>,
-    min_width: Pixels,
-    row_id_prefix: &'static str,
-    horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    context: &MarkdownPreviewRenderContext,
 ) -> Vec<AnyElement> {
     let requested_rows = range.len();
     let rows = range
         .filter_map(|ix| {
             let row = document.rows.get(ix)?;
-            Some(markdown_preview_row_element(
-                theme,
-                row,
-                ix,
-                bar_color,
-                min_width,
-                row_id_prefix,
-                horizontal_scroll_handle.clone(),
-            ))
+            Some(markdown_preview_row_element(row, ix, context))
         })
         .collect::<Vec<_>>();
     perf::record_row_batch(
@@ -305,14 +327,15 @@ pub(super) fn render_markdown_preview_document_rows(
 }
 
 fn markdown_preview_row_element(
-    theme: AppTheme,
     row: &MarkdownPreviewRow,
     row_ix: usize,
-    bar_color: Option<gpui::Rgba>,
-    min_width: Pixels,
-    row_id_prefix: &'static str,
-    horizontal_scroll_handle: Option<gpui::ScrollHandle>,
+    context: &MarkdownPreviewRenderContext,
 ) -> AnyElement {
+    let theme = context.theme;
+    let bar_color = context.bar_color;
+    let min_width = context.min_width;
+    let row_id_prefix = context.row_id_prefix;
+    let text_region = context.text_region;
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return div()
@@ -327,9 +350,7 @@ fn markdown_preview_row_element(
     let row_layout = markdown_preview_row_layout(row);
     let typography = markdown_preview_row_typography(theme, row);
     let (display, highlights) = markdown_preview_display_and_highlights(theme, row);
-    let indent_steps = f32::from(row.indent_level.saturating_sub(1));
-    let indent =
-        px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX);
+    let horizontal_padding = markdown_preview_row_horizontal_padding(row);
 
     let mut content = div()
         .flex_1()
@@ -482,7 +503,7 @@ fn markdown_preview_row_element(
         row.kind,
         MarkdownPreviewRowKind::CodeLine { is_last: true, .. }
     ) && row.code_block_horizontal_scroll_hint
-        && let Some(scroll_handle) = horizontal_scroll_handle
+        && let Some(scroll_handle) = context.horizontal_scroll_handle.clone()
     {
         content_shell = content_shell.child(
             components::Scrollbar::horizontal((row_id_prefix, row_ix), scroll_handle).render(theme),
@@ -496,8 +517,8 @@ fn markdown_preview_row_element(
         .h_full()
         .flex()
         .items_center()
-        .pl(indent)
-        .pr(px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX));
+        .pl(px(horizontal_padding.left_px))
+        .pr(px(horizontal_padding.right_px));
     if let Some(blockquote_gutter) =
         markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
     {
@@ -505,29 +526,102 @@ fn markdown_preview_row_element(
     }
     row_content = row_content.child(content_shell);
 
-    div()
-        .relative()
-        .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-        .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
-        .w_full()
-        .flex()
-        .items_center()
-        .pt(px(row_layout.top_inset_px))
-        .pb(px(row_layout.bottom_inset_px))
-        .when_some(markdown_preview_row_background(theme, row), |div, bg| {
-            div.bg(bg)
-        })
-        .when_some(bar_color, |container, color| {
-            container.child(
-                div()
-                    .h_full()
-                    .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
-                    .bg(color),
-            )
-        })
-        .min_w(min_width)
-        .child(row_content)
-        .into_any_element()
+    let row_text = row.text.clone();
+
+    if let Some(view) = context.view.clone() {
+        // Interactive markdown preview row with text selection + context menu.
+        div()
+            .id(("md_preview_row", row_ix))
+            .relative()
+            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .pt(px(row_layout.top_inset_px))
+            .pb(px(row_layout.bottom_inset_px))
+            .when_some(markdown_preview_row_background(theme, row), |div, bg| {
+                div.bg(bg)
+            })
+            .when_some(bar_color, |container, color| {
+                container.child(
+                    div()
+                        .h_full()
+                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .bg(color),
+                )
+            })
+            .min_w(min_width)
+            .child(row_content)
+            .on_mouse_down(gpui::MouseButton::Left, {
+                let view = view.clone();
+                move |event, window, cx| {
+                    window.focus(&view.read(cx).diff_panel_focus_handle);
+                    let click_count = event.click_count;
+                    let position = event.position;
+                    view.update(cx, |this, cx| {
+                        if click_count >= 2 {
+                            this.double_click_select_diff_text(
+                                row_ix,
+                                text_region,
+                                DiffClickKind::Line,
+                            );
+                        } else {
+                            this.begin_diff_text_selection(row_ix, text_region, position);
+                            this.begin_diff_text_scroll_tracking(position, cx);
+                        }
+                        cx.notify();
+                    });
+                }
+            })
+            .on_mouse_down(gpui::MouseButton::Right, {
+                let view = view.clone();
+                move |event, window, cx| {
+                    view.update(cx, |this, cx| {
+                        this.open_diff_editor_context_menu(
+                            row_ix,
+                            text_region,
+                            event.position,
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    });
+                }
+            })
+            .child(DiffTextSelectionOverlay {
+                view,
+                visible_ix: row_ix,
+                region: text_region,
+                text: row_text,
+            })
+            .into_any_element()
+    } else {
+        // Non-interactive markdown preview row (benchmarks, conflict resolver).
+        div()
+            .relative()
+            .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .pt(px(row_layout.top_inset_px))
+            .pb(px(row_layout.bottom_inset_px))
+            .when_some(markdown_preview_row_background(theme, row), |div, bg| {
+                div.bg(bg)
+            })
+            .when_some(bar_color, |container, color| {
+                container.child(
+                    div()
+                        .h_full()
+                        .w(px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX))
+                        .bg(color),
+                )
+            })
+            .min_w(min_width)
+            .child(row_content)
+            .into_any_element()
+    }
 }
 
 fn markdown_preview_row_required_width(
@@ -557,10 +651,8 @@ fn markdown_preview_row_required_width(
             )
         };
 
-        let indent_steps = f32::from(row.indent_level.saturating_sub(1));
-        let mut width =
-            px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX);
-        width += px(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX);
+        let horizontal_padding = markdown_preview_row_horizontal_padding(row);
+        let mut width = px(horizontal_padding.left_px + horizontal_padding.right_px);
         width += text_width;
 
         if row.blockquote_level > 0 {
@@ -738,6 +830,7 @@ fn markdown_preview_row_marker(row: &MarkdownPreviewRow) -> Option<SharedString>
     }
 
     match row.kind {
+        MarkdownPreviewRowKind::DetailsSummary => Some("v".into()),
         MarkdownPreviewRowKind::ListItem { number: Some(n) } => Some(format!("{n}.").into()),
         MarkdownPreviewRowKind::ListItem { number: None } => Some("•".into()),
         _ => None,
@@ -892,6 +985,11 @@ fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLa
             bottom_inset_px: 7.0,
             shell_bottom_inset_px: 0.0,
         },
+        MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowLayout {
+            top_inset_px: 2.0,
+            bottom_inset_px: 6.0,
+            shell_bottom_inset_px: 0.0,
+        },
         MarkdownPreviewRowKind::Paragraph => MarkdownPreviewRowLayout {
             top_inset_px: 3.0,
             bottom_inset_px: 7.0,
@@ -984,9 +1082,16 @@ fn markdown_preview_row_typography(
             font_family: None,
             text_color,
         },
+        MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowTypography {
+            font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
+            line_height: 32.0,
+            font_weight: Some(FontWeight::BOLD),
+            font_family: None,
+            text_color,
+        },
         MarkdownPreviewRowKind::ListItem { .. } => MarkdownPreviewRowTypography {
             font_size: MARKDOWN_PREVIEW_BASE_FONT_PX,
-            line_height: 30.0,
+            line_height: 36.0,
             font_weight: None,
             font_family: None,
             text_color,
@@ -1027,6 +1132,31 @@ fn markdown_preview_code_background(theme: AppTheme) -> gpui::Rgba {
         with_alpha(theme.colors.surface_bg_elevated, 0.88)
     } else {
         with_alpha(theme.colors.surface_bg, 0.86)
+    }
+}
+
+fn markdown_preview_row_horizontal_padding(
+    row: &MarkdownPreviewRow,
+) -> MarkdownPreviewRowHorizontalPadding {
+    let indent_steps = f32::from(row.indent_level.saturating_sub(1));
+    let default_left_px =
+        MARKDOWN_PREVIEW_CONTENT_PAD_X_PX + indent_steps * MARKDOWN_PREVIEW_INDENT_STEP_PX;
+
+    match row.kind {
+        MarkdownPreviewRowKind::CodeLine { .. } if row.indent_level == 0 => {
+            MarkdownPreviewRowHorizontalPadding {
+                left_px: 0.0,
+                right_px: 0.0,
+            }
+        }
+        MarkdownPreviewRowKind::CodeLine { .. } => MarkdownPreviewRowHorizontalPadding {
+            left_px: default_left_px,
+            right_px: 0.0,
+        },
+        _ => MarkdownPreviewRowHorizontalPadding {
+            left_px: default_left_px,
+            right_px: MARKDOWN_PREVIEW_CONTENT_PAD_X_PX,
+        },
     }
 }
 
@@ -1211,7 +1341,7 @@ fn history_table_row(
     cx: &mut gpui::Context<HistoryView>,
 ) -> AnyElement {
     let context_menu_invoker: SharedString =
-        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.0.as_str()).into();
+        format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
@@ -1497,7 +1627,8 @@ mod tests {
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
         markdown_preview_alert_title_label, markdown_preview_display_and_highlights,
         markdown_preview_inline_highlight, markdown_preview_row_background,
-        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_typography,
+        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
+        markdown_preview_row_marker, markdown_preview_row_typography,
     };
     use crate::view::markdown_preview::MarkdownInlineSpan;
     use crate::view::{
@@ -1614,7 +1745,7 @@ mod tests {
             "row renderer should not build prepared syntax documents"
         );
         assert!(
-            !render_source.contains("prepare_diff_syntax_document_with_budget("),
+            !render_source.contains("prepare_diff_syntax_document_with_budget_reuse("),
             "row renderer should not run full-document parse prep"
         );
     }
@@ -1679,6 +1810,22 @@ mod tests {
     }
 
     #[test]
+    fn markdown_preview_details_summary_rows_are_bold_and_marked() {
+        let theme = AppTheme::zed_one_light();
+        let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
+
+        let typography = markdown_preview_row_typography(theme, &row);
+
+        assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
+        assert_eq!(
+            markdown_preview_row_marker(&row)
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some("v")
+        );
+    }
+
+    #[test]
     fn markdown_preview_code_rows_reserve_bottom_space_for_local_scrollbar() {
         let row = markdown_row(MarkdownPreviewRowKind::CodeLine {
             is_first: false,
@@ -1692,6 +1839,20 @@ mod tests {
             super::MARKDOWN_PREVIEW_CODE_SCROLLBAR_PAD_BOTTOM_PX
         );
         assert_eq!(layout.bottom_inset_px, 4.0);
+    }
+
+    #[test]
+    fn markdown_preview_top_level_code_rows_drop_outer_horizontal_padding() {
+        let mut row = markdown_row(MarkdownPreviewRowKind::CodeLine {
+            is_first: true,
+            is_last: false,
+        });
+        row.indent_level = 0;
+
+        let padding = markdown_preview_row_horizontal_padding(&row);
+
+        assert_eq!(padding.left_px, 0.0);
+        assert_eq!(padding.right_px, 0.0);
     }
 
     #[test]

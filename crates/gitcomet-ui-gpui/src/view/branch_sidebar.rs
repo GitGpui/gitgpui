@@ -236,7 +236,7 @@ pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
             });
         } else {
             for (remote, mut branches) in remotes {
-                branches.sort();
+                branches.sort_unstable();
                 branches.dedup();
                 rows.push(BranchSidebarRow::RemoteHeader {
                     name: remote.clone().into(),

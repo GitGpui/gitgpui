@@ -18,32 +18,28 @@ pub(crate) enum ViewPerfSpan {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ViewPerfRenderLane {
-    ThreeWay,
-    ResolverDiff,
     ResolvedPreview,
     MarkdownPreview,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct SpanStats {
     pub calls: u64,
     pub total_nanos: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct RowBatchStats {
     pub calls: u64,
     pub requested_rows: u64,
     pub painted_rows: u64,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) struct ViewPerfSnapshot {
-    pub render_three_way_rows_batch: RowBatchStats,
-    pub render_resolver_diff_rows_batch: RowBatchStats,
     pub render_resolved_preview_rows_batch: RowBatchStats,
     pub markdown_preview_rows_batch: RowBatchStats,
     pub render_three_way_rows: SpanStats,
@@ -108,14 +104,12 @@ pub(crate) fn record_row_batch(
     let _ = (lane, requested_rows, painted_rows);
 }
 
+#[cfg(test)]
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn snapshot() -> ViewPerfSnapshot {
     #[cfg(debug_assertions)]
     {
         ViewPerfSnapshot {
-            render_three_way_rows_batch: RENDER_THREE_WAY_ROWS_BATCH.snapshot(),
-            render_resolver_diff_rows_batch: RENDER_RESOLVER_DIFF_ROWS_BATCH.snapshot(),
             render_resolved_preview_rows_batch: RENDER_RESOLVED_PREVIEW_ROWS_BATCH.snapshot(),
             markdown_preview_rows_batch: MARKDOWN_PREVIEW_ROWS_BATCH.snapshot(),
             render_three_way_rows: RENDER_THREE_WAY_ROWS_SPAN.snapshot(),
@@ -135,13 +129,11 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
     }
 }
 
+#[cfg(test)]
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn reset() {
     #[cfg(debug_assertions)]
     {
-        RENDER_THREE_WAY_ROWS_BATCH.reset();
-        RENDER_RESOLVER_DIFF_ROWS_BATCH.reset();
         RENDER_RESOLVED_PREVIEW_ROWS_BATCH.reset();
         MARKDOWN_PREVIEW_ROWS_BATCH.reset();
 
@@ -185,8 +177,8 @@ impl AtomicSpanStats {
         self.total_nanos.fetch_add(elapsed_nanos, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn snapshot(&self) -> SpanStats {
         SpanStats {
             calls: self.calls.load(Ordering::Relaxed),
@@ -194,8 +186,8 @@ impl AtomicSpanStats {
         }
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
         self.total_nanos.store(0, Ordering::Relaxed);
@@ -228,8 +220,8 @@ impl AtomicRowBatchStats {
         self.painted_rows.fetch_add(painted_rows, Ordering::Relaxed);
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn snapshot(&self) -> RowBatchStats {
         RowBatchStats {
             calls: self.calls.load(Ordering::Relaxed),
@@ -238,8 +230,8 @@ impl AtomicRowBatchStats {
         }
     }
 
+    #[cfg(test)]
     #[inline]
-    #[allow(dead_code)]
     fn reset(&self) {
         self.calls.store(0, Ordering::Relaxed);
         self.requested_rows.store(0, Ordering::Relaxed);
@@ -267,10 +259,6 @@ static MARKDOWN_PREVIEW_PARSE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 static MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 
 #[cfg(debug_assertions)]
-static RENDER_THREE_WAY_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
-#[cfg(debug_assertions)]
-static RENDER_RESOLVER_DIFF_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
-#[cfg(debug_assertions)]
 static RENDER_RESOLVED_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 #[cfg(debug_assertions)]
 static MARKDOWN_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
@@ -295,8 +283,6 @@ fn span_stats(span: ViewPerfSpan) -> &'static AtomicSpanStats {
 #[cfg(debug_assertions)]
 fn row_stats(lane: ViewPerfRenderLane) -> &'static AtomicRowBatchStats {
     match lane {
-        ViewPerfRenderLane::ThreeWay => &RENDER_THREE_WAY_ROWS_BATCH,
-        ViewPerfRenderLane::ResolverDiff => &RENDER_RESOLVER_DIFF_ROWS_BATCH,
         ViewPerfRenderLane::ResolvedPreview => &RENDER_RESOLVED_PREVIEW_ROWS_BATCH,
         ViewPerfRenderLane::MarkdownPreview => &MARKDOWN_PREVIEW_ROWS_BATCH,
     }
@@ -342,13 +328,13 @@ mod tests {
     #[test]
     fn snapshot_exposes_recorded_row_batches() {
         reset();
-        record_row_batch(ViewPerfRenderLane::ThreeWay, 12, 9);
+        record_row_batch(ViewPerfRenderLane::ResolvedPreview, 12, 9);
         let snapshot = snapshot();
 
         #[cfg(debug_assertions)]
         {
             assert_eq!(
-                snapshot.render_three_way_rows_batch,
+                snapshot.render_resolved_preview_rows_batch,
                 RowBatchStats {
                     calls: 1,
                     requested_rows: 12,

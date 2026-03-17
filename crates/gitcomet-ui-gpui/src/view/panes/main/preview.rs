@@ -1,11 +1,37 @@
 use super::*;
 
 struct ReadyWorktreePreview {
-    lines: Arc<Vec<String>>,
-    source_len: usize,
+    text: SharedString,
+    line_starts: Arc<[usize]>,
+}
+
+impl ReadyWorktreePreview {
+    fn from_text(text: String) -> Self {
+        let line_starts = Arc::from(build_line_starts(&text));
+        Self {
+            text: text.into(),
+            line_starts,
+        }
+    }
+
+    fn from_lines(lines: &[String], source_len: usize) -> Self {
+        let (text, line_starts) = preview_source_text_and_line_starts_from_lines(lines, source_len);
+        Self { text, line_starts }
+    }
 }
 
 impl MainPaneView {
+    /// Clears worktree preview source text, line starts, and the segments
+    /// cache. Use this when the preview content is invalidated but the caller
+    /// still needs to set identity fields (path, loadable state, syntax
+    /// language) separately.
+    pub(super) fn reset_worktree_preview_source_state(&mut self) {
+        self.worktree_preview_text = SharedString::default();
+        self.worktree_preview_line_starts = Arc::default();
+        self.worktree_preview_segments_cache_path = None;
+        self.worktree_preview_segments_cache.clear();
+    }
+
     pub(in super::super::super) fn is_file_diff_target(target: Option<&DiffTarget>) -> bool {
         matches!(
             target,
@@ -21,17 +47,15 @@ impl MainPaneView {
             )
         });
         let has_untracked_preview = self.untracked_worktree_preview_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && crate::view::is_existing_regular_file(&p)
+            !crate::view::should_bypass_text_file_preview_for_path(&p) && p.is_file()
         });
         let has_added_preview = self.added_file_preview_abs_path().is_some_and(|p| {
             !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !crate::view::is_existing_directory(&p)
-                && (crate::view::is_existing_regular_file(&p) || is_commit_file_target)
+                && !p.is_dir()
+                && (p.is_file() || is_commit_file_target)
         });
         let has_deleted_preview = self.deleted_file_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
-                && !crate::view::is_existing_directory(&p)
+            !crate::view::should_bypass_text_file_preview_for_path(&p) && !p.is_dir()
         });
         has_untracked_preview || has_added_preview || has_deleted_preview
     }
@@ -94,6 +118,13 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn ensure_conflict_markdown_preview_cache(&mut self) {
+        if self.is_conflict_rendered_preview_active()
+            && self
+                .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full)
+        {
+            return;
+        }
+
         let Some(source_hash) = self.conflict_resolver.source_hash else {
             self.conflict_resolver.markdown_preview =
                 ConflictResolverMarkdownPreviewState::default();
@@ -129,7 +160,7 @@ impl MainPaneView {
             } else {
                 repo.spec.workdir.join(path)
             };
-            crate::view::is_existing_directory(&abs_path)
+            abs_path.is_dir()
         })
     }
 
@@ -143,7 +174,7 @@ impl MainPaneView {
         } else {
             repo.spec.workdir.join(path)
         };
-        if !crate::view::is_existing_directory(&abs_path) {
+        if !abs_path.is_dir() {
             return None;
         }
 
@@ -168,8 +199,88 @@ impl MainPaneView {
 
     pub(in crate::view) fn worktree_preview_line_count(&self) -> Option<usize> {
         match &self.worktree_preview {
-            Loadable::Ready(lines) => Some(lines.len()),
+            Loadable::Ready(line_count) => Some(*line_count),
             _ => None,
+        }
+    }
+
+    pub(in crate::view) fn worktree_preview_line_text(&self, line_ix: usize) -> Option<&str> {
+        let line_count = self.worktree_preview_line_count()?;
+        if line_ix >= line_count {
+            return None;
+        }
+        Some(rows::resolved_output_line_text(
+            self.worktree_preview_text.as_ref(),
+            self.worktree_preview_line_starts.as_ref(),
+            line_ix,
+        ))
+    }
+
+    /// Returns the row count for the active markdown preview, taking the
+    /// current diff view mode into account.  Returns `None` when no markdown
+    /// preview is active.
+    pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
+        if self.is_file_preview_active() {
+            if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
+                return Some(doc.rows.len());
+            }
+            return None;
+        }
+        if let Loadable::Ready(diff) = &self.file_markdown_preview {
+            return Some(match self.diff_view {
+                DiffViewMode::Inline => diff.inline.rows.len(),
+                DiffViewMode::Split => diff.old.rows.len().max(diff.new.rows.len()),
+            });
+        }
+        None
+    }
+
+    /// Returns the text of a markdown preview row at `visible_ix` for the
+    /// given `region`.  For file preview (added/deleted/untracked) only
+    /// `DiffTextRegion::Inline` is meaningful.
+    pub(in crate::view) fn markdown_preview_row_text(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let fallback = SharedString::default();
+
+        if self.is_file_preview_active() {
+            let Loadable::Ready(doc) = &self.worktree_markdown_preview else {
+                return fallback;
+            };
+            return doc
+                .rows
+                .get(visible_ix)
+                .map(|r| r.text.clone())
+                .unwrap_or(fallback);
+        }
+
+        let Loadable::Ready(diff) = &self.file_markdown_preview else {
+            return fallback;
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => diff
+                .inline
+                .rows
+                .get(visible_ix)
+                .map(|r| r.text.clone())
+                .unwrap_or(fallback),
+            DiffViewMode::Split => match region {
+                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => diff
+                    .old
+                    .rows
+                    .get(visible_ix)
+                    .map(|r| r.text.clone())
+                    .unwrap_or(fallback),
+                DiffTextRegion::SplitRight => diff
+                    .new
+                    .rows
+                    .get(visible_ix)
+                    .map(|r| r.text.clone())
+                    .unwrap_or(fallback),
+            },
         }
     }
 
@@ -318,13 +429,11 @@ impl MainPaneView {
             self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
             self.worktree_preview_path = Some(path);
             self.worktree_preview = Loadable::Loading;
-            self.worktree_preview_source_len = 0;
+            self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
-            self.worktree_preview_segments_cache_path = None;
-            self.worktree_preview_segments_cache.clear();
         } else if matches!(self.worktree_preview, Loadable::NotLoaded) {
             self.worktree_preview = Loadable::Loading;
-            self.worktree_preview_source_len = 0;
+            self.reset_worktree_preview_source_state();
             self.diff_horizontal_min_width = px(0.0);
         }
     }
@@ -345,10 +454,8 @@ impl MainPaneView {
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_path = Some(path.clone());
         self.worktree_preview = Loadable::Loading;
-        self.worktree_preview_source_len = 0;
+        self.reset_worktree_preview_source_state();
         self.diff_horizontal_min_width = px(0.0);
-        self.worktree_preview_segments_cache_path = None;
-        self.worktree_preview_segments_cache.clear();
         self.worktree_preview_scroll
             .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
 
@@ -373,10 +480,7 @@ impl MainPaneView {
                     "File is not valid UTF-8; binary preview is not supported.".to_string()
                 })?;
 
-                Ok::<ReadyWorktreePreview, String>(ReadyWorktreePreview {
-                    lines: Arc::new(text.lines().map(|s| s.to_string()).collect::<Vec<_>>()),
-                    source_len: text.len(),
-                })
+                Ok::<ReadyWorktreePreview, String>(ReadyWorktreePreview::from_text(text))
                 }
             })
             .await;
@@ -387,17 +491,15 @@ impl MainPaneView {
                 this.worktree_preview_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 match result {
-                    Ok(preview) => this.set_worktree_preview_ready_lines(
+                    Ok(preview) => this.set_worktree_preview_ready_source(
                         path.clone(),
-                        preview.lines,
-                        preview.source_len,
+                        preview.text,
+                        preview.line_starts,
                         cx,
                     ),
                     Err(e) => {
                         this.worktree_preview = Loadable::Error(e);
-                        this.worktree_preview_source_len = 0;
-                        this.worktree_preview_segments_cache_path = None;
-                        this.worktree_preview_segments_cache.clear();
+                        this.reset_worktree_preview_source_state();
                     }
                 }
                 cx.notify();
@@ -466,14 +568,7 @@ impl MainPaneView {
                         } else {
                             file.new.as_deref()
                         };
-                        text.map(|text| {
-                            Ok(ReadyWorktreePreview {
-                                lines: Arc::new(
-                                    text.lines().map(|s| s.to_string()).collect::<Vec<_>>(),
-                                ),
-                                source_len: text.len(),
-                            })
-                        })
+                        text.map(|text| Ok(ReadyWorktreePreview::from_text(text.to_owned())))
                     }),
                 };
 
@@ -487,20 +582,20 @@ impl MainPaneView {
                                 &repo.spec.workdir,
                                 repo.diff_state.diff_target.as_ref(),
                             ) {
-                                preview_result = Some(Ok(ReadyWorktreePreview {
-                                    lines: Arc::new(preview.lines),
-                                    source_len: preview.source_len,
-                                }));
+                                preview_result = Some(Ok(ReadyWorktreePreview::from_lines(
+                                    preview.lines.as_slice(),
+                                    preview.source_len,
+                                )));
                             }
                         } else if let Some(preview) = build_new_file_preview_from_diff(
                             &annotated,
                             &repo.spec.workdir,
                             repo.diff_state.diff_target.as_ref(),
                         ) {
-                            preview_result = Some(Ok(ReadyWorktreePreview {
-                                lines: Arc::new(preview.lines),
-                                source_len: preview.source_len,
-                            }));
+                            preview_result = Some(Ok(ReadyWorktreePreview::from_lines(
+                                preview.lines.as_slice(),
+                                preview.source_len,
+                            )));
                         } else if let Some(e) = diff_file_error {
                             preview_result = Some(Err(e));
                         } else {
@@ -532,10 +627,10 @@ impl MainPaneView {
             Ok(preview) => {
                 self.worktree_preview_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
-                self.set_worktree_preview_ready_lines(
+                self.set_worktree_preview_ready_source(
                     abs_path,
-                    preview.lines,
-                    preview.source_len,
+                    preview.text,
+                    preview.line_starts,
                     cx,
                 );
                 self.diff_horizontal_min_width = px(0.0);
@@ -551,11 +646,9 @@ impl MainPaneView {
                         .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                     self.worktree_preview_path = Some(abs_path);
                     self.worktree_preview = Loadable::Error(e);
-                    self.worktree_preview_source_len = 0;
-                    self.diff_horizontal_min_width = px(0.0);
-                    self.worktree_preview_segments_cache_path = None;
                     self.worktree_preview_syntax_language = None;
-                    self.worktree_preview_segments_cache.clear();
+                    self.reset_worktree_preview_source_state();
+                    self.diff_horizontal_min_width = px(0.0);
                 }
             }
         }

@@ -1,4 +1,4 @@
-use crate::model::RepoId;
+use crate::model::{ConflictFileLoadMode, RepoId};
 use crate::session::SessionReposSnapshot;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{ConflictSide, PullMode, RemoteUrlKind, ResetMode};
@@ -94,6 +94,7 @@ pub enum Effect {
     LoadConflictFile {
         repo_id: RepoId,
         path: PathBuf,
+        mode: ConflictFileLoadMode,
     },
     SaveWorktreeFile {
         repo_id: RepoId,

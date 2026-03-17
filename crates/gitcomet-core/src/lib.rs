@@ -8,5 +8,6 @@ pub mod error;
 pub mod file_diff;
 pub mod merge;
 pub mod merge_extraction;
+pub mod mergetool_trace;
 pub mod services;
 pub mod text_utils;

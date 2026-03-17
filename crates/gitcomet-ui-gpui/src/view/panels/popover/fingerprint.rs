@@ -1,9 +1,10 @@
 use super::*;
 use crate::view::fingerprint as view_fingerprint;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
 pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     hash_popover_kind(popover, &mut hasher);
 
     match popover {
@@ -589,7 +590,7 @@ mod tests {
     use super::*;
 
     fn hash_kind(kind: PopoverKind) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         hash_popover_kind(&kind, &mut hasher);
         hasher.finish()
     }

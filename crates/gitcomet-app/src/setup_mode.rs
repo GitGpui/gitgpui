@@ -4,7 +4,7 @@
 //! `git difftool` and `git mergetool` invoke gitcomet automatically.
 //! Uninstall removes those entries while preserving unrelated tool settings.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
 /// A single `git config` key-value pair to set.
@@ -580,7 +580,7 @@ fn read_uninstall_snapshot(
     scope: &str,
     entries: &[UninstallEntry],
 ) -> Result<HashMap<&'static str, Vec<String>>, String> {
-    let mut snapshot = HashMap::new();
+    let mut snapshot = HashMap::default();
     for key in collect_uninstall_snapshot_keys(entries) {
         snapshot.insert(key, read_git_config_values(scope, key)?);
     }
@@ -1209,7 +1209,7 @@ mod tests {
     #[test]
     fn uninstall_plan_unsets_matching_setup_values() {
         let entries = build_uninstall_entries();
-        let mut snapshot: HashMap<&'static str, Vec<String>> = HashMap::new();
+        let mut snapshot: HashMap<&'static str, Vec<String>> = HashMap::default();
         snapshot.insert("mergetool.gitcomet.cmd", vec!["custom-cmd".to_string()]);
         snapshot.insert("merge.tool", vec!["gitcomet".to_string()]);
         snapshot.insert("mergetool.prompt", vec!["false".to_string()]);
@@ -1230,7 +1230,7 @@ mod tests {
     #[test]
     fn uninstall_plan_preserves_non_gitcomet_generic_settings() {
         let entries = build_uninstall_entries();
-        let mut snapshot: HashMap<&'static str, Vec<String>> = HashMap::new();
+        let mut snapshot: HashMap<&'static str, Vec<String>> = HashMap::default();
         snapshot.insert("mergetool.gitcomet.cmd", vec!["custom-cmd".to_string()]);
         snapshot.insert("merge.tool", vec!["meld".to_string()]);
         snapshot.insert("mergetool.prompt", vec!["false".to_string()]);

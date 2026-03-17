@@ -116,14 +116,21 @@ impl RepoLoadsInFlight {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictFile {
     pub path: PathBuf,
-    pub base_bytes: Option<Vec<u8>>,
-    pub ours_bytes: Option<Vec<u8>>,
-    pub theirs_bytes: Option<Vec<u8>>,
-    pub current_bytes: Option<Vec<u8>>,
-    pub base: Option<String>,
-    pub ours: Option<String>,
-    pub theirs: Option<String>,
-    pub current: Option<String>,
+    pub base_bytes: Option<Arc<[u8]>>,
+    pub ours_bytes: Option<Arc<[u8]>>,
+    pub theirs_bytes: Option<Arc<[u8]>>,
+    pub current_bytes: Option<Arc<[u8]>>,
+    pub base: Option<Arc<str>>,
+    pub ours: Option<Arc<str>>,
+    pub theirs: Option<Arc<str>>,
+    pub current: Option<Arc<str>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ConflictFileLoadMode {
+    #[default]
+    CurrentOnly,
+    Full,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -284,6 +291,7 @@ impl Default for DiffState {
 #[derive(Clone, Debug)]
 pub struct ConflictState {
     pub conflict_file_path: Option<PathBuf>,
+    pub conflict_file_load_mode: ConflictFileLoadMode,
     pub conflict_file: Loadable<Option<ConflictFile>>,
     pub conflict_session: Option<ConflictSession>,
     pub conflict_hide_resolved: bool,
@@ -294,6 +302,7 @@ impl Default for ConflictState {
     fn default() -> Self {
         Self {
             conflict_file_path: None,
+            conflict_file_load_mode: ConflictFileLoadMode::CurrentOnly,
             conflict_file: Loadable::NotLoaded,
             conflict_session: None,
             conflict_hide_resolved: false,
@@ -573,6 +582,14 @@ impl RepoState {
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
+    pub(crate) fn set_conflict_file_load_mode(&mut self, v: ConflictFileLoadMode) {
+        if self.conflict_state.conflict_file_load_mode == v {
+            return;
+        }
+        self.conflict_state.conflict_file_load_mode = v;
+        self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
+    }
+
     pub(crate) fn set_conflict_file(&mut self, v: Loadable<Option<ConflictFile>>) {
         self.conflict_state.conflict_file = v;
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
@@ -623,7 +640,6 @@ pub struct DiagnosticEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DiagnosticKind {
     Info,
-    Warning,
     Error,
 }
 
@@ -663,10 +679,10 @@ mod tests {
         repo.status = Loadable::Ready(Arc::new(RepoStatus::default()));
         repo.history_state.log = Loadable::Ready(Arc::new(LogPage {
             commits: vec![Commit {
-                id: CommitId("c1".to_string()),
+                id: CommitId("c1".into()),
                 parent_ids: Vec::new(),
-                summary: "s1".to_string(),
-                author: "a".to_string(),
+                summary: "s1".into(),
+                author: "a".into(),
                 time: SystemTime::UNIX_EPOCH,
             }],
             next_cursor: None,
@@ -676,14 +692,14 @@ mod tests {
             next_cursor: None,
         }));
         repo.history_state.blame = Loadable::Ready(Arc::new(vec![BlameLine {
-            commit_id: "c1".to_string(),
-            author: "a".to_string(),
+            commit_id: "c1".into(),
+            author: "a".into(),
             author_time_unix: None,
-            summary: "s1".to_string(),
+            summary: "s1".into(),
             line: "line".to_string(),
         }]));
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
-            id: CommitId("c1".to_string()),
+            id: CommitId("c1".into()),
             message: "m".to_string(),
             committed_at: "t".to_string(),
             parent_ids: Vec::new(),
@@ -691,7 +707,7 @@ mod tests {
         }));
         repo.diff_state.diff = Loadable::Ready(Arc::new(Diff {
             target: DiffTarget::Commit {
-                commit_id: CommitId("c1".to_string()),
+                commit_id: CommitId("c1".into()),
                 path: None,
             },
             lines: Vec::new(),
@@ -781,7 +797,7 @@ mod tests {
     fn set_selected_commit_bumps_selected_commit_rev() {
         let mut repo = new_repo();
         let before = repo.history_state.selected_commit_rev;
-        repo.set_selected_commit(Some(CommitId("abc".to_string())));
+        repo.set_selected_commit(Some(CommitId("abc".into())));
         assert_eq!(repo.history_state.selected_commit_rev, before + 1);
         repo.set_selected_commit(None);
         assert_eq!(repo.history_state.selected_commit_rev, before + 2);
@@ -862,6 +878,21 @@ mod tests {
     }
 
     #[test]
+    fn set_conflict_file_load_mode_bumps_conflict_rev_only_on_change() {
+        let mut repo = new_repo();
+        let before = repo.conflict_state.conflict_rev;
+        repo.set_conflict_file_load_mode(ConflictFileLoadMode::Full);
+        assert_eq!(
+            repo.conflict_state.conflict_file_load_mode,
+            ConflictFileLoadMode::Full
+        );
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
+
+        repo.set_conflict_file_load_mode(ConflictFileLoadMode::Full);
+        assert_eq!(repo.conflict_state.conflict_rev, before + 1);
+    }
+
+    #[test]
     fn set_conflict_hide_resolved_bumps_conflict_rev_only_on_change() {
         let mut repo = new_repo();
         let before = repo.conflict_state.conflict_rev;
@@ -921,7 +952,7 @@ mod tests {
     #[test]
     fn set_detached_head_commit_updates_only_on_change() {
         let mut repo = new_repo();
-        let head = CommitId("abc123".to_string());
+        let head = CommitId("abc123".into());
         repo.set_detached_head_commit(Some(head.clone()));
         assert_eq!(repo.detached_head_commit, Some(head.clone()));
 

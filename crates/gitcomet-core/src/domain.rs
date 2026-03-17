@@ -1,7 +1,11 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
+
+#[cfg(test)]
+use rustc_hash::FxHashMap as HashMap;
+#[cfg(test)]
+use std::sync::Mutex;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RepoSpec {
@@ -9,7 +13,7 @@ pub struct RepoSpec {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CommitId(pub String);
+pub struct CommitId(pub Arc<str>);
 
 impl AsRef<str> for CommitId {
     fn as_ref(&self) -> &str {
@@ -17,12 +21,18 @@ impl AsRef<str> for CommitId {
     }
 }
 
+impl std::fmt::Display for CommitId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     pub id: CommitId,
     pub parent_ids: Vec<CommitId>,
-    pub summary: String,
-    pub author: String,
+    pub summary: Arc<str>,
+    pub author: Arc<str>,
     pub time: SystemTime,
 }
 
@@ -233,24 +243,22 @@ pub trait DiffRowProvider {
     fn slice(&self, start: usize, end: usize) -> Self::SliceIter<'_>;
 }
 
+#[cfg(test)]
 #[derive(Debug)]
-pub struct PagedDiffLineProvider {
+pub(crate) struct PagedDiffLineProvider {
     lines: Arc<[DiffLine]>,
     page_size: usize,
     pages: Mutex<HashMap<usize, Arc<[DiffLine]>>>,
 }
 
+#[cfg(test)]
 impl PagedDiffLineProvider {
-    pub fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
+    pub(crate) fn new(lines: Arc<[DiffLine]>, page_size: usize) -> Self {
         Self {
             lines,
             page_size: page_size.max(1),
-            pages: Mutex::new(HashMap::new()),
+            pages: Mutex::new(HashMap::default()),
         }
-    }
-
-    pub fn from_vec(lines: Vec<DiffLine>, page_size: usize) -> Self {
-        Self::new(Arc::from(lines), page_size)
     }
 
     pub fn cached_page_count(&self) -> usize {
@@ -273,7 +281,7 @@ impl PagedDiffLineProvider {
         }
 
         let (start, end) = self.page_bounds(page_ix)?;
-        let page = Arc::<[DiffLine]>::from(self.lines[start..end].to_vec());
+        let page = Arc::<[DiffLine]>::from(&self.lines[start..end]);
         if let Ok(mut pages) = self.pages.lock() {
             return Some(Arc::clone(
                 pages.entry(page_ix).or_insert_with(|| Arc::clone(&page)),
@@ -283,6 +291,7 @@ impl PagedDiffLineProvider {
     }
 }
 
+#[cfg(test)]
 impl DiffRowProvider for PagedDiffLineProvider {
     type RowRef = DiffLine;
     type SliceIter<'a>
@@ -339,26 +348,23 @@ pub enum DiffLineKind {
 
 impl Diff {
     fn classify_unified_line(raw: &str) -> DiffLineKind {
-        if raw.starts_with("@@") {
-            DiffLineKind::Hunk
-        } else if raw.starts_with("diff ")
-            || raw.starts_with("index ")
-            || raw.starts_with("--- ")
-            || raw.starts_with("+++ ")
-            || raw.starts_with("new file mode ")
-            || raw.starts_with("deleted file mode ")
-            || raw.starts_with("similarity index ")
-            || raw.starts_with("rename from ")
-            || raw.starts_with("rename to ")
-            || raw.starts_with("Binary files ")
-        {
-            DiffLineKind::Header
-        } else if raw.starts_with('+') && !raw.starts_with("+++ ") {
-            DiffLineKind::Add
-        } else if raw.starts_with('-') && !raw.starts_with("---") {
-            DiffLineKind::Remove
-        } else {
-            DiffLineKind::Context
+        match raw.as_bytes().first().copied() {
+            Some(b'@') if raw.starts_with("@@") => DiffLineKind::Hunk,
+            Some(b'd') if raw.starts_with("diff ") || raw.starts_with("deleted file mode ") => {
+                DiffLineKind::Header
+            }
+            Some(b'i') if raw.starts_with("index ") => DiffLineKind::Header,
+            Some(b'-') if raw.starts_with("--- ") => DiffLineKind::Header,
+            Some(b'-') => DiffLineKind::Remove,
+            Some(b'+') if raw.starts_with("+++ ") => DiffLineKind::Header,
+            Some(b'+') => DiffLineKind::Add,
+            Some(b'n') if raw.starts_with("new file mode ") => DiffLineKind::Header,
+            Some(b's') if raw.starts_with("similarity index ") => DiffLineKind::Header,
+            Some(b'r') if raw.starts_with("rename from ") || raw.starts_with("rename to ") => {
+                DiffLineKind::Header
+            }
+            Some(b'B') if raw.starts_with("Binary files ") => DiffLineKind::Header,
+            _ => DiffLineKind::Context,
         }
     }
 
@@ -376,7 +382,8 @@ impl Diff {
         Self { target, lines: out }
     }
 
-    pub fn from_unified_reader<R: std::io::BufRead>(
+    #[cfg(test)]
+    pub(crate) fn from_unified_reader<R: std::io::BufRead>(
         target: DiffTarget,
         mut reader: R,
     ) -> std::io::Result<Self> {
@@ -401,7 +408,8 @@ impl Diff {
         Self::from_unified_iter(target, text.lines())
     }
 
-    pub fn paged_lines(&self, page_size: usize) -> PagedDiffLineProvider {
+    #[cfg(test)]
+    pub(crate) fn paged_lines(&self, page_size: usize) -> PagedDiffLineProvider {
         PagedDiffLineProvider::new(Arc::from(self.lines.clone()), page_size)
     }
 }
@@ -410,7 +418,7 @@ impl Diff {
 pub struct StashEntry {
     pub index: usize,
     pub id: CommitId,
-    pub message: String,
+    pub message: Arc<str>,
     pub created_at: Option<SystemTime>,
 }
 
@@ -418,9 +426,9 @@ pub struct StashEntry {
 pub struct ReflogEntry {
     pub index: usize,
     pub new_id: CommitId,
-    pub message: String,
+    pub message: Arc<str>,
     pub time: Option<SystemTime>,
-    pub selector: String,
+    pub selector: Arc<str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,9 +444,11 @@ pub struct LogCursor {
 
 #[cfg(test)]
 mod tests {
-    use super::{Diff, DiffArea, DiffLineKind, DiffRowProvider, DiffTarget, SubmoduleStatus};
+    use super::*;
+    use rustc_hash::FxHashSet;
     use std::io::Cursor;
     use std::path::PathBuf;
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn submodule_status_maps_known_git_markers() {
@@ -552,5 +562,107 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
             .collect::<Vec<_>>();
         assert_eq!(slice, vec!["old1", "-old2", "+new2"]);
         assert_eq!(provider.cached_page_count(), 3);
+    }
+
+    // --- Tests moved from tests/domain_smoke.rs ---
+
+    #[test]
+    fn commit_id_is_hashable() {
+        let mut set = FxHashSet::default();
+        set.insert(CommitId("a".into()));
+        set.insert(CommitId("b".into()));
+        assert!(set.contains(&CommitId("a".into())));
+    }
+
+    #[test]
+    fn log_cursor_roundtrips() {
+        let cursor = LogCursor {
+            last_seen: CommitId("deadbeef".into()),
+        };
+        assert_eq!(cursor.last_seen.as_ref(), "deadbeef");
+    }
+
+    #[test]
+    fn commit_struct_is_constructible() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let commit = Commit {
+            id: CommitId("1".into()),
+            parent_ids: vec![CommitId("0".into())],
+            summary: "test".into(),
+            author: "me".into(),
+            time: now,
+        };
+        assert_eq!(&*commit.summary, "test");
+    }
+
+    // --- Tests moved from tests/diff_from_unified.rs ---
+
+    #[test]
+    fn diff_from_unified_classifies_lines() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        let text = "\
+diff --git a/a.txt b/a.txt
+index 0000000..1111111 100644
+--- a/a.txt
++++ b/a.txt
+@@ -0,0 +1,2 @@
++hello
+ world
+-bye
+";
+
+        let diff = Diff::from_unified(target, text);
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Header));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Hunk));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Add));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Remove));
+        assert!(diff.lines.iter().any(|l| l.kind == DiffLineKind::Context));
+    }
+
+    #[test]
+    fn diff_from_unified_treats_three_dash_content_as_removed_line() {
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        let diff = Diff::from_unified(
+            target,
+            "\
+@@ -1 +1 @@
+----keep this as removed content
++++ header
+",
+        );
+
+        assert_eq!(diff.lines[1].kind, DiffLineKind::Remove);
+        assert_eq!(diff.lines[2].kind, DiffLineKind::Header);
+    }
+
+    #[test]
+    fn stash_and_reflog_entries_share_arc_text_on_clone() {
+        let stash = StashEntry {
+            index: 0,
+            id: CommitId("stash".into()),
+            message: "stash message".into(),
+            created_at: None,
+        };
+        let stash_clone = stash.clone();
+        assert!(Arc::ptr_eq(&stash.message, &stash_clone.message));
+
+        let reflog = ReflogEntry {
+            index: 0,
+            new_id: CommitId("head".into()),
+            message: "reflog message".into(),
+            time: None,
+            selector: "HEAD@{0}".into(),
+        };
+        let reflog_clone = reflog.clone();
+        assert!(Arc::ptr_eq(&reflog.message, &reflog_clone.message));
+        assert!(Arc::ptr_eq(&reflog.selector, &reflog_clone.selector));
     }
 }

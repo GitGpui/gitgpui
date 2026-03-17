@@ -1,5 +1,7 @@
 use super::util::push_diagnostic;
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight};
+use crate::model::{
+    AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
+};
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
@@ -62,9 +64,16 @@ pub(super) fn conflict_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
     {
+        let existing_session = repo_state.conflict_state.conflict_session.as_ref();
         let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
             _ => None,
+        });
+        let session = session.map(|mut session| {
+            if let Some(existing_session) = existing_session {
+                restore_conflict_session_resolutions(existing_session, &mut session);
+            }
+            session
         });
         let value = match result {
             Ok(v) => Loadable::Ready(v),
@@ -77,6 +86,18 @@ pub(super) fn conflict_file_loaded(
         repo_state.set_conflict_session(session);
     }
     Vec::new()
+}
+
+fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut ConflictSession) {
+    if existing.path != next.path {
+        return;
+    }
+
+    for (prev, current) in existing.regions.iter().zip(next.regions.iter_mut()) {
+        if prev.base == current.base && prev.ours == current.ours && prev.theirs == current.theirs {
+            current.resolution = prev.resolution.clone();
+        }
+    }
 }
 
 /// Build a `ConflictSession` from a loaded `ConflictFile` and the current repo status.
@@ -97,29 +118,28 @@ fn build_conflict_session(
         _ => None,
     }?;
 
-    let payload_from = |bytes: &Option<Vec<u8>>, text: &Option<String>| -> ConflictPayload {
-        if let Some(t) = text {
-            ConflictPayload::Text(t.clone())
-        } else if let Some(b) = bytes {
-            ConflictPayload::from_bytes(b.clone())
-        } else {
-            ConflictPayload::Absent
-        }
-    };
-
-    let base = payload_from(&file.base_bytes, &file.base);
-    let ours = payload_from(&file.ours_bytes, &file.ours);
-    let theirs = payload_from(&file.theirs_bytes, &file.theirs);
+    let base = ConflictPayload::from_stage_parts(file.base_bytes.clone(), file.base.clone());
+    let ours = ConflictPayload::from_stage_parts(file.ours_bytes.clone(), file.ours.clone());
+    let theirs = ConflictPayload::from_stage_parts(file.theirs_bytes.clone(), file.theirs.clone());
 
     // If we have merged text with markers, parse regions from it.
-    if let Some(current) = file.current.as_deref() {
-        Some(ConflictSession::from_merged_text(
+    if let Some(current) = file.current.as_ref() {
+        Some(ConflictSession::from_merged_shared_text(
             file.path.clone(),
             conflict_kind,
             base,
             ours,
             theirs,
-            current,
+            current.clone(),
+        ))
+    } else if let Some(current) = file.current_bytes.as_ref() {
+        Some(ConflictSession::new_with_current(
+            file.path.clone(),
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            ConflictPayload::Binary(current.clone()),
         ))
     } else {
         Some(ConflictSession::new(
@@ -243,15 +263,21 @@ pub(super) fn load_conflict_file(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
+    mode: ConflictFileLoadMode,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     repo_state.set_conflict_file_path(Some(path.clone()));
+    repo_state.set_conflict_file_load_mode(mode);
     repo_state.set_conflict_file(Loadable::Loading);
     repo_state.set_conflict_session(None);
     repo_state.set_conflict_hide_resolved(false);
-    vec![Effect::LoadConflictFile { repo_id, path }]
+    vec![Effect::LoadConflictFile {
+        repo_id,
+        path,
+        mode,
+    }]
 }
 
 pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -454,6 +480,7 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
     }
 
     repo_state.set_conflict_file_path(None);
+    repo_state.set_conflict_file_load_mode(ConflictFileLoadMode::CurrentOnly);
     repo_state.set_conflict_file(Loadable::NotLoaded);
     repo_state.set_conflict_session(None);
     repo_state.set_conflict_hide_resolved(false);
@@ -735,7 +762,7 @@ mod tests {
         let mut state = AppState::default();
         let repo_id = RepoId(42);
         let path = PathBuf::from("tracked.txt");
-        let commit_id = CommitId("abc".to_string());
+        let commit_id = CommitId("abc".into());
 
         assert!(
             file_history_loaded(&mut state, repo_id, path.clone(), Ok(empty_log_page())).is_empty()
@@ -748,7 +775,15 @@ mod tests {
         assert!(clear_commit_selection(&mut state, repo_id).is_empty());
         assert!(load_stashes(&mut state, repo_id).is_empty());
         assert!(refresh_branches(&mut state, repo_id).is_empty());
-        assert!(load_conflict_file(&mut state, repo_id, path.clone()).is_empty());
+        assert!(
+            load_conflict_file(
+                &mut state,
+                repo_id,
+                path.clone(),
+                ConflictFileLoadMode::CurrentOnly,
+            )
+            .is_empty()
+        );
         assert!(load_reflog(&mut state, repo_id).is_empty());
         assert!(load_file_history(&mut state, repo_id, path.clone(), 25).is_empty());
         assert!(load_blame(&mut state, repo_id, path.clone(), Some("HEAD".to_string())).is_empty());
@@ -885,11 +920,13 @@ mod tests {
             ours_bytes: None,
             theirs_bytes: None,
             current_bytes: None,
-            base: Some("base\n".to_string()),
-            ours: Some("ours\n".to_string()),
-            theirs: Some("theirs\n".to_string()),
+            base: Some("base\n".to_string().into()),
+            ours: Some("ours\n".to_string().into()),
+            theirs: Some("theirs\n".to_string().into()),
             current: Some(
-                "pre\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\npost\n".to_string(),
+                "pre\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\npost\n"
+                    .to_string()
+                    .into(),
             ),
         };
 
@@ -926,9 +963,9 @@ mod tests {
 
         let file = ConflictFile {
             path: path.clone(),
-            base_bytes: Some(vec![0xff, 0x00]),
-            ours_bytes: Some(b"ours\n".to_vec()),
-            theirs_bytes: Some(b"theirs\n".to_vec()),
+            base_bytes: Some(vec![0xff, 0x00].into()),
+            ours_bytes: Some(b"ours\n".to_vec().into()),
+            theirs_bytes: Some(b"theirs\n".to_vec().into()),
             current_bytes: None,
             base: None,
             ours: None,
@@ -958,8 +995,8 @@ mod tests {
             tracked_path.clone(),
             FileConflictKind::BothAdded,
             ConflictPayload::Absent,
-            ConflictPayload::Text("ours\n".to_string()),
-            ConflictPayload::Text("theirs\n".to_string()),
+            ConflictPayload::Text("ours\n".to_string().into()),
+            ConflictPayload::Text("theirs\n".to_string().into()),
         );
 
         conflict_file_loaded(
@@ -1025,17 +1062,26 @@ mod tests {
                 conflict_path.clone(),
                 FileConflictKind::BothAdded,
                 ConflictPayload::Absent,
-                ConflictPayload::Text("ours".to_string()),
-                ConflictPayload::Text("theirs".to_string()),
+                ConflictPayload::Text("ours".to_string().into()),
+                ConflictPayload::Text("theirs".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }
 
-        let effects = load_conflict_file(&mut state, repo_id, conflict_path.clone());
+        let effects = load_conflict_file(
+            &mut state,
+            repo_id,
+            conflict_path.clone(),
+            ConflictFileLoadMode::CurrentOnly,
+        );
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             effects[0],
-            Effect::LoadConflictFile { repo_id: rid, ref path } if rid == repo_id && path == &conflict_path
+            Effect::LoadConflictFile {
+                repo_id: rid,
+                ref path,
+                mode: ConflictFileLoadMode::CurrentOnly
+            } if rid == repo_id && path == &conflict_path
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
@@ -1143,8 +1189,8 @@ mod tests {
     fn select_and_clear_commit_selection_cover_all_branches() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
-        let commit_a = CommitId("a".to_string());
-        let commit_b = CommitId("b".to_string());
+        let commit_a = CommitId("a".into());
+        let commit_b = CommitId("b".into());
 
         repo_mut(&mut state, repo_id).set_commit_details(Loadable::Error("old".to_string()));
         let effects = select_commit(&mut state, repo_id, commit_a.clone());
@@ -1447,9 +1493,9 @@ mod tests {
             repo.set_conflict_session(Some(ConflictSession::new(
                 path.clone(),
                 FileConflictKind::BothModified,
-                ConflictPayload::Text("base\n".to_string()),
-                ConflictPayload::Text("ours\n".to_string()),
-                ConflictPayload::Text("theirs\n".to_string()),
+                ConflictPayload::Text("base\n".to_string().into()),
+                ConflictPayload::Text("ours\n".to_string().into()),
+                ConflictPayload::Text("theirs\n".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }
@@ -1481,9 +1527,9 @@ mod tests {
             repo.set_conflict_session(Some(ConflictSession::new(
                 path.clone(),
                 FileConflictKind::BothModified,
-                ConflictPayload::Text("base\n".to_string()),
-                ConflictPayload::Text("ours\n".to_string()),
-                ConflictPayload::Text("theirs\n".to_string()),
+                ConflictPayload::Text("base\n".to_string().into()),
+                ConflictPayload::Text("ours\n".to_string().into()),
+                ConflictPayload::Text("theirs\n".to_string().into()),
             )));
             repo.set_conflict_hide_resolved(true);
         }
@@ -1541,8 +1587,8 @@ mod tests {
     fn commit_details_loaded_requires_selected_commit_match() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
-        let selected = CommitId("selected".to_string());
-        let other = CommitId("other".to_string());
+        let selected = CommitId("selected".into());
+        let other = CommitId("other".into());
 
         repo_mut(&mut state, repo_id).set_selected_commit(Some(selected.clone()));
         commit_details_loaded(

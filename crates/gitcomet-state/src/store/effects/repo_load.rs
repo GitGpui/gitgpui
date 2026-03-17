@@ -1,9 +1,16 @@
+use crate::model::ConflictFileLoadMode;
 use crate::msg::Msg;
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::decode_utf8_optional;
+use gitcomet_core::mergetool_trace::{
+    self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
+};
+use gitcomet_core::services::{ConflictFileStages, decode_utf8_optional};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc;
+use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor};
 use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
@@ -13,6 +20,72 @@ fn missing_repo_error(repo_id: RepoId) -> Error {
         "Repository handle not found for repo_id {}",
         repo_id.0
     )))
+}
+
+fn trace_side_stats(bytes: Option<&[u8]>, text: Option<&str>) -> MergetoolTraceSideStats {
+    MergetoolTraceSideStats::from_bytes_and_text(bytes, text)
+}
+
+fn trace_payload_stats(payload: Option<&ConflictPayload>) -> MergetoolTraceSideStats {
+    MergetoolTraceSideStats::from_bytes_and_text(
+        payload.and_then(ConflictPayload::as_bytes),
+        payload.and_then(ConflictPayload::as_text),
+    )
+}
+
+fn conflict_file_stages_from_session(
+    path: PathBuf,
+    session: &ConflictSession,
+) -> ConflictFileStages {
+    let (base_bytes, base) = session.base.clone().into_stage_parts();
+    let (ours_bytes, ours) = session.ours.clone().into_stage_parts();
+    let (theirs_bytes, theirs) = session.theirs.clone().into_stage_parts();
+
+    ConflictFileStages {
+        path,
+        base_bytes,
+        ours_bytes,
+        theirs_bytes,
+        base,
+        ours,
+        theirs,
+    }
+}
+
+fn empty_conflict_file_stages(path: PathBuf) -> ConflictFileStages {
+    ConflictFileStages {
+        path,
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        base: None,
+        ours: None,
+        theirs: None,
+    }
+}
+
+fn conflict_file_current_from_session(session: &ConflictSession) -> Option<ConflictStageParts> {
+    session
+        .current
+        .as_ref()
+        .map(|p| p.clone().into_stage_parts())
+}
+
+fn canonicalize_loaded_side(
+    bytes: Option<Arc<[u8]>>,
+    text: Option<Arc<str>>,
+) -> ConflictStageParts {
+    if let Some(text) = text {
+        return (None, Some(text));
+    }
+
+    match bytes {
+        Some(bytes) => match std::str::from_utf8(bytes.as_ref()) {
+            Ok(text) => (None, Some(Arc::<str>::from(text))),
+            Err(_) => (Some(bytes), None),
+        },
+        None => (None, None),
+    }
 }
 
 pub(super) fn schedule_load_branches(
@@ -361,37 +434,124 @@ pub(super) fn schedule_load_conflict_file(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     path: PathBuf,
+    mode: ConflictFileLoadMode,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let conflict_session = repo.conflict_session(&path).ok().flatten();
+        let trace_path = path.clone();
+        let load_full = matches!(mode, ConflictFileLoadMode::Full);
 
-        let stages = match repo.conflict_file_stages(&path) {
-            Ok(v) => Ok(v),
-            Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
-                .diff_file_text(&DiffTarget::WorkingTree {
-                    path: path.clone(),
-                    area: DiffArea::Unstaged,
-                })
-                .map(|opt| {
-                    opt.map(|d| {
-                        let ours_bytes = d.old.as_ref().map(|text| text.as_bytes().to_vec());
-                        let theirs_bytes = d.new.as_ref().map(|text| text.as_bytes().to_vec());
-                        gitcomet_core::services::ConflictFileStages {
-                            path: d.path,
-                            base_bytes: None,
-                            ours_bytes,
-                            theirs_bytes,
-                            base: None,
-                            ours: d.old,
-                            theirs: d.new,
-                        }
+        let conflict_session_started = Instant::now();
+        let conflict_session = load_full
+            .then(|| repo.conflict_session(&path).ok().flatten())
+            .flatten();
+        let session_ref = conflict_session.as_ref();
+        mergetool_trace::record_with(|| {
+            MergetoolTraceEvent::new(
+                MergetoolTraceStage::LoadConflictSession,
+                Some(trace_path.clone()),
+                conflict_session_started.elapsed(),
+            )
+            .with_base(trace_payload_stats(
+                session_ref.map(|session| &session.base),
+            ))
+            .with_ours(trace_payload_stats(
+                session_ref.map(|session| &session.ours),
+            ))
+            .with_theirs(trace_payload_stats(
+                session_ref.map(|session| &session.theirs),
+            ))
+            .with_conflict_block_count(session_ref.map(|session| session.regions.len()))
+        });
+
+        let stages_started = Instant::now();
+        let stages = if !load_full {
+            Ok(Some(empty_conflict_file_stages(path.clone())))
+        } else if let Some(session) = session_ref {
+            Ok(Some(conflict_file_stages_from_session(
+                path.clone(),
+                session,
+            )))
+        } else {
+            match repo.conflict_file_stages(&path) {
+                Ok(v) => Ok(v),
+                Err(e) if matches!(e.kind(), ErrorKind::Unsupported(_)) => repo
+                    .diff_file_text(&DiffTarget::WorkingTree {
+                        path: path.clone(),
+                        area: DiffArea::Unstaged,
                     })
-                }),
-            Err(e) => Err(e),
+                    .map(|opt| {
+                        opt.map(|d| {
+                            let ours_bytes = d
+                                .old
+                                .as_ref()
+                                .map(|text| Arc::<[u8]>::from(text.as_bytes()));
+                            let theirs_bytes = d
+                                .new
+                                .as_ref()
+                                .map(|text| Arc::<[u8]>::from(text.as_bytes()));
+                            ConflictFileStages {
+                                path: d.path,
+                                base_bytes: None,
+                                ours_bytes,
+                                theirs_bytes,
+                                base: None,
+                                ours: d.old.map(Arc::<str>::from),
+                                theirs: d.new.map(Arc::<str>::from),
+                            }
+                        })
+                    }),
+                Err(e) => Err(e),
+            }
         };
+        let stage_ref = stages.as_ref().ok().and_then(|opt| opt.as_ref());
+        mergetool_trace::record_with(|| {
+            MergetoolTraceEvent::new(
+                MergetoolTraceStage::LoadConflictFileStages,
+                Some(trace_path.clone()),
+                stages_started.elapsed(),
+            )
+            .with_base(trace_side_stats(
+                stage_ref.and_then(|stage| stage.base_bytes.as_deref()),
+                stage_ref.and_then(|stage| stage.base.as_deref()),
+            ))
+            .with_ours(trace_side_stats(
+                stage_ref.and_then(|stage| stage.ours_bytes.as_deref()),
+                stage_ref.and_then(|stage| stage.ours.as_deref()),
+            ))
+            .with_theirs(trace_side_stats(
+                stage_ref.and_then(|stage| stage.theirs_bytes.as_deref()),
+                stage_ref.and_then(|stage| stage.theirs.as_deref()),
+            ))
+        });
 
-        let current_bytes = std::fs::read(repo.spec().workdir.join(&path)).ok();
-        let current = decode_utf8_optional(current_bytes.as_deref());
+        let current_started = Instant::now();
+        let (current_trace_stage, current_bytes, current) = if let Some((current_bytes, current)) =
+            session_ref.and_then(conflict_file_current_from_session)
+        {
+            (
+                MergetoolTraceStage::LoadCurrentReuse,
+                current_bytes,
+                current,
+            )
+        } else {
+            let current_bytes = std::fs::read(repo.spec().workdir.join(&path))
+                .ok()
+                .map(Arc::<[u8]>::from);
+            let current = decode_utf8_optional(current_bytes.as_deref()).map(Arc::<str>::from);
+            (MergetoolTraceStage::LoadCurrentRead, current_bytes, current)
+        };
+        mergetool_trace::record_with(|| {
+            MergetoolTraceEvent::new(
+                current_trace_stage,
+                Some(trace_path),
+                current_started.elapsed(),
+            )
+            .with_current(trace_side_stats(
+                current_bytes.as_deref(),
+                current.as_deref(),
+            ))
+        });
+        let (current_bytes, current) = canonicalize_loaded_side(current_bytes, current);
 
         let result = stages.map(|opt| {
             opt.map(|d| {
@@ -404,12 +564,15 @@ pub(super) fn schedule_load_conflict_file(
                     ours,
                     theirs,
                 } = d;
+                let (base_bytes, base) = canonicalize_loaded_side(base_bytes, base);
+                let (ours_bytes, ours) = canonicalize_loaded_side(ours_bytes, ours);
+                let (theirs_bytes, theirs) = canonicalize_loaded_side(theirs_bytes, theirs);
 
                 crate::model::ConflictFile {
                     path,
-                    base: base.or_else(|| decode_utf8_optional(base_bytes.as_deref())),
-                    ours: ours.or_else(|| decode_utf8_optional(ours_bytes.as_deref())),
-                    theirs: theirs.or_else(|| decode_utf8_optional(theirs_bytes.as_deref())),
+                    base,
+                    ours,
+                    theirs,
                     base_bytes,
                     ours_bytes,
                     theirs_bytes,
