@@ -35,12 +35,12 @@ on:
         required: false
         type: string
       tap_repo:
-        description: "Target tap repository in OWNER/REPO form (e.g. Auto-Explore/homebrew-gitcomet)"
+        description: "Target tap repository in OWNER/REPO form (e.g. Auto-Explore/homebrew-gitcomet). Defaults to HOMEBREW_TAP_REPO when omitted."
         required: false
         default: ""
         type: string
       tap_branch:
-        description: "Target branch in tap repo"
+        description: "Target branch in tap repo. Defaults to HOMEBREW_TAP_BRANCH when omitted."
         required: false
         default: "main"
         type: string
@@ -74,8 +74,10 @@ jobs:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           INPUT_TAP_REPO: ${{ inputs.tap_repo }}
           DISPATCH_TAP_REPO: ${{ github.event.inputs.tap_repo }}
+          VAR_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
           INPUT_TAP_BRANCH: ${{ inputs.tap_branch }}
           DISPATCH_TAP_BRANCH: ${{ github.event.inputs.tap_branch }}
+          VAR_TAP_BRANCH: ${{ vars.HOMEBREW_TAP_BRANCH }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -84,8 +86,8 @@ jobs:
 
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
-          tap_repo="${INPUT_TAP_REPO:-${DISPATCH_TAP_REPO:-}}"
-          tap_branch="${INPUT_TAP_BRANCH:-${DISPATCH_TAP_BRANCH:-main}}"
+          tap_repo="${INPUT_TAP_REPO:-${DISPATCH_TAP_REPO:-${VAR_TAP_REPO:-}}}"
+          tap_branch="${INPUT_TAP_BRANCH:-${DISPATCH_TAP_BRANCH:-${VAR_TAP_BRANCH:-main}}}"
           dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"

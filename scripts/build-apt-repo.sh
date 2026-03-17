@@ -220,12 +220,11 @@ write_release_checksums() {
 run_gpg() {
   local -a args
   args=(--batch --yes --pinentry-mode loopback --local-user "$signing_key")
-  args+=("$@")
 
   if [[ -n "$gpg_passphrase" ]]; then
-    gpg "${args[@]}" --passphrase-fd 0 <<<"$gpg_passphrase"
+    gpg "${args[@]}" --passphrase-fd 0 "$@" <<<"$gpg_passphrase"
   else
-    gpg "${args[@]}"
+    gpg "${args[@]}" "$@"
   fi
 }
 

@@ -53,6 +53,27 @@ jobs:
             .github/workflows/release-manual-main.yml
           ].each { |path| YAML.load_file(path) }'
 
+      - name: Validate deployment workflow config keys
+        run: |
+          set -euo pipefail
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_COMPONENT' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_ORIGIN' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/release-manual-main.yml
+          grep -Fq 'vars.APT_STORAGE_ACCOUNT' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_CONTAINER' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_DISTRIBUTION' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_COMPONENT' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_ORIGIN' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_LABEL' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_REPO_DESCRIPTION' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
+          grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
       - name: Generate formula from synthetic artifacts
         run: |
           set -euo pipefail
@@ -72,6 +93,29 @@ jobs:
           ruby -c dist/deployment-ci/gitcomet.rb
           grep -q "on_linux do" dist/deployment-ci/gitcomet.rb
           grep -q "gitcomet-v0.0.0-ci-linux-x86_64.tar.gz" dist/deployment-ci/gitcomet.rb
+
+      - name: Validate Homebrew tap initial publish detection
+        run: |
+          set -euo pipefail
+          rm -rf dist/deployment-ci/tap-repo
+          git init --initial-branch=main dist/deployment-ci/tap-repo
+
+          pushd dist/deployment-ci/tap-repo >/dev/null
+          git config user.name "GitComet CI"
+          git config user.email "ci@autoexplore.ai"
+          echo "# Homebrew Tap" > README.md
+          git add README.md
+          git commit -m "Initial tap repo"
+
+          mkdir -p Formula
+          cp ../gitcomet.rb Formula/gitcomet.rb
+
+          git add Formula/gitcomet.rb
+          if git diff --cached --quiet -- Formula/gitcomet.rb; then
+            echo "Expected initial formula publish to be detected as a change."
+            exit 1
+          fi
+          popd >/dev/null
 
   apt-repo-generation-smoke:
     name: Validate APT repo generation script
@@ -98,7 +142,7 @@ jobs:
             echo "Package: gitcomet"
             echo "Version: 0.0.0~ci1"
             echo "Architecture: amd64"
-            echo "Maintainer: GitComet CI <ci@example.invalid>"
+            echo "Maintainer: GitComet CI <ci@autoexplore.ai>"
             echo "Description: Synthetic GitComet package for deployment CI."
           } > "${pkg_root}/DEBIAN/control"
 
@@ -116,7 +160,7 @@ jobs:
             echo "Key-Type: RSA"
             echo "Key-Length: 3072"
             echo "Name-Real: GitComet CI"
-            echo "Name-Email: ci@example.invalid"
+            echo "Name-Email: ci@autoexplore.ai"
             echo "Expire-Date: 0"
             echo "%no-protection"
             echo "%commit"
@@ -141,6 +185,7 @@ jobs:
             --label GitComet \
             --description "GitComet deployment CI repository" \
             --repo-url https://example.invalid/gitcomet/apt \
+            --gpg-passphrase "deployment-ci-passphrase" \
             --signing-key "${APT_TEST_GPG_KEY_ID}"
 
       - name: Validate generated repo
