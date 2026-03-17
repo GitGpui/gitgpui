@@ -9,6 +9,10 @@ on:
       version:
         required: true
         type: string
+      deb_revision:
+        required: false
+        type: string
+        default: "1"
       release_id:
         required: false
         type: string
@@ -21,6 +25,11 @@ on:
       version:
         description: "Optional version override (e.g. 0.2.0). If omitted, derived from tag."
         required: false
+        type: string
+      deb_revision:
+        description: "Debian package revision suffix appended to the upstream version (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
         type: string
       release_id:
         description: "Optional release id for manual backfills"
@@ -50,6 +59,7 @@ jobs:
     outputs:
       tag: ${{ steps.norm.outputs.tag }}
       version: ${{ steps.norm.outputs.version }}
+      deb_revision: ${{ steps.norm.outputs.deb_revision }}
       release_id: ${{ steps.norm.outputs.release_id }}
     steps:
       - name: Normalize tag and version
@@ -59,6 +69,8 @@ jobs:
           DISPATCH_TAG: ${{ github.event.inputs.tag }}
           INPUT_VERSION: ${{ inputs.version }}
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          INPUT_DEB_REVISION: ${{ inputs.deb_revision }}
+          DISPATCH_DEB_REVISION: ${{ github.event.inputs.deb_revision }}
           INPUT_RELEASE_ID: ${{ inputs.release_id }}
           DISPATCH_RELEASE_ID: ${{ github.event.inputs.release_id }}
         run: |
@@ -66,10 +78,12 @@ jobs:
 
           tag="${INPUT_TAG:-${DISPATCH_TAG:-}}"
           version="${INPUT_VERSION:-${DISPATCH_VERSION:-}}"
+          deb_revision="${INPUT_DEB_REVISION:-${DISPATCH_DEB_REVISION:-1}}"
           release_id="${INPUT_RELEASE_ID:-${DISPATCH_RELEASE_ID:-}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"
           version="$(echo "$version" | tr -d '[:space:]')"
+          deb_revision="$(echo "$deb_revision" | tr -d '[:space:]')"
           release_id="$(echo "$release_id" | tr -d '[:space:]')"
 
           if [ -z "$tag" ]; then
@@ -95,8 +109,14 @@ jobs:
             exit 1
           fi
 
+          if ! [[ "$deb_revision" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error title=Invalid Debian revision::Expected a positive integer like 1, 2, or 3."
+            exit 1
+          fi
+
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "deb_revision=$deb_revision" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
   build_windows:
@@ -168,6 +188,7 @@ jobs:
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
+      DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -215,7 +236,9 @@ jobs:
       - name: Package .deb
         run: |
           set -euo pipefail
-          deb_version="${VERSION/-rc./~rc.}"
+          deb_upstream_version="${VERSION/-rc./~rc.}"
+          deb_revision="${DEB_REVISION}"
+          deb_version="${deb_upstream_version}-${deb_revision}"
           pkg_root="dist/deb-root"
           mkdir -p "${pkg_root}/DEBIAN"
           mkdir -p "${pkg_root}/usr/bin"

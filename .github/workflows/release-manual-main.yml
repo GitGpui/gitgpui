@@ -7,6 +7,11 @@ on:
         description: "Release version (e.g. 0.2.0 or v0.2.0)"
         required: true
         type: string
+      deb_revision:
+        description: "Debian package revision suffix appended to the upstream version (e.g. 1 for 1.2.3-1)."
+        required: true
+        default: "1"
+        type: string
       prerelease:
         description: "Mark GitHub release as prerelease"
         required: true
@@ -147,6 +152,7 @@ jobs:
     with:
       tag: ${{ needs.validate.outputs.tag }}
       version: ${{ needs.validate.outputs.version }}
+      deb_revision: ${{ github.event.inputs.deb_revision }}
       release_id: ${{ needs.create_release.outputs.release_id }}
     secrets: inherit
 
