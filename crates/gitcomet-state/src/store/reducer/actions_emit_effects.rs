@@ -1,7 +1,7 @@
 use super::util::{
     diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
     format_failure_summary, push_action_log, push_command_log, refresh_full_effects,
-    refresh_primary_effects,
+    refresh_primary_effects, selected_conflict_target_path, start_conflict_target_reload,
 };
 use crate::model::{AppState, Loadable, RepoId, RepoState};
 use crate::msg::{Effect, RepoCommandKind};
@@ -645,25 +645,33 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::ApplyWorktreePatch { .. }
     ) && let Some(target) = repo_state.diff_state.diff_target.clone()
     {
-        repo_state.diff_state.diff = Loadable::Loading;
-        let supports_file = matches!(
-            &target,
-            DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
-        );
-        let wants_image = diff_target_wants_image_preview(&target);
-        let is_svg = diff_target_is_svg(&target);
-        repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
-            Loadable::Loading
+        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+            repo_state.diff_state.diff = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+            repo_state.bump_diff_state_rev();
+            extra_effects.extend(start_conflict_target_reload(repo_state, conflict_path));
         } else {
-            Loadable::NotLoaded
-        };
-        repo_state.diff_state.diff_file_image = if supports_file && wants_image {
-            Loadable::Loading
-        } else {
-            Loadable::NotLoaded
-        };
-        repo_state.bump_diff_state_rev();
-        extra_effects.extend(diff_reload_effects(repo_id, target));
+            repo_state.diff_state.diff = Loadable::Loading;
+            let supports_file = matches!(
+                &target,
+                DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+            );
+            let wants_image = diff_target_wants_image_preview(&target);
+            let is_svg = diff_target_is_svg(&target);
+            repo_state.diff_state.diff_file = if supports_file && (!wants_image || is_svg) {
+                Loadable::Loading
+            } else {
+                Loadable::NotLoaded
+            };
+            repo_state.diff_state.diff_file_image = if supports_file && wants_image {
+                Loadable::Loading
+            } else {
+                Loadable::NotLoaded
+            };
+            repo_state.bump_diff_state_rev();
+            extra_effects.extend(diff_reload_effects(repo_id, target));
+        }
     }
     let mut effects = refresh_full_effects(repo_state);
     effects.extend(extra_effects);
@@ -737,6 +745,8 @@ fn resolution_command_path(command: &RepoCommandKind) -> Option<&std::path::Path
 
 fn clear_conflict_context(repo_state: &mut RepoState) {
     repo_state.conflict_state.conflict_file_path = None;
+    repo_state.conflict_state.conflict_file_load_mode =
+        crate::model::ConflictFileLoadMode::CurrentOnly;
     repo_state.conflict_state.conflict_file = Loadable::NotLoaded;
     repo_state.conflict_state.conflict_session = None;
     repo_state.conflict_state.conflict_hide_resolved = false;

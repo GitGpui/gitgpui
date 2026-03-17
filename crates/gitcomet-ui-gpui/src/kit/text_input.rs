@@ -1,5 +1,6 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
+use crate::view::components::CONTROL_HEIGHT_PX;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -8,8 +9,7 @@ use gpui::{
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
     WrappedLine, actions, anchored, deferred, div, fill, hsla, point, px, relative, size,
 };
-use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
@@ -55,6 +55,8 @@ actions!(
 
 const MAX_UNDO_STEPS: usize = 100;
 const TEXT_INPUT_GUARD_ROWS: usize = 2;
+const TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS: usize = 24;
+const TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT: usize = 4;
 const TEXT_INPUT_MAX_LINE_SHAPE_BYTES: usize = 4 * 1024;
 const TEXT_INPUT_SHAPE_CACHE_LIMIT: usize = 8 * 1024;
 const TEXT_INPUT_TRUNCATION_SUFFIX: &str = "…";
@@ -73,6 +75,172 @@ struct ShapedRowCacheKey {
     wrap_width_key: i32,
     style_epoch: u64,
     text_hash_slice: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct HighlightProviderResult {
+    pub highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    pub pending: bool,
+}
+
+#[derive(Clone)]
+pub struct HighlightProvider {
+    resolve: Arc<dyn Fn(Range<usize>) -> HighlightProviderResult + Send + Sync>,
+    drain_pending: Arc<dyn Fn() -> usize + Send + Sync>,
+    has_pending: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl HighlightProvider {
+    #[cfg(test)]
+    pub fn from_fn<F>(resolve: F) -> Self
+    where
+        F: Fn(Range<usize>) -> Vec<(Range<usize>, gpui::HighlightStyle)> + Send + Sync + 'static,
+    {
+        Self {
+            resolve: Arc::new(move |range| HighlightProviderResult {
+                highlights: resolve(range),
+                pending: false,
+            }),
+            drain_pending: Arc::new(|| 0),
+            has_pending: Arc::new(|| false),
+        }
+    }
+
+    pub fn with_pending<R, D, H>(resolve: R, drain_pending: D, has_pending: H) -> Self
+    where
+        R: Fn(Range<usize>) -> HighlightProviderResult + Send + Sync + 'static,
+        D: Fn() -> usize + Send + Sync + 'static,
+        H: Fn() -> bool + Send + Sync + 'static,
+    {
+        Self {
+            resolve: Arc::new(resolve),
+            drain_pending: Arc::new(drain_pending),
+            has_pending: Arc::new(has_pending),
+        }
+    }
+
+    pub fn resolve(&self, range: Range<usize>) -> HighlightProviderResult {
+        (self.resolve)(range)
+    }
+
+    fn drain_pending(&self) -> usize {
+        (self.drain_pending)()
+    }
+
+    fn has_pending(&self) -> bool {
+        (self.has_pending)()
+    }
+}
+
+#[derive(Clone)]
+struct ProviderHighlightCacheEntry {
+    byte_start: usize,
+    byte_end: usize,
+    pending: bool,
+    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
+impl ProviderHighlightCacheEntry {
+    fn contains_range(&self, byte_range: &Range<usize>) -> bool {
+        self.byte_start <= byte_range.start && self.byte_end >= byte_range.end
+    }
+
+    fn span_len(&self) -> usize {
+        self.byte_end.saturating_sub(self.byte_start)
+    }
+}
+
+#[derive(Clone)]
+struct ProviderHighlightCache {
+    highlight_epoch: u64,
+    entries: Vec<ProviderHighlightCacheEntry>,
+}
+
+impl ProviderHighlightCache {
+    fn new(highlight_epoch: u64) -> Self {
+        Self {
+            highlight_epoch,
+            entries: Vec::new(),
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        highlight_epoch: u64,
+        byte_range: &Range<usize>,
+    ) -> Option<ResolvedProviderHighlights> {
+        if self.highlight_epoch != highlight_epoch {
+            self.highlight_epoch = highlight_epoch;
+            self.entries.clear();
+            return None;
+        }
+
+        let best_idx = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.contains_range(byte_range))
+            .min_by_key(|(_, entry)| entry.span_len())
+            .map(|(idx, _)| idx)?;
+
+        if best_idx + 1 != self.entries.len() {
+            let entry = self.entries.remove(best_idx);
+            self.entries.push(entry);
+        }
+
+        let entry = self
+            .entries
+            .last()
+            .expect("provider highlight cache should contain the requested entry");
+        Some(ResolvedProviderHighlights {
+            pending: entry.pending,
+            highlights: Arc::clone(&entry.highlights),
+        })
+    }
+
+    fn insert(
+        &mut self,
+        highlight_epoch: u64,
+        byte_range: Range<usize>,
+        pending: bool,
+        highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    ) {
+        if self.highlight_epoch != highlight_epoch {
+            self.highlight_epoch = highlight_epoch;
+            self.entries.clear();
+        }
+
+        self.entries.retain(|entry| {
+            entry.byte_start != byte_range.start || entry.byte_end != byte_range.end
+        });
+        self.entries.push(ProviderHighlightCacheEntry {
+            byte_start: byte_range.start,
+            byte_end: byte_range.end,
+            pending,
+            highlights,
+        });
+        if self.entries.len() > TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT {
+            let overflow = self.entries.len() - TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT;
+            self.entries.drain(0..overflow);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedProviderHighlights {
+    pending: bool,
+    highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
+fn should_reset_highlight_provider_binding(
+    has_existing_provider: bool,
+    current_binding_key: Option<u64>,
+    next_binding_key: Option<u64>,
+) -> bool {
+    match next_binding_key {
+        Some(next_key) => !has_existing_provider || current_binding_key != Some(next_key),
+        None => true,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +397,9 @@ pub struct TextInput {
     line_ending: &'static str,
     style: TextInputStyle,
     highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    highlight_provider: Option<HighlightProvider>,
+    highlight_provider_binding_key: Option<u64>,
+    provider_highlight_cache: Option<ProviderHighlightCache>,
     highlight_epoch: u64,
     line_height_override: Option<Pixels>,
 
@@ -265,7 +436,9 @@ pub struct TextInput {
     has_focus: bool,
     cursor_blink_visible: bool,
     cursor_blink_task: Option<gpui::Task<()>>,
+    highlight_provider_poll_task: Option<gpui::Task<()>>,
     undo_stack: Vec<UndoSnapshot>,
+    enter_pressed: bool,
 }
 
 impl TextInput {
@@ -284,6 +457,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             highlights: Arc::new(Vec::new()),
+            highlight_provider: None,
+            highlight_provider_binding_key: None,
+            provider_highlight_cache: None,
             highlight_epoch: 1,
             line_height_override: None,
             selected_range: 0..0,
@@ -317,7 +493,9 @@ impl TextInput {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            enter_pressed: false,
         }
     }
 
@@ -335,6 +513,9 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
             highlights: Arc::new(Vec::new()),
+            highlight_provider: None,
+            highlight_provider_binding_key: None,
+            provider_highlight_cache: None,
             highlight_epoch: 1,
             line_height_override: None,
             selected_range: 0..0,
@@ -368,12 +549,18 @@ impl TextInput {
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
+            highlight_provider_poll_task: None,
             undo_stack: Vec::new(),
+            enter_pressed: false,
         }
     }
 
     pub fn text(&self) -> &str {
         self.content.as_ref()
+    }
+
+    pub fn text_snapshot(&self) -> TextModelSnapshot {
+        self.content.snapshot()
     }
 
     pub fn focus_handle(&self) -> FocusHandle {
@@ -424,6 +611,35 @@ impl TextInput {
         self.invalidate_layout_caches();
     }
 
+    fn bump_shape_style_epoch_preserving_wrap_rows(&mut self) {
+        self.shape_style_epoch = self.shape_style_epoch.wrapping_add(1).max(1);
+        self.invalidate_layout_caches_preserving_wrap_rows();
+    }
+
+    fn invalidate_highlights(&mut self, preserve_wrap_rows: bool) {
+        self.provider_highlight_cache = None;
+        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
+        if preserve_wrap_rows {
+            self.bump_shape_style_epoch_preserving_wrap_rows();
+        } else {
+            self.bump_shape_style_epoch();
+        }
+    }
+
+    fn note_provider_highlights_changed(&mut self) {
+        self.invalidate_highlights(true);
+    }
+
+    fn invalidate_provider_highlights_for_text_change(&mut self) {
+        if self.highlight_provider.is_none() {
+            return;
+        }
+
+        self.provider_highlight_cache = None;
+        self.prepaint_highlight_runs_cache = None;
+        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
+    }
+
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
         let style = TextInputStyle::from_theme(theme);
         if self.style == style {
@@ -450,6 +666,7 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         self.pending_text_edit_delta = None;
+        self.invalidate_provider_highlights_for_text_change();
         cx.notify();
     }
 
@@ -460,9 +677,51 @@ impl TextInput {
     ) {
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
         self.highlights = Arc::new(highlights);
-        self.highlight_epoch = self.highlight_epoch.wrapping_add(1).max(1);
-        self.bump_shape_style_epoch();
+        self.highlight_provider = None;
+        self.highlight_provider_binding_key = None;
+        self.highlight_provider_poll_task.take();
+        self.invalidate_highlights(false);
         cx.notify();
+    }
+
+    fn install_highlight_provider(
+        &mut self,
+        provider: HighlightProvider,
+        binding_key: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_reset_highlight_provider_binding(
+            self.highlight_provider.is_some(),
+            self.highlight_provider_binding_key,
+            binding_key,
+        ) {
+            return;
+        }
+
+        self.highlight_provider = Some(provider);
+        self.highlight_provider_binding_key = binding_key;
+        self.highlight_provider_poll_task.take();
+        self.highlights = Arc::new(Vec::new());
+        self.invalidate_highlights(false);
+        cx.notify();
+    }
+
+    /// Replace the full highlight vector with a lazy provider that generates highlights
+    /// on demand for only the visible byte range. Use this for large documents where
+    /// materializing all highlights is wasteful.
+    pub fn set_highlight_provider(&mut self, provider: HighlightProvider, cx: &mut Context<Self>) {
+        self.install_highlight_provider(provider, None, cx);
+    }
+
+    /// Like `set_highlight_provider`, but lets callers provide a stable binding key so
+    /// repeated reapplication of the same provider can keep the existing highlight cache.
+    pub fn set_highlight_provider_with_key(
+        &mut self,
+        binding_key: u64,
+        provider: HighlightProvider,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_highlight_provider(provider, Some(binding_key), cx);
     }
 
     pub fn set_line_height(&mut self, line_height: Option<Pixels>, cx: &mut Context<Self>) {
@@ -476,6 +735,10 @@ impl TextInput {
     fn effective_line_height(&self, window: &Window) -> Pixels {
         self.line_height_override
             .unwrap_or_else(|| window.line_height())
+    }
+
+    pub fn take_enter_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.enter_pressed)
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -496,6 +759,81 @@ impl TextInput {
 
     fn queue_cursor_autoscroll(&mut self) {
         self.pending_cursor_autoscroll = true;
+    }
+
+    fn resolve_provider_highlights(
+        &mut self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> ResolvedProviderHighlights {
+        let requested_range = byte_start..byte_end;
+        if let Some(cache) = self.provider_highlight_cache.as_mut()
+            && let Some(resolved) = cache.resolve(self.highlight_epoch, &requested_range)
+        {
+            return resolved;
+        }
+        let Some(ref provider) = self.highlight_provider else {
+            return ResolvedProviderHighlights {
+                pending: false,
+                highlights: Arc::new(Vec::new()),
+            };
+        };
+        let mut result = provider.resolve(requested_range.clone());
+        result
+            .highlights
+            .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let pending = result.pending;
+        let highlights = Arc::new(result.highlights);
+        self.provider_highlight_cache
+            .get_or_insert_with(|| ProviderHighlightCache::new(self.highlight_epoch))
+            .insert(
+                self.highlight_epoch,
+                requested_range,
+                pending,
+                Arc::clone(&highlights),
+            );
+        ResolvedProviderHighlights {
+            pending,
+            highlights,
+        }
+    }
+
+    fn ensure_highlight_provider_poll(&mut self, cx: &mut Context<Self>) {
+        if self.highlight_provider_poll_task.is_some() {
+            return;
+        }
+
+        let task = cx.spawn(
+            async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| loop {
+                gpui::Timer::after(Duration::from_millis(16)).await;
+
+                let should_continue = input
+                    .update(cx, |input, cx| {
+                        let Some(provider) = input.highlight_provider.clone() else {
+                            input.highlight_provider_poll_task = None;
+                            return false;
+                        };
+
+                        let applied = provider.drain_pending();
+                        if applied > 0 {
+                            input.note_provider_highlights_changed();
+                            cx.notify();
+                        }
+
+                        let pending = provider.has_pending();
+                        if !pending {
+                            input.highlight_provider_poll_task = None;
+                        }
+                        pending
+                    })
+                    .unwrap_or(false);
+
+                if !should_continue {
+                    break;
+                }
+            },
+        );
+        self.highlight_provider_poll_task = Some(task);
     }
 
     fn trim_shape_caches(&mut self) {
@@ -1461,6 +1799,8 @@ impl TextInput {
 
     fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
         if self.read_only || !self.multiline {
+            self.enter_pressed = true;
+            cx.notify();
             return;
         }
         self.queue_cursor_autoscroll();
@@ -1544,13 +1884,15 @@ impl TextInput {
         let inserted = self.content.replace_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
         self.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
-        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
-        self.selected_range = inserted.end..inserted.end;
+        let cursor = inserted.end;
+        self.mark_wrap_dirty_from_edit(range, inserted.clone());
+        self.selected_range = cursor..cursor;
         self.selection_reversed = false;
         self.marked_range.take();
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
         inserted
@@ -1682,6 +2024,7 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         self.pending_text_edit_delta = None;
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2287,6 +2630,7 @@ impl EntityInputHandler for TextInput {
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2332,6 +2676,7 @@ impl EntityInputHandler for TextInput {
         self.vertical_motion_x = None;
         self.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
+        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2539,24 +2884,41 @@ impl Element for TextElement {
             let font_size = style.font_size.to_pixels(window.rem_size());
             let line_height = input.effective_line_height(window);
             let base_font = style.font();
-            let highlights = if !has_content {
-                None
-            } else {
-                Some(Arc::clone(&input.highlights))
-            };
-            let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
 
             let display_text_str = display_text.as_ref();
             let line_starts = compute_line_starts(display_text_str);
             let line_count = line_starts.len().max(1);
+            let (visible_top, visible_bottom) =
+                visible_vertical_window(bounds, input.vertical_scroll_handle.as_ref());
+
+            // Resolve highlights: use the provider path for large documents,
+            // otherwise use the pre-materialized highlight vector.
+            let highlights = if !has_content {
+                None
+            } else if input.highlight_provider.is_some() {
+                let byte_range = provider_prefetch_byte_range_for_visible_window(
+                    line_starts.as_slice(),
+                    display_text_str.len(),
+                    line_count,
+                    line_height,
+                    visible_top,
+                    visible_bottom,
+                );
+                let resolved = input.resolve_provider_highlights(byte_range.start, byte_range.end);
+                if resolved.pending {
+                    input.ensure_highlight_provider_poll(cx);
+                }
+                Some(resolved.highlights)
+            } else {
+                Some(Arc::clone(&input.highlights))
+            };
+            let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
             let shape_style = TextShapeStyle {
                 base_font: &base_font,
                 text_color,
                 highlights: highlight_slice,
                 font_size,
             };
-            let (visible_top, visible_bottom) =
-                visible_vertical_window(bounds, input.vertical_scroll_handle.as_ref());
 
             if !soft_wrap {
                 let mut scroll_x = if input.multiline {
@@ -2658,9 +3020,16 @@ impl Element for TextElement {
                 let cursor_quad = if selected_range.is_empty() {
                     let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
-                    let caret_inset_y = px(2.0);
-                    let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
-                    let top = bounds.top() + line_height * line_ix as f32 + caret_inset_y;
+                    let caret_inset_y = px(3.0);
+                    let caret_h = if !input.multiline && !input.chromeless {
+                        // Cap caret to fit within the fixed-height container
+                        // (CONTROL_HEIGHT_PX minus 2px border minus insets).
+                        (px(CONTROL_HEIGHT_PX) - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
+                    } else {
+                        (line_height - caret_inset_y * 2.0).max(px(2.0))
+                    };
+                    let caret_top_inset = (line_height - caret_h) / 2.0;
+                    let top = bounds.top() + line_height * line_ix as f32 + caret_top_inset;
                     Some(fill(
                         Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
                         style_colors.cursor,
@@ -2941,7 +3310,7 @@ impl Element for TextElement {
                 let line_ix = line_index_for_offset(&line_starts, cursor, line_count);
                 let start = line_starts.get(line_ix).copied().unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
-                let caret_inset_y = px(2.0);
+                let caret_inset_y = px(3.0);
                 let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
                 let pos = lines[line_ix]
                     .position_for_index(local, line_height)
@@ -3163,7 +3532,13 @@ impl Render for TextInput {
         let style = self.style;
         let focus = self.focus_handle.clone();
         let chromeless = self.chromeless;
-        let padding = if chromeless { px(0.0) } else { px(8.0) };
+        let multiline = self.multiline;
+        let pad_x = if chromeless { px(0.0) } else { px(8.0) };
+        let pad_y = if chromeless || !multiline {
+            px(0.0)
+        } else {
+            px(8.0)
+        };
         let is_focused = focus.is_focused(window);
 
         if self.has_focus != is_focused {
@@ -3211,7 +3586,8 @@ impl Render for TextInput {
         let text_surface = div()
             .w_full()
             .min_w(px(0.0))
-            .p(padding)
+            .px(pad_x)
+            .py(pad_y)
             .overflow_hidden()
             .child(TextElement { input: cx.entity() });
 
@@ -3260,7 +3636,9 @@ impl Render for TextInput {
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
             .line_height(self.effective_line_height(window))
             .text_size(px(13.0))
-            .when(self.multiline, |d| d.items_start())
+            .when(!multiline && !chromeless, |d| d.h(px(CONTROL_HEIGHT_PX)))
+            .when(!multiline, |d| d.items_center())
+            .when(multiline, |d| d.items_start())
             .child(text_surface);
 
         if !chromeless {
@@ -3299,7 +3677,7 @@ impl Render for TextInput {
 }
 
 fn hash_text_slice(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()
 }
@@ -3399,6 +3777,46 @@ fn visible_plain_line_range(
         end = (start + 1).min(line_count);
     }
     start..end
+}
+
+fn byte_range_for_line_range(
+    line_starts: &[usize],
+    text_len: usize,
+    line_range: Range<usize>,
+) -> Range<usize> {
+    if line_range.is_empty() {
+        return 0..0;
+    }
+
+    let start = line_starts
+        .get(line_range.start)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let end = line_starts
+        .get(line_range.end)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    start.min(end)..end.max(start)
+}
+
+fn provider_prefetch_byte_range_for_visible_window(
+    line_starts: &[usize],
+    text_len: usize,
+    line_count: usize,
+    line_height: Pixels,
+    visible_top: Pixels,
+    visible_bottom: Pixels,
+) -> Range<usize> {
+    let line_range = visible_plain_line_range(
+        line_count,
+        line_height,
+        visible_top,
+        visible_bottom,
+        TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS,
+    );
+    byte_range_for_line_range(line_starts, text_len, line_range)
 }
 
 fn wrapped_line_index_for_y(
@@ -3896,7 +4314,8 @@ fn runs_for_line(
     runs
 }
 
-fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut DefaultHasher) {
+#[cfg(feature = "benchmarks")]
+fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHasher) {
     runs.len().hash(hasher);
     let mut total = 0usize;
     for run in runs {
@@ -3907,6 +4326,7 @@ fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut DefaultHasher) {
     total.hash(hasher);
 }
 
+#[cfg(feature = "benchmarks")]
 pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     text: &str,
     line_starts: &[usize],
@@ -3915,7 +4335,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
     let base_color = hsla(0.0, 0.0, 1.0, 1.0);
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
         let line_text = line_text_for_index(text, line_starts, line_ix);
@@ -3933,6 +4353,7 @@ pub(crate) fn benchmark_text_input_runs_legacy_visible_window(
     hasher.finish()
 }
 
+#[cfg(feature = "benchmarks")]
 pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
     text: &str,
     line_starts: &[usize],
@@ -3949,7 +4370,7 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
         visible_line_range,
         highlights,
     );
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     for runs in &line_runs {
         hash_text_runs_for_benchmark(runs.as_slice(), &mut hasher);
     }
@@ -4057,6 +4478,44 @@ mod tests {
     fn visible_plain_line_range_applies_guard_rows() {
         let range = visible_plain_line_range(100, px(20.0), px(200.0), px(260.0), 2);
         assert_eq!(range, 8..16);
+    }
+
+    #[test]
+    fn provider_prefetch_byte_range_extends_visible_window_with_guard_rows() {
+        let text = std::iter::repeat("x")
+            .take(100)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let line_starts = compute_line_starts(text.as_str());
+        let range = provider_prefetch_byte_range_for_visible_window(
+            line_starts.as_slice(),
+            text.len(),
+            100,
+            px(20.0),
+            px(600.0),
+            px(660.0),
+        );
+
+        assert_eq!(range, 12..116);
+    }
+
+    #[test]
+    fn provider_prefetch_byte_range_clamps_to_document_bounds() {
+        let text = std::iter::repeat("x")
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let line_starts = compute_line_starts(text.as_str());
+        let range = provider_prefetch_byte_range_for_visible_window(
+            line_starts.as_slice(),
+            text.len(),
+            10,
+            px(20.0),
+            px(0.0),
+            px(20.0),
+        );
+
+        assert_eq!(range, 0..text.len());
     }
 
     #[test]
@@ -4348,5 +4807,783 @@ mod tests {
             run_color_at_offset(streamed_runs.as_slice(), 6),
             style_high.color.expect("style_high color should exist")
         );
+    }
+
+    #[test]
+    fn resolve_provider_highlights_caches_by_epoch_and_range() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        // Simulate the cache behavior without needing a full GPUI context.
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch: u64 = 1;
+
+        let h1 = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(!h1.pending);
+        assert_eq!(h1.highlights.len(), 1);
+        assert_eq!(h1.highlights[0].0, 0..100);
+
+        // Same range and epoch → cached, no new call.
+        let h2 = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&h1.highlights, &h2.highlights));
+
+        // Contained range → cached, no new call.
+        let h3 = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert!(Arc::ptr_eq(&h1.highlights, &h3.highlights));
+
+        // Wider range → new call.
+        let _h4 = test_resolve_with_cache(&mut cache, epoch, 0, 120, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        // Different epoch → new call even for same range.
+        let _h5 = test_resolve_with_cache(&mut cache, epoch + 1, 0, 120, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_reuses_multiple_cached_ranges() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let first = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        let second = test_resolve_with_cache(&mut cache, epoch, 200, 300, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        let first_subrange = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(Arc::ptr_eq(&first.highlights, &first_subrange.highlights));
+
+        let second_subrange = test_resolve_with_cache(&mut cache, epoch, 220, 260, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(Arc::ptr_eq(&second.highlights, &second_subrange.highlights));
+
+        let cache = cache.expect("resolved ranges should populate the provider cache");
+        assert_eq!(cache.highlight_epoch, epoch);
+        assert_eq!(cache.entries.len(), 2);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_prefers_smallest_containing_cached_range() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let narrow = test_resolve_with_cache(&mut cache, epoch, 50, 150, &provider);
+        let wide = test_resolve_with_cache(&mut cache, epoch, 0, 200, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+        let resolved = test_resolve_with_cache(&mut cache, epoch, 60, 140, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
+        assert!(
+            Arc::ptr_eq(&resolved.highlights, &narrow.highlights),
+            "the smallest cached containing slice should win even if a wider slice is newer"
+        );
+        assert!(
+            !Arc::ptr_eq(&resolved.highlights, &wide.highlights),
+            "the wider containing slice should not be reused when a tighter one exists"
+        );
+
+        let cache = cache.expect("resolved ranges should populate the provider cache");
+        assert_eq!(cached_provider_ranges(&cache), vec![0..200, 50..150]);
+    }
+
+    #[test]
+    fn resolve_provider_highlights_cache_is_bounded() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+        for window in 0..TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT {
+            let start = window * 100;
+            let end = start + 100;
+            let _ = test_resolve_with_cache(&mut cache, epoch, start, end, &provider);
+        }
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let _ = test_resolve_with_cache(
+            &mut cache,
+            epoch,
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT * 100,
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT * 100 + 100,
+            &provider,
+        );
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT + 1
+        );
+
+        let cache_ref = cache.as_ref().expect("cache should retain recent ranges");
+        assert_eq!(
+            cache_ref.entries.len(),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let _ = test_resolve_with_cache(&mut cache, epoch, 0, 50, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT + 2,
+            "the oldest cached slice should be evicted once the cache reaches its bound"
+        );
+    }
+
+    #[test]
+    fn resolve_provider_highlights_cache_hit_promotes_entry_before_eviction() {
+        use std::sync::atomic::Ordering;
+
+        let (call_count, provider) = make_counting_provider();
+
+        let mut cache: Option<ProviderHighlightCache> = None;
+        let epoch = 1;
+
+        let first = test_resolve_with_cache(&mut cache, epoch, 0, 100, &provider);
+        let _second = test_resolve_with_cache(&mut cache, epoch, 100, 200, &provider);
+        let _third = test_resolve_with_cache(&mut cache, epoch, 200, 300, &provider);
+        let _fourth = test_resolve_with_cache(&mut cache, epoch, 300, 400, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            TEXT_INPUT_PROVIDER_HIGHLIGHT_CACHE_LIMIT
+        );
+
+        let promoted = test_resolve_with_cache(&mut cache, epoch, 20, 80, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 4);
+        assert!(Arc::ptr_eq(&promoted.highlights, &first.highlights));
+
+        let _fifth = test_resolve_with_cache(&mut cache, epoch, 400, 500, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 5);
+
+        let cache_ref = cache
+            .as_ref()
+            .expect("cache should retain recent ranges after a bounded insert");
+        assert_eq!(
+            cached_provider_ranges(cache_ref),
+            vec![200..300, 300..400, 0..100, 400..500]
+        );
+
+        let reused = test_resolve_with_cache(&mut cache, epoch, 10, 50, &provider);
+        assert_eq!(call_count.load(Ordering::SeqCst), 5);
+        assert!(
+            Arc::ptr_eq(&reused.highlights, &first.highlights),
+            "a cache hit should keep the promoted slice resident across the next eviction"
+        );
+
+        let _evicted = test_resolve_with_cache(&mut cache, epoch, 120, 180, &provider);
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            6,
+            "the cold slice should be evicted instead of the recently-used one"
+        );
+    }
+
+    #[test]
+    fn highlight_provider_binding_key_reuses_existing_provider_when_unchanged() {
+        assert!(!should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            Some(41)
+        ));
+    }
+
+    #[test]
+    fn highlight_provider_binding_key_rebinds_when_missing_changed_or_unkeyed() {
+        assert!(should_reset_highlight_provider_binding(
+            false,
+            Some(41),
+            Some(41)
+        ));
+        assert!(should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            Some(42)
+        ));
+        assert!(should_reset_highlight_provider_binding(
+            true,
+            Some(41),
+            None
+        ));
+    }
+
+    fn test_resolve_with_cache(
+        cache: &mut Option<ProviderHighlightCache>,
+        epoch: u64,
+        byte_start: usize,
+        byte_end: usize,
+        provider: &HighlightProvider,
+    ) -> ResolvedProviderHighlights {
+        let requested_range = byte_start..byte_end;
+        if let Some(resolved) = cache
+            .as_mut()
+            .and_then(|c| c.resolve(epoch, &requested_range))
+        {
+            return resolved;
+        }
+        let mut result = provider.resolve(requested_range.clone());
+        result
+            .highlights
+            .sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        let pending = result.pending;
+        let highlights = Arc::new(result.highlights);
+        cache
+            .get_or_insert_with(|| ProviderHighlightCache::new(epoch))
+            .insert(epoch, requested_range, pending, Arc::clone(&highlights));
+        ResolvedProviderHighlights {
+            pending,
+            highlights,
+        }
+    }
+
+    fn make_counting_provider() -> (Arc<std::sync::atomic::AtomicUsize>, HighlightProvider) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&call_count);
+        let provider = HighlightProvider::from_fn(move |range: Range<usize>| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            vec![(
+                range,
+                gpui::HighlightStyle {
+                    color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+                    ..gpui::HighlightStyle::default()
+                },
+            )]
+        });
+
+        (call_count, provider)
+    }
+
+    fn cached_provider_ranges(cache: &ProviderHighlightCache) -> Vec<Range<usize>> {
+        cache
+            .entries
+            .iter()
+            .map(|entry| entry.byte_start..entry.byte_end)
+            .collect()
+    }
+
+    struct DualProviders {
+        first_calls: Arc<std::sync::atomic::AtomicUsize>,
+        second_calls: Arc<std::sync::atomic::AtomicUsize>,
+        first_color: gpui::Hsla,
+        second_color: gpui::Hsla,
+        first: HighlightProvider,
+        second: HighlightProvider,
+    }
+
+    fn make_dual_providers() -> DualProviders {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let first_color = gpui::hsla(0.0, 1.0, 0.5, 1.0);
+        let second_color = gpui::hsla(0.66, 1.0, 0.5, 1.0);
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let fc = Arc::clone(&first_calls);
+        let sc = Arc::clone(&second_calls);
+        DualProviders {
+            first_calls,
+            second_calls,
+            first_color,
+            second_color,
+            first: HighlightProvider::from_fn(move |range: Range<usize>| {
+                fc.fetch_add(1, Ordering::SeqCst);
+                vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(first_color),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )]
+            }),
+            second: HighlightProvider::from_fn(move |range: Range<usize>| {
+                sc.fetch_add(1, Ordering::SeqCst);
+                vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(second_color),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )]
+            }),
+        }
+    }
+
+    #[gpui::test]
+    fn stable_highlight_provider_binding_key_preserves_existing_provider_and_cache(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let initial_resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                assert_eq!(initial_resolved.highlights[0].1.color, Some(dp.first_color));
+
+                let initial_cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("initial resolve should populate the provider cache");
+                assert_eq!(initial_cache.entries.len(), 1);
+                let initial_entry = initial_cache
+                    .entries
+                    .last()
+                    .expect("initial cache should contain one provider slice");
+                assert_eq!(initial_entry.byte_start, 0);
+                assert_eq!(initial_entry.byte_end, 5);
+
+                let initial_highlight_epoch = input.highlight_epoch;
+                let initial_shape_epoch = input.shape_style_epoch;
+                let initial_cached_highlights = Arc::clone(&initial_entry.highlights);
+
+                input.set_highlight_provider_with_key(41, dp.second.clone(), cx);
+
+                assert_eq!(
+                    input.highlight_epoch, initial_highlight_epoch,
+                    "reinstalling the same binding key should not invalidate provider highlights"
+                );
+                assert_eq!(
+                    input.shape_style_epoch, initial_shape_epoch,
+                    "reinstalling the same binding key should not invalidate shaped rows"
+                );
+
+                let cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("stable binding key should preserve the cached provider range");
+                let cache_entry = cache
+                    .entries
+                    .last()
+                    .expect("stable binding key should keep the cached provider slice");
+                assert!(
+                    Arc::ptr_eq(&cache_entry.highlights, &initial_cached_highlights),
+                    "stable binding key should preserve the existing cached highlight vector"
+                );
+
+                let resolved = input.resolve_provider_highlights(1, 4);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    1,
+                    "stable binding key should keep using the original provider/cache"
+                );
+                assert_eq!(
+                    dp.second_calls.load(Ordering::SeqCst),
+                    0,
+                    "stable binding key should not bind a replacement provider"
+                );
+                assert!(Arc::ptr_eq(
+                    &resolved.highlights,
+                    &initial_cached_highlights
+                ));
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn changed_highlight_provider_binding_key_rebinds_and_clears_cached_range(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                let previous_shape_epoch = input.shape_style_epoch;
+
+                input.set_highlight_provider_with_key(42, dp.second.clone(), cx);
+
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "changing the binding key should drop the cached provider range"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "changing the binding key should invalidate provider highlight epochs"
+                );
+                assert!(
+                    input.shape_style_epoch > previous_shape_epoch,
+                    "changing the binding key should invalidate shaped text caches"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    1,
+                    "rebinding should stop using the previous provider"
+                );
+                assert_eq!(
+                    dp.second_calls.load(Ordering::SeqCst),
+                    1,
+                    "rebinding should resolve highlights from the new provider"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.second_color));
+
+                let cache = input
+                    .provider_highlight_cache
+                    .as_ref()
+                    .expect("resolving after a rebind should repopulate the provider cache");
+                assert_eq!(cache.highlight_epoch, input.highlight_epoch);
+                assert_eq!(cache.entries.len(), 1);
+                let cache_entry = cache
+                    .entries
+                    .last()
+                    .expect("rebind resolve should cache the requested provider slice");
+                assert_eq!(cache_entry.byte_start, 0);
+                assert_eq!(cache_entry.byte_end, 5);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_utf8_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                let inserted = input.replace_utf8_range(0..5, "gamma", cx);
+                assert_eq!(inserted, 0..5);
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "text edits should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "text edits should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after an edit, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn set_text_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|_window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.set_text("gamma\nbeta", cx);
+
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "set_text should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "set_text should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after set_text, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn undo_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+
+                let inserted = input.replace_utf8_range(0..5, "gamma", cx);
+                assert_eq!(inserted, 0..5);
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 2);
+                let previous_highlight_epoch = input.highlight_epoch;
+
+                input.undo(&Undo, window, cx);
+
+                assert_eq!(input.text(), "alpha\nbeta");
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "undo should clear cached provider ranges restored from the old snapshot"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "undo should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    3,
+                    "after undo, the provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_text_in_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.replace_text_in_range(Some(0..5), "gamma", window, cx);
+
+                assert_eq!(input.text(), "gamma\nbeta");
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "IME replace_text_in_range should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "IME replace_text_in_range should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after replace_text_in_range, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn replace_and_mark_text_in_range_invalidates_cached_provider_highlights(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        let (input, cx) = cx.add_window_view(|window, cx| {
+            TextInput::new(
+                TextInputOptions {
+                    multiline: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let dp = make_dual_providers();
+
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.set_text("alpha\nbeta", cx);
+                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+
+                let _ = input.resolve_provider_highlights(0, 5);
+                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+                let previous_highlight_epoch = input.highlight_epoch;
+                assert!(
+                    input.provider_highlight_cache.is_some(),
+                    "initial resolve should populate the provider cache"
+                );
+
+                input.replace_and_mark_text_in_range(Some(0..5), "gamma", None, window, cx);
+
+                assert_eq!(input.text(), "gamma\nbeta");
+                assert_eq!(input.marked_range, Some(0..5));
+                assert!(
+                    input.provider_highlight_cache.is_none(),
+                    "IME replace_and_mark_text_in_range should clear cached provider ranges"
+                );
+                assert!(
+                    input.highlight_epoch > previous_highlight_epoch,
+                    "IME replace_and_mark_text_in_range should invalidate provider highlight epochs"
+                );
+
+                let resolved = input.resolve_provider_highlights(0, 5);
+                assert_eq!(
+                    dp.first_calls.load(Ordering::SeqCst),
+                    2,
+                    "after replace_and_mark_text_in_range, the stable provider should be asked for a fresh range"
+                );
+                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            });
+        });
+    }
+
+    #[test]
+    fn highlight_provider_with_pending_uses_custom_callbacks() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let pending = Arc::new(AtomicBool::new(true));
+        let pending_for_resolve = Arc::clone(&pending);
+        let pending_for_check = Arc::clone(&pending);
+        let drain_calls = Arc::new(AtomicUsize::new(0));
+        let drain_calls_for_provider = Arc::clone(&drain_calls);
+        let provider = HighlightProvider::with_pending(
+            move |range: Range<usize>| HighlightProviderResult {
+                highlights: vec![(
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )],
+                pending: pending_for_resolve.load(Ordering::SeqCst),
+            },
+            move || {
+                drain_calls_for_provider.fetch_add(1, Ordering::SeqCst);
+                pending.store(false, Ordering::SeqCst);
+                1
+            },
+            move || pending_for_check.load(Ordering::SeqCst),
+        );
+
+        let first = provider.resolve(4..12);
+        assert!(first.pending);
+        assert_eq!(first.highlights[0].0, 4..12);
+        assert!(provider.has_pending());
+        assert_eq!(provider.drain_pending(), 1);
+        assert_eq!(drain_calls.load(Ordering::SeqCst), 1);
+        assert!(!provider.has_pending());
+
+        let second = provider.resolve(4..12);
+        assert!(!second.pending);
     }
 }

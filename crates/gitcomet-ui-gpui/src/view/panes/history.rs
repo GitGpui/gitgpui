@@ -1,4 +1,5 @@
 use super::super::*;
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
 mod history_panel;
@@ -167,7 +168,7 @@ pub(in super::super) struct HistoryView {
 
 impl HistoryView {
     fn notify_fingerprint_for(state: &AppState) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
@@ -762,7 +763,7 @@ impl HistoryView {
                     let mut stash_messages_by_id: HashMap<&str, &str> =
                         HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
                     for stash in stashes.iter() {
-                        stash_messages_by_id.insert(stash.id.as_ref(), stash.message.as_str());
+                        stash_messages_by_id.insert(stash.id.as_ref(), stash.message.as_ref());
                     }
 
                     let stash_tip_ids_from_list: HashSet<&str> = stash_messages_by_id
@@ -869,7 +870,7 @@ impl HistoryView {
                             .push(format!("{}/{}", branch.remote, branch.name));
                     }
                     for names in branch_names_by_target.values_mut() {
-                        names.sort();
+                        names.sort_unstable();
                         names.dedup();
                     }
 
@@ -910,7 +911,7 @@ impl HistoryView {
                                 if let Some(branches) = branch_names_by_target.get(commit_id) {
                                     names.extend(branches.iter().cloned());
                                 }
-                                names.sort();
+                                names.sort_unstable();
                                 names.dedup();
                                 if names.is_empty() {
                                     SharedString::from("")
@@ -944,7 +945,7 @@ impl HistoryView {
                                         None
                                     }
                                 })
-                                .unwrap_or(commit.summary.as_str());
+                                .unwrap_or(&commit.summary);
                             let summary: SharedString = summary_text.to_string().into();
 
                             let when: SharedString = format_datetime(
@@ -1015,7 +1016,7 @@ impl HistoryView {
     }
 
     fn log_fingerprint(commits: &[Commit]) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         commits.len().hash(&mut hasher);
         for id in commits.iter().take(3).map(|c| c.id.as_ref()) {
             id.hash(&mut hasher);
@@ -1031,7 +1032,7 @@ fn is_probable_stash_tip(commit: &Commit) -> bool {
     if !(2..=3).contains(&commit.parent_ids.len()) {
         return false;
     }
-    let summary = commit.summary.as_str();
+    let summary: &str = &commit.summary;
     (summary.starts_with("WIP on ") || summary.starts_with("On ")) && summary.contains(": ")
 }
 
@@ -1053,10 +1054,10 @@ mod tests {
 
     fn commit(id: &str, parents: &[&str], summary: &str) -> Commit {
         Commit {
-            id: CommitId(id.to_string()),
-            parent_ids: parents.iter().map(|p| CommitId((*p).to_string())).collect(),
-            summary: summary.to_string(),
-            author: "a".to_string(),
+            id: CommitId(id.into()),
+            parent_ids: parents.iter().map(|p| CommitId((*p).into())).collect(),
+            summary: summary.into(),
+            author: "a".into(),
             time: SystemTime::UNIX_EPOCH,
         }
     }

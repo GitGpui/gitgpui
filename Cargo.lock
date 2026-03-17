@@ -2250,6 +2250,7 @@ dependencies = [
  "gitcomet-ui",
  "gitcomet-ui-gpui",
  "mimalloc",
+ "rustc-hash 2.1.1",
  "tempfile",
 ]
 
@@ -2259,7 +2260,9 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "rustc-hash 2.1.1",
+ "strsim",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2285,6 +2288,7 @@ name = "gitcomet-state"
 version = "0.1.0"
 dependencies = [
  "gitcomet-core",
+ "gix",
  "notify",
  "rustc-hash 2.1.1",
  "serde",
@@ -2307,8 +2311,8 @@ dependencies = [
  "criterion",
  "gitcomet-core",
  "gitcomet-state",
- "gitcomet-ui",
  "gpui",
+ "lru",
  "metal 0.33.0",
  "pulldown-cmark",
  "resvg 0.47.0",
@@ -2323,10 +2327,12 @@ dependencies = [
  "tree-sitter-css",
  "tree-sitter-go",
  "tree-sitter-html",
+ "tree-sitter-javascript",
  "tree-sitter-json",
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "tree-sitter-xml",
  "tree-sitter-yaml",
  "unicode-segmentation",
  "zed-reqwest",
@@ -4300,6 +4306,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fae87c125b03c1d2c0150c90365d7d6bcc53fb73a9acaef207d2d065860f062"
 dependencies = [
  "imgref",
+]
+
+[[package]]
+name = "lru"
+version = "0.16.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -7219,6 +7234,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-json"
 version = "0.24.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7259,6 +7284,16 @@ name = "tree-sitter-typescript"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-xml"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e670041f591d994f54d597ddcd8f4ebc930e282c4c76a42268743b71f0c8b6b3"
 dependencies = [
  "cc",
  "tree-sitter-language",

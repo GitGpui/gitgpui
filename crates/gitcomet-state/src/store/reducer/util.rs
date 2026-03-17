@@ -1,10 +1,11 @@
 use crate::model::{
     AppNotification, AppNotificationKind, AppState, AuthPromptKind, CommandLogEntry,
-    DiagnosticEntry, DiagnosticKind, RepoId, RepoLoadsInFlight, RepoState,
+    ConflictFileLoadMode, DiagnosticEntry, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight,
+    RepoState,
 };
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth, stage_git_auth};
-use gitcomet_core::domain::DiffTarget;
+use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
@@ -55,6 +56,60 @@ pub(super) fn diff_target_is_svg(target: &DiffTarget) -> bool {
         } => is_svg_path(path),
         _ => false,
     }
+}
+
+pub(super) fn selected_conflict_target_path(
+    repo_state: &RepoState,
+    target: &DiffTarget,
+) -> Option<PathBuf> {
+    let DiffTarget::WorkingTree { path, area } = target else {
+        return None;
+    };
+    if *area != DiffArea::Unstaged {
+        return None;
+    }
+
+    if repo_state.conflict_state.conflict_file_path.as_deref() == Some(path.as_path()) {
+        return Some(path.clone());
+    }
+
+    let Loadable::Ready(status) = &repo_state.status else {
+        return None;
+    };
+    status
+        .unstaged
+        .iter()
+        .find(|entry| entry.path == *path && entry.kind == FileStatusKind::Conflicted)
+        .map(|_| path.clone())
+}
+
+pub(super) fn current_conflict_load_mode(repo_state: &RepoState) -> ConflictFileLoadMode {
+    repo_state.conflict_state.conflict_file_load_mode
+}
+
+pub(super) fn start_conflict_target_reload(
+    repo_state: &mut RepoState,
+    path: PathBuf,
+) -> Vec<Effect> {
+    let mode = current_conflict_load_mode(repo_state);
+    start_conflict_target_reload_with_mode(repo_state, path, mode)
+}
+
+pub(super) fn start_conflict_target_reload_with_mode(
+    repo_state: &mut RepoState,
+    path: PathBuf,
+    mode: ConflictFileLoadMode,
+) -> Vec<Effect> {
+    repo_state.set_conflict_file_path(Some(path.clone()));
+    repo_state.set_conflict_file_load_mode(mode);
+    repo_state.set_conflict_file(Loadable::Loading);
+    repo_state.set_conflict_session(None);
+    repo_state.set_conflict_hide_resolved(false);
+    vec![Effect::LoadConflictFile {
+        repo_id: repo_state.id,
+        path,
+        mode,
+    }]
 }
 
 pub(super) fn diff_reload_effects(repo_id: RepoId, target: DiffTarget) -> Vec<Effect> {

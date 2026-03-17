@@ -355,7 +355,7 @@ mod tests {
         assert!(!conflict_side_has_payload(&file, ConflictSide::Theirs));
 
         file.theirs = None;
-        file.theirs_bytes = Some(vec![0xff, 0x00]);
+        file.theirs_bytes = Some(vec![0xff, 0x00].into());
         assert!(conflict_side_has_payload(&file, ConflictSide::Theirs));
     }
 }

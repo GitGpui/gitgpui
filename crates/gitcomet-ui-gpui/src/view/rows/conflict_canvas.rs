@@ -5,7 +5,7 @@ use gpui::{
     App, Bounds, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle, Window, fill,
     point, px, size,
 };
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -17,19 +17,11 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
 type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
-type ThreeWayColumnBounds = (
-    Bounds<Pixels>,
-    Bounds<Pixels>,
-    Bounds<Pixels>,
-    Bounds<Pixels>,
-    Bounds<Pixels>,
-);
-
 thread_local! {
-    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
-    static CONFLICT_TEXT_LAYOUT_CACHE: RefCell<HashMap<u64, gpui::ShapedLine>> =
-        RefCell::new(HashMap::default());
+    static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
+    static CONFLICT_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
+        RefCell::new(new_fx_lru_cache(CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
 }
 
 #[derive(Clone, Debug)]
@@ -37,21 +29,6 @@ pub(super) struct ConflictChunkContext {
     pub(super) conflict_ix: usize,
     pub(super) has_base: bool,
     pub(super) selected_choices: Vec<conflict_resolver::ConflictChoice>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ThreeWayCanvasColumn {
-    pub(super) line_no: SharedString,
-    pub(super) bg: gpui::Rgba,
-    pub(super) fg: gpui::Rgba,
-    pub(super) text: SharedString,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(super) struct ThreeWayChunkContext {
-    pub(super) base: Option<ConflictChunkContext>,
-    pub(super) ours: Option<ConflictChunkContext>,
-    pub(super) theirs: Option<ConflictChunkContext>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -228,70 +205,41 @@ pub(super) fn split_conflict_row_canvas(
     .into_any_element()
 }
 
+/// Canvas renderer for a single conflict column (used when per-column lists are active).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn inline_conflict_row_canvas(
+pub(super) fn single_column_conflict_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
+    id_prefix: &'static str,
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
-    old_line_no: SharedString,
-    new_line_no: SharedString,
-    prefix: SharedString,
+    line_no: SharedString,
     bg: gpui::Rgba,
     fg: gpui::Rgba,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
     show_whitespace: bool,
     chunk_context: Option<ConflictChunkContext>,
+    chunk_menu_prefix: &'static str,
+    is_three_way: bool,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, show_whitespace);
 
     keyed_canvas(
-        ("conflict_resolver_inline_row_canvas", visible_row_ix),
-        move |bounds, window, _cx| {
-            let pad = px_2(window);
-            let gap = pad;
-            let text_bounds = inline_text_bounds(bounds, pad, gap);
-            InlineRowPrepaintState {
-                bounds,
-                text_bounds,
-            }
-        },
-        move |bounds, prepaint, window, cx| {
+        (id_prefix, visible_row_ix),
+        move |bounds, _window, _cx| bounds,
+        move |bounds, _prepaint, window, cx| {
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
-            let line_no_width = conflict_line_no_width();
 
             window.paint_quad(fill(bounds, bg));
 
-            let old_line_x = bounds.left() + pad;
-            let new_line_x = old_line_x + line_no_width + gap;
-            let prefix_x = new_line_x + line_no_width + gap;
-
             paint_gutter_text(
-                &old_line_no,
-                old_line_x,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &new_line_no,
-                new_line_x,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &prefix,
-                prefix_x,
+                &line_no,
+                bounds.left() + pad,
                 y,
                 theme.colors.text_muted,
                 line_metrics,
@@ -299,285 +247,38 @@ pub(super) fn inline_conflict_row_canvas(
                 cx,
             );
 
-            window.paint_layer(prepaint.text_bounds, |window| {
-                paint_conflict_text(
-                    prepaint.text_bounds,
-                    fg,
-                    y,
-                    line_metrics,
-                    &prepared,
-                    window,
-                    cx,
-                );
+            let text_bounds = split_column_text_bounds(bounds, pad, gap);
+            window.paint_layer(text_bounds, |window| {
+                paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
             });
 
             if let Some(chunk_context) = chunk_context.clone() {
                 let clip_bounds = window.content_mask().bounds;
-                let visible_row = prepaint.bounds.intersect(&clip_bounds);
+                let visible = bounds.intersect(&clip_bounds);
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &gpui::MouseDownEvent, phase, window, cx| {
                         if phase != DispatchPhase::Bubble
                             || event.button != gpui::MouseButton::Right
-                            || !visible_row.contains(&event.position)
                         {
                             return;
                         }
-
+                        if !visible.contains(&event.position) {
+                            return;
+                        }
                         let invoker: SharedString = format!(
-                            "resolver_two_way_inline_chunk_menu_{}_{}",
-                            chunk_context.conflict_ix, row_ix
+                            "{}_{}_{}",
+                            chunk_menu_prefix, chunk_context.conflict_ix, row_ix
                         )
                         .into();
-
-                        let conflict_ix = chunk_context.conflict_ix;
-                        let has_base = chunk_context.has_base;
-                        let selected_choices = chunk_context.selected_choices.clone();
-                        let anchor = event.position;
-                        view.update(cx, |this, cx| {
-                            this.open_conflict_resolver_chunk_context_menu(
-                                invoker,
-                                conflict_ix,
-                                has_base,
-                                false,
-                                selected_choices,
-                                None,
-                                anchor,
-                                window,
-                                cx,
-                            );
-                            cx.notify();
-                        });
-                    }
-                });
-            }
-        },
-    )
-    .h(px(20.0))
-    .min_w(min_width)
-    .w_full()
-    .text_xs()
-    .whitespace_nowrap()
-    .into_any_element()
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn three_way_conflict_row_canvas(
-    theme: AppTheme,
-    view: Entity<MainPaneView>,
-    visible_row_ix: usize,
-    row_ix: usize,
-    min_width: Pixels,
-    base_target_width: Pixels,
-    ours_target_width: Pixels,
-    theirs_target_width: Pixels,
-    base_column: ThreeWayCanvasColumn,
-    ours_column: ThreeWayCanvasColumn,
-    theirs_column: ThreeWayCanvasColumn,
-    base_styled: Option<&CachedDiffStyledText>,
-    ours_styled: Option<&CachedDiffStyledText>,
-    theirs_styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
-    chunk_context: ThreeWayChunkContext,
-) -> AnyElement {
-    let base_prepared =
-        prepare_conflict_text_for_canvas(base_column.text, base_styled, show_whitespace);
-    let ours_prepared =
-        prepare_conflict_text_for_canvas(ours_column.text, ours_styled, show_whitespace);
-    let theirs_prepared =
-        prepare_conflict_text_for_canvas(theirs_column.text, theirs_styled, show_whitespace);
-
-    keyed_canvas(
-        ("conflict_resolver_three_way_row_canvas", visible_row_ix),
-        move |bounds, _window, _cx| {
-            let handle_width = px(PANE_RESIZE_HANDLE_PX);
-            let (base_col, first_handle, ours_col, second_handle, theirs_col) =
-                three_way_columns_with_widths(
-                    bounds,
-                    base_target_width,
-                    ours_target_width,
-                    theirs_target_width,
-                    handle_width,
-                );
-
-            ThreeWayRowPrepaintState {
-                base_col,
-                first_handle,
-                ours_col,
-                second_handle,
-                theirs_col,
-            }
-        },
-        move |bounds, prepaint, window, cx| {
-            let line_metrics = line_metrics(window);
-            let y = center_text_y(bounds, line_metrics.line_height);
-            let pad = px_2(window);
-            let gap = pad;
-
-            window.paint_quad(fill(prepaint.base_col, base_column.bg));
-            window.paint_quad(fill(prepaint.ours_col, ours_column.bg));
-            window.paint_quad(fill(prepaint.theirs_col, theirs_column.bg));
-
-            let first_divider_x = prepaint.first_handle.left()
-                + ((prepaint.first_handle.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(first_divider_x, prepaint.first_handle.top()),
-                    size(px(1.0), prepaint.first_handle.size.height),
-                ),
-                theme.colors.border,
-            ));
-            let second_divider_x = prepaint.second_handle.left()
-                + ((prepaint.second_handle.size.width - px(1.0)).max(px(0.0)) * 0.5).floor();
-            window.paint_quad(fill(
-                Bounds::new(
-                    point(second_divider_x, prepaint.second_handle.top()),
-                    size(px(1.0), prepaint.second_handle.size.height),
-                ),
-                theme.colors.border,
-            ));
-
-            paint_gutter_text(
-                &base_column.line_no,
-                prepaint.base_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &ours_column.line_no,
-                prepaint.ours_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &theirs_column.line_no,
-                prepaint.theirs_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-
-            let base_text_bounds = split_column_text_bounds(prepaint.base_col, pad, gap);
-            let ours_text_bounds = split_column_text_bounds(prepaint.ours_col, pad, gap);
-            let theirs_text_bounds = split_column_text_bounds(prepaint.theirs_col, pad, gap);
-
-            window.paint_layer(base_text_bounds, |window| {
-                paint_conflict_text(
-                    base_text_bounds,
-                    base_column.fg,
-                    y,
-                    line_metrics,
-                    &base_prepared,
-                    window,
-                    cx,
-                );
-            });
-            window.paint_layer(ours_text_bounds, |window| {
-                paint_conflict_text(
-                    ours_text_bounds,
-                    ours_column.fg,
-                    y,
-                    line_metrics,
-                    &ours_prepared,
-                    window,
-                    cx,
-                );
-            });
-            window.paint_layer(theirs_text_bounds, |window| {
-                paint_conflict_text(
-                    theirs_text_bounds,
-                    theirs_column.fg,
-                    y,
-                    line_metrics,
-                    &theirs_prepared,
-                    window,
-                    cx,
-                );
-            });
-
-            if chunk_context.base.is_some()
-                || chunk_context.ours.is_some()
-                || chunk_context.theirs.is_some()
-            {
-                let clip_bounds = window.content_mask().bounds;
-                let visible_base = prepaint.base_col.intersect(&clip_bounds);
-                let visible_ours = prepaint.ours_col.intersect(&clip_bounds);
-                let visible_theirs = prepaint.theirs_col.intersect(&clip_bounds);
-                window.on_mouse_event({
-                    let view = view.clone();
-                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                        {
-                            return;
-                        }
-
-                        let (invoker, chunk_context) = if visible_base.contains(&event.position) {
-                            match chunk_context.base.as_ref() {
-                                Some(context) => (
-                                    Some::<SharedString>(
-                                        format!(
-                                            "resolver_three_way_base_chunk_menu_{}_{}",
-                                            context.conflict_ix, row_ix
-                                        )
-                                        .into(),
-                                    ),
-                                    Some(context.clone()),
-                                ),
-                                None => (None, None),
-                            }
-                        } else if visible_ours.contains(&event.position) {
-                            match chunk_context.ours.as_ref() {
-                                Some(context) => (
-                                    Some::<SharedString>(
-                                        format!(
-                                            "resolver_three_way_ours_chunk_menu_{}_{}",
-                                            context.conflict_ix, row_ix
-                                        )
-                                        .into(),
-                                    ),
-                                    Some(context.clone()),
-                                ),
-                                None => (None, None),
-                            }
-                        } else if visible_theirs.contains(&event.position) {
-                            match chunk_context.theirs.as_ref() {
-                                Some(context) => (
-                                    Some::<SharedString>(
-                                        format!(
-                                            "resolver_three_way_theirs_chunk_menu_{}_{}",
-                                            context.conflict_ix, row_ix
-                                        )
-                                        .into(),
-                                    ),
-                                    Some(context.clone()),
-                                ),
-                                None => (None, None),
-                            }
-                        } else {
-                            (None, None)
-                        };
-
-                        let (Some(invoker), Some(chunk_context)) = (invoker, chunk_context) else {
-                            return;
-                        };
-
                         let anchor = event.position;
                         view.update(cx, |this, cx| {
                             this.open_conflict_resolver_chunk_context_menu(
                                 invoker,
                                 chunk_context.conflict_ix,
                                 chunk_context.has_base,
-                                true,
-                                chunk_context.selected_choices,
+                                is_three_way,
+                                chunk_context.selected_choices.clone(),
                                 None,
                                 anchor,
                                 window,
@@ -603,21 +304,6 @@ struct SplitRowPrepaintState {
     left_col: Bounds<Pixels>,
     handle_bounds: Bounds<Pixels>,
     right_col: Bounds<Pixels>,
-}
-
-#[derive(Clone, Debug)]
-struct ThreeWayRowPrepaintState {
-    base_col: Bounds<Pixels>,
-    first_handle: Bounds<Pixels>,
-    ours_col: Bounds<Pixels>,
-    second_handle: Bounds<Pixels>,
-    theirs_col: Bounds<Pixels>,
-}
-
-#[derive(Clone, Debug)]
-struct InlineRowPrepaintState {
-    bounds: Bounds<Pixels>,
-    text_bounds: Bounds<Pixels>,
 }
 
 #[derive(Clone, Debug)]
@@ -688,9 +374,7 @@ fn prepare_conflict_text_for_canvas(
 }
 
 fn hash_text(text: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     hasher.finish()
 }
@@ -799,6 +483,16 @@ fn split_columns_with_widths(
     (left, handle, right)
 }
 
+#[cfg(test)]
+type ThreeWayColumnBounds = (
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+    Bounds<Pixels>,
+);
+
+#[cfg(test)]
 fn three_way_columns_with_widths(
     bounds: Bounds<Pixels>,
     base_target_width: Pixels,
@@ -866,22 +560,8 @@ fn split_column_text_bounds(col: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bo
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 
-fn inline_text_bounds(bounds: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bounds<Pixels> {
-    let line_no_width = conflict_line_no_width();
-    let prefix_width = conflict_inline_prefix_width();
-    let left = bounds.left() + pad + line_no_width + gap + line_no_width + gap + prefix_width + gap;
-    let width =
-        (bounds.size.width - pad * 2.0 - line_no_width - line_no_width - prefix_width - gap * 3.0)
-            .max(px(0.0));
-    Bounds::new(point(left, bounds.top()), size(width, bounds.size.height))
-}
-
 fn conflict_line_no_width() -> Pixels {
     px(38.0)
-}
-
-fn conflict_inline_prefix_width() -> Pixels {
-    px(12.0)
 }
 
 fn paint_gutter_text(
@@ -899,8 +579,7 @@ fn paint_gutter_text(
     let mut style = diff_text_style(window);
     style.color = color.into();
     let key = {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         metrics.font_size.hash(&mut hasher);
         style.font_family.hash(&mut hasher);
@@ -912,7 +591,7 @@ fn paint_gutter_text(
         hasher.finish()
     };
 
-    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned());
+    let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
     let shaped = shaped.unwrap_or_else(|| {
         let run = style.to_run(text.len());
         let shaped = window
@@ -920,11 +599,7 @@ fn paint_gutter_text(
             .shape_line(text.clone(), metrics.font_size, &[run], None);
 
         GUTTER_TEXT_LAYOUT_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if cache.len() > GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-                cache.clear();
-            }
-            cache.insert(key, shaped.clone());
+            cache.borrow_mut().put(key, shaped.clone());
         });
 
         shaped
@@ -969,7 +644,8 @@ fn ensure_layout_cached(
     window: &mut Window,
 ) -> gpui::ShapedLine {
     let key = conflict_layout_key(prepared, base_style, fg, metrics);
-    if let Some(layout) = CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow().get(&key).cloned())
+    if let Some(layout) =
+        CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned())
     {
         return layout;
     }
@@ -991,11 +667,7 @@ fn ensure_layout_cached(
     };
 
     CONFLICT_TEXT_LAYOUT_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if cache.len() > CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES {
-            cache.clear();
-        }
-        cache.insert(key, shaped.clone());
+        cache.borrow_mut().put(key, shaped.clone());
     });
 
     shaped
@@ -1007,9 +679,7 @@ fn conflict_layout_key(
     fg: gpui::Rgba,
     metrics: LineMetrics,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     prepared.text_hash.hash(&mut hasher);
     prepared.highlights_hash.hash(&mut hasher);
     metrics.font_size.hash(&mut hasher);

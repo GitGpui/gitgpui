@@ -431,13 +431,20 @@ fn status_row(
                         None,
                     );
                 }
-                this.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
+                if is_conflicted && area == DiffArea::Unstaged {
+                    this.store.dispatch(Msg::SelectConflictDiff {
+                        repo_id,
                         path: clicked_path.clone(),
-                        area,
-                    },
-                });
+                    });
+                } else {
+                    this.store.dispatch(Msg::SelectDiff {
+                        repo_id,
+                        target: DiffTarget::WorkingTree {
+                            path: clicked_path.clone(),
+                            area,
+                        },
+                    });
+                }
                 this.activate_context_menu_invoker(context_menu_invoker_for_row.clone(), cx);
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
@@ -505,13 +512,20 @@ fn status_row(
                 modifiers,
                 entries.as_deref(),
             );
-            this.store.dispatch(Msg::SelectDiff {
-                repo_id,
-                target: DiffTarget::WorkingTree {
+            if is_conflicted && area == DiffArea::Unstaged {
+                this.store.dispatch(Msg::SelectConflictDiff {
+                    repo_id,
                     path: (*path_for_row).clone(),
-                    area,
-                },
-            });
+                });
+            } else {
+                this.store.dispatch(Msg::SelectDiff {
+                    repo_id,
+                    target: DiffTarget::WorkingTree {
+                        path: (*path_for_row).clone(),
+                        area,
+                    },
+                });
+            }
             cx.notify();
         }))
         .into_any_element()

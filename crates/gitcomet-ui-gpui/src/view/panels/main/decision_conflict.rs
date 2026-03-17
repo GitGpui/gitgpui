@@ -227,7 +227,7 @@ mod tests {
     fn decision_restore_availability_detects_text_and_bytes_sources() {
         let mut file = empty_conflict_file();
         file.base = Some("base".into());
-        file.ours_bytes = Some(vec![0xff, 0x00]);
+        file.ours_bytes = Some(vec![0xff, 0x00].into());
 
         assert_eq!(
             decision_restore_availability(&file),

@@ -37,6 +37,46 @@ const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 25.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
+        label: "conflict_streamed_provider/index_build",
+        estimate_path: "conflict_streamed_provider/index_build/new/estimates.json",
+        threshold_ns: 50.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_provider/first_page/200",
+        estimate_path: "conflict_streamed_provider/first_page/200/new/estimates.json",
+        threshold_ns: 100.0 * NANOS_PER_MICROSECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_provider/first_page_cache_hit/200",
+        estimate_path: "conflict_streamed_provider/first_page_cache_hit/200/new/estimates.json",
+        threshold_ns: 30.0 * NANOS_PER_MICROSECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_provider/deep_scroll_90pct/200",
+        estimate_path: "conflict_streamed_provider/deep_scroll_90pct/200/new/estimates.json",
+        threshold_ns: 120.0 * NANOS_PER_MICROSECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_provider/search_rare_text",
+        estimate_path: "conflict_streamed_provider/search_rare_text/new/estimates.json",
+        threshold_ns: 3.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_resolved_output/projection_build",
+        estimate_path: "conflict_streamed_resolved_output/projection_build/new/estimates.json",
+        threshold_ns: 5.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_resolved_output/window/200",
+        estimate_path: "conflict_streamed_resolved_output/window/200/new/estimates.json",
+        threshold_ns: 25.0 * NANOS_PER_MICROSECOND,
+    },
+    PerfBudgetSpec {
+        label: "conflict_streamed_resolved_output/deep_window_90pct/200",
+        estimate_path: "conflict_streamed_resolved_output/deep_window_90pct/200/new/estimates.json",
+        threshold_ns: 25.0 * NANOS_PER_MICROSECOND,
+    },
+    PerfBudgetSpec {
         label: "markdown_preview_parse_build/single_document/medium",
         estimate_path: "markdown_preview_parse_build/single_document/medium/new/estimates.json",
         threshold_ns: 2.0 * NANOS_PER_MILLISECOND,
@@ -481,6 +521,30 @@ mod tests {
         assert!(labels.contains(&"markdown_preview_parse_build/two_sided_diff/medium"));
         assert!(labels.contains(&"markdown_preview_render_single/window_rows/200"));
         assert!(labels.contains(&"markdown_preview_render_diff/window_rows/200"));
+    }
+
+    #[test]
+    fn perf_budgets_include_streamed_conflict_provider_targets() {
+        let labels = PERF_BUDGETS
+            .iter()
+            .map(|spec| spec.label)
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"conflict_streamed_provider/index_build"));
+        assert!(labels.contains(&"conflict_streamed_provider/first_page/200"));
+        assert!(labels.contains(&"conflict_streamed_provider/first_page_cache_hit/200"));
+        assert!(labels.contains(&"conflict_streamed_provider/deep_scroll_90pct/200"));
+        assert!(labels.contains(&"conflict_streamed_provider/search_rare_text"));
+    }
+
+    #[test]
+    fn perf_budgets_include_streamed_resolved_output_targets() {
+        let labels = PERF_BUDGETS
+            .iter()
+            .map(|spec| spec.label)
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"conflict_streamed_resolved_output/projection_build"));
+        assert!(labels.contains(&"conflict_streamed_resolved_output/window/200"));
+        assert!(labels.contains(&"conflict_streamed_resolved_output/deep_window_90pct/200"));
     }
 
     #[test]

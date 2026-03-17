@@ -2,9 +2,9 @@ use super::*;
 
 fn make_region(base: Option<&str>, ours: &str, theirs: &str) -> ConflictRegion {
     ConflictRegion {
-        base: base.map(|s| s.to_string()),
-        ours: ours.to_string(),
-        theirs: theirs.to_string(),
+        base: base.map(ConflictRegionText::from),
+        ours: ours.into(),
+        theirs: theirs.into(),
         resolution: ConflictRegionResolution::Unresolved,
     }
 }
@@ -17,6 +17,7 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
         base: ConflictPayload::Text("base\n".into()),
         ours: ConflictPayload::Text("ours\n".into()),
         theirs: ConflictPayload::Text("theirs\n".into()),
+        current: None,
         regions,
     }
 }
@@ -50,6 +51,44 @@ fn payload_absent() {
     assert!(p.as_text().is_none());
     assert!(p.as_bytes().is_none());
     assert_eq!(p.byte_len(), None);
+    assert!(!p.is_binary());
+}
+
+#[test]
+fn stage_parts_round_trip_text() {
+    let text: Arc<str> = Arc::from("hello");
+    let p = ConflictPayload::from_stage_parts(None, Some(text.clone()));
+    assert_eq!(p.as_text(), Some("hello"));
+    let (bytes, text_out) = p.into_stage_parts();
+    assert!(bytes.is_none());
+    assert_eq!(text_out.as_deref(), Some("hello"));
+}
+
+#[test]
+fn stage_parts_round_trip_binary() {
+    let bytes: Arc<[u8]> = Arc::from(vec![0xFF, 0xFE]);
+    let p = ConflictPayload::from_stage_parts(Some(bytes.clone()), None);
+    assert!(p.is_binary());
+    let (bytes_out, text_out) = p.into_stage_parts();
+    assert_eq!(bytes_out.as_deref(), Some([0xFF, 0xFE].as_slice()));
+    assert!(text_out.is_none());
+}
+
+#[test]
+fn stage_parts_round_trip_absent() {
+    let p = ConflictPayload::from_stage_parts(None, None);
+    assert!(p.is_absent());
+    let (bytes, text) = p.into_stage_parts();
+    assert!(bytes.is_none());
+    assert!(text.is_none());
+}
+
+#[test]
+fn stage_parts_text_preferred_over_bytes() {
+    let text: Arc<str> = Arc::from("hi");
+    let bytes: Arc<[u8]> = Arc::from(b"hi".to_vec());
+    let p = ConflictPayload::from_stage_parts(Some(bytes), Some(text));
+    assert_eq!(p.as_text(), Some("hi"));
     assert!(!p.is_binary());
 }
 
@@ -188,6 +227,11 @@ fn strategy_for_both_deleted_stays_decision_only_when_binary() {
 
 // -- Marker parsing tests --
 
+fn slice_range<'a>(text: &'a str, range: &std::ops::Range<usize>) -> &'a str {
+    text.get(range.clone())
+        .expect("parser produced invalid byte range")
+}
+
 #[test]
 fn parse_regions_two_way_markers() {
     let merged = "before\n<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\nafter\n";
@@ -272,6 +316,40 @@ end
     assert_eq!(session.solved_count(), 1);
     assert_eq!(session.unsolved_count(), 1);
     assert_eq!(session.next_unresolved_after(0), Some(1));
+}
+
+#[test]
+fn session_from_merged_shared_text_reuses_region_backing() {
+    let merged: Arc<str> = "\
+start
+<<<<<<< ours
+local one
+=======
+remote one
+>>>>>>> theirs
+end
+"
+    .into();
+    let session = ConflictSession::from_merged_shared_text(
+        PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("base\n".into()),
+        ConflictPayload::Text("ours\n".into()),
+        ConflictPayload::Text("theirs\n".into()),
+        merged.clone(),
+    );
+
+    assert_eq!(session.regions.len(), 1);
+    assert_eq!(session.regions[0].ours, "local one\n");
+    assert_eq!(session.regions[0].theirs, "remote one\n");
+    assert!(
+        session.regions[0].ours.shares_backing_with(&merged),
+        "ours slice should point into the original merged buffer",
+    );
+    assert!(
+        session.regions[0].theirs.shares_backing_with(&merged),
+        "theirs slice should point into the original merged buffer",
+    );
 }
 
 #[test]
@@ -374,6 +452,125 @@ theirs content
     assert_eq!(regions[0].ours, "ours content\n");
     assert_eq!(regions[0].base.as_deref(), Some("base content\n"));
     assert_eq!(regions[0].theirs, "theirs content\n");
+}
+
+#[test]
+fn parse_conflict_marker_ranges_two_way_markers() {
+    let merged = "before\n<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\nafter\n";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 3);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Conflict(block) => {
+            assert_eq!(
+                &merged[block.marker_start..block.marker_end],
+                "<<<<<<< ours\nlocal 1\n=======\nremote 1\n>>>>>>> theirs\n"
+            );
+            assert_eq!(slice_range(merged, &block.ours), "local 1\n");
+            assert_eq!(block.base, None);
+            assert_eq!(slice_range(merged, &block.theirs), "remote 1\n");
+        }
+        other => panic!("expected conflict segment, got {other:?}"),
+    }
+
+    match &ranges[2] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "after\n");
+        }
+        other => panic!("expected trailing text segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_diff3_markers() {
+    let merged = "\
+<<<<<<< ours
+local line
+||||||| base
+base line
+=======
+remote line
+>>>>>>> theirs
+";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 1);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Conflict(block) => {
+            assert_eq!(
+                &merged[block.marker_start..block.marker_end],
+                "<<<<<<< ours\nlocal line\n||||||| base\nbase line\n=======\nremote line\n>>>>>>> theirs\n"
+            );
+            assert_eq!(slice_range(merged, &block.ours), "local line\n");
+            assert_eq!(
+                block.base.as_ref().map(|range| slice_range(merged, range)),
+                Some("base line\n")
+            );
+            assert_eq!(slice_range(merged, &block.theirs), "remote line\n");
+        }
+        other => panic!("expected conflict segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_preserve_malformed_no_separator_as_text() {
+    let merged = "before\n<<<<<<< ours\nours line 1\nours line 2\n";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 2);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(
+                slice_range(merged, range),
+                "<<<<<<< ours\nours line 1\nours line 2\n"
+            );
+        }
+        other => panic!("expected malformed block to remain text, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_conflict_marker_ranges_preserve_malformed_diff3_missing_end_as_text() {
+    let merged = "\
+before
+<<<<<<< ours
+ours
+||||||| base
+base
+=======
+theirs
+";
+    let ranges = parse_conflict_marker_ranges(merged);
+
+    assert_eq!(ranges.len(), 2);
+    match &ranges[0] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(slice_range(merged, range), "before\n");
+        }
+        other => panic!("expected leading text segment, got {other:?}"),
+    }
+    match &ranges[1] {
+        ParsedConflictSegmentRanges::Text(range) => {
+            assert_eq!(
+                slice_range(merged, range),
+                "<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n"
+            );
+        }
+        other => panic!("expected malformed diff3 block to remain text, got {other:?}"),
+    }
 }
 
 #[test]
@@ -831,16 +1028,37 @@ fn session_new_text_conflict() {
 
 #[test]
 fn session_side_byte_accessors_expose_all_payload_bytes() {
-    let session = ConflictSession::new(
+    let session = ConflictSession::new_with_current(
         PathBuf::from("file.bin"),
         FileConflictKind::BothModified,
-        ConflictPayload::Binary(vec![0x00, 0x01]),
+        ConflictPayload::Binary(vec![0x00, 0x01].into()),
         ConflictPayload::Text("ours\n".into()),
         ConflictPayload::Absent,
+        ConflictPayload::Binary(vec![0x02, 0x03].into()),
     );
     assert_eq!(session.base_bytes(), Some([0x00_u8, 0x01].as_slice()));
     assert_eq!(session.ours_bytes(), Some("ours\n".as_bytes()));
     assert_eq!(session.theirs_bytes(), None);
+    assert_eq!(session.current_bytes(), Some([0x02_u8, 0x03].as_slice()));
+    assert_eq!(session.current_text(), None);
+}
+
+#[test]
+fn session_new_with_absent_current_preserves_loaded_absence() {
+    let session = ConflictSession::new_with_current(
+        PathBuf::from("deleted.txt"),
+        FileConflictKind::BothDeleted,
+        ConflictPayload::Text("base\n".into()),
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
+    assert_eq!(session.current_bytes(), None);
+    assert_eq!(session.current_text(), None);
 }
 
 #[test]
@@ -848,7 +1066,7 @@ fn session_new_binary_conflict() {
     let session = ConflictSession::new(
         PathBuf::from("image.png"),
         FileConflictKind::BothModified,
-        ConflictPayload::Binary(vec![0xFF]),
+        ConflictPayload::Binary(vec![0xFF].into()),
         ConflictPayload::Text("ours".into()),
         ConflictPayload::Text("theirs".into()),
     );
@@ -911,6 +1129,7 @@ fn from_merged_text_without_markers_keeps_synthetic_two_way_region() {
     assert_eq!(session.regions[0].base, None);
     assert_eq!(session.regions[0].ours, "ours\n");
     assert_eq!(session.regions[0].theirs, "");
+    assert_eq!(session.current_text(), Some("ours\n"));
 }
 
 #[test]
@@ -1381,9 +1600,9 @@ fn history_merge_session_method() {
     let theirs_text = "# Changelog\n- Original\n- Added by theirs\n";
 
     let mut session = make_session(vec![ConflictRegion {
-        base: Some(base_text.to_string()),
-        ours: ours_text.to_string(),
-        theirs: theirs_text.to_string(),
+        base: Some(base_text.into()),
+        ours: ours_text.into(),
+        theirs: theirs_text.into(),
         resolution: ConflictRegionResolution::Unresolved,
     }]);
 
@@ -1409,9 +1628,9 @@ fn history_merge_session_method() {
 fn history_merge_skips_already_resolved() {
     let options = HistoryAutosolveOptions::bullet_list();
     let mut session = make_session(vec![ConflictRegion {
-        base: Some("# Changelog\n- Original\n".to_string()),
-        ours: "# Changelog\n- Original\n- New\n".to_string(),
-        theirs: "# Changelog\n- Original\n- Other\n".to_string(),
+        base: Some("# Changelog\n- Original\n".into()),
+        ours: "# Changelog\n- Original\n- New\n".into(),
+        theirs: "# Changelog\n- Original\n- Other\n".into(),
         resolution: ConflictRegionResolution::PickOurs,
     }]);
 

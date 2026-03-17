@@ -8,8 +8,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
-#[cfg(windows)]
 use std::sync::OnceLock;
 #[cfg(windows)]
 use std::thread;
@@ -18,10 +16,48 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
 
-#[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
-#[cfg(not(windows))]
-const NULL_DEVICE: &str = "/dev/null";
+struct TestGitEnv {
+    _root: tempfile::TempDir,
+    global_config: PathBuf,
+    home_dir: PathBuf,
+    xdg_config_home: PathBuf,
+    gnupg_home: PathBuf,
+}
+
+fn ensure_isolated_git_test_env() -> &'static TestGitEnv {
+    static ENV: OnceLock<TestGitEnv> = OnceLock::new();
+    ENV.get_or_init(|| {
+        let root = tempfile::tempdir().expect("test git env tempdir");
+        let home_dir = root.path().join("home");
+        let xdg_config_home = root.path().join("xdg");
+        let gnupg_home = root.path().join("gnupg");
+        let global_config = root.path().join("gitconfig");
+
+        fs::create_dir_all(&home_dir).expect("test git home");
+        fs::create_dir_all(&xdg_config_home).expect("test git xdg config home");
+        fs::create_dir_all(&gnupg_home).expect("test gnupg home");
+        fs::write(&global_config, b"").expect("test global git config");
+
+        #[cfg(unix)]
+        fs::set_permissions(&gnupg_home, Permissions::from_mode(0o700))
+            .expect("test gnupg home permissions");
+
+        gitcomet_git_gix::install_test_git_command_environment(
+            global_config.clone(),
+            home_dir.clone(),
+            xdg_config_home.clone(),
+            gnupg_home.clone(),
+        );
+
+        TestGitEnv {
+            _root: root,
+            global_config,
+            home_dir,
+            xdg_config_home,
+            gnupg_home,
+        }
+    })
+}
 
 fn git_path_arg(path: &Path) -> String {
     path.to_str()
@@ -33,71 +69,9 @@ fn git_remote_url(path: &Path) -> String {
     git_path_arg(path)
 }
 
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-fn repo_local_mergetool_consent_key(repo: &Path, tool_name: &str) -> String {
-    let repo_path = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
-    let mut bytes = stable_path_bytes(&repo_path);
-    bytes.push(0);
-    bytes.extend_from_slice(tool_name.as_bytes());
-    format!(
-        "gitcomet.mergetool.allowrepolocalcmd-{:016x}",
-        fnv1a_64(&bytes)
-    )
-}
-
-fn stable_path_bytes(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-
-        return path.as_os_str().as_bytes().to_vec();
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        let mut bytes = Vec::new();
-        for unit in path.as_os_str().encode_wide() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        return bytes;
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        path.to_str()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_else(|| format!("{path:?}").into_bytes())
-    }
-}
-
 fn allow_repo_local_mergetool_cmd(repo: &Path, tool_name: &str) {
-    static GLOBAL_CONFIG_WRITE_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = GLOBAL_CONFIG_WRITE_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-
-    let consent_key = repo_local_mergetool_consent_key(repo, tool_name);
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["config", "--global", &consent_key, "true"])
-        .status()
-        .expect("git config --global to run");
-    assert!(
-        status.success(),
-        "git config --global {} true failed",
-        consent_key
-    );
+    let _ = ensure_isolated_git_test_env();
+    gitcomet_git_gix::allow_test_repo_local_mergetool_command(repo, tool_name);
 }
 
 fn set_repo_local_mergetool_cmd_with_consent(repo: &Path, tool_name: &str, command: &str) {
@@ -280,6 +254,7 @@ fn git_local_push_available_for_status_integration_tests() -> bool {
 }
 
 fn require_git_shell_for_status_integration_tests() -> bool {
+    let _ = ensure_isolated_git_test_env();
     #[cfg(windows)]
     {
         if !git_shell_available_for_status_integration_tests() {
@@ -298,10 +273,14 @@ fn require_git_shell_for_status_integration_tests() -> bool {
     true
 }
 fn git_command() -> Command {
+    let env = ensure_isolated_git_test_env();
     let mut cmd = Command::new("git");
     // Keep integration tests deterministic by isolating from host git config.
     cmd.env("GIT_CONFIG_NOSYSTEM", "1");
-    cmd.env("GIT_CONFIG_GLOBAL", NULL_DEVICE);
+    cmd.env("GIT_CONFIG_GLOBAL", &env.global_config);
+    cmd.env("HOME", &env.home_dir);
+    cmd.env("XDG_CONFIG_HOME", &env.xdg_config_home);
+    cmd.env("GNUPGHOME", &env.gnupg_home);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("GCM_INTERACTIVE", "Never");
     // Some scenarios clone local file:// remotes (submodules, temp-origin repos).
@@ -990,7 +969,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
 
     let commit = opened
         .diff_file_text(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("a.txt")),
         })
         .unwrap()
@@ -1029,7 +1008,7 @@ fn diff_file_text_root_commit_has_no_parent_side() {
     let opened = backend.open(repo).unwrap();
     let commit = opened
         .diff_file_text(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("a.txt")),
         })
         .unwrap()
@@ -1189,7 +1168,7 @@ fn diff_file_image_reports_old_and_new_for_working_tree_and_commits() {
 
     let commit = opened
         .diff_file_image(&DiffTarget::Commit {
-            commit_id: gitcomet_core::domain::CommitId(head),
+            commit_id: gitcomet_core::domain::CommitId(head.into()),
             path: Some(PathBuf::from("img.png")),
         })
         .unwrap()
@@ -1377,6 +1356,70 @@ fn committed_gitlink_unstaged_modified_reports_modified_status_and_diff() {
 }
 
 #[test]
+fn status_cache_invalidates_when_gitlink_appears_on_same_repo_instance() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let nested = repo.join("chess3");
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let initial_status = opened.status().unwrap();
+    assert!(
+        initial_status.staged.is_empty() && initial_status.unstaged.is_empty(),
+        "expected clean repo before adding gitlink; status={initial_status:?}"
+    );
+
+    std::fs::create_dir_all(&nested).expect("create nested repo path");
+    run_git(&nested, &["init"]);
+    run_git(&nested, &["config", "user.email", "you@example.com"]);
+    run_git(&nested, &["config", "user.name", "You"]);
+    run_git(&nested, &["config", "commit.gpgsign", "false"]);
+
+    write(&nested, "file.txt", "one\n");
+    run_git(&nested, &["add", "file.txt"]);
+    run_git(
+        &nested,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "nested c1"],
+    );
+
+    run_git(repo, &["add", "chess3"]);
+
+    let staged_gitlink = opened.status().unwrap();
+    assert!(
+        staged_gitlink
+            .staged
+            .iter()
+            .any(|e| e.path == Path::new("chess3") && e.kind == FileStatusKind::Added),
+        "expected staged Added gitlink entry after cached clean status; status={staged_gitlink:?}"
+    );
+
+    write(&nested, "file.txt", "one\ntwo\n");
+    run_git(&nested, &["add", "file.txt"]);
+    run_git(
+        &nested,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "nested c2"],
+    );
+
+    let advanced_gitlink = opened.status().unwrap();
+    assert!(
+        advanced_gitlink
+            .unstaged
+            .iter()
+            .any(|e| e.path == Path::new("chess3") && e.kind == FileStatusKind::Modified),
+        "expected cached gitlink capability to keep reporting nested repo advances; status={advanced_gitlink:?}"
+    );
+}
+
+#[test]
 fn diff_file_commit_target_without_path_returns_none() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -1398,7 +1441,7 @@ fn diff_file_commit_target_without_path_returns_none() {
 
     let head = run_git_output(repo, &["rev-parse", "HEAD"]);
     let target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId(head),
+        commit_id: gitcomet_core::domain::CommitId(head.into()),
         path: None,
     };
 
@@ -1587,7 +1630,7 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     let unknown_target = DiffTarget::Commit {
-        commit_id: gitcomet_core::domain::CommitId("not-a-real-revision".to_string()),
+        commit_id: gitcomet_core::domain::CommitId("not-a-real-revision".into()),
         path: Some(PathBuf::from("a.txt")),
     };
 
@@ -3805,7 +3848,7 @@ fn revert_commit_creates_new_commit_and_reverts_content() {
     let opened = backend.open(repo).unwrap();
 
     opened
-        .revert(&gitcomet_core::domain::CommitId(c2.clone()))
+        .revert(&gitcomet_core::domain::CommitId(c2.clone().into()))
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "one\n");
@@ -4528,7 +4571,7 @@ fn create_and_delete_local_branch() {
         .to_owned();
 
     opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
     run_git(
         repo,
@@ -4570,7 +4613,7 @@ fn create_branch_existing_branch_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .expect_err("creating an existing branch should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4596,10 +4639,7 @@ fn create_branch_on_unborn_head_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("HEAD".into()))
         .expect_err("creating a branch on unborn HEAD should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4652,13 +4692,12 @@ fn create_branch_from_detached_head_using_head_revision() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .checkout_commit(&gitcomet_core::domain::CommitId(first_commit.clone()))
+        .checkout_commit(&gitcomet_core::domain::CommitId(
+            first_commit.clone().into(),
+        ))
         .unwrap();
     opened
-        .create_branch(
-            "rescue",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("rescue", &gitcomet_core::domain::CommitId("HEAD".into()))
         .unwrap();
 
     let rescue_target = run_git_output(repo, &["rev-parse", "rescue"]);
@@ -4691,10 +4730,7 @@ fn create_branch_from_annotated_tag_peels_to_commit() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("v1".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("v1".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4727,7 +4763,10 @@ fn create_branch_from_blob_target_returns_structured_git_error() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(blob.clone()))
+        .create_branch(
+            "feature",
+            &gitcomet_core::domain::CommitId(blob.clone().into()),
+        )
         .expect_err("creating a branch from a blob should fail");
     assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
     let ErrorKind::Git(failure) = err.kind() else {
@@ -4777,10 +4816,7 @@ fn create_branch_head_target_reflects_move_after_backend_open() {
     let second_commit = run_git_output(repo, &["rev-parse", "HEAD"]);
 
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("HEAD".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("HEAD".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4814,10 +4850,7 @@ fn create_branch_target_branch_created_after_backend_open() {
     run_git(repo, &["branch", "source"]);
 
     opened
-        .create_branch(
-            "feature",
-            &gitcomet_core::domain::CommitId("source".to_string()),
-        )
+        .create_branch("feature", &gitcomet_core::domain::CommitId("source".into()))
         .unwrap();
 
     let feature_target = run_git_output(repo, &["rev-parse", "feature"]);
@@ -4856,7 +4889,7 @@ fn create_branch_succeeds_without_persisted_user_identity() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .create_branch("feature", &gitcomet_core::domain::CommitId(head))
+        .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .unwrap();
 
     run_git(
@@ -5235,7 +5268,7 @@ fn cherry_pick_applies_commit_onto_current_branch() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .cherry_pick(&gitcomet_core::domain::CommitId(feature_sha))
+        .cherry_pick(&gitcomet_core::domain::CommitId(feature_sha.into()))
         .unwrap();
 
     assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
@@ -5385,7 +5418,7 @@ fn list_tags_returns_sorted_names_with_commit_targets() {
 
     let names = tags.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>();
     assert_eq!(names, vec!["a-first", "z-last"]);
-    assert!(tags.iter().all(|tag| tag.target.0 == head));
+    assert!(tags.iter().all(|tag| tag.target.as_ref() == head));
 }
 
 #[test]
@@ -7137,7 +7170,7 @@ fn checkout_commit_detaches_head_at_target() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     opened
-        .checkout_commit(&gitcomet_core::domain::CommitId(sha.clone()))
+        .checkout_commit(&gitcomet_core::domain::CommitId(sha.clone().into()))
         .unwrap();
 
     let head_name = git_command()
@@ -8061,9 +8094,15 @@ fn conflict_session_both_deleted_restore_from_base_resolves_conflict() {
         .expect("conflict session for BothDeleted");
     assert_eq!(session.conflict_kind, FileConflictKind::BothDeleted);
     assert_eq!(session.strategy, ConflictResolverStrategy::DecisionOnly);
-    assert!(matches!(session.base, ConflictPayload::Text(ref t) if t == "original content\n"));
+    assert!(
+        matches!(session.base, ConflictPayload::Text(ref t) if t.as_ref() == "original content\n")
+    );
     assert!(session.ours.is_absent());
     assert!(session.theirs.is_absent());
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by accepting deletion
@@ -8134,8 +8173,12 @@ fn conflict_session_added_by_us_keep_resolves_conflict() {
     assert_eq!(session.conflict_kind, FileConflictKind::AddedByUs);
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.is_absent());
-    assert!(matches!(session.ours, ConflictPayload::Text(ref t) if t == "added by us\n"));
+    assert!(matches!(session.ours, ConflictPayload::Text(ref t) if t.as_ref() == "added by us\n"));
     assert!(session.theirs.is_absent());
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by keeping ours (the added file)
@@ -8220,7 +8263,13 @@ fn conflict_session_added_by_them_keep_resolves_conflict() {
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.is_absent());
     assert!(session.ours.is_absent());
-    assert!(matches!(session.theirs, ConflictPayload::Text(ref t) if t == "added by them\n"));
+    assert!(
+        matches!(session.theirs, ConflictPayload::Text(ref t) if t.as_ref() == "added by them\n")
+    );
+    assert!(matches!(
+        session.current.as_ref(),
+        Some(ConflictPayload::Absent)
+    ));
     assert_eq!(session.unsolved_count(), 1);
 
     // Resolve by keeping theirs (the added file)
@@ -8313,7 +8362,7 @@ fn conflict_session_deleted_by_them_keep_ours_resolves_conflict() {
     assert_eq!(session.strategy, ConflictResolverStrategy::TwoWayKeepDelete);
     assert!(session.base.as_text().is_some());
     assert!(
-        matches!(session.ours, ConflictPayload::Text(ref t) if t == "modified by us\n"),
+        matches!(session.ours, ConflictPayload::Text(ref t) if t.as_ref() == "modified by us\n"),
         "ours (modified side) should have text"
     );
     assert!(

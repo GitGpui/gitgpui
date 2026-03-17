@@ -328,11 +328,16 @@ pub(super) fn reduce(
         }
         Msg::ClearCommitSelection { repo_id } => effects::clear_commit_selection(state, repo_id),
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
+        Msg::SelectConflictDiff { repo_id, path } => {
+            diff_selection::select_conflict_diff(state, repo_id, path)
+        }
         Msg::ClearDiffSelection { repo_id } => diff_selection::clear_diff_selection(state, repo_id),
         Msg::LoadStashes { repo_id } => effects::load_stashes(state, repo_id),
-        Msg::LoadConflictFile { repo_id, path } => {
-            effects::load_conflict_file(state, repo_id, path)
-        }
+        Msg::LoadConflictFile {
+            repo_id,
+            path,
+            mode,
+        } => effects::load_conflict_file(state, repo_id, path, mode),
         Msg::LoadReflog { repo_id } => effects::load_reflog(state, repo_id),
         Msg::LoadFileHistory {
             repo_id,

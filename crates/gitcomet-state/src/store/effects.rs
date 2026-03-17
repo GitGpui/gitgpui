@@ -77,8 +77,12 @@ pub(super) fn schedule_effect(
         Effect::LoadStashes { repo_id, limit } => {
             repo_load::schedule_load_stashes(executor, repos, msg_tx, repo_id, limit);
         }
-        Effect::LoadConflictFile { repo_id, path } => {
-            repo_load::schedule_load_conflict_file(executor, repos, msg_tx, repo_id, path);
+        Effect::LoadConflictFile {
+            repo_id,
+            path,
+            mode,
+        } => {
+            repo_load::schedule_load_conflict_file(executor, repos, msg_tx, repo_id, path, mode);
         }
         Effect::LoadReflog { repo_id, limit } => {
             repo_load::schedule_load_reflog(executor, repos, msg_tx, repo_id, limit);

@@ -49,6 +49,7 @@ pub(super) struct MarkdownPreviewRow {
 pub(super) enum MarkdownPreviewRowKind {
     Heading { level: u8 },
     Paragraph,
+    DetailsSummary,
     ListItem { number: Option<u64> },
     BlockquoteLine,
     CodeLine { is_first: bool, is_last: bool },
@@ -250,19 +251,20 @@ pub(super) fn build_markdown_diff_preview(
     new_source: &str,
 ) -> Option<MarkdownPreviewDiff> {
     let (mut old, mut new) = parse_markdown_diff(old_source, new_source)?;
-    let diff_rows = gitcomet_core::file_diff::side_by_side_rows(old_source, new_source);
-    let (old_mask, new_mask) = build_changed_line_masks(
-        &diff_rows,
-        old_source.lines().count(),
-        new_source.lines().count(),
-    );
+    let plan = gitcomet_core::file_diff::side_by_side_plan(old_source, new_source);
+    let old_line_count = old_source.lines().count();
+    let new_line_count = new_source.lines().count();
+    let (old_mask, new_mask) =
+        gitcomet_core::file_diff::plan_changed_line_masks(&plan, old_line_count, new_line_count);
     annotate_change_hints(&mut old, &mut new, &old_mask, &new_mask);
+    let (old_line_to_diff_row, new_line_to_diff_row) =
+        gitcomet_core::file_diff::plan_line_to_row_maps(&plan, old_line_count, new_line_count);
     align_markdown_diff_rows(
         &mut old,
         &mut new,
-        &diff_rows,
-        old_source.lines().count(),
-        new_source.lines().count(),
+        old_line_to_diff_row.as_slice(),
+        new_line_to_diff_row.as_slice(),
+        plan.row_count,
     )?;
     let inline = build_inline_markdown_diff_document(&old, &new);
     Some(MarkdownPreviewDiff { old, new, inline })
@@ -298,63 +300,25 @@ fn annotate_change_hints(
     }
 }
 
-/// Build changed-line boolean vectors from `FileDiffRow` data.
-fn build_changed_line_masks(
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    old_line_count: usize,
-    new_line_count: usize,
-) -> (Vec<bool>, Vec<bool>) {
-    use gitcomet_core::file_diff::FileDiffRowKind;
-
-    let mut old_mask = vec![false; old_line_count];
-    let mut new_mask = vec![false; new_line_count];
-
-    let mark = |mask: &mut [bool], line: Option<u32>| {
-        if let Some(l) = line {
-            let ix = l.saturating_sub(1) as usize;
-            if ix < mask.len() {
-                mask[ix] = true;
-            }
-        }
-    };
-
-    for row in diff_rows {
-        match row.kind {
-            FileDiffRowKind::Context => {}
-            FileDiffRowKind::Remove => mark(&mut old_mask, row.old_line),
-            FileDiffRowKind::Add => mark(&mut new_mask, row.new_line),
-            FileDiffRowKind::Modify => {
-                mark(&mut old_mask, row.old_line);
-                mark(&mut new_mask, row.new_line);
-            }
-        }
-    }
-
-    (old_mask, new_mask)
-}
-
 fn align_markdown_diff_rows(
     old_doc: &mut MarkdownPreviewDocument,
     new_doc: &mut MarkdownPreviewDocument,
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    old_line_count: usize,
-    new_line_count: usize,
+    old_line_to_diff_row: &[Option<usize>],
+    new_line_to_diff_row: &[Option<usize>],
+    diff_row_count: usize,
 ) -> Option<()> {
-    let old_line_to_diff_row = build_line_to_diff_row_map(diff_rows, old_line_count, true);
-    let new_line_to_diff_row = build_line_to_diff_row_map(diff_rows, new_line_count, false);
-
     let old_rows = std::mem::take(&mut old_doc.rows);
     let new_rows = std::mem::take(&mut new_doc.rows);
 
     let (mut old_groups, old_trailing) =
-        markdown_rows_grouped_by_diff_anchor(old_rows, &old_line_to_diff_row, diff_rows.len());
+        markdown_rows_grouped_by_diff_anchor(old_rows, old_line_to_diff_row, diff_row_count);
     let (mut new_groups, new_trailing) =
-        markdown_rows_grouped_by_diff_anchor(new_rows, &new_line_to_diff_row, diff_rows.len());
+        markdown_rows_grouped_by_diff_anchor(new_rows, new_line_to_diff_row, diff_row_count);
 
     let mut old_aligned = Vec::new();
     let mut new_aligned = Vec::new();
 
-    for diff_ix in 0..diff_rows.len() {
+    for diff_ix in 0..diff_row_count {
         let old_group = std::mem::take(&mut old_groups[diff_ix]);
         let new_group = std::mem::take(&mut new_groups[diff_ix]);
         push_aligned_markdown_row_groups(&mut old_aligned, &mut new_aligned, old_group, new_group)?;
@@ -370,27 +334,6 @@ fn align_markdown_diff_rows(
     old_doc.rows = old_aligned;
     new_doc.rows = new_aligned;
     Some(())
-}
-
-fn build_line_to_diff_row_map(
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-    line_count: usize,
-    old_side: bool,
-) -> Vec<Option<usize>> {
-    let mut line_to_diff_row = vec![None; line_count];
-
-    for (diff_ix, row) in diff_rows.iter().enumerate() {
-        let line = if old_side { row.old_line } else { row.new_line };
-        let Some(line) = line else {
-            continue;
-        };
-        let line_ix = line.saturating_sub(1) as usize;
-        if let Some(anchor_ix) = line_to_diff_row.get_mut(line_ix) {
-            *anchor_ix = Some(diff_ix);
-        }
-    }
-
-    line_to_diff_row
 }
 
 fn markdown_rows_grouped_by_diff_anchor(
@@ -642,7 +585,7 @@ fn line_range_change_hint(
 
 /// Flatten markdown events into preview rows.
 fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPreviewRow>> {
-    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ListContext {
@@ -665,11 +608,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
         }
     }
 
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_GFM;
+    let options = markdown_parser_options();
 
     let mut rows = Vec::new();
     let mut text_buf = String::new();
@@ -1149,6 +1088,53 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         }
                         continue;
                     }
+                    HtmlHandling::DetailsSummary(summary_source) => {
+                        if !text_buf.is_empty() {
+                            push_row_with_context(
+                                &mut rows,
+                                MarkdownPreviewRowInput::plain(
+                                    current_row_kind(&list_item_stack, in_blockquote),
+                                    &text_buf,
+                                    &inline_spans,
+                                    source_line_range(
+                                        source_start_byte,
+                                        event_range.start,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
+                                footnote_context.as_mut(),
+                                &mut blockquote_stack,
+                            )?;
+                            text_buf.clear();
+                            inline_spans.clear();
+                        }
+
+                        let (summary_text, summary_spans) =
+                            parse_inline_markdown_fragment(&summary_source);
+                        if !summary_text.is_empty() {
+                            push_row_with_context(
+                                &mut rows,
+                                MarkdownPreviewRowInput::plain(
+                                    MarkdownPreviewRowKind::DetailsSummary,
+                                    &summary_text,
+                                    &summary_spans,
+                                    source_line_range(
+                                        event_range.start,
+                                        event_range.end,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
+                                footnote_context.as_mut(),
+                                &mut blockquote_stack,
+                            )?;
+                        }
+                        source_start_byte = event_range.end;
+                        continue;
+                    }
                     HtmlHandling::StartInlineStyle(style) => {
                         span_stack.push(style);
                         continue;
@@ -1228,6 +1214,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 enum HtmlHandling {
     Ignore,
     HardBreak,
+    DetailsSummary(String),
     StartInlineStyle(MarkdownInlineStyle),
     EndInlineStyle(MarkdownInlineStyle),
     AppendText(String),
@@ -1270,6 +1257,14 @@ fn html_event_should_append(
     in_paragraph || in_heading || in_list || blockquote_level > 0 || in_code_block || in_table_row
 }
 
+fn markdown_parser_options() -> pulldown_cmark::Options {
+    pulldown_cmark::Options::ENABLE_TABLES
+        | pulldown_cmark::Options::ENABLE_STRIKETHROUGH
+        | pulldown_cmark::Options::ENABLE_TASKLISTS
+        | pulldown_cmark::Options::ENABLE_FOOTNOTES
+        | pulldown_cmark::Options::ENABLE_GFM
+}
+
 fn classify_supported_html(html: &str) -> HtmlHandling {
     let trimmed = html.trim();
     if trimmed.is_empty() {
@@ -1279,6 +1274,9 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("<!--") {
         return HtmlHandling::Ignore;
+    }
+    if let Some(summary_source) = extract_html_summary_content(trimmed) {
+        return HtmlHandling::DetailsSummary(summary_source);
     }
     if let Some(alt_text) = extract_html_image_alt(trimmed) {
         return HtmlHandling::AppendText(alt_text);
@@ -1311,8 +1309,49 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     {
         return HtmlHandling::Ignore;
     }
+    if is_html_open_tag(lower.as_str(), "details") || is_html_close_tag(lower.as_str(), "details") {
+        return HtmlHandling::Ignore;
+    }
 
     HtmlHandling::AppendLiteral
+}
+
+fn is_html_open_tag(lower_html: &str, tag_name: &str) -> bool {
+    if !lower_html.starts_with('<') || lower_html.starts_with("</") {
+        return false;
+    }
+
+    let Some(rest) = lower_html.strip_prefix('<') else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(tag_name) else {
+        return false;
+    };
+
+    rest.is_empty()
+        || rest.starts_with('>')
+        || rest.starts_with('/')
+        || rest.starts_with(char::is_whitespace)
+}
+
+fn is_html_close_tag(lower_html: &str, tag_name: &str) -> bool {
+    let Some(rest) = lower_html.strip_prefix("</") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(tag_name) else {
+        return false;
+    };
+
+    rest.is_empty() || rest.starts_with('>') || rest.starts_with(char::is_whitespace)
+}
+
+fn extract_html_summary_content(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let open_ix = lower.find("<summary")?;
+    let start_tag_end_rel = html[open_ix..].find('>')?;
+    let content_start = open_ix + start_tag_end_rel + 1;
+    let close_rel = lower[content_start..].find("</summary>")?;
+    Some(html[content_start..content_start + close_rel].to_owned())
 }
 
 fn extract_html_image_alt(html: &str) -> Option<String> {
@@ -1364,6 +1403,127 @@ fn pop_matching_inline_style(stack: &mut Vec<MarkdownInlineStyle>, style: Markdo
     }
 }
 
+fn strip_generic_html_tags(fragment: &str) -> String {
+    let mut stripped = String::with_capacity(fragment.len());
+    let mut chars = fragment.chars().peekable();
+    let mut in_tag = false;
+
+    while let Some(ch) = chars.next() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+            }
+            continue;
+        }
+
+        if ch == '<'
+            && chars
+                .peek()
+                .is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?'))
+        {
+            in_tag = true;
+            continue;
+        }
+
+        stripped.push(ch);
+    }
+
+    stripped
+}
+
+fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSpan>) {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let mut text_buf = String::new();
+    let mut span_stack = Vec::new();
+    let mut inline_spans = Vec::new();
+
+    for event in Parser::new_ext(source, markdown_parser_options()) {
+        match event {
+            Event::Start(Tag::Strong) => span_stack.push(MarkdownInlineStyle::Bold),
+            Event::Start(Tag::Emphasis) => span_stack.push(MarkdownInlineStyle::Italic),
+            Event::Start(Tag::Strikethrough) => {
+                span_stack.push(MarkdownInlineStyle::Strikethrough);
+            }
+            Event::Start(Tag::Link { .. }) => span_stack.push(MarkdownInlineStyle::Link),
+            Event::End(
+                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
+            ) => {
+                span_stack.pop();
+            }
+            Event::Text(cow) => {
+                let style = resolve_style_stack(&span_stack);
+                let start = text_buf.len();
+                text_buf.push_str(&cow);
+                let end = text_buf.len();
+                if style != MarkdownInlineStyle::Normal {
+                    inline_spans.push(MarkdownInlineSpan {
+                        byte_range: start..end,
+                        style,
+                    });
+                }
+            }
+            Event::Code(cow) => {
+                let start = text_buf.len();
+                text_buf.push_str(&cow);
+                let end = text_buf.len();
+                inline_spans.push(MarkdownInlineSpan {
+                    byte_range: start..end,
+                    style: MarkdownInlineStyle::Code,
+                });
+            }
+            Event::FootnoteReference(label) => {
+                let start = text_buf.len();
+                text_buf.push('[');
+                text_buf.push_str(&label);
+                text_buf.push(']');
+                let end = text_buf.len();
+                inline_spans.push(MarkdownInlineSpan {
+                    byte_range: start..end,
+                    style: MarkdownInlineStyle::Link,
+                });
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if !text_buf.is_empty() {
+                    text_buf.push(' ');
+                }
+            }
+            Event::Html(cow) | Event::InlineHtml(cow) => {
+                match classify_supported_html(cow.as_ref()) {
+                    HtmlHandling::Ignore => {}
+                    HtmlHandling::HardBreak => {
+                        if !text_buf.is_empty() {
+                            text_buf.push(' ');
+                        }
+                    }
+                    HtmlHandling::DetailsSummary(summary_source) => {
+                        let summary_text = strip_generic_html_tags(&summary_source);
+                        if !summary_text.is_empty() {
+                            if !text_buf.is_empty() {
+                                text_buf.push(' ');
+                            }
+                            text_buf.push_str(&summary_text);
+                        }
+                    }
+                    HtmlHandling::StartInlineStyle(style) => span_stack.push(style),
+                    HtmlHandling::EndInlineStyle(style) => {
+                        pop_matching_inline_style(&mut span_stack, style);
+                    }
+                    HtmlHandling::AppendText(text) => {
+                        text_buf.push_str(&text);
+                    }
+                    HtmlHandling::AppendLiteral => {
+                        text_buf.push_str(&strip_generic_html_tags(cow.as_ref()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    normalize_whitespace_with_spans(&text_buf, &inline_spans)
+}
+
 fn push_row_with_context(
     rows: &mut Vec<MarkdownPreviewRow>,
     row: MarkdownPreviewRowInput<'_>,
@@ -1406,7 +1566,9 @@ fn push_row(
     let (row_text, row_spans) = match row.kind {
         // Paragraph-like rows collapse whitespace, so remap inline spans to
         // the normalized text instead of leaving them pointed at stale bytes.
-        MarkdownPreviewRowKind::Paragraph | MarkdownPreviewRowKind::BlockquoteLine => {
+        MarkdownPreviewRowKind::Paragraph
+        | MarkdownPreviewRowKind::DetailsSummary
+        | MarkdownPreviewRowKind::BlockquoteLine => {
             normalize_whitespace_with_spans(row.text, row.inline_spans)
         }
         _ => (row.text.to_owned(), row.inline_spans.to_vec()),
@@ -2375,6 +2537,44 @@ mod tests {
     }
 
     #[test]
+    fn details_summary_renders_as_structured_preview_rows() {
+        let doc = parse(
+            "<details open>\n<summary>**Quick start**</summary>\n\nInstall the package.\n</details>\n",
+        );
+
+        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::DetailsSummary);
+        assert_eq!(doc.rows[0].text.as_ref(), "Quick start");
+        let summary_bold = spans_with_style(&doc.rows[0], MarkdownInlineStyle::Bold);
+        assert_eq!(summary_bold.len(), 1);
+        assert_eq!(
+            &doc.rows[0].text.as_ref()[summary_bold[0].byte_range.clone()],
+            "Quick start"
+        );
+
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(doc.rows[1].text.as_ref(), "Install the package.");
+    }
+
+    #[test]
+    fn details_summary_on_same_html_line_ignores_wrapper_tags() {
+        let doc = parse(
+            "<details><summary><strong>Examples</strong> and `usage`</summary>\n\nBody text.\n</details>\n",
+        );
+
+        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::DetailsSummary);
+        assert_eq!(doc.rows[0].text.as_ref(), "Examples and usage");
+        let summary_code = spans_with_style(&doc.rows[0], MarkdownInlineStyle::Code);
+        assert_eq!(summary_code.len(), 1);
+        assert_eq!(
+            &doc.rows[0].text.as_ref()[summary_code[0].byte_range.clone()],
+            "usage"
+        );
+        assert_eq!(doc.rows[1].text.as_ref(), "Body text.");
+    }
+
+    #[test]
     fn escaped_markdown_characters_remain_literal() {
         let doc = parse("Let's rename \\*our-new-project\\* to \\*our-old-project\\*.\n");
         assert_eq!(
@@ -2788,40 +2988,34 @@ mod tests {
         assert_ne!(new_table_rows[2].change_hint, MarkdownChangeHint::None);
     }
 
-    // ── build_changed_line_masks ─────────────────────────────────────────
+    // ── plan_changed_line_masks ──────────────────────────────────────────
 
     #[test]
-    fn build_changed_line_masks_from_diff_rows() {
-        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+    fn plan_changed_line_masks_from_plan_rows() {
+        use gitcomet_core::file_diff::{FileDiffPlan, FileDiffPlanRun};
 
-        let diff_rows = vec![
-            FileDiffRow {
-                kind: FileDiffRowKind::Context,
-                old_line: Some(1),
-                new_line: Some(1),
-                old: Some("same".into()),
-                new: Some("same".into()),
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Remove,
-                old_line: Some(2),
-                new_line: None,
-                old: Some("old".into()),
-                new: None,
-                eof_newline: None,
-            },
-            FileDiffRow {
-                kind: FileDiffRowKind::Add,
-                old_line: None,
-                new_line: Some(2),
-                old: None,
-                new: Some("new".into()),
-                eof_newline: None,
-            },
-        ];
+        let plan = FileDiffPlan {
+            runs: vec![
+                FileDiffPlanRun::Context {
+                    old_start: 0,
+                    new_start: 0,
+                    len: 1,
+                },
+                FileDiffPlanRun::Remove {
+                    old_start: 1,
+                    len: 1,
+                },
+                FileDiffPlanRun::Add {
+                    new_start: 1,
+                    len: 1,
+                },
+            ],
+            row_count: 3,
+            inline_row_count: 3,
+            eof_newline: None,
+        };
 
-        let (old_mask, new_mask) = build_changed_line_masks(&diff_rows, 3, 3);
+        let (old_mask, new_mask) = gitcomet_core::file_diff::plan_changed_line_masks(&plan, 3, 3);
         assert!(!old_mask[0]); // context line
         assert!(old_mask[1]); // removed line
         assert!(!new_mask[0]); // context line
@@ -3020,19 +3214,21 @@ code line
     // ── Modify-kind mask coverage ────────────────────────────────────────
 
     #[test]
-    fn build_changed_line_masks_handles_modify_kind() {
-        use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+    fn plan_changed_line_masks_handles_modify_kind() {
+        use gitcomet_core::file_diff::{FileDiffPlan, FileDiffPlanRun};
 
-        let diff_rows = vec![FileDiffRow {
-            kind: FileDiffRowKind::Modify,
-            old_line: Some(1),
-            new_line: Some(1),
-            old: Some("before".into()),
-            new: Some("after".into()),
+        let plan = FileDiffPlan {
+            runs: vec![FileDiffPlanRun::Modify {
+                old_start: 0,
+                new_start: 0,
+                len: 1,
+            }],
+            row_count: 1,
+            inline_row_count: 2,
             eof_newline: None,
-        }];
+        };
 
-        let (old_mask, new_mask) = build_changed_line_masks(&diff_rows, 2, 2);
+        let (old_mask, new_mask) = gitcomet_core::file_diff::plan_changed_line_masks(&plan, 2, 2);
         assert!(old_mask[0]); // modify marks old side
         assert!(!old_mask[1]);
         assert!(new_mask[0]); // modify marks new side

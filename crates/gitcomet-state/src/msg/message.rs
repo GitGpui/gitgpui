@@ -1,4 +1,4 @@
-use crate::model::RepoId;
+use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
@@ -118,6 +118,10 @@ pub enum Msg {
         repo_id: RepoId,
         target: DiffTarget,
     },
+    SelectConflictDiff {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     ClearDiffSelection {
         repo_id: RepoId,
     },
@@ -127,6 +131,7 @@ pub enum Msg {
     LoadConflictFile {
         repo_id: RepoId,
         path: PathBuf,
+        mode: ConflictFileLoadMode,
     },
     LoadReflog {
         repo_id: RepoId,

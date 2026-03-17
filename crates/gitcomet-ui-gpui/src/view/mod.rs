@@ -24,7 +24,7 @@ use gpui::{
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
@@ -74,10 +74,7 @@ use caches::{
 use chrome::{
     CLIENT_SIDE_DECORATION_INSET, TitleBarView, cursor_style_for_resize_edge, resize_edge,
 };
-use conflict_resolver::{
-    ConflictDiffMode, ConflictInlineRow, ConflictPickSide, ConflictResolverViewMode,
-    ResolvedLineMeta, SourceLineKey,
-};
+use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
 use date_time::format_datetime_utc;
 use date_time::{DateTimeFormat, Timezone, format_datetime};
@@ -94,7 +91,7 @@ use diff_utils::{
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display, rasterize_svg_preview_image,
-    rasterize_svg_preview_png, scrollbar_markers_from_flags,
+    scrollbar_markers_from_flags,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
@@ -1008,11 +1005,16 @@ impl GitCometView {
             FocusedMergetoolBootstrapAction::SetActiveRepo(repo_id) => {
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
-            FocusedMergetoolBootstrapAction::SelectDiff { repo_id, target } => {
-                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            FocusedMergetoolBootstrapAction::SelectConflictDiff { repo_id, path } => {
+                self.store
+                    .dispatch(Msg::SelectConflictDiff { repo_id, path });
             }
             FocusedMergetoolBootstrapAction::LoadConflictFile { repo_id, path } => {
-                self.store.dispatch(Msg::LoadConflictFile { repo_id, path });
+                self.store.dispatch(Msg::LoadConflictFile {
+                    repo_id,
+                    path,
+                    mode: gitcomet_state::model::ConflictFileLoadMode::CurrentOnly,
+                });
             }
             FocusedMergetoolBootstrapAction::Complete => {
                 self.focused_mergetool_bootstrap = None;
@@ -1048,7 +1050,7 @@ impl GitCometView {
 
         let mut rows = Vec::new();
         for (remote, mut branches) in grouped {
-            branches.sort();
+            branches.sort_unstable();
             branches.dedup();
             rows.push(RemoteRow::Header(remote.clone()));
             for name in branches {
@@ -1151,7 +1153,7 @@ impl GitCometView {
             .update(cx, |host, cx| host.push_toast(kind, message, cx));
     }
 
-    #[cfg_attr(test, allow(dead_code))]
+    #[cfg(not(test))]
     fn push_toast_with_link(
         &mut self,
         kind: components::ToastKind,

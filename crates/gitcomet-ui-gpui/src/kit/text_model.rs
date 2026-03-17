@@ -16,7 +16,7 @@ enum BufferId {
     Add,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Piece {
     buffer: BufferId,
     chunk_index: usize,
@@ -47,7 +47,7 @@ impl Piece {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LineIndex {
-    starts: Vec<usize>,
+    starts: Arc<[usize]>,
 }
 
 impl LineIndex {
@@ -59,17 +59,24 @@ impl LineIndex {
                 starts.push(ix + 1);
             }
         }
-        Self { starts }
+        Self {
+            starts: Arc::<[usize]>::from(starts),
+        }
     }
 
     fn starts(&self) -> &[usize] {
-        self.starts.as_slice()
+        self.starts.as_ref()
+    }
+
+    fn shared_starts(&self) -> Arc<[usize]> {
+        Arc::clone(&self.starts)
     }
 
     fn apply_edit(&mut self, range: Range<usize>, inserted: &str) {
-        debug_assert_eq!(self.starts.first().copied(), Some(0));
+        let starts = self.starts.as_ref();
+        debug_assert_eq!(starts.first().copied(), Some(0));
         debug_assert!(
-            self.starts.windows(2).all(|window| window[0] < window[1]),
+            starts.windows(2).all(|window| window[0] < window[1]),
             "line starts must remain strictly increasing before edit"
         );
 
@@ -77,19 +84,19 @@ impl LineIndex {
         let new_len = inserted.len();
         let delta = new_len as isize - old_len as isize;
 
-        let prefix_len = self.starts.partition_point(|&start| start <= range.start);
+        let prefix_len = starts.partition_point(|&start| start <= range.start);
         // For non-empty edits, a line start at `range.end` is produced by a
         // newline byte inside the replaced range and must be removed.
-        let suffix_start = self.starts.partition_point(|&start| start <= range.end);
+        let suffix_start = starts.partition_point(|&start| start <= range.end);
 
         let inserted_breaks = inserted.bytes().filter(|&b| b == b'\n').count();
         let mut updated = Vec::with_capacity(
             prefix_len
                 .saturating_add(inserted_breaks)
-                .saturating_add(self.starts.len().saturating_sub(suffix_start))
+                .saturating_add(starts.len().saturating_sub(suffix_start))
                 .saturating_add(1),
         );
-        updated.extend_from_slice(&self.starts[..prefix_len]);
+        updated.extend_from_slice(&starts[..prefix_len]);
 
         for (ix, byte) in inserted.bytes().enumerate() {
             if byte == b'\n' {
@@ -97,7 +104,7 @@ impl LineIndex {
             }
         }
 
-        for &start in &self.starts[suffix_start..] {
+        for &start in &starts[suffix_start..] {
             let shifted = if delta >= 0 {
                 start.saturating_add(delta as usize)
             } else {
@@ -106,15 +113,19 @@ impl LineIndex {
             updated.push(shifted);
         }
 
-        updated.sort_unstable();
-        updated.dedup();
-        if updated.first().copied() != Some(0) {
-            updated.insert(0, 0);
-        }
-        self.starts = updated;
-        debug_assert_eq!(self.starts.first().copied(), Some(0));
+        // The three sections (prefix, inserted breaks, shifted suffix) are
+        // already in strictly increasing order with non-overlapping ranges:
+        //   prefix values        ≤ range.start
+        //   inserted break values ∈ (range.start, range.start + new_len]
+        //   shifted suffix values > range.start + new_len
+        // so sort/dedup is unnecessary.
+        self.starts = Arc::<[usize]>::from(updated);
+        debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
         debug_assert!(
-            self.starts.windows(2).all(|window| window[0] < window[1]),
+            self.starts
+                .as_ref()
+                .windows(2)
+                .all(|window| window[0] < window[1]),
             "line starts must remain strictly increasing after edit"
         );
     }
@@ -202,6 +213,12 @@ impl Default for TextModel {
     }
 }
 
+impl Default for TextModelSnapshot {
+    fn default() -> Self {
+        TextModel::default().snapshot()
+    }
+}
+
 impl TextModel {
     pub fn new() -> Self {
         Self::from_large_text("")
@@ -251,10 +268,12 @@ impl TextModel {
         self.len() == 0
     }
 
+    #[cfg(feature = "benchmarks")]
     pub fn model_id(&self) -> u64 {
         self.core.model_id
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn revision(&self) -> u64 {
         self.core.revision
     }
@@ -263,6 +282,7 @@ impl TextModel {
         self.core.materialized().as_ref()
     }
 
+    #[cfg(feature = "benchmarks")]
     pub fn as_shared_string(&self) -> SharedString {
         self.core.materialized().clone()
     }
@@ -281,6 +301,7 @@ impl TextModel {
         *self = Self::from_large_text(text);
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn append_large(&mut self, text: &str) -> Range<usize> {
         let start = self.len();
         self.replace_range(start..start, text)
@@ -390,8 +411,13 @@ impl TextModelSnapshot {
         self.core.materialized().clone()
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn line_starts(&self) -> &[usize] {
         self.core.line_index.starts()
+    }
+
+    pub fn shared_line_starts(&self) -> Arc<[usize]> {
+        self.core.line_index.shared_starts()
     }
 
     pub fn is_char_boundary(&self, offset: usize) -> bool {
@@ -419,6 +445,7 @@ impl TextModelSnapshot {
         false
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn clamp_to_char_boundary(&self, mut offset: usize) -> usize {
         offset = offset.min(self.len());
         while offset > 0 && !self.is_char_boundary(offset) {
@@ -427,6 +454,7 @@ impl TextModelSnapshot {
         offset
     }
 
+    #[cfg(any(test, feature = "benchmarks"))]
     pub fn slice_to_string(&self, range: Range<usize>) -> String {
         let start = self.clamp_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_to_char_boundary(range.end.min(self.len()));
@@ -547,8 +575,8 @@ fn prepare_chunks_parallel(text: &str, ranges: &[Range<usize>]) -> Vec<Arc<str>>
     }
 
     let mut assignments = vec![Vec::<(usize, Range<usize>)>::new(); thread_count];
-    for (ix, range) in ranges.iter().cloned().enumerate() {
-        assignments[ix % thread_count].push((ix, range));
+    for (ix, range) in ranges.iter().enumerate() {
+        assignments[ix % thread_count].push((ix, range.clone()));
     }
 
     let mut worker_results = vec![Vec::<(usize, Arc<str>)>::new(); thread_count];
@@ -592,9 +620,9 @@ fn split_pieces_at(pieces: &[Piece], offset: usize) -> (Vec<Piece>, Vec<Piece>) 
     for piece in pieces {
         let piece_end = consumed.saturating_add(piece.len);
         if piece_end <= offset {
-            left.push(piece.clone());
+            left.push(*piece);
         } else if consumed >= offset {
-            right.push(piece.clone());
+            right.push(*piece);
         } else {
             let split_at = offset.saturating_sub(consumed).min(piece.len);
             if let Some(prefix) = piece.prefix(split_at) {
@@ -647,7 +675,7 @@ fn merge_adjacent_pieces(pieces: &mut Vec<Piece>) {
     }
 
     let mut merged = Vec::with_capacity(pieces.len());
-    let mut current = pieces[0].clone();
+    let mut current = pieces[0];
     for piece in pieces.iter().skip(1) {
         let contiguous = current.buffer == piece.buffer
             && current.chunk_index == piece.chunk_index
@@ -657,7 +685,7 @@ fn merge_adjacent_pieces(pieces: &mut Vec<Piece>) {
             continue;
         }
         merged.push(current);
-        current = piece.clone();
+        current = *piece;
     }
     merged.push(current);
     *pieces = merged;
@@ -740,6 +768,39 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_shared_line_starts_reuse_index_storage() {
+        let model = TextModel::from_large_text("alpha\nbeta\ngamma");
+        let snapshot = model.snapshot();
+
+        let model_starts = model.snapshot().shared_line_starts();
+        let snapshot_starts = snapshot.shared_line_starts();
+
+        assert!(
+            Arc::ptr_eq(&model_starts, &snapshot_starts),
+            "snapshots should share line-start storage with the source model"
+        );
+        assert_eq!(snapshot_starts.as_ref(), &[0, 6, 11]);
+    }
+
+    #[test]
+    fn snapshot_shared_line_starts_remain_stable_after_edit() {
+        let mut model = TextModel::from_large_text("alpha\nbeta\ngamma");
+        let old_snapshot = model.snapshot();
+        let old_starts = old_snapshot.shared_line_starts();
+
+        model.replace_range(6..10, "BETA\nDELTA");
+
+        let new_starts = model.snapshot().shared_line_starts();
+
+        assert!(
+            !Arc::ptr_eq(&old_starts, &new_starts),
+            "editing should swap to a new line-start index"
+        );
+        assert_eq!(old_starts.as_ref(), &[0, 6, 11]);
+        assert_eq!(new_starts.as_ref(), &[0, 6, 11, 17]);
+    }
+
+    #[test]
     fn append_large_uses_piece_table_insert_path() {
         let mut model = TextModel::new();
         let inserted = model.append_large("first\n");
@@ -785,6 +846,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::reversed_empty_ranges)]
     fn replace_range_normalizes_reversed_and_out_of_bounds_ranges() {
         let mut model = TextModel::from_large_text("abcdef");
         let inserted = model.replace_range(128..2, "XY");
@@ -824,6 +886,46 @@ mod tests {
         assert_eq!(inserted, 1..3);
         assert_eq!(model.as_str(), "a\n\nb");
         assert_eq!(model.line_starts(), &[0, 2, 3]);
+    }
+
+    #[test]
+    fn apply_edit_at_line_boundaries_stays_monotonic() {
+        // Exercises boundary conditions around the monotonic-output guarantee:
+        // edits exactly at newline offsets, multi-newline inserts replacing
+        // multi-newline ranges, and empty-range inserts at every line start.
+        let cases: &[(&str, Range<usize>, &str)] = &[
+            // Delete a newline exactly between two line starts.
+            ("a\nb\nc", 1..2, ""),
+            // Replace across multiple newlines with multiple newlines.
+            ("a\nb\nc\nd", 2..5, "X\nY\nZ"),
+            // Insert newlines at position 0.
+            ("abc", 0..0, "\n\n"),
+            // Insert at end after trailing newline.
+            ("a\n", 2..2, "b\nc"),
+            // Replace entire content.
+            ("old\ntext", 0..8, "new\n\nlines\n"),
+            // Delete range that spans from before a newline to after it.
+            ("ab\ncd\nef", 2..5, ""),
+            // Insert at every line start in a multi-line doc.
+            ("a\nb\nc\n", 0..0, "X"),
+            ("a\nb\nc\n", 2..2, "X"),
+            ("a\nb\nc\n", 4..4, "X"),
+            // Replace newline with newlines.
+            ("a\nb", 1..2, "\n\n"),
+        ];
+        for (text, range, inserted) in cases {
+            let mut model = TextModel::from_large_text(text);
+            model.replace_range(range.clone(), inserted);
+            let mut control = text.to_string();
+            replace_control(&mut control, range.clone(), inserted);
+            assert_eq!(model.as_str(), control, "text mismatch for edit {text:?}");
+            let expected_starts = line_starts_for_text(&control);
+            assert_eq!(
+                model.line_starts(),
+                expected_starts.as_slice(),
+                "line starts mismatch for edit on {text:?} [{range:?} -> {inserted:?}]"
+            );
+        }
     }
 
     #[test]

@@ -97,6 +97,12 @@ impl ScrollbarHandle {
                 .last_item_size
                 .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
                 .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().height),
+            (ScrollbarAxis::Horizontal, Self::UniformList(handle)) => handle
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| (size.contents.width - size.item.width).max(px(0.0)))
+                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().width),
             (ScrollbarAxis::Vertical, _) => self.base_handle().max_offset().height.max(px(0.0)),
             (ScrollbarAxis::Horizontal, _) => self.base_handle().max_offset().width.max(px(0.0)),
         }
@@ -148,7 +154,7 @@ impl Scrollbar {
         }
     }
 
-    pub fn horizontal(id: impl Into<ElementId>, handle: ScrollHandle) -> Self {
+    pub fn horizontal(id: impl Into<ElementId>, handle: impl Into<ScrollbarHandle>) -> Self {
         Self {
             id: id.into(),
             handle: handle.into(),

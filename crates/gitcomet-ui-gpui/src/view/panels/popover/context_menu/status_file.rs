@@ -88,13 +88,20 @@ pub(super) fn model(
         icon: Some("↗".into()),
         shortcut: Some("Enter".into()),
         disabled: false,
-        action: Box::new(ContextMenuAction::SelectDiff {
-            repo_id,
-            target: DiffTarget::WorkingTree {
+        action: if area == DiffArea::Unstaged && is_unstaged_conflicted {
+            Box::new(ContextMenuAction::SelectConflictDiff {
+                repo_id,
                 path: path.clone(),
-                area,
-            },
-        }),
+            })
+        } else {
+            Box::new(ContextMenuAction::SelectDiff {
+                repo_id,
+                target: DiffTarget::WorkingTree {
+                    path: path.clone(),
+                    area,
+                },
+            })
+        },
     });
     items.push(ContextMenuItem::Entry {
         label: "Open file".into(),
@@ -174,12 +181,9 @@ pub(super) fn model(
             icon: Some("✎".into()),
             shortcut: Some("M".into()),
             disabled: !can_manual,
-            action: Box::new(ContextMenuAction::SelectDiff {
+            action: Box::new(ContextMenuAction::SelectConflictDiff {
                 repo_id,
-                target: DiffTarget::WorkingTree {
-                    path: path.clone(),
-                    area: DiffArea::Unstaged,
-                },
+                path: path.clone(),
             }),
         });
         if area == DiffArea::Unstaged && is_unstaged_conflicted {

@@ -1,7 +1,11 @@
-use super::util::{diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview};
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoId};
+use super::util::{
+    diff_reload_effects, diff_target_is_svg, diff_target_wants_image_preview,
+    selected_conflict_target_path, start_conflict_target_reload,
+    start_conflict_target_reload_with_mode,
+};
+use crate::model::{AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId};
 use crate::msg::Effect;
-use gitcomet_core::domain::{Diff, DiffTarget, FileDiffImage, FileDiffText};
+use gitcomet_core::domain::{Diff, DiffArea, DiffTarget, FileDiffImage, FileDiffText};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
 
@@ -15,6 +19,14 @@ pub(super) fn select_diff(
     };
 
     repo_state.diff_state.diff_target = Some(target.clone());
+    if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+        repo_state.diff_state.diff = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+        repo_state.bump_diff_state_rev();
+        return start_conflict_target_reload(repo_state, conflict_path);
+    }
+
     repo_state.diff_state.diff = Loadable::Loading;
     let supports_file = matches!(
         &target,
@@ -40,6 +52,28 @@ pub(super) fn select_diff(
         effects.rotate_left(1);
     }
     effects
+}
+
+pub(super) fn select_conflict_diff(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    let target = DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    repo_state.diff_state.diff_target = Some(target);
+    repo_state.diff_state.diff = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file = Loadable::NotLoaded;
+    repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+    repo_state.bump_diff_state_rev();
+
+    start_conflict_target_reload_with_mode(repo_state, path, ConflictFileLoadMode::CurrentOnly)
 }
 
 pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

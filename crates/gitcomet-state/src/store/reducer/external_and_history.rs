@@ -1,6 +1,6 @@
 use super::util::{
     diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
-    refresh_primary_effects,
+    refresh_primary_effects, selected_conflict_target_path, start_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoExternalChange};
@@ -85,7 +85,11 @@ pub(super) fn repo_externally_changed(
         && let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
-        effects.extend(diff_reload_effects(repo_id, target));
+        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+        } else {
+            effects.extend(diff_reload_effects(repo_id, target));
+        }
     }
 
     effects
@@ -316,7 +320,11 @@ pub(super) fn repo_action_finished(
     if let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
-        effects.extend(diff_reload_effects(repo_id, target));
+        if let Some(conflict_path) = selected_conflict_target_path(repo_state, &target) {
+            effects.extend(start_conflict_target_reload(repo_state, conflict_path));
+        } else {
+            effects.extend(diff_reload_effects(repo_id, target));
+        }
     }
     effects
 }

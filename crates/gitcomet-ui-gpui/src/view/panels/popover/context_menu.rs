@@ -369,6 +369,10 @@ impl PopoverHost {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
+            ContextMenuAction::SelectConflictDiff { repo_id, path } => {
+                self.store
+                    .dispatch(Msg::SelectConflictDiff { repo_id, path });
+            }
             ContextMenuAction::OpenFile { repo_id, path } => {
                 let full_path = match self.resolve_workdir_path(repo_id, &path) {
                     Ok(path) => path,

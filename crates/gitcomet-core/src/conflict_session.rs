@@ -1,5 +1,7 @@
 use crate::domain::FileConflictKind;
+use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 mod autosolve;
 mod history;
@@ -13,6 +15,7 @@ use autosolve::{
 };
 #[cfg(test)]
 use history::history_section_suffix;
+#[cfg(test)]
 use marker_parse::parse_conflict_regions_from_markers;
 #[cfg(test)]
 use regex::Regex;
@@ -23,7 +26,8 @@ pub use autosolve::{
 };
 pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
-    ParsedConflictBlock, ParsedConflictSegment, parse_conflict_marker_segments,
+    ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
+    ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
 };
 pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 
@@ -34,11 +38,139 @@ pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictPayload {
     /// Valid UTF-8 text content.
-    Text(String),
+    Text(Arc<str>),
     /// Non-UTF8 binary content.
-    Binary(Vec<u8>),
+    Binary(Arc<[u8]>),
     /// Side is absent (file deleted or not present on this branch).
     Absent,
+}
+
+/// Tuple form used by staged conflict-file loading: `(raw_bytes, utf8_text)`.
+pub type ConflictStageParts = (Option<Arc<[u8]>>, Option<Arc<str>>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ConflictRegionTextStorage {
+    Owned(String),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+}
+
+#[derive(Clone, Debug)]
+pub struct ConflictRegionText {
+    storage: ConflictRegionTextStorage,
+}
+
+impl ConflictRegionText {
+    pub fn shared(text: Arc<str>) -> Self {
+        let len = text.len();
+        Self {
+            storage: ConflictRegionTextStorage::SharedSlice {
+                text,
+                range: 0..len,
+            },
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared conflict region text range should stay within bounds"
+        );
+        Self {
+            storage: ConflictRegionTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            ConflictRegionTextStorage::Owned(text) => text.as_str(),
+            ConflictRegionTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared conflict region text range should stay valid"),
+        }
+    }
+
+    pub fn into_owned_string(self) -> String {
+        match self.storage {
+            ConflictRegionTextStorage::Owned(text) => text,
+            ConflictRegionTextStorage::SharedSlice { text, range } => text
+                .get(range)
+                .expect("shared conflict region text range should stay valid")
+                .to_string(),
+        }
+    }
+
+    pub fn shares_backing_with(&self, other: &Arc<str>) -> bool {
+        match &self.storage {
+            ConflictRegionTextStorage::Owned(_) => false,
+            ConflictRegionTextStorage::SharedSlice { text, .. } => Arc::ptr_eq(text, other),
+        }
+    }
+}
+
+impl std::fmt::Display for ConflictRegionText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::ops::Deref for ConflictRegionText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ConflictRegionText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<String> for ConflictRegionText {
+    fn from(value: String) -> Self {
+        Self {
+            storage: ConflictRegionTextStorage::Owned(value),
+        }
+    }
+}
+
+impl From<&str> for ConflictRegionText {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
+    }
+}
+
+impl PartialEq for ConflictRegionText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ConflictRegionText {}
+
+impl PartialEq<&str> for ConflictRegionText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<ConflictRegionText> for &str {
+    fn eq(&self, other: &ConflictRegionText) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<String> for ConflictRegionText {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ConflictRegionText> for String {
+    fn eq(&self, other: &ConflictRegionText) -> bool {
+        self.as_str() == other.as_str()
+    }
 }
 
 impl ConflictPayload {
@@ -58,7 +190,7 @@ impl ConflictPayload {
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             ConflictPayload::Text(s) => Some(s.as_bytes()),
-            ConflictPayload::Binary(bytes) => Some(bytes.as_slice()),
+            ConflictPayload::Binary(bytes) => Some(bytes.as_ref()),
             ConflictPayload::Absent => None,
         }
     }
@@ -81,8 +213,33 @@ impl ConflictPayload {
     /// Try to create from raw bytes: if valid UTF-8, produce `Text`; otherwise `Binary`.
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         match String::from_utf8(bytes) {
-            Ok(s) => ConflictPayload::Text(s),
-            Err(e) => ConflictPayload::Binary(e.into_bytes()),
+            Ok(s) => ConflictPayload::Text(s.into()),
+            Err(e) => ConflictPayload::Binary(e.into_bytes().into()),
+        }
+    }
+
+    /// Construct from the separate bytes/text fields used by `ConflictFileStages`.
+    ///
+    /// Prefers text when present; falls back to binary bytes; produces `Absent`
+    /// when both are `None`.
+    pub fn from_stage_parts(bytes: Option<Arc<[u8]>>, text: Option<Arc<str>>) -> Self {
+        if let Some(t) = text {
+            ConflictPayload::Text(t)
+        } else if let Some(b) = bytes {
+            ConflictPayload::Binary(b)
+        } else {
+            ConflictPayload::Absent
+        }
+    }
+
+    /// Decompose into the separate bytes/text fields used by `ConflictFileStages`.
+    ///
+    /// Inverse of [`from_stage_parts`](Self::from_stage_parts).
+    pub fn into_stage_parts(self) -> ConflictStageParts {
+        match self {
+            ConflictPayload::Text(text) => (None, Some(text)),
+            ConflictPayload::Binary(bytes) => (Some(bytes), None),
+            ConflictPayload::Absent => (None, None),
         }
     }
 }
@@ -256,11 +413,11 @@ impl RegexAutosolveOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictRegion {
     /// The base (common ancestor) content for this region.
-    pub base: Option<String>,
+    pub base: Option<ConflictRegionText>,
     /// The "ours" (local/HEAD) content.
-    pub ours: String,
+    pub ours: ConflictRegionText,
     /// The "theirs" (remote/incoming) content.
-    pub theirs: String,
+    pub theirs: ConflictRegionText,
     /// Current resolution state.
     pub resolution: ConflictRegionResolution,
 }
@@ -272,19 +429,19 @@ impl ConflictRegion {
         match &self.resolution {
             ConflictRegionResolution::Unresolved => None,
             ConflictRegionResolution::PickBase => self.base.as_deref().or(Some("")),
-            ConflictRegionResolution::PickOurs => Some(&self.ours),
-            ConflictRegionResolution::PickTheirs => Some(&self.theirs),
+            ConflictRegionResolution::PickOurs => Some(self.ours.as_str()),
+            ConflictRegionResolution::PickTheirs => Some(self.theirs.as_str()),
             ConflictRegionResolution::PickBoth => None, // caller must concat ours+theirs
-            ConflictRegionResolution::ManualEdit(text) => Some(text),
-            ConflictRegionResolution::AutoResolved { content, .. } => Some(content),
+            ConflictRegionResolution::ManualEdit(text) => Some(text.as_str()),
+            ConflictRegionResolution::AutoResolved { content, .. } => Some(content.as_str()),
         }
     }
 
     /// Produce the resolved text for "both" picks (ours followed by theirs).
     pub fn resolved_text_both(&self) -> String {
         let mut out = String::with_capacity(self.ours.len() + self.theirs.len());
-        out.push_str(&self.ours);
-        out.push_str(&self.theirs);
+        out.push_str(self.ours.as_str());
+        out.push_str(self.theirs.as_str());
         out
     }
 }
@@ -353,6 +510,11 @@ pub struct ConflictSession {
     pub ours: ConflictPayload,
     /// "Theirs" (remote/incoming) content — full file.
     pub theirs: ConflictPayload,
+    /// Loaded current merged/worktree content, when the loader already has it.
+    ///
+    /// `None` means the current payload was not loaded alongside the session.
+    /// `Some(ConflictPayload::Absent)` means it was loaded and is absent.
+    pub current: Option<ConflictPayload>,
     /// Parsed conflict regions (populated for marker-based text conflicts).
     pub regions: Vec<ConflictRegion>,
 }
@@ -362,17 +524,17 @@ impl ConflictSession {
         self.strategy == ConflictResolverStrategy::BinarySidePick && self.regions.is_empty()
     }
 
-    fn payload_as_side_text(payload: &ConflictPayload) -> Option<String> {
+    fn payload_as_side_text(payload: &ConflictPayload) -> Option<ConflictRegionText> {
         match payload {
-            ConflictPayload::Text(text) => Some(text.clone()),
-            ConflictPayload::Absent => Some(String::new()),
+            ConflictPayload::Text(text) => Some(ConflictRegionText::shared(text.clone())),
+            ConflictPayload::Absent => Some(ConflictRegionText::from(String::new())),
             ConflictPayload::Binary(_) => None,
         }
     }
 
-    fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<String>> {
+    fn payload_as_base_text(payload: &ConflictPayload) -> Option<Option<ConflictRegionText>> {
         match payload {
-            ConflictPayload::Text(text) => Some(Some(text.clone())),
+            ConflictPayload::Text(text) => Some(Some(ConflictRegionText::shared(text.clone()))),
             ConflictPayload::Absent => Some(None),
             ConflictPayload::Binary(_) => None,
         }
@@ -401,13 +563,13 @@ impl ConflictSession {
         }
     }
 
-    /// Create a new session from the three file-level payloads.
-    pub fn new(
+    fn new_with_optional_current(
         path: PathBuf,
         conflict_kind: FileConflictKind,
         base: ConflictPayload,
         ours: ConflictPayload,
         theirs: ConflictPayload,
+        current: Option<ConflictPayload>,
     ) -> Self {
         let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
         let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
@@ -421,14 +583,61 @@ impl ConflictSession {
             base,
             ours,
             theirs,
+            current,
             regions,
         }
+    }
+
+    /// Create a new session from the three file-level payloads.
+    pub fn new(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+    ) -> Self {
+        Self::new_with_optional_current(path, conflict_kind, base, ours, theirs, None)
+    }
+
+    /// Create a new session and retain the loaded current merged/worktree payload.
+    pub fn new_with_current(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        current: ConflictPayload,
+    ) -> Self {
+        Self::new_with_optional_current(path, conflict_kind, base, ours, theirs, Some(current))
+    }
+
+    /// Build a session from shared merged marker text without copying it again.
+    pub fn from_merged_shared_text(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        merged_text: Arc<str>,
+    ) -> Self {
+        let mut session = Self::new_with_current(
+            path,
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            ConflictPayload::Text(merged_text.clone()),
+        );
+        session.parse_regions_from_shared_text(merged_text);
+        session
     }
 
     /// Build a session and parse conflict regions from merged marker text.
     ///
     /// This is a convenience for loading a conflicted worktree file where the
     /// merged content still contains conflict markers.
+    // Public for test and benchmark setup only; not called from production code.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn from_merged_text(
         path: PathBuf,
         conflict_kind: FileConflictKind,
@@ -437,9 +646,14 @@ impl ConflictSession {
         theirs: ConflictPayload,
         merged_text: &str,
     ) -> Self {
-        let mut session = Self::new(path, conflict_kind, base, ours, theirs);
-        session.parse_regions_from_merged_text(merged_text);
-        session
+        Self::from_merged_shared_text(
+            path,
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            Arc::<str>::from(merged_text),
+        )
     }
 
     /// Parse marker-based conflict regions from merged text and replace the
@@ -449,8 +663,16 @@ impl ConflictSession {
     /// diff3-style (`|||||||` base section) markers.
     ///
     /// Returns the number of parsed regions.
+    // Public for tests only; thin wrapper around parse_regions_from_shared_text.
+    #[cfg(test)]
     pub fn parse_regions_from_merged_text(&mut self, merged_text: &str) -> usize {
-        self.regions = parse_conflict_regions_from_markers(merged_text);
+        self.parse_regions_from_shared_text(Arc::<str>::from(merged_text))
+    }
+
+    /// Parse marker-based conflict regions from shared merged text and replace
+    /// the current region list without copying each block payload.
+    pub fn parse_regions_from_shared_text(&mut self, merged_text: Arc<str>) -> usize {
+        self.regions = marker_parse::parse_conflict_regions_from_shared_text(merged_text);
         if self.regions.is_empty()
             && let Some(region) = Self::synthetic_region_for_strategy(
                 self.strategy,
@@ -477,6 +699,16 @@ impl ConflictSession {
     /// Returns the theirs side bytes (stage 3 payload), when present.
     pub fn theirs_bytes(&self) -> Option<&[u8]> {
         self.theirs.as_bytes()
+    }
+
+    /// Returns the loaded current merged/worktree text, when available.
+    pub fn current_text(&self) -> Option<&str> {
+        self.current.as_ref().and_then(ConflictPayload::as_text)
+    }
+
+    /// Returns the loaded current merged/worktree bytes, when available.
+    pub fn current_bytes(&self) -> Option<&[u8]> {
+        self.current.as_ref().and_then(ConflictPayload::as_bytes)
     }
 
     /// Total number of conflict regions.
@@ -601,8 +833,8 @@ impl ConflictSession {
                 &compiled,
             ) {
                 let content = match pick {
-                    AutosolvePickSide::Ours => region.ours.clone(),
-                    AutosolvePickSide::Theirs => region.theirs.clone(),
+                    AutosolvePickSide::Ours => region.ours.to_string(),
+                    AutosolvePickSide::Theirs => region.theirs.to_string(),
                 };
                 region.resolution = ConflictRegionResolution::AutoResolved {
                     confidence: rule.confidence(),

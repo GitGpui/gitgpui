@@ -1,3 +1,19 @@
+mod split_row_index;
+mod word_highlight;
+
+#[cfg(test)]
+use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_SIZE};
+pub use split_row_index::{ConflictSplitRowIndex, TwoWaySplitProjection, TwoWaySplitVisibleRow};
+#[cfg(any(test, feature = "benchmarks"))]
+pub use word_highlight::compute_three_way_word_highlights;
+pub use word_highlight::compute_word_highlights_for_row;
+#[cfg(feature = "benchmarks")]
+pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
+
+use rustc_hash::FxHashMap;
+use std::ops::Range;
+use std::sync::Arc;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictChoice {
     Base,
@@ -6,16 +22,22 @@ pub enum ConflictChoice {
     Both,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConflictDiffMode {
-    Split,
-    Inline,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictResolverViewMode {
     ThreeWay,
     TwoWayDiff,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ConflictRenderingMode {
+    EagerSmallFile,
+    StreamedLargeFile,
+}
+
+impl ConflictRenderingMode {
+    pub fn is_streamed_large_file(self) -> bool {
+        matches!(self, Self::StreamedLargeFile)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
@@ -25,9 +47,9 @@ pub enum ConflictPickSide {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub enum AutosolveTraceMode {
     Safe,
+    #[cfg(test)]
     History,
 }
 
@@ -38,10 +60,165 @@ pub enum ConflictNavDirection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+enum ConflictTextStorage {
+    Owned(String),
+    SharedSlice { text: Arc<str>, range: Range<usize> },
+}
+
+#[derive(Clone, Debug)]
+pub struct ConflictText {
+    storage: ConflictTextStorage,
+}
+
+impl ConflictText {
+    pub fn shared(text: Arc<str>) -> Self {
+        let len = text.len();
+        Self {
+            storage: ConflictTextStorage::SharedSlice {
+                text,
+                range: 0..len,
+            },
+        }
+    }
+
+    pub fn shared_slice(text: Arc<str>, range: Range<usize>) -> Self {
+        debug_assert!(
+            text.get(range.clone()).is_some(),
+            "shared conflict text range should stay within bounds"
+        );
+        Self {
+            storage: ConflictTextStorage::SharedSlice { text, range },
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match &self.storage {
+            ConflictTextStorage::Owned(text) => text.as_str(),
+            ConflictTextStorage::SharedSlice { text, range } => text
+                .get(range.clone())
+                .expect("shared conflict text range should stay valid"),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_str().is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_str().len()
+    }
+
+    pub fn push_str(&mut self, suffix: &str) {
+        if suffix.is_empty() {
+            return;
+        }
+
+        match &mut self.storage {
+            ConflictTextStorage::Owned(text) => text.push_str(suffix),
+            ConflictTextStorage::SharedSlice { .. } => {
+                let mut owned = self.as_str().to_string();
+                owned.push_str(suffix);
+                self.storage = ConflictTextStorage::Owned(owned);
+            }
+        }
+    }
+
+    pub fn into_owned_string(self) -> String {
+        match self.storage {
+            ConflictTextStorage::Owned(text) => text,
+            ConflictTextStorage::SharedSlice { text, range } => text
+                .get(range)
+                .expect("shared conflict text range should stay valid")
+                .to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn shares_backing_with(&self, other: &Arc<str>) -> bool {
+        match &self.storage {
+            ConflictTextStorage::Owned(_) => false,
+            ConflictTextStorage::SharedSlice { text, .. } => Arc::ptr_eq(text, other),
+        }
+    }
+}
+
+impl Default for ConflictText {
+    fn default() -> Self {
+        String::new().into()
+    }
+}
+
+impl std::fmt::Display for ConflictText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::ops::Deref for ConflictText {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ConflictText {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl From<String> for ConflictText {
+    fn from(value: String) -> Self {
+        Self {
+            storage: ConflictTextStorage::Owned(value),
+        }
+    }
+}
+
+impl From<&str> for ConflictText {
+    fn from(value: &str) -> Self {
+        value.to_string().into()
+    }
+}
+
+impl PartialEq for ConflictText {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ConflictText {}
+
+impl PartialEq<&str> for ConflictText {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<ConflictText> for &str {
+    fn eq(&self, other: &ConflictText) -> bool {
+        *self == other.as_str()
+    }
+}
+
+impl PartialEq<String> for ConflictText {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl PartialEq<ConflictText> for String {
+    fn eq(&self, other: &ConflictText) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictBlock {
-    pub base: Option<String>,
-    pub ours: String,
-    pub theirs: String,
+    pub base: Option<ConflictText>,
+    pub ours: ConflictText,
+    pub theirs: ConflictText,
     pub choice: ConflictChoice,
     /// Whether this block has been explicitly resolved (by user pick or auto-resolve).
     /// Blocks start unresolved; becomes `true` when the user picks a side or auto-resolve runs.
@@ -50,10 +227,11 @@ pub struct ConflictBlock {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConflictSegment {
-    Text(String),
+    Text(ConflictText),
     Block(ConflictBlock),
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConflictInlineRow {
     pub side: ConflictPickSide,
@@ -78,7 +256,6 @@ pub enum ResolvedLineSource {
 
 impl ResolvedLineSource {
     /// Compact single-character label for UI badges.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn badge_char(self) -> char {
         match self {
             Self::A => 'A',
@@ -134,7 +311,26 @@ impl SourceLineKey {
 }
 
 /// Per-line word-highlight ranges. `None` means no highlights for that line.
-pub type WordHighlights = Vec<Option<Vec<std::ops::Range<usize>>>>;
+pub type WordHighlights = FxHashMap<usize, Vec<Range<usize>>>;
+
+/// Per-line pair of `(old, new)` word-highlight ranges for a two-way diff row.
+pub type TwoWayWordHighlightPair = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+/// Shared context rows kept around each block-local two-way conflict diff.
+///
+/// This preserves a small amount of unchanged surrounding code in the large-file
+/// sparse path without regressing back to whole-file row materialization.
+pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
+/// Above this size, one conflict block is effectively the whole document.
+///
+/// Bootstrap should stay bounded instead of diffing the entire block eagerly.
+pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
+/// Head/tail preview rows kept for very large conflict blocks during bootstrap.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
+/// Word-diff highlighting is optional chrome, so skip giant blocks entirely.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
 /// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
 pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
@@ -179,6 +375,7 @@ pub fn format_autosolve_trace_summary(
             stats.pass2_split,
             stats.pass1_after_split
         ),
+        #[cfg(test)]
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
             unresolved_before, unresolved_after, stats.history
@@ -214,17 +411,23 @@ pub fn active_conflict_autosolve_trace_label(
 }
 
 pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
-    gitcomet_core::conflict_session::parse_conflict_marker_segments(text)
+    parse_conflict_markers_shared(Arc::<str>::from(text))
+}
+
+pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
+    gitcomet_core::conflict_session::parse_conflict_marker_ranges(text.as_ref())
         .into_iter()
         .map(|segment| match segment {
-            gitcomet_core::conflict_session::ParsedConflictSegment::Text(text) => {
-                ConflictSegment::Text(text)
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Text(range) => {
+                ConflictSegment::Text(ConflictText::shared_slice(Arc::clone(&text), range))
             }
-            gitcomet_core::conflict_session::ParsedConflictSegment::Conflict(block) => {
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(block) => {
                 ConflictSegment::Block(ConflictBlock {
-                    base: block.base,
-                    ours: block.ours,
-                    theirs: block.theirs,
+                    base: block
+                        .base
+                        .map(|range| ConflictText::shared_slice(Arc::clone(&text), range)),
+                    ours: ConflictText::shared_slice(Arc::clone(&text), block.ours),
+                    theirs: ConflictText::shared_slice(Arc::clone(&text), block.theirs),
                     choice: ConflictChoice::Ours,
                     resolved: false,
                 })
@@ -233,12 +436,13 @@ pub fn parse_conflict_markers(text: &str) -> Vec<ConflictSegment> {
         .collect()
 }
 
-fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: String) {
+fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<ConflictText>) {
+    let text = text.into();
     if text.is_empty() {
         return;
     }
     if let Some(ConflictSegment::Text(prev)) = segments.last_mut() {
-        prev.push_str(&text);
+        prev.push_str(text.as_str());
         return;
     }
     segments.push(ConflictSegment::Text(text));
@@ -282,7 +486,7 @@ fn extract_block_contents_from_output(
         match seg {
             ConflictSegment::Text(text) => {
                 let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text) {
+                if !tail.starts_with(text.as_str()) {
                     return None;
                 }
                 cursor = cursor.saturating_add(text.len());
@@ -358,6 +562,46 @@ pub fn derive_region_resolution_updates_from_output(
     }
 
     Some(updates)
+}
+
+/// Derive per-region session resolution updates directly from marker segments.
+///
+/// Streamed resolved-output mode is read-only until explicit materialization,
+/// so the block choice state is the source of truth and no full output string
+/// needs to be assembled.
+pub fn derive_region_resolution_updates_from_segments(
+    segments: &[ConflictSegment],
+    block_region_indices: &[usize],
+) -> Vec<(
+    usize,
+    gitcomet_core::conflict_session::ConflictRegionResolution,
+)> {
+    use gitcomet_core::conflict_session::ConflictRegionResolution as R;
+
+    let mut updates = Vec::with_capacity(conflict_count(segments));
+    let mut block_ix = 0usize;
+    for seg in segments {
+        let ConflictSegment::Block(block) = seg else {
+            continue;
+        };
+        let region_ix = block_region_indices
+            .get(block_ix)
+            .copied()
+            .unwrap_or(block_ix);
+        let resolution = if !block.resolved {
+            R::Unresolved
+        } else {
+            match block.choice {
+                ConflictChoice::Base => R::PickBase,
+                ConflictChoice::Ours => R::PickOurs,
+                ConflictChoice::Theirs => R::PickTheirs,
+                ConflictChoice::Both => R::PickBoth,
+            }
+        };
+        updates.push((region_ix, resolution));
+        block_ix += 1;
+    }
+    updates
 }
 
 /// Result of applying state-layer region resolutions to UI marker segments.
@@ -436,6 +680,48 @@ fn apply_region_resolution_to_block(
     }
 }
 
+/// Apply ordered per-block resolutions to parsed UI marker segments.
+///
+/// This is used by save/export paths that derive resolutions from the current
+/// resolved-output buffer and need to keep manual edits as plain text while
+/// preserving untouched unresolved blocks.
+pub(in crate::view) fn apply_ordered_region_resolutions(
+    segments: &mut Vec<ConflictSegment>,
+    resolutions: &[gitcomet_core::conflict_session::ConflictRegionResolution],
+) -> usize {
+    if segments.is_empty() || resolutions.is_empty() {
+        return 0;
+    }
+
+    let mut applied = 0usize;
+    let mut block_ix = 0usize;
+    let mut synced: Vec<ConflictSegment> = Vec::with_capacity(segments.len());
+
+    for seg in segments.drain(..) {
+        match seg {
+            ConflictSegment::Text(text) => append_text_segment(&mut synced, text),
+            ConflictSegment::Block(mut block) => {
+                if let Some(resolution) = resolutions.get(block_ix) {
+                    if let Some(materialized_text) =
+                        apply_region_resolution_to_block(&mut block, resolution)
+                    {
+                        append_text_segment(&mut synced, materialized_text);
+                    } else {
+                        synced.push(ConflictSegment::Block(block));
+                    }
+                    applied += 1;
+                } else {
+                    synced.push(ConflictSegment::Block(block));
+                }
+                block_ix += 1;
+            }
+        }
+    }
+
+    *segments = synced;
+    applied
+}
+
 /// Apply state-layer region resolutions to parsed UI marker segments.
 ///
 /// This allows resolver rebuilds to preserve choices tracked in
@@ -443,7 +729,7 @@ fn apply_region_resolution_to_block(
 /// non-side-pick text into plain `Text` segments when needed.
 ///
 /// Returns how many conflict regions were applied.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn apply_session_region_resolutions(
     segments: &mut Vec<ConflictSegment>,
     regions: &[gitcomet_core::conflict_session::ConflictRegion],
@@ -558,7 +844,7 @@ pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
 /// 2-way blocks that don't have an ancestor section.
 ///
 /// Returns the number of blocks updated.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn apply_choice_to_unresolved_segments(
     segments: &mut [ConflictSegment],
     choice: ConflictChoice,
@@ -597,7 +883,7 @@ pub fn next_unresolved_conflict_index(
 
 /// Find the previous unresolved conflict index before `current`.
 /// Wraps around to the last unresolved conflict.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn prev_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,
@@ -620,7 +906,7 @@ pub fn prev_unresolved_conflict_index(
 /// 4. (if `whitespace_normalize`) whitespace-only difference → pick ours.
 ///
 /// Returns the number of blocks auto-resolved.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
     auto_resolve_segments_with_options(segments, false)
 }
@@ -664,7 +950,7 @@ pub fn auto_resolve_segments_with_options(
 ///
 /// This mode uses regex normalization rules from core and only performs
 /// side-picks (`Ours` / `Theirs`), never synthetic text rewrites.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_regex(
     segments: &mut [ConflictSegment],
     options: &gitcomet_core::conflict_session::RegexAutosolveOptions,
@@ -706,7 +992,7 @@ pub fn auto_resolve_segments_regex(
 /// segment containing the merged content.
 ///
 /// Returns the number of blocks resolved.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_history(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -716,6 +1002,7 @@ pub fn auto_resolve_segments_history(
 }
 
 /// Like [`auto_resolve_segments_history`] but keeps block->region mappings in sync.
+#[cfg(test)]
 pub fn auto_resolve_segments_history_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     options: &gitcomet_core::conflict_session::HistoryAutosolveOptions,
@@ -748,7 +1035,7 @@ pub fn auto_resolve_segments_history_with_region_indices(
                     if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                         prev.push_str(&merged);
                     } else {
-                        new_segments.push(ConflictSegment::Text(merged));
+                        new_segments.push(ConflictSegment::Text(merged.into()));
                     }
                     count += 1;
                     continue;
@@ -772,7 +1059,7 @@ pub fn auto_resolve_segments_history_with_region_indices(
 /// become `Text` segments; remaining conflicts become smaller `Block` segments.
 ///
 /// Returns the number of original blocks that were split.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize {
     let mut block_region_indices = sequential_conflict_region_indices(segments);
     auto_resolve_segments_pass2_with_region_indices(segments, &mut block_region_indices)
@@ -811,14 +1098,14 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
                                 if let Some(ConflictSegment::Text(prev)) = new_segments.last_mut() {
                                     prev.push_str(&text);
                                 } else {
-                                    new_segments.push(ConflictSegment::Text(text));
+                                    new_segments.push(ConflictSegment::Text(text.into()));
                                 }
                             }
                             Subchunk::Conflict { base, ours, theirs } => {
                                 new_segments.push(ConflictSegment::Block(ConflictBlock {
-                                    base: Some(base),
-                                    ours,
-                                    theirs,
+                                    base: Some(base.into()),
+                                    ours: ours.into(),
+                                    theirs: theirs.into(),
                                     choice: ConflictChoice::Ours,
                                     resolved: false,
                                 }));
@@ -885,6 +1172,788 @@ pub fn generate_resolved_text_with_options(
     generate_core_resolved_text(&core_segments, options)
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ResolvedOutputFragmentSource {
+    TextSegment { segment_ix: usize },
+    BlockBase { segment_ix: usize },
+    BlockOurs { segment_ix: usize },
+    BlockTheirs { segment_ix: usize },
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedOutputFragment {
+    source: ResolvedOutputFragmentSource,
+    line_starts: std::sync::Arc<[usize]>,
+    newline_count: usize,
+    ends_with_newline: bool,
+    line_count: usize,
+    widest_line_ix: usize,
+    widest_line_len: usize,
+}
+
+impl ResolvedOutputFragment {
+    fn line_text<'a>(&self, segments: &'a [ConflictSegment], line_ix: usize) -> Option<&'a str> {
+        let text = match self.source {
+            ResolvedOutputFragmentSource::TextSegment { segment_ix } => {
+                match segments.get(segment_ix) {
+                    Some(ConflictSegment::Text(text)) => text.as_str(),
+                    _ => return None,
+                }
+            }
+            ResolvedOutputFragmentSource::BlockBase { segment_ix } => {
+                match segments.get(segment_ix) {
+                    Some(ConflictSegment::Block(block)) => block.base.as_deref().unwrap_or(""),
+                    _ => return None,
+                }
+            }
+            ResolvedOutputFragmentSource::BlockOurs { segment_ix } => {
+                match segments.get(segment_ix) {
+                    Some(ConflictSegment::Block(block)) => block.ours.as_str(),
+                    _ => return None,
+                }
+            }
+            ResolvedOutputFragmentSource::BlockTheirs { segment_ix } => {
+                match segments.get(segment_ix) {
+                    Some(ConflictSegment::Block(block)) => block.theirs.as_str(),
+                    _ => return None,
+                }
+            }
+        };
+        (line_ix < self.line_count)
+            .then(|| line_text_from_starts(text, self.line_starts.as_ref(), line_ix))
+    }
+
+    fn widest_line(&self) -> Option<(usize, usize)> {
+        (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ResolvedOutputSpan {
+    SourceLines {
+        visible_start: usize,
+        len: usize,
+        fragment_ix: usize,
+        fragment_line_start: usize,
+    },
+    MergedLine {
+        visible_index: usize,
+        text: String,
+    },
+}
+
+impl ResolvedOutputSpan {
+    fn visible_start(&self) -> usize {
+        match self {
+            Self::SourceLines { visible_start, .. } => *visible_start,
+            Self::MergedLine { visible_index, .. } => *visible_index,
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::SourceLines { len, .. } => *len,
+            Self::MergedLine { .. } => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ResolvedOutputProjection {
+    fragments: Vec<ResolvedOutputFragment>,
+    spans: Vec<ResolvedOutputSpan>,
+    conflict_line_ranges: Vec<std::ops::Range<usize>>,
+    line_count: usize,
+    widest_line_ix: usize,
+    output_hash: u64,
+}
+
+impl ResolvedOutputProjection {
+    pub fn from_segments(segments: &[ConflictSegment]) -> Self {
+        #[derive(Clone, Debug)]
+        enum PendingLine {
+            Empty,
+            Source {
+                fragment_ix: usize,
+                line_ix: usize,
+                conflict_ix: Option<usize>,
+            },
+            Composed {
+                text: String,
+                conflict_ix: Option<usize>,
+            },
+        }
+
+        impl PendingLine {
+            fn conflict_ix(&self) -> Option<usize> {
+                match self {
+                    Self::Empty => None,
+                    Self::Source { conflict_ix, .. } | Self::Composed { conflict_ix, .. } => {
+                        *conflict_ix
+                    }
+                }
+            }
+        }
+
+        fn fragment_line_stats(
+            text: &str,
+        ) -> (std::sync::Arc<[usize]>, usize, bool, usize, usize, usize) {
+            let mut starts = Vec::new();
+            starts.push(0usize);
+            for (ix, byte) in text.as_bytes().iter().enumerate() {
+                if *byte == b'\n' {
+                    starts.push(ix.saturating_add(1));
+                }
+            }
+            let newline_count = starts.len().saturating_sub(1);
+            let ends_with_newline = text.as_bytes().last().copied() == Some(b'\n');
+            let stats = scan_text_line_stats(text);
+            (
+                starts.into(),
+                newline_count,
+                ends_with_newline,
+                stats.line_count,
+                stats.widest_line_ix,
+                stats.widest_line_len,
+            )
+        }
+
+        fn structural_output_hash(
+            fragments: &[ResolvedOutputFragment],
+            spans: &[ResolvedOutputSpan],
+            conflict_line_ranges: &[std::ops::Range<usize>],
+            line_count: usize,
+        ) -> u64 {
+            use std::hash::{Hash, Hasher};
+
+            let mut hasher = rustc_hash::FxHasher::default();
+            line_count.hash(&mut hasher);
+            fragments.len().hash(&mut hasher);
+            spans.len().hash(&mut hasher);
+            conflict_line_ranges.len().hash(&mut hasher);
+            for fragment in fragments {
+                fragment.source.hash(&mut hasher);
+                fragment.line_starts.len().hash(&mut hasher);
+                fragment.newline_count.hash(&mut hasher);
+                fragment.ends_with_newline.hash(&mut hasher);
+            }
+            for span in spans {
+                match span {
+                    ResolvedOutputSpan::SourceLines {
+                        visible_start,
+                        len,
+                        fragment_ix,
+                        fragment_line_start,
+                    } => {
+                        0u8.hash(&mut hasher);
+                        visible_start.hash(&mut hasher);
+                        len.hash(&mut hasher);
+                        fragment_ix.hash(&mut hasher);
+                        fragment_line_start.hash(&mut hasher);
+                    }
+                    ResolvedOutputSpan::MergedLine {
+                        visible_index,
+                        text,
+                    } => {
+                        1u8.hash(&mut hasher);
+                        visible_index.hash(&mut hasher);
+                        text.hash(&mut hasher);
+                    }
+                }
+            }
+            for range in conflict_line_ranges {
+                range.start.hash(&mut hasher);
+                range.end.hash(&mut hasher);
+            }
+            hasher.finish()
+        }
+
+        fn push_source_span(
+            spans: &mut Vec<ResolvedOutputSpan>,
+            visible_start: usize,
+            fragment_ix: usize,
+            fragment_line_start: usize,
+            len: usize,
+        ) {
+            if len == 0 {
+                return;
+            }
+            if let Some(ResolvedOutputSpan::SourceLines {
+                visible_start: prev_visible_start,
+                len: prev_len,
+                fragment_ix: prev_fragment_ix,
+                fragment_line_start: prev_fragment_line_start,
+            }) = spans.last_mut()
+                && *prev_fragment_ix == fragment_ix
+                && prev_visible_start.saturating_add(*prev_len) == visible_start
+                && prev_fragment_line_start.saturating_add(*prev_len) == fragment_line_start
+            {
+                *prev_len = prev_len.saturating_add(len);
+                return;
+            }
+            spans.push(ResolvedOutputSpan::SourceLines {
+                visible_start,
+                len,
+                fragment_ix,
+                fragment_line_start,
+            });
+        }
+
+        fn push_merged_line(
+            spans: &mut Vec<ResolvedOutputSpan>,
+            visible_index: usize,
+            text: String,
+        ) {
+            spans.push(ResolvedOutputSpan::MergedLine {
+                visible_index,
+                text,
+            });
+        }
+
+        fn merge_conflict_ix(current: Option<usize>, next: Option<usize>) -> Option<usize> {
+            match (current, next) {
+                (None, other) | (other, None) => other,
+                (Some(left), Some(right)) => {
+                    debug_assert_eq!(
+                        left, right,
+                        "resolved output line should not span multiple conflict blocks"
+                    );
+                    Some(left)
+                }
+            }
+        }
+
+        fn extend_conflict_line_range(
+            ranges: &mut [Option<std::ops::Range<usize>>],
+            conflict_ix: Option<usize>,
+            line_ix: usize,
+        ) {
+            let Some(conflict_ix) = conflict_ix else {
+                return;
+            };
+            let Some(slot) = ranges.get_mut(conflict_ix) else {
+                return;
+            };
+            match slot {
+                Some(range) => {
+                    range.start = range.start.min(line_ix);
+                    range.end = range.end.max(line_ix.saturating_add(1));
+                }
+                None => {
+                    *slot = Some(line_ix..line_ix.saturating_add(1));
+                }
+            }
+        }
+
+        fn finalize_pending_line(
+            pending: &mut PendingLine,
+            fragments: &[ResolvedOutputFragment],
+            segments: &[ConflictSegment],
+            spans: &mut Vec<ResolvedOutputSpan>,
+            visible_line: &mut usize,
+            conflict_ranges: &mut [Option<std::ops::Range<usize>>],
+            widest_visible_line: &mut (usize, usize),
+        ) {
+            let line_conflict = pending.conflict_ix();
+            let line_len = match pending {
+                PendingLine::Empty => 0,
+                PendingLine::Source {
+                    fragment_ix,
+                    line_ix,
+                    ..
+                } => fragments
+                    .get(*fragment_ix)
+                    .and_then(|fragment| fragment.line_text(segments, *line_ix))
+                    .map_or(0, str::len),
+                PendingLine::Composed { text, .. } => text.len(),
+            };
+            if line_len > widest_visible_line.1 {
+                *widest_visible_line = (*visible_line, line_len);
+            }
+            match pending {
+                PendingLine::Empty => {
+                    push_merged_line(spans, *visible_line, String::new());
+                }
+                PendingLine::Source {
+                    fragment_ix,
+                    line_ix,
+                    ..
+                } => {
+                    push_source_span(spans, *visible_line, *fragment_ix, *line_ix, 1);
+                }
+                PendingLine::Composed { text, .. } => {
+                    push_merged_line(spans, *visible_line, std::mem::take(text));
+                }
+            }
+            extend_conflict_line_range(conflict_ranges, line_conflict, *visible_line);
+            *visible_line = visible_line.saturating_add(1);
+            *pending = PendingLine::Empty;
+        }
+
+        fn update_widest_from_source_span(
+            widest_visible_line: &mut (usize, usize),
+            fragments: &[ResolvedOutputFragment],
+            visible_start: usize,
+            fragment_ix: usize,
+            fragment_line_start: usize,
+            len: usize,
+        ) {
+            let Some(fragment) = fragments.get(fragment_ix) else {
+                return;
+            };
+            let Some((widest_line_ix, widest_line_len)) = fragment.widest_line() else {
+                return;
+            };
+            let fragment_line_end = fragment_line_start.saturating_add(len);
+            if widest_line_ix < fragment_line_start || widest_line_ix >= fragment_line_end {
+                return;
+            }
+
+            let visible_ix =
+                visible_start.saturating_add(widest_line_ix.saturating_sub(fragment_line_start));
+            if widest_line_len > widest_visible_line.1 {
+                *widest_visible_line = (visible_ix, widest_line_len);
+            }
+        }
+
+        fn append_source_piece_to_pending(
+            pending: &mut PendingLine,
+            fragments: &[ResolvedOutputFragment],
+            segments: &[ConflictSegment],
+            fragment_ix: usize,
+            line_ix: usize,
+            conflict_ix: Option<usize>,
+        ) {
+            let piece_text = fragments
+                .get(fragment_ix)
+                .and_then(|fragment| fragment.line_text(segments, line_ix))
+                .unwrap_or("");
+            match pending {
+                PendingLine::Empty => {
+                    if piece_text.is_empty() {
+                        return;
+                    }
+                    *pending = PendingLine::Source {
+                        fragment_ix,
+                        line_ix,
+                        conflict_ix,
+                    };
+                }
+                PendingLine::Source {
+                    fragment_ix: existing_fragment_ix,
+                    line_ix: existing_line_ix,
+                    conflict_ix: existing_conflict_ix,
+                } => {
+                    let existing_text = fragments
+                        .get(*existing_fragment_ix)
+                        .and_then(|fragment| fragment.line_text(segments, *existing_line_ix))
+                        .unwrap_or("");
+                    let mut composed =
+                        String::with_capacity(existing_text.len().saturating_add(piece_text.len()));
+                    composed.push_str(existing_text);
+                    composed.push_str(piece_text);
+                    *pending = PendingLine::Composed {
+                        text: composed,
+                        conflict_ix: merge_conflict_ix(*existing_conflict_ix, conflict_ix),
+                    };
+                }
+                PendingLine::Composed {
+                    text,
+                    conflict_ix: existing_conflict_ix,
+                } => {
+                    text.push_str(piece_text);
+                    *existing_conflict_ix = merge_conflict_ix(*existing_conflict_ix, conflict_ix);
+                }
+            }
+        }
+
+        let conflict_total = conflict_count(segments);
+        let mut conflict_ranges: Vec<Option<std::ops::Range<usize>>> = vec![None; conflict_total];
+        let mut conflict_line_anchors = vec![0usize; conflict_total];
+        let mut fragments = Vec::new();
+        let mut spans = Vec::new();
+        let mut pending = PendingLine::Empty;
+        let mut visible_line = 0usize;
+        let mut block_ix = 0usize;
+        let mut widest_visible_line = (0usize, 0usize);
+
+        fn push_fragment(
+            fragments: &mut Vec<ResolvedOutputFragment>,
+            source: ResolvedOutputFragmentSource,
+            text: &str,
+        ) -> Option<usize> {
+            if text.is_empty() {
+                return None;
+            }
+            let (
+                line_starts,
+                newline_count,
+                ends_with_newline,
+                line_count,
+                widest_line_ix,
+                widest_line_len,
+            ) = fragment_line_stats(text);
+            let fragment_ix = fragments.len();
+            fragments.push(ResolvedOutputFragment {
+                source,
+                line_starts,
+                newline_count,
+                ends_with_newline,
+                line_count,
+                widest_line_ix,
+                widest_line_len,
+            });
+            Some(fragment_ix)
+        }
+
+        for (segment_ix, segment) in segments.iter().enumerate() {
+            match segment {
+                ConflictSegment::Text(text) => {
+                    let Some(fragment_ix) = push_fragment(
+                        &mut fragments,
+                        ResolvedOutputFragmentSource::TextSegment { segment_ix },
+                        text.as_str(),
+                    ) else {
+                        continue;
+                    };
+                    let fragment = &fragments[fragment_ix];
+                    if fragment.newline_count == 0 {
+                        append_source_piece_to_pending(
+                            &mut pending,
+                            &fragments,
+                            segments,
+                            fragment_ix,
+                            0,
+                            None,
+                        );
+                        continue;
+                    }
+
+                    if !matches!(pending, PendingLine::Empty) {
+                        append_source_piece_to_pending(
+                            &mut pending,
+                            &fragments,
+                            segments,
+                            fragment_ix,
+                            0,
+                            None,
+                        );
+                        finalize_pending_line(
+                            &mut pending,
+                            &fragments,
+                            segments,
+                            &mut spans,
+                            &mut visible_line,
+                            &mut conflict_ranges,
+                            &mut widest_visible_line,
+                        );
+                        if fragment.newline_count > 1 {
+                            push_source_span(
+                                &mut spans,
+                                visible_line,
+                                fragment_ix,
+                                1,
+                                fragment.newline_count - 1,
+                            );
+                            update_widest_from_source_span(
+                                &mut widest_visible_line,
+                                &fragments,
+                                visible_line,
+                                fragment_ix,
+                                1,
+                                fragment.newline_count - 1,
+                            );
+                            visible_line = visible_line.saturating_add(fragment.newline_count - 1);
+                        }
+                    } else {
+                        push_source_span(
+                            &mut spans,
+                            visible_line,
+                            fragment_ix,
+                            0,
+                            fragment.newline_count,
+                        );
+                        update_widest_from_source_span(
+                            &mut widest_visible_line,
+                            &fragments,
+                            visible_line,
+                            fragment_ix,
+                            0,
+                            fragment.newline_count,
+                        );
+                        visible_line = visible_line.saturating_add(fragment.newline_count);
+                    }
+
+                    if !fragment.ends_with_newline {
+                        pending = PendingLine::Source {
+                            fragment_ix,
+                            line_ix: fragment.newline_count,
+                            conflict_ix: None,
+                        };
+                    }
+                }
+                ConflictSegment::Block(block) => {
+                    let conflict_ix = block_ix;
+                    block_ix = block_ix.saturating_add(1);
+                    if let Some(anchor) = conflict_line_anchors.get_mut(conflict_ix) {
+                        *anchor = visible_line;
+                    }
+
+                    let mut fragment_sources: Vec<(ResolvedOutputFragmentSource, &str)> =
+                        Vec::new();
+                    match block.choice {
+                        ConflictChoice::Base => {
+                            if let Some(base) = block.base.as_deref() {
+                                fragment_sources.push((
+                                    ResolvedOutputFragmentSource::BlockBase { segment_ix },
+                                    base,
+                                ));
+                            }
+                        }
+                        ConflictChoice::Ours => {
+                            fragment_sources.push((
+                                ResolvedOutputFragmentSource::BlockOurs { segment_ix },
+                                block.ours.as_str(),
+                            ));
+                        }
+                        ConflictChoice::Theirs => {
+                            fragment_sources.push((
+                                ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
+                                block.theirs.as_str(),
+                            ));
+                        }
+                        ConflictChoice::Both => {
+                            fragment_sources.push((
+                                ResolvedOutputFragmentSource::BlockOurs { segment_ix },
+                                block.ours.as_str(),
+                            ));
+                            fragment_sources.push((
+                                ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
+                                block.theirs.as_str(),
+                            ));
+                        }
+                    }
+
+                    for (source, text) in fragment_sources {
+                        let Some(fragment_ix) = push_fragment(&mut fragments, source, text) else {
+                            continue;
+                        };
+                        let fragment = &fragments[fragment_ix];
+                        if fragment.newline_count == 0 {
+                            append_source_piece_to_pending(
+                                &mut pending,
+                                &fragments,
+                                segments,
+                                fragment_ix,
+                                0,
+                                Some(conflict_ix),
+                            );
+                            continue;
+                        }
+
+                        if !matches!(pending, PendingLine::Empty) {
+                            append_source_piece_to_pending(
+                                &mut pending,
+                                &fragments,
+                                segments,
+                                fragment_ix,
+                                0,
+                                Some(conflict_ix),
+                            );
+                            finalize_pending_line(
+                                &mut pending,
+                                &fragments,
+                                segments,
+                                &mut spans,
+                                &mut visible_line,
+                                &mut conflict_ranges,
+                                &mut widest_visible_line,
+                            );
+                            if fragment.newline_count > 1 {
+                                let middle_len = fragment.newline_count - 1;
+                                push_source_span(
+                                    &mut spans,
+                                    visible_line,
+                                    fragment_ix,
+                                    1,
+                                    middle_len,
+                                );
+                                update_widest_from_source_span(
+                                    &mut widest_visible_line,
+                                    &fragments,
+                                    visible_line,
+                                    fragment_ix,
+                                    1,
+                                    middle_len,
+                                );
+                                for offset in 0..middle_len {
+                                    extend_conflict_line_range(
+                                        &mut conflict_ranges,
+                                        Some(conflict_ix),
+                                        visible_line.saturating_add(offset),
+                                    );
+                                }
+                                visible_line = visible_line.saturating_add(middle_len);
+                            }
+                        } else {
+                            push_source_span(
+                                &mut spans,
+                                visible_line,
+                                fragment_ix,
+                                0,
+                                fragment.newline_count,
+                            );
+                            update_widest_from_source_span(
+                                &mut widest_visible_line,
+                                &fragments,
+                                visible_line,
+                                fragment_ix,
+                                0,
+                                fragment.newline_count,
+                            );
+                            for offset in 0..fragment.newline_count {
+                                extend_conflict_line_range(
+                                    &mut conflict_ranges,
+                                    Some(conflict_ix),
+                                    visible_line.saturating_add(offset),
+                                );
+                            }
+                            visible_line = visible_line.saturating_add(fragment.newline_count);
+                        }
+
+                        if !fragment.ends_with_newline {
+                            pending = PendingLine::Source {
+                                fragment_ix,
+                                line_ix: fragment.newline_count,
+                                conflict_ix: Some(conflict_ix),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        finalize_pending_line(
+            &mut pending,
+            &fragments,
+            segments,
+            &mut spans,
+            &mut visible_line,
+            &mut conflict_ranges,
+            &mut widest_visible_line,
+        );
+
+        let conflict_line_ranges: Vec<std::ops::Range<usize>> = conflict_ranges
+            .into_iter()
+            .enumerate()
+            .map(|(conflict_ix, range)| {
+                range.unwrap_or_else(|| {
+                    let anchor = conflict_line_anchors
+                        .get(conflict_ix)
+                        .copied()
+                        .unwrap_or_default()
+                        .min(visible_line);
+                    anchor..anchor
+                })
+            })
+            .collect();
+        let line_count = visible_line.max(1);
+        let output_hash = structural_output_hash(
+            &fragments,
+            &spans,
+            conflict_line_ranges.as_slice(),
+            line_count,
+        );
+
+        Self {
+            fragments,
+            spans,
+            conflict_line_ranges,
+            line_count,
+            widest_line_ix: widest_visible_line.0,
+            output_hash,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.line_count
+    }
+
+    pub fn output_hash(&self) -> u64 {
+        self.output_hash
+    }
+
+    pub fn widest_line_ix(&self) -> usize {
+        self.widest_line_ix
+    }
+
+    /// Approximate heap bytes used by projection metadata, excluding the
+    /// underlying segment texts which are shared with the resolver state.
+    #[cfg(all(test, feature = "benchmarks"))]
+    pub fn metadata_byte_size(&self) -> usize {
+        let fragments = self.fragments.len() * std::mem::size_of::<ResolvedOutputFragment>()
+            + self
+                .fragments
+                .iter()
+                .map(|fragment| fragment.line_starts.len() * std::mem::size_of::<usize>())
+                .sum::<usize>();
+        let spans = self.spans.len() * std::mem::size_of::<ResolvedOutputSpan>()
+            + self
+                .spans
+                .iter()
+                .map(|span| match span {
+                    ResolvedOutputSpan::SourceLines { .. } => 0,
+                    ResolvedOutputSpan::MergedLine { text, .. } => text.capacity(),
+                })
+                .sum::<usize>();
+        let conflict_ranges =
+            self.conflict_line_ranges.len() * std::mem::size_of::<std::ops::Range<usize>>();
+        fragments + spans + conflict_ranges
+    }
+
+    pub fn conflict_line_range(&self, conflict_ix: usize) -> Option<std::ops::Range<usize>> {
+        self.conflict_line_ranges.get(conflict_ix).cloned()
+    }
+
+    pub fn conflict_line_ranges(&self) -> &[std::ops::Range<usize>] {
+        self.conflict_line_ranges.as_slice()
+    }
+
+    pub fn line_text<'a>(
+        &'a self,
+        segments: &'a [ConflictSegment],
+        line_ix: usize,
+    ) -> Option<std::borrow::Cow<'a, str>> {
+        let span_ix = self
+            .spans
+            .partition_point(|span| span.visible_start() <= line_ix)
+            .checked_sub(1)?;
+        let span = self.spans.get(span_ix)?;
+        if line_ix >= span.visible_start().saturating_add(span.len()) {
+            return None;
+        }
+        match span {
+            ResolvedOutputSpan::SourceLines {
+                visible_start,
+                fragment_ix,
+                fragment_line_start,
+                ..
+            } => {
+                let fragment = self.fragments.get(*fragment_ix)?;
+                let line_ix_in_fragment =
+                    fragment_line_start.saturating_add(line_ix.saturating_sub(*visible_start));
+                fragment
+                    .line_text(segments, line_ix_in_fragment)
+                    .map(std::borrow::Cow::Borrowed)
+            }
+            ResolvedOutputSpan::MergedLine { text, .. } => {
+                Some(std::borrow::Cow::Borrowed(text.as_str()))
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<ConflictInlineRow> {
     use gitcomet_core::domain::DiffLineKind as K;
     use gitcomet_core::file_diff::FileDiffRowKind as RK;
@@ -935,13 +2004,383 @@ pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<
     out
 }
 
-fn text_line_count(text: &str) -> u32 {
+#[cfg(any(test, feature = "benchmarks"))]
+pub(super) fn block_max_line_count(block: &ConflictBlock) -> usize {
+    text_line_count_usize(block.base.as_deref().unwrap_or_default())
+        .max(text_line_count_usize(&block.ours))
+        .max(text_line_count_usize(&block.theirs))
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
+    block_max_line_count(block) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
+}
+
+pub fn select_conflict_rendering_mode(
+    segments: &[ConflictSegment],
+    combined_line_count: usize,
+) -> ConflictRenderingMode {
+    let _ = combined_line_count;
+    if !segments.is_empty() {
+        ConflictRenderingMode::StreamedLargeFile
+    } else {
+        ConflictRenderingMode::EagerSmallFile
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn preview_line_starts(text: &str) -> Vec<usize> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
+    starts.push(0);
+    for (ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push(ix.saturating_add(1));
+        }
+    }
+    starts
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn line_slice_text<'a>(
+    text: &'a str,
+    line_starts: &[usize],
+    line_count: usize,
+    start_line_ix: usize,
+    end_line_ix: usize,
+) -> &'a str {
+    if text.is_empty() || line_count == 0 {
+        return "";
+    }
+
+    let start = start_line_ix.min(line_count);
+    let end = end_line_ix.min(line_count);
+    if start >= end {
+        return "";
+    }
+
+    let text_len = text.len();
+    let start_byte = line_starts
+        .get(start)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let end_byte = if end >= line_count {
+        text_len
+    } else {
+        line_starts
+            .get(end)
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len)
+    };
+    if start_byte >= end_byte {
+        return "";
+    }
+    text.get(start_byte..end_byte).unwrap_or("")
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_renumbered_block_diff_rows(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    old_text: &str,
+    new_text: &str,
+    old_line_offset: u32,
+    new_line_offset: u32,
+) -> bool {
+    let whole_block_diff_ran = text_line_count_usize(old_text)
+        > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
+        || text_line_count_usize(new_text) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
+    debug_assert!(
+        !whole_block_diff_ran,
+        "bootstrap should not call side_by_side_rows on a giant conflict block"
+    );
+    let block_rows = gitcomet_core::file_diff::side_by_side_rows(old_text, new_text);
+    for row in block_rows {
+        rows.push(gitcomet_core::file_diff::FileDiffRow {
+            kind: row.kind,
+            old_line: row
+                .old_line
+                .map(|l| l.saturating_add(old_line_offset).saturating_sub(1)),
+            new_line: row
+                .new_line
+                .map(|l| l.saturating_add(new_line_offset).saturating_sub(1)),
+            old: row.old,
+            new: row.new,
+            eof_newline: row.eof_newline,
+        });
+    }
+    whole_block_diff_ran
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_large_conflict_block_preview_rows(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    block: &ConflictBlock,
+    ours_offset: u32,
+    theirs_offset: u32,
+) {
+    let ours_count = text_line_count_usize(&block.ours);
+    let theirs_count = text_line_count_usize(&block.theirs);
+    let ours_line_starts = preview_line_starts(&block.ours);
+    let theirs_line_starts = preview_line_starts(&block.theirs);
+
+    let head_ours_end = ours_count.min(LARGE_CONFLICT_BLOCK_PREVIEW_LINES);
+    let head_theirs_end = theirs_count.min(LARGE_CONFLICT_BLOCK_PREVIEW_LINES);
+    let _ = push_renumbered_block_diff_rows(
+        rows,
+        line_slice_text(&block.ours, &ours_line_starts, ours_count, 0, head_ours_end),
+        line_slice_text(
+            &block.theirs,
+            &theirs_line_starts,
+            theirs_count,
+            0,
+            head_theirs_end,
+        ),
+        ours_offset,
+        theirs_offset,
+    );
+
+    let tail_ours_start = ours_count.saturating_sub(LARGE_CONFLICT_BLOCK_PREVIEW_LINES);
+    let tail_theirs_start = theirs_count.saturating_sub(LARGE_CONFLICT_BLOCK_PREVIEW_LINES);
+    let omitted_ours = tail_ours_start.saturating_sub(head_ours_end);
+    let omitted_theirs = tail_theirs_start.saturating_sub(head_theirs_end);
+    let can_show_tail = omitted_ours > 0 && omitted_theirs > 0;
+
+    if omitted_ours > 0 || omitted_theirs > 0 {
+        let summary: Arc<str> = format!(
+            "... large conflict block preview omitted {omitted_ours} ours lines and {omitted_theirs} theirs lines ..."
+        )
+        .into();
+        rows.push(gitcomet_core::file_diff::FileDiffRow {
+            kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
+            old_line: (omitted_ours > 0).then(|| {
+                ours_offset.saturating_add(u32::try_from(head_ours_end).unwrap_or(u32::MAX))
+            }),
+            new_line: (omitted_theirs > 0).then(|| {
+                theirs_offset.saturating_add(u32::try_from(head_theirs_end).unwrap_or(u32::MAX))
+            }),
+            old: Some(Arc::clone(&summary)),
+            new: Some(summary),
+            eof_newline: None,
+        });
+    }
+
+    if can_show_tail {
+        let _ = push_renumbered_block_diff_rows(
+            rows,
+            line_slice_text(
+                &block.ours,
+                &ours_line_starts,
+                ours_count,
+                tail_ours_start,
+                ours_count,
+            ),
+            line_slice_text(
+                &block.theirs,
+                &theirs_line_starts,
+                theirs_count,
+                tail_theirs_start,
+                theirs_count,
+            ),
+            ours_offset.saturating_add(u32::try_from(tail_ours_start).unwrap_or(u32::MAX)),
+            theirs_offset.saturating_add(u32::try_from(tail_theirs_start).unwrap_or(u32::MAX)),
+        );
+    }
+}
+
+/// Build two-way diff rows using block-local diffs instead of a full-file Myers diff.
+///
+/// For each `Block` segment, a block-local `side_by_side_rows` is run on just
+/// the block's ours vs theirs text, and the resulting rows are re-numbered to
+/// global line positions. Surrounding `Text` segments contribute only a small
+/// boundary context window, so unchanged file regions are not materialized in
+/// full.
+///
+/// The output is proportional to total conflict-block size plus a fixed amount
+/// of context per block, making it suitable for very large files where running
+/// Myers on the entire ours/theirs content would be prohibitively expensive.
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn block_local_two_way_diff_rows(
+    segments: &[ConflictSegment],
+) -> Vec<gitcomet_core::file_diff::FileDiffRow> {
+    block_local_two_way_diff_rows_with_stats(segments).0
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BlockLocalTwoWayDiffStats {
+    pub(crate) whole_block_diff_ran: bool,
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(crate) fn block_local_two_way_diff_rows_with_stats(
+    segments: &[ConflictSegment],
+) -> (
+    Vec<gitcomet_core::file_diff::FileDiffRow>,
+    BlockLocalTwoWayDiffStats,
+) {
+    block_local_two_way_diff_rows_with_context_and_stats(segments, BLOCK_LOCAL_DIFF_CONTEXT_LINES)
+}
+
+#[cfg(test)]
+fn block_local_two_way_diff_rows_with_context(
+    segments: &[ConflictSegment],
+    context_lines: usize,
+) -> Vec<gitcomet_core::file_diff::FileDiffRow> {
+    block_local_two_way_diff_rows_with_context_and_stats(segments, context_lines).0
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn block_local_two_way_diff_rows_with_context_and_stats(
+    segments: &[ConflictSegment],
+    context_lines: usize,
+) -> (
+    Vec<gitcomet_core::file_diff::FileDiffRow>,
+    BlockLocalTwoWayDiffStats,
+) {
+    let mut rows = Vec::new();
+    let mut stats = BlockLocalTwoWayDiffStats::default();
+    let mut ours_line = 1u32;
+    let mut theirs_line = 1u32;
+
+    for (segment_ix, segment) in segments.iter().enumerate() {
+        match segment {
+            ConflictSegment::Text(text) => {
+                let count = push_block_local_boundary_context_rows(
+                    &mut rows,
+                    segments,
+                    segment_ix,
+                    text,
+                    ours_line,
+                    theirs_line,
+                    context_lines,
+                );
+                ours_line = ours_line.saturating_add(count);
+                theirs_line = theirs_line.saturating_add(count);
+            }
+            ConflictSegment::Block(block) => {
+                let ours_offset = ours_line;
+                let theirs_offset = theirs_line;
+                if should_use_large_conflict_block_preview(block) {
+                    push_large_conflict_block_preview_rows(
+                        &mut rows,
+                        block,
+                        ours_offset,
+                        theirs_offset,
+                    );
+                } else {
+                    stats.whole_block_diff_ran |= push_renumbered_block_diff_rows(
+                        &mut rows,
+                        &block.ours,
+                        &block.theirs,
+                        ours_offset,
+                        theirs_offset,
+                    );
+                }
+                let ours_count = text_line_count(&block.ours);
+                let theirs_count = text_line_count(&block.theirs);
+                ours_line = ours_line.saturating_add(ours_count);
+                theirs_line = theirs_line.saturating_add(theirs_count);
+            }
+        }
+    }
+    (rows, stats)
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_block_local_boundary_context_rows(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    segments: &[ConflictSegment],
+    segment_ix: usize,
+    text: &str,
+    old_line_start: u32,
+    new_line_start: u32,
+    context_lines: usize,
+) -> u32 {
+    let line_count = text_line_count(text);
+    if text.is_empty() || context_lines == 0 {
+        return line_count;
+    }
+
+    let has_prev_block = segment_ix > 0
+        && matches!(
+            segments.get(segment_ix - 1),
+            Some(ConflictSegment::Block(_))
+        );
+    let has_next_block = matches!(
+        segments.get(segment_ix + 1),
+        Some(ConflictSegment::Block(_))
+    );
+    if !has_prev_block && !has_next_block {
+        return line_count;
+    }
+
+    let line_count_usize = usize::try_from(line_count).unwrap_or(usize::MAX);
+
+    let leading_count = if has_prev_block {
+        context_lines.min(line_count_usize)
+    } else {
+        0
+    };
+    let trailing_count = if has_next_block {
+        context_lines.min(line_count_usize)
+    } else {
+        0
+    };
+    let trailing_start = line_count_usize.saturating_sub(trailing_count);
+
+    push_block_local_context_lines(
+        rows,
+        text.lines().enumerate().take(leading_count),
+        old_line_start,
+        new_line_start,
+    );
+    push_block_local_context_lines(
+        rows,
+        text.lines()
+            .enumerate()
+            .skip(leading_count.max(trailing_start)),
+        old_line_start,
+        new_line_start,
+    );
+    line_count
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+fn push_block_local_context_lines<'a>(
+    rows: &mut Vec<gitcomet_core::file_diff::FileDiffRow>,
+    lines: impl Iterator<Item = (usize, &'a str)>,
+    old_line_start: u32,
+    new_line_start: u32,
+) {
+    use gitcomet_core::file_diff::{FileDiffRow, FileDiffRowKind};
+
+    for (line_ix, text) in lines {
+        let line_offset = u32::try_from(line_ix).unwrap_or(u32::MAX);
+        let content: Arc<str> = text.into();
+        rows.push(FileDiffRow {
+            kind: FileDiffRowKind::Context,
+            old_line: Some(old_line_start.saturating_add(line_offset)),
+            new_line: Some(new_line_start.saturating_add(line_offset)),
+            old: Some(Arc::clone(&content)),
+            new: Some(content),
+            eof_newline: None,
+        });
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+pub(super) fn text_line_count(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
     }
     u32::try_from(text.lines().count()).unwrap_or(u32::MAX)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn build_two_way_conflict_line_ranges(
     segments: &[ConflictSegment],
 ) -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
@@ -971,6 +2410,7 @@ fn build_two_way_conflict_line_ranges(
     ranges
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn row_conflict_index_for_lines(
     old_line: Option<u32>,
     new_line: Option<u32>,
@@ -983,11 +2423,7 @@ fn row_conflict_index_for_lines(
 }
 
 fn text_line_count_usize(text: &str) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        text.lines().count()
-    }
+    scan_text_line_stats(text).line_count
 }
 
 fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
@@ -998,7 +2434,11 @@ fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
     }
 }
 
-fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> Option<&'a str> {
+pub(super) fn indexed_line_text<'a>(
+    text: &'a str,
+    line_starts: &[usize],
+    line_ix: usize,
+) -> Option<&'a str> {
     if text.is_empty() {
         return None;
     }
@@ -1018,13 +2458,87 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
     Some(text.get(start..end).unwrap_or(""))
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TextLineStats {
+    pub(super) line_count: usize,
+    pub(super) widest_line_ix: usize,
+    pub(super) widest_line_len: usize,
+}
+
+impl TextLineStats {
+    pub(super) fn widest_line(self) -> Option<(usize, usize)> {
+        (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
+    }
+}
+
+pub(super) fn scan_text_line_stats(text: &str) -> TextLineStats {
+    if text.is_empty() {
+        return TextLineStats::default();
+    }
+
+    let bytes = text.as_bytes();
+    let mut line_count = 1usize;
+    let mut current_line_ix = 0usize;
+    let mut current_line_len = 0usize;
+    let mut widest_line_ix = 0usize;
+    let mut widest_line_len = 0usize;
+
+    let mut finalize_line = |line_ix: usize, line_len: usize| {
+        if line_len > widest_line_len {
+            widest_line_len = line_len;
+            widest_line_ix = line_ix;
+        }
+    };
+
+    for (ix, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            finalize_line(current_line_ix, current_line_len);
+            current_line_len = 0;
+            if ix.saturating_add(1) < bytes.len() {
+                current_line_ix = current_line_ix.saturating_add(1);
+                line_count = line_count.saturating_add(1);
+            }
+        } else {
+            current_line_len = current_line_len.saturating_add(1);
+        }
+    }
+
+    if bytes.last().copied() != Some(b'\n') {
+        finalize_line(current_line_ix, current_line_len);
+    }
+
+    TextLineStats {
+        line_count,
+        widest_line_ix,
+        widest_line_len,
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ThreeWayConflictMaps {
-    pub conflict_ranges: Vec<std::ops::Range<usize>>,
-    pub base_line_conflict_map: Vec<Option<usize>>,
-    pub ours_line_conflict_map: Vec<Option<usize>>,
-    pub theirs_line_conflict_map: Vec<Option<usize>>,
+    /// Per-side conflict ranges indexed by [base, ours, theirs].
+    pub conflict_ranges: [Vec<std::ops::Range<usize>>; 3],
+    /// Per-side per-line conflict maps (populated only in eager mode).
+    pub line_conflict_maps: [Vec<Option<usize>>; 3],
     pub conflict_has_base: Vec<bool>,
+}
+
+/// Binary search on sorted, non-overlapping ranges to find which conflict a line belongs to.
+///
+/// Returns `Some(conflict_index)` if the line falls within a range, `None` otherwise.
+/// Ranges must be sorted by start and non-overlapping for correct results.
+pub fn conflict_index_for_line(ranges: &[std::ops::Range<usize>], line: usize) -> Option<usize> {
+    ranges
+        .binary_search_by(|range| {
+            if line < range.start {
+                std::cmp::Ordering::Greater
+            } else if line >= range.end {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+        .ok()
 }
 
 /// Build per-column line-to-conflict maps for three-way conflict rendering.
@@ -1032,21 +2546,32 @@ pub struct ThreeWayConflictMaps {
 /// The returned `conflict_ranges` follow the legacy behavior and are expressed
 /// in the ours-column line space. The line maps provide O(1) conflict lookup
 /// for each column at render/navigation time.
-pub fn build_three_way_conflict_maps(
+fn build_three_way_conflict_maps_impl(
     segments: &[ConflictSegment],
     base_line_count: usize,
     ours_line_count: usize,
     theirs_line_count: usize,
+    include_line_conflict_maps: bool,
 ) -> ThreeWayConflictMaps {
     let block_count = segments
         .iter()
         .filter(|segment| matches!(segment, ConflictSegment::Block(_)))
         .count();
     let mut maps = ThreeWayConflictMaps {
-        conflict_ranges: Vec::with_capacity(block_count),
-        base_line_conflict_map: vec![None; base_line_count],
-        ours_line_conflict_map: vec![None; ours_line_count],
-        theirs_line_conflict_map: vec![None; theirs_line_count],
+        conflict_ranges: [
+            Vec::with_capacity(block_count),
+            Vec::with_capacity(block_count),
+            Vec::with_capacity(block_count),
+        ],
+        line_conflict_maps: if include_line_conflict_maps {
+            [
+                vec![None; base_line_count],
+                vec![None; ours_line_count],
+                vec![None; theirs_line_count],
+            ]
+        } else {
+            Default::default()
+        },
         conflict_has_base: Vec::with_capacity(block_count),
     };
 
@@ -1082,23 +2607,25 @@ pub fn build_three_way_conflict_maps(
                 let ours_end = ours_offset.saturating_add(ours_count);
                 let theirs_end = theirs_offset.saturating_add(theirs_count);
 
-                maps.conflict_ranges.push(ours_offset..ours_end);
+                maps.conflict_ranges[0].push(base_offset..base_end);
+                maps.conflict_ranges[1].push(ours_offset..ours_end);
+                maps.conflict_ranges[2].push(theirs_offset..theirs_end);
                 maps.conflict_has_base.push(block.base.is_some());
 
                 mark_range(
-                    &mut maps.base_line_conflict_map,
+                    &mut maps.line_conflict_maps[0],
                     base_offset,
                     base_end,
                     conflict_ix,
                 );
                 mark_range(
-                    &mut maps.ours_line_conflict_map,
+                    &mut maps.line_conflict_maps[1],
                     ours_offset,
                     ours_end,
                     conflict_ix,
                 );
                 mark_range(
-                    &mut maps.theirs_line_conflict_map,
+                    &mut maps.line_conflict_maps[2],
                     theirs_offset,
                     theirs_end,
                     conflict_ix,
@@ -1115,10 +2642,43 @@ pub fn build_three_way_conflict_maps(
     maps
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
+pub fn build_three_way_conflict_maps(
+    segments: &[ConflictSegment],
+    base_line_count: usize,
+    ours_line_count: usize,
+    theirs_line_count: usize,
+) -> ThreeWayConflictMaps {
+    build_three_way_conflict_maps_impl(
+        segments,
+        base_line_count,
+        ours_line_count,
+        theirs_line_count,
+        true,
+    )
+}
+
+/// Build compact three-way conflict metadata without eager per-line side maps.
+pub fn build_three_way_conflict_maps_without_line_maps(
+    segments: &[ConflictSegment],
+    base_line_count: usize,
+    ours_line_count: usize,
+    theirs_line_count: usize,
+) -> ThreeWayConflictMaps {
+    build_three_way_conflict_maps_impl(
+        segments,
+        base_line_count,
+        ours_line_count,
+        theirs_line_count,
+        false,
+    )
+}
+
 /// Build conflict-index maps for two-way split and inline rows.
 ///
 /// Each output entry is `Some(conflict_index)` when the row belongs to a marker
 /// conflict block, or `None` for non-conflict context rows.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn map_two_way_rows_to_conflicts(
     segments: &[ConflictSegment],
     diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
@@ -1140,6 +2700,7 @@ pub fn map_two_way_rows_to_conflicts(
 ///
 /// When `hide_resolved` is true, rows belonging to resolved conflict blocks are
 /// removed from the visible list. Non-conflict rows are always kept visible.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_two_way_visible_indices(
     row_conflict_map: &[Option<usize>],
     segments: &[ConflictSegment],
@@ -1172,6 +2733,7 @@ pub fn build_two_way_visible_indices(
 /// `visible_row_indices` maps visible list rows to source row indices. This helper
 /// resolves conflict index -> visible row index so callers can scroll/focus a
 /// specific conflict in two-way resolver modes.
+#[cfg(test)]
 pub fn visible_index_for_two_way_conflict(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -1190,6 +2752,7 @@ pub fn visible_index_for_two_way_conflict(
 ///
 /// Returns visible list indices (not source row indices) in unresolved queue
 /// order so callers can feed them directly into shared diff navigation helpers.
+#[cfg(test)]
 pub fn unresolved_visible_nav_entries_for_two_way(
     segments: &[ConflictSegment],
     row_conflict_map: &[Option<usize>],
@@ -1204,6 +2767,7 @@ pub fn unresolved_visible_nav_entries_for_two_way(
 }
 
 /// Map a two-way visible index back to its conflict index.
+#[cfg(test)]
 pub fn two_way_conflict_index_for_visible_row(
     row_conflict_map: &[Option<usize>],
     visible_row_indices: &[usize],
@@ -1222,10 +2786,227 @@ pub enum ThreeWayVisibleItem {
     CollapsedBlock(usize),
 }
 
+/// Span-based replacement for `Vec<ThreeWayVisibleItem>` that uses O(spans) memory
+/// instead of O(visible lines). Each span covers a contiguous run of source lines
+/// or a single synthetic row (collapsed block / preview gap).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ThreeWayVisibleSpan {
+    /// A contiguous run of source lines mapped 1:1 to visible indices.
+    Lines {
+        visible_start: usize,
+        source_line_start: usize,
+        len: usize,
+    },
+    /// A single collapsed-block row at the given visible index.
+    CollapsedResolvedBlock {
+        visible_index: usize,
+        conflict_ix: usize,
+    },
+}
+
+impl ThreeWayVisibleSpan {
+    fn visible_start(&self) -> usize {
+        match *self {
+            Self::Lines { visible_start, .. } => visible_start,
+            Self::CollapsedResolvedBlock { visible_index, .. } => visible_index,
+        }
+    }
+
+    fn visible_len(&self) -> usize {
+        match *self {
+            Self::Lines { len, .. } => len,
+            Self::CollapsedResolvedBlock { .. } => 1,
+        }
+    }
+}
+
+/// Compact visible-index projection for three-way views.
+///
+/// Replaces `Vec<ThreeWayVisibleItem>` for giant mode. Stores spans instead of
+/// per-row entries, keeping memory proportional to the number of conflict blocks
+/// rather than the number of file lines.
+#[derive(Clone, Debug, Default)]
+pub struct ThreeWayVisibleProjection {
+    spans: Vec<ThreeWayVisibleSpan>,
+    visible_len: usize,
+}
+
+impl ThreeWayVisibleProjection {
+    /// Total number of visible rows.
+    pub fn len(&self) -> usize {
+        self.visible_len
+    }
+
+    /// Look up the visible item at the given visible index. O(log spans).
+    pub fn get(&self, visible_ix: usize) -> Option<ThreeWayVisibleItem> {
+        if visible_ix >= self.visible_len {
+            return None;
+        }
+        let span_ix = self
+            .spans
+            .partition_point(|s| s.visible_start() + s.visible_len() <= visible_ix);
+        let span = self.spans.get(span_ix)?;
+        match *span {
+            ThreeWayVisibleSpan::Lines {
+                visible_start,
+                source_line_start,
+                len,
+            } => {
+                let offset = visible_ix.checked_sub(visible_start)?;
+                if offset >= len {
+                    return None;
+                }
+                Some(ThreeWayVisibleItem::Line(source_line_start + offset))
+            }
+            ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                visible_index,
+                conflict_ix,
+            } => {
+                if visible_ix != visible_index {
+                    return None;
+                }
+                Some(ThreeWayVisibleItem::CollapsedBlock(conflict_ix))
+            }
+        }
+    }
+
+    /// Find the visible index for the first line of a conflict range, or its
+    /// collapsed entry. Returns `None` if the range is not visible.
+    /// O(log spans).
+    pub fn visible_index_for_conflict(
+        &self,
+        conflict_ranges: &[std::ops::Range<usize>],
+        range_ix: usize,
+    ) -> Option<usize> {
+        let range = conflict_ranges.get(range_ix)?;
+        for span in &self.spans {
+            match *span {
+                ThreeWayVisibleSpan::Lines {
+                    visible_start,
+                    source_line_start,
+                    len,
+                } => {
+                    let source_end = source_line_start + len;
+                    if range.start >= source_line_start && range.start < source_end {
+                        return Some(visible_start + (range.start - source_line_start));
+                    }
+                }
+                ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                    visible_index,
+                    conflict_ix,
+                } if conflict_ix == range_ix => {
+                    return Some(visible_index);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Access the underlying spans for direct iteration (avoids per-item O(log n) lookup).
+    pub fn spans(&self) -> &[ThreeWayVisibleSpan] {
+        &self.spans
+    }
+}
+
+/// Build a span-based visible projection for three-way views.
+///
+/// All lines in every conflict block are included (no preview gaps).
+/// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
+pub fn build_three_way_visible_projection(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    segments: &[ConflictSegment],
+    hide_resolved: bool,
+) -> ThreeWayVisibleProjection {
+    let resolved_blocks: Vec<bool> = segments
+        .iter()
+        .filter_map(|s| match s {
+            ConflictSegment::Block(b) => Some(b.resolved),
+            _ => None,
+        })
+        .collect();
+
+    let mut spans: Vec<ThreeWayVisibleSpan> = Vec::new();
+    let mut visible_ix = 0usize;
+    let mut line_ix = 0usize;
+    let mut range_ix = 0usize;
+
+    // Helper: flush a pending lines run.
+    let mut pending_lines_start: Option<usize> = None;
+
+    let flush_pending = |spans: &mut Vec<ThreeWayVisibleSpan>,
+                         pending: &mut Option<usize>,
+                         vis: &mut usize,
+                         line: usize| {
+        if let Some(start) = pending.take() {
+            let len = line - start;
+            if len > 0 {
+                spans.push(ThreeWayVisibleSpan::Lines {
+                    visible_start: *vis - len,
+                    source_line_start: start,
+                    len,
+                });
+            }
+        }
+    };
+
+    while line_ix < total_lines {
+        // Advance range_ix past completed ranges.
+        while let Some(range) = conflict_ranges.get(range_ix) {
+            if range.end <= line_ix {
+                range_ix += 1;
+                continue;
+            }
+            break;
+        }
+
+        if let Some(range) = conflict_ranges.get(range_ix)
+            && range.contains(&line_ix)
+            && hide_resolved
+            && resolved_blocks.get(range_ix).copied().unwrap_or(false)
+        {
+            flush_pending(
+                &mut spans,
+                &mut pending_lines_start,
+                &mut visible_ix,
+                line_ix,
+            );
+            spans.push(ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                visible_index: visible_ix,
+                conflict_ix: range_ix,
+            });
+            visible_ix += 1;
+            line_ix = range.end;
+            continue;
+        }
+
+        // Normal line.
+        if pending_lines_start.is_none() {
+            pending_lines_start = Some(line_ix);
+        }
+        visible_ix += 1;
+        line_ix += 1;
+    }
+
+    flush_pending(
+        &mut spans,
+        &mut pending_lines_start,
+        &mut visible_ix,
+        line_ix,
+    );
+
+    ThreeWayVisibleProjection {
+        spans,
+        visible_len: visible_ix,
+    }
+}
+
 /// Build the mapping from visible row indices to actual three-way data items.
 ///
 /// When `hide_resolved` is false, every line maps directly.
 /// When true, resolved conflict ranges are collapsed to a single summary row.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn build_three_way_visible_map(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -1275,6 +3056,7 @@ pub fn build_three_way_visible_map(
 
 /// Find the visible index for the first line of a conflict range, or the
 /// collapsed block entry. Returns `None` if the range is not visible.
+#[cfg(test)]
 pub fn visible_index_for_conflict(
     visible_map: &[ThreeWayVisibleItem],
     conflict_ranges: &[std::ops::Range<usize>],
@@ -1285,262 +3067,6 @@ pub fn visible_index_for_conflict(
         ThreeWayVisibleItem::Line(ix) => range.contains(ix),
         ThreeWayVisibleItem::CollapsedBlock(ci) => *ci == range_ix,
     })
-}
-
-/// Build unresolved-only visible navigation entries for three-way views.
-///
-/// Returns visible indices in unresolved queue order.
-pub fn unresolved_visible_nav_entries_for_three_way(
-    segments: &[ConflictSegment],
-    visible_map: &[ThreeWayVisibleItem],
-    conflict_ranges: &[std::ops::Range<usize>],
-) -> Vec<usize> {
-    unresolved_conflict_indices(segments)
-        .into_iter()
-        .filter_map(|conflict_ix| {
-            visible_index_for_conflict(visible_map, conflict_ranges, conflict_ix)
-        })
-        .collect()
-}
-
-pub fn compute_three_way_word_highlights(
-    base_text: &str,
-    base_line_starts: &[usize],
-    ours_text: &str,
-    ours_line_starts: &[usize],
-    theirs_text: &str,
-    theirs_line_starts: &[usize],
-    marker_segments: &[ConflictSegment],
-) -> (WordHighlights, WordHighlights, WordHighlights) {
-    let len = indexed_line_count(base_text, base_line_starts)
-        .max(indexed_line_count(ours_text, ours_line_starts))
-        .max(indexed_line_count(theirs_text, theirs_line_starts));
-    let mut wh_base: WordHighlights = vec![None; len];
-    let mut wh_ours: WordHighlights = vec![None; len];
-    let mut wh_theirs: WordHighlights = vec![None; len];
-
-    fn merge_line_ranges(
-        highlights: &mut WordHighlights,
-        line_ix: usize,
-        ranges: Vec<std::ops::Range<usize>>,
-    ) {
-        if ranges.is_empty() {
-            return;
-        }
-        let Some(slot) = highlights.get_mut(line_ix) else {
-            return;
-        };
-        match slot {
-            Some(existing) => {
-                *existing = merge_ranges(existing, &ranges);
-            }
-            None => {
-                *slot = Some(ranges);
-            }
-        }
-    }
-
-    fn line_index(start: usize, line_no: Option<u32>) -> Option<usize> {
-        let local = usize::try_from(line_no?).ok()?.checked_sub(1)?;
-        start.checked_add(local)
-    }
-
-    fn full_line_range(
-        text: &str,
-        line_starts: &[usize],
-        line_ix: usize,
-    ) -> Vec<std::ops::Range<usize>> {
-        let Some(line) = indexed_line_text(text, line_starts, line_ix) else {
-            return Vec::new();
-        };
-        if line.is_empty() {
-            return Vec::new();
-        }
-        std::iter::once(0..line.len()).collect()
-    }
-
-    struct HighlightSide<'a> {
-        global_start: usize,
-        text: &'a str,
-        line_starts: &'a [usize],
-    }
-
-    fn apply_aligned_word_highlights(
-        old_text: &str,
-        new_text: &str,
-        old_side: HighlightSide<'_>,
-        new_side: HighlightSide<'_>,
-        old_highlights: &mut WordHighlights,
-        new_highlights: &mut WordHighlights,
-    ) {
-        use gitcomet_core::file_diff::FileDiffRowKind;
-
-        let rows = gitcomet_core::file_diff::side_by_side_rows(old_text, new_text);
-        for row in rows {
-            match row.kind {
-                FileDiffRowKind::Modify => {
-                    let old = row.old.as_deref().unwrap_or("");
-                    let new = row.new.as_deref().unwrap_or("");
-                    let (old_ranges, new_ranges) =
-                        super::word_diff::capped_word_diff_ranges(old, new);
-
-                    if let Some(ix) = line_index(old_side.global_start, row.old_line) {
-                        merge_line_ranges(old_highlights, ix, old_ranges);
-                    }
-                    if let Some(ix) = line_index(new_side.global_start, row.new_line) {
-                        merge_line_ranges(new_highlights, ix, new_ranges);
-                    }
-                }
-                FileDiffRowKind::Remove => {
-                    if let Some(ix) = line_index(old_side.global_start, row.old_line) {
-                        merge_line_ranges(
-                            old_highlights,
-                            ix,
-                            full_line_range(old_side.text, old_side.line_starts, ix),
-                        );
-                    }
-                }
-                FileDiffRowKind::Add => {
-                    if let Some(ix) = line_index(new_side.global_start, row.new_line) {
-                        merge_line_ranges(
-                            new_highlights,
-                            ix,
-                            full_line_range(new_side.text, new_side.line_starts, ix),
-                        );
-                    }
-                }
-                FileDiffRowKind::Context => {}
-            }
-        }
-    }
-
-    let mut base_offset = 0usize;
-    let mut ours_offset = 0usize;
-    let mut theirs_offset = 0usize;
-    for seg in marker_segments {
-        match seg {
-            ConflictSegment::Text(text) => {
-                let n = usize::try_from(text_line_count(text)).unwrap_or(0);
-                base_offset = base_offset.saturating_add(n);
-                ours_offset = ours_offset.saturating_add(n);
-                theirs_offset = theirs_offset.saturating_add(n);
-            }
-            ConflictSegment::Block(block) => {
-                if let Some(base) = block.base.as_deref() {
-                    apply_aligned_word_highlights(
-                        base,
-                        &block.ours,
-                        HighlightSide {
-                            global_start: base_offset,
-                            text: base_text,
-                            line_starts: base_line_starts,
-                        },
-                        HighlightSide {
-                            global_start: ours_offset,
-                            text: ours_text,
-                            line_starts: ours_line_starts,
-                        },
-                        &mut wh_base,
-                        &mut wh_ours,
-                    );
-                    apply_aligned_word_highlights(
-                        base,
-                        &block.theirs,
-                        HighlightSide {
-                            global_start: base_offset,
-                            text: base_text,
-                            line_starts: base_line_starts,
-                        },
-                        HighlightSide {
-                            global_start: theirs_offset,
-                            text: theirs_text,
-                            line_starts: theirs_line_starts,
-                        },
-                        &mut wh_base,
-                        &mut wh_theirs,
-                    );
-                }
-                // Local/Remote highlighting must align by diff rows, not absolute same-row index.
-                apply_aligned_word_highlights(
-                    &block.ours,
-                    &block.theirs,
-                    HighlightSide {
-                        global_start: ours_offset,
-                        text: ours_text,
-                        line_starts: ours_line_starts,
-                    },
-                    HighlightSide {
-                        global_start: theirs_offset,
-                        text: theirs_text,
-                        line_starts: theirs_line_starts,
-                    },
-                    &mut wh_ours,
-                    &mut wh_theirs,
-                );
-
-                let base_count =
-                    usize::try_from(text_line_count(block.base.as_deref().unwrap_or_default()))
-                        .unwrap_or(0);
-                let ours_count = usize::try_from(text_line_count(&block.ours)).unwrap_or(0);
-                let theirs_count = usize::try_from(text_line_count(&block.theirs)).unwrap_or(0);
-                base_offset = base_offset.saturating_add(base_count);
-                ours_offset = ours_offset.saturating_add(ours_count);
-                theirs_offset = theirs_offset.saturating_add(theirs_count);
-            }
-        }
-    }
-
-    (wh_base, wh_ours, wh_theirs)
-}
-
-fn merge_ranges(
-    a: &[std::ops::Range<usize>],
-    b: &[std::ops::Range<usize>],
-) -> Vec<std::ops::Range<usize>> {
-    if a.is_empty() {
-        return b.to_vec();
-    }
-    if b.is_empty() {
-        return a.to_vec();
-    }
-    let mut combined: Vec<std::ops::Range<usize>> = Vec::with_capacity(a.len() + b.len());
-    combined.extend_from_slice(a);
-    combined.extend_from_slice(b);
-    combined.sort_by_key(|r| (r.start, r.end));
-    let mut out: Vec<std::ops::Range<usize>> = Vec::with_capacity(combined.len());
-    for r in combined {
-        if let Some(last) = out.last_mut().filter(|l| r.start <= l.end) {
-            last.end = last.end.max(r.end);
-            continue;
-        }
-        out.push(r);
-    }
-    out
-}
-
-/// Per-line pair of (old, new) word-highlight ranges for two-way diff.
-pub type TwoWayWordHighlights =
-    Vec<Option<(Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>)>>;
-
-pub fn compute_two_way_word_highlights(
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
-) -> TwoWayWordHighlights {
-    diff_rows
-        .iter()
-        .map(|row| {
-            if row.kind != gitcomet_core::file_diff::FileDiffRowKind::Modify {
-                return None;
-            }
-            let old = row.old.as_deref().unwrap_or("");
-            let new = row.new.as_deref().unwrap_or("");
-            let (old_ranges, new_ranges) = super::word_diff::capped_word_diff_ranges(old, new);
-            if old_ranges.is_empty() && new_ranges.is_empty() {
-                None
-            } else {
-                Some((old_ranges, new_ranges))
-            }
-        })
-        .collect()
 }
 
 /// When conflict markers use 2-way style (no `|||||||` base section), `block.base`
@@ -1593,7 +3119,7 @@ pub fn populate_block_bases_from_ancestor(segments: &mut [ConflictSegment], ance
                     .get(text_idx)
                     .map(|r| r.start)
                     .unwrap_or(ancestor_text.len());
-                block.base = Some(ancestor_text[prev_end..next_start].to_string());
+                block.base = Some(ancestor_text[prev_end..next_start].to_string().into());
             }
         }
     }
@@ -1641,12 +3167,7 @@ pub fn split_output_lines_for_outline(output: &str) -> Vec<String> {
     output.split('\n').map(|line| line.to_string()).collect()
 }
 
-#[allow(dead_code)]
-pub fn output_line_count_for_outline(output: &str) -> usize {
-    output.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
     if lines.is_empty() {
         return output.to_string();
@@ -1678,12 +3199,14 @@ pub fn append_lines_to_output(output: &str, lines: &[String]) -> String {
 ///
 /// In three-way mode: A = Base, B = Ours, C = Theirs.
 /// In two-way mode: A = Ours (old), B = Theirs (new), C is empty.
+#[cfg(any(test, feature = "benchmarks"))]
 pub struct SourceLines<'a> {
     pub a: &'a [gpui::SharedString],
     pub b: &'a [gpui::SharedString],
     pub c: &'a [gpui::SharedString],
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 fn build_source_line_lookup<'a>(
     sources: &'a SourceLines<'a>,
 ) -> rustc_hash::FxHashMap<&'a str, (ResolvedLineSource, u32)> {
@@ -1746,21 +3269,13 @@ fn compute_resolved_line_provenance_from_iter<'a>(
 /// Each output line is compared (exact text equality) against every source line
 /// in A, B, C. The first match found (priority: A, B, C) wins; if none match
 /// the line is labeled `Manual`.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn compute_resolved_line_provenance(
     output_lines: &[String],
     sources: &SourceLines<'_>,
 ) -> Vec<ResolvedLineMeta> {
     let lookup = build_source_line_lookup(sources);
     compute_resolved_line_provenance_from_iter(output_lines.iter().map(String::as_str), &lookup)
-}
-
-#[allow(dead_code)]
-pub fn compute_resolved_line_provenance_from_text(
-    output_text: &str,
-    sources: &SourceLines<'_>,
-) -> Vec<ResolvedLineMeta> {
-    let lookup = build_source_line_lookup(sources);
-    compute_resolved_line_provenance_from_iter(output_text.split('\n'), &lookup)
 }
 
 fn insert_indexed_source_lines<'a>(
@@ -1799,41 +3314,26 @@ pub fn compute_resolved_line_provenance_from_text_with_indexed_sources(
     compute_resolved_line_provenance_from_iter(output_text.split('\n'), &lookup)
 }
 
-fn insert_two_way_side_lookup<'a>(
-    lookup: &mut rustc_hash::FxHashMap<&'a str, (ResolvedLineSource, u32)>,
-    rows: &'a [gitcomet_core::file_diff::FileDiffRow],
-    source: ResolvedLineSource,
-    read_text: impl Fn(&'a gitcomet_core::file_diff::FileDiffRow) -> Option<&'a str>,
-) {
-    let mut line_no = rows
-        .iter()
-        .filter_map(&read_text)
-        .count()
-        .min(u32::MAX as usize) as u32;
-    for row in rows.iter().rev() {
-        let Some(text) = read_text(row) else {
-            continue;
-        };
-        if line_no == 0 {
-            continue;
-        }
-        lookup.insert(text, (source, line_no));
-        line_no = line_no.saturating_sub(1);
-    }
-}
-
-pub fn compute_resolved_line_provenance_from_text_two_way_rows(
+pub fn compute_resolved_line_provenance_from_text_two_way_indexed_sources(
     output_text: &str,
-    diff_rows: &[gitcomet_core::file_diff::FileDiffRow],
+    ours_text: &str,
+    ours_line_starts: &[usize],
+    theirs_text: &str,
+    theirs_line_starts: &[usize],
 ) -> Vec<ResolvedLineMeta> {
     let mut lookup = rustc_hash::FxHashMap::default();
-    // Reverse insertion to preserve side priority A > B for duplicate lines.
-    insert_two_way_side_lookup(&mut lookup, diff_rows, ResolvedLineSource::B, |row| {
-        row.new.as_deref()
-    });
-    insert_two_way_side_lookup(&mut lookup, diff_rows, ResolvedLineSource::A, |row| {
-        row.old.as_deref()
-    });
+    insert_indexed_source_lines(
+        &mut lookup,
+        ResolvedLineSource::B,
+        theirs_text,
+        theirs_line_starts,
+    );
+    insert_indexed_source_lines(
+        &mut lookup,
+        ResolvedLineSource::A,
+        ours_text,
+        ours_line_starts,
+    );
     compute_resolved_line_provenance_from_iter(output_text.split('\n'), &lookup)
 }
 
@@ -1845,7 +3345,7 @@ pub fn compute_resolved_line_provenance_from_text_two_way_rows(
 ///
 /// Used to gate the plus-icon: a source row's plus-icon is hidden when its key
 /// is already in this set (preventing duplicate insertion).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn build_resolved_output_line_sources_index(
     meta: &[ResolvedLineMeta],
     output_lines: &[String],
@@ -1893,7 +3393,7 @@ pub fn build_resolved_output_line_sources_index_from_text(
 ///
 /// Returns `true` if the source line's key is in the dedupe index — meaning
 /// the plus-icon for that row should be hidden.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn is_source_line_in_output(
     index: &rustc_hash::FxHashSet<SourceLineKey>,
     view_mode: ConflictResolverViewMode,
@@ -1903,6 +3403,26 @@ pub fn is_source_line_in_output(
 ) -> bool {
     let key = SourceLineKey::new(view_mode, side, line_no, content);
     index.contains(&key)
+}
+
+/// Extract a single line from text using pre-computed line starts.
+fn line_text_from_starts<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
+    let text_len = text.len();
+    let start = line_starts
+        .get(line_ix)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    let end = line_starts
+        .get(line_ix + 1)
+        .copied()
+        .unwrap_or(text_len)
+        .min(text_len);
+    if start >= end {
+        return "";
+    }
+    let slice = text.get(start..end).unwrap_or("");
+    slice.strip_suffix('\n').unwrap_or(slice)
 }
 
 #[cfg(test)]

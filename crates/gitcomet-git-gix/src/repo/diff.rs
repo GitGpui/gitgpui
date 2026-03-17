@@ -11,6 +11,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{ConflictFileStages, Result, decode_utf8_optional};
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
 
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
@@ -244,9 +245,12 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
-        let base_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 1)?;
-        let ours_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 2)?;
-        let theirs_bytes = gix_index_stage_blob_bytes_optional(&repo, path, 3)?;
+        let base_bytes =
+            gix_index_stage_blob_bytes_optional(&repo, path, 1)?.map(Arc::<[u8]>::from);
+        let ours_bytes =
+            gix_index_stage_blob_bytes_optional(&repo, path, 2)?.map(Arc::<[u8]>::from);
+        let theirs_bytes =
+            gix_index_stage_blob_bytes_optional(&repo, path, 3)?.map(Arc::<[u8]>::from);
         let base = decode_utf8_optional(base_bytes.as_deref());
         let ours = decode_utf8_optional(ours_bytes.as_deref());
         let theirs = decode_utf8_optional(theirs_bytes.as_deref());
@@ -256,9 +260,9 @@ impl GixRepo {
             base_bytes,
             ours_bytes,
             theirs_bytes,
-            base,
-            ours,
-            theirs,
+            base: base.map(Arc::<str>::from),
+            ours: ours.map(Arc::<str>::from),
+            theirs: theirs.map(Arc::<str>::from),
         }))
     }
 
@@ -272,34 +276,31 @@ impl GixRepo {
         let Some(stages) = self.conflict_file_stages_impl(&repo_path)? else {
             return Ok(None);
         };
-        let current_bytes = std::fs::read(self.spec.workdir.join(&repo_path)).ok();
-        let current = decode_utf8_optional(current_bytes.as_deref());
+        let current =
+            read_worktree_file_conflict_payload_known_optional(&self.spec.workdir, &repo_path);
 
-        let payload_from = |bytes: Option<Vec<u8>>, text: Option<String>| -> ConflictPayload {
-            if let Some(text) = text {
-                ConflictPayload::Text(text)
-            } else if let Some(bytes) = bytes {
-                ConflictPayload::from_bytes(bytes)
-            } else {
-                ConflictPayload::Absent
-            }
-        };
+        let base = ConflictPayload::from_stage_parts(stages.base_bytes, stages.base);
+        let ours = ConflictPayload::from_stage_parts(stages.ours_bytes, stages.ours);
+        let theirs = ConflictPayload::from_stage_parts(stages.theirs_bytes, stages.theirs);
 
-        let base = payload_from(stages.base_bytes, stages.base);
-        let ours = payload_from(stages.ours_bytes, stages.ours);
-        let theirs = payload_from(stages.theirs_bytes, stages.theirs);
-
-        let session = if let Some(current) = current {
-            ConflictSession::from_merged_text(
+        let session = match current {
+            Some(ConflictPayload::Text(current)) => ConflictSession::from_merged_shared_text(
                 repo_path,
                 conflict_kind,
                 base,
                 ours,
                 theirs,
-                &current,
-            )
-        } else {
-            ConflictSession::new(repo_path, conflict_kind, base, ours, theirs)
+                current,
+            ),
+            Some(current) => ConflictSession::new_with_current(
+                repo_path,
+                conflict_kind,
+                base,
+                ours,
+                theirs,
+                current,
+            ),
+            None => ConflictSession::new(repo_path, conflict_kind, base, ours, theirs),
         };
         Ok(Some(session))
     }
@@ -337,6 +338,18 @@ fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Opti
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
+    }
+}
+
+fn read_worktree_file_conflict_payload_known_optional(
+    workdir: &Path,
+    path: &Path,
+) -> Option<ConflictPayload> {
+    let full = workdir.join(path);
+    match std::fs::read(&full) {
+        Ok(bytes) => Some(ConflictPayload::from_bytes(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(ConflictPayload::Absent),
+        Err(_) => None,
     }
 }
 
