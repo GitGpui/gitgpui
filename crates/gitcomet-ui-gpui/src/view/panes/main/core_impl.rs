@@ -432,6 +432,20 @@ fn update_line_sources_index_for_range(
     }
 }
 
+fn widest_resolved_output_line_ix(text: &str, line_starts: &[usize]) -> usize {
+    let mut best_ix = 0usize;
+    let mut best_len = 0usize;
+    let line_count = line_starts.len().max(1);
+    for line_ix in 0..line_count {
+        let width = rows::resolved_output_line_text(text, line_starts, line_ix).len();
+        if width > best_len {
+            best_len = width;
+            best_ix = line_ix;
+        }
+    }
+    best_ix
+}
+
 fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> usize {
     let mut preferred_ix = 0usize;
     for ix in 1..N {
@@ -916,6 +930,7 @@ impl MainPaneView {
             conflict_resolved_preview_syntax_inflight: None,
             conflict_resolved_preview_line_count: 0,
             conflict_resolved_preview_line_starts: Arc::default(),
+            conflict_resolved_output_measure_row: 0,
             conflict_resolved_outline_stash: None,
             conflict_resolved_preview_segments_cache: HashMap::default(),
             #[cfg(test)]
@@ -990,6 +1005,11 @@ impl MainPaneView {
                 .and_then(rows::diff_syntax_language_for_path);
             self.conflict_resolved_preview_prepared_syntax_document = None;
             self.conflict_resolved_preview_syntax_inflight = None;
+            self.conflict_resolved_output_measure_row = self
+                .conflict_resolved_output_projection
+                .as_ref()
+                .map(conflict_resolver::ResolvedOutputProjection::widest_line_ix)
+                .unwrap_or(0);
         } else {
             let output_snapshot = self
                 .conflict_resolver_input
@@ -997,6 +1017,10 @@ impl MainPaneView {
             self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
             self.conflict_resolved_preview_line_count =
                 self.conflict_resolved_preview_line_starts.len().max(1);
+            self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
+                output_snapshot.as_str(),
+                self.conflict_resolved_preview_line_starts.as_ref(),
+            );
             self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
         }
         if let Some(input) = &self.diff_hunk_picker_search_input {
@@ -1026,6 +1050,7 @@ impl MainPaneView {
         self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = projection.len();
         self.conflict_resolved_preview_line_starts = Arc::default();
+        self.conflict_resolved_output_measure_row = projection.widest_line_ix();
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolved_preview_segments_cache.clear();
     }
@@ -1292,11 +1317,6 @@ impl MainPaneView {
         source_hash: Option<u64>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if indexed_line_count(text.as_ref(), line_starts.as_ref())
-            > rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
-        {
-            return;
-        }
         if self.conflict_three_way_syntax_inflight[side] {
             return;
         }
@@ -1398,6 +1418,7 @@ impl MainPaneView {
         self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = 0;
         self.conflict_resolved_preview_line_starts = Arc::default();
+        self.conflict_resolved_output_measure_row = 0;
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolved_preview_segments_cache.clear();
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
@@ -1549,6 +1570,10 @@ impl MainPaneView {
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count =
             self.conflict_resolved_preview_line_starts.len().max(1);
+        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
+            output_snapshot.as_str(),
+            self.conflict_resolved_preview_line_starts.as_ref(),
+        );
         self.conflict_resolved_preview_segments_cache.clear();
         self.refresh_conflict_resolved_output_syntax(output_snapshot, syntax_edit, cx);
         self.conflict_resolved_preview_text = output_snapshot.clone();
@@ -1879,6 +1904,10 @@ impl MainPaneView {
             path.and_then(rows::diff_syntax_language_for_path);
         self.conflict_resolved_preview_line_count = new_line_count;
         self.conflict_resolved_preview_line_starts = new_line_starts;
+        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
+            output_text,
+            self.conflict_resolved_preview_line_starts.as_ref(),
+        );
         if used_stash {
             self.conflict_resolved_preview_segments_cache.clear();
         } else {
@@ -2634,21 +2663,19 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_row_styling_enabled(&self) -> bool {
-        self.conflict_resolver.three_way_len
-            <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
+        !self.conflict_resolver.is_binary_conflict
     }
 
     pub(in crate::view) fn conflict_row_syntax_language(&self) -> Option<rows::DiffSyntaxLanguage> {
-        self.conflict_row_styling_enabled()
-            .then_some(self.conflict_resolver.conflict_syntax_language)
-            .flatten()
+        self.conflict_resolver.conflict_syntax_language
     }
 
     pub(in crate::view) fn conflict_resolved_preview_render_syntax_language(
         &self,
     ) -> Option<rows::DiffSyntaxLanguage> {
-        (self.conflict_resolved_preview_line_count
-            <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX)
+        const MAX_RENDER_LINES: usize = 20_000;
+
+        (self.conflict_resolved_preview_line_count <= MAX_RENDER_LINES)
             .then_some(self.conflict_resolved_preview_syntax_language)
             .flatten()
     }

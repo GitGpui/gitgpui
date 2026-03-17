@@ -154,8 +154,7 @@ impl MainPaneView {
 
         if let Some((_path, conflict_kind)) = self.active_conflict_target() {
             if Self::conflict_resolver_strategy(conflict_kind, false).is_some() {
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+                self.conflict_resolver_scroll_all_columns(visible_ix, gpui::ScrollStrategy::Center);
             } else {
                 self.diff_scroll
                     .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);

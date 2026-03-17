@@ -1187,6 +1187,9 @@ struct ResolvedOutputFragment {
     line_starts: std::sync::Arc<[usize]>,
     newline_count: usize,
     ends_with_newline: bool,
+    line_count: usize,
+    widest_line_ix: usize,
+    widest_line_len: usize,
 }
 
 impl ResolvedOutputFragment {
@@ -1217,8 +1220,12 @@ impl ResolvedOutputFragment {
                 }
             }
         };
-        (line_ix < self.line_starts.len())
+        (line_ix < self.line_count)
             .then(|| line_text_from_starts(text, self.line_starts.as_ref(), line_ix))
+    }
+
+    fn widest_line(&self) -> Option<(usize, usize)> {
+        (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 }
 
@@ -1258,6 +1265,7 @@ pub struct ResolvedOutputProjection {
     spans: Vec<ResolvedOutputSpan>,
     conflict_line_ranges: Vec<std::ops::Range<usize>>,
     line_count: usize,
+    widest_line_ix: usize,
     output_hash: u64,
 }
 
@@ -1288,7 +1296,9 @@ impl ResolvedOutputProjection {
             }
         }
 
-        fn fragment_line_stats(text: &str) -> (std::sync::Arc<[usize]>, usize, bool) {
+        fn fragment_line_stats(
+            text: &str,
+        ) -> (std::sync::Arc<[usize]>, usize, bool, usize, usize, usize) {
             let mut starts = Vec::new();
             starts.push(0usize);
             for (ix, byte) in text.as_bytes().iter().enumerate() {
@@ -1298,7 +1308,15 @@ impl ResolvedOutputProjection {
             }
             let newline_count = starts.len().saturating_sub(1);
             let ends_with_newline = text.as_bytes().last().copied() == Some(b'\n');
-            (starts.into(), newline_count, ends_with_newline)
+            let stats = scan_text_line_stats(text);
+            (
+                starts.into(),
+                newline_count,
+                ends_with_newline,
+                stats.line_count,
+                stats.widest_line_ix,
+                stats.widest_line_len,
+            )
         }
 
         fn structural_output_hash(
@@ -1430,11 +1448,29 @@ impl ResolvedOutputProjection {
 
         fn finalize_pending_line(
             pending: &mut PendingLine,
+            fragments: &[ResolvedOutputFragment],
+            segments: &[ConflictSegment],
             spans: &mut Vec<ResolvedOutputSpan>,
             visible_line: &mut usize,
             conflict_ranges: &mut [Option<std::ops::Range<usize>>],
+            widest_visible_line: &mut (usize, usize),
         ) {
             let line_conflict = pending.conflict_ix();
+            let line_len = match pending {
+                PendingLine::Empty => 0,
+                PendingLine::Source {
+                    fragment_ix,
+                    line_ix,
+                    ..
+                } => fragments
+                    .get(*fragment_ix)
+                    .and_then(|fragment| fragment.line_text(segments, *line_ix))
+                    .map_or(0, str::len),
+                PendingLine::Composed { text, .. } => text.len(),
+            };
+            if line_len > widest_visible_line.1 {
+                *widest_visible_line = (*visible_line, line_len);
+            }
             match pending {
                 PendingLine::Empty => {
                     push_merged_line(spans, *visible_line, String::new());
@@ -1453,6 +1489,32 @@ impl ResolvedOutputProjection {
             extend_conflict_line_range(conflict_ranges, line_conflict, *visible_line);
             *visible_line = visible_line.saturating_add(1);
             *pending = PendingLine::Empty;
+        }
+
+        fn update_widest_from_source_span(
+            widest_visible_line: &mut (usize, usize),
+            fragments: &[ResolvedOutputFragment],
+            visible_start: usize,
+            fragment_ix: usize,
+            fragment_line_start: usize,
+            len: usize,
+        ) {
+            let Some(fragment) = fragments.get(fragment_ix) else {
+                return;
+            };
+            let Some((widest_line_ix, widest_line_len)) = fragment.widest_line() else {
+                return;
+            };
+            let fragment_line_end = fragment_line_start.saturating_add(len);
+            if widest_line_ix < fragment_line_start || widest_line_ix >= fragment_line_end {
+                return;
+            }
+
+            let visible_ix =
+                visible_start.saturating_add(widest_line_ix.saturating_sub(fragment_line_start));
+            if widest_line_len > widest_visible_line.1 {
+                *widest_visible_line = (visible_ix, widest_line_len);
+            }
         }
 
         fn append_source_piece_to_pending(
@@ -1514,6 +1576,7 @@ impl ResolvedOutputProjection {
         let mut pending = PendingLine::Empty;
         let mut visible_line = 0usize;
         let mut block_ix = 0usize;
+        let mut widest_visible_line = (0usize, 0usize);
 
         fn push_fragment(
             fragments: &mut Vec<ResolvedOutputFragment>,
@@ -1523,13 +1586,23 @@ impl ResolvedOutputProjection {
             if text.is_empty() {
                 return None;
             }
-            let (line_starts, newline_count, ends_with_newline) = fragment_line_stats(text);
+            let (
+                line_starts,
+                newline_count,
+                ends_with_newline,
+                line_count,
+                widest_line_ix,
+                widest_line_len,
+            ) = fragment_line_stats(text);
             let fragment_ix = fragments.len();
             fragments.push(ResolvedOutputFragment {
                 source,
                 line_starts,
                 newline_count,
                 ends_with_newline,
+                line_count,
+                widest_line_ix,
+                widest_line_len,
             });
             Some(fragment_ix)
         }
@@ -1568,13 +1641,24 @@ impl ResolvedOutputProjection {
                         );
                         finalize_pending_line(
                             &mut pending,
+                            &fragments,
+                            segments,
                             &mut spans,
                             &mut visible_line,
                             &mut conflict_ranges,
+                            &mut widest_visible_line,
                         );
                         if fragment.newline_count > 1 {
                             push_source_span(
                                 &mut spans,
+                                visible_line,
+                                fragment_ix,
+                                1,
+                                fragment.newline_count - 1,
+                            );
+                            update_widest_from_source_span(
+                                &mut widest_visible_line,
+                                &fragments,
                                 visible_line,
                                 fragment_ix,
                                 1,
@@ -1585,6 +1669,14 @@ impl ResolvedOutputProjection {
                     } else {
                         push_source_span(
                             &mut spans,
+                            visible_line,
+                            fragment_ix,
+                            0,
+                            fragment.newline_count,
+                        );
+                        update_widest_from_source_span(
+                            &mut widest_visible_line,
+                            &fragments,
                             visible_line,
                             fragment_ix,
                             0,
@@ -1671,14 +1763,25 @@ impl ResolvedOutputProjection {
                             );
                             finalize_pending_line(
                                 &mut pending,
+                                &fragments,
+                                segments,
                                 &mut spans,
                                 &mut visible_line,
                                 &mut conflict_ranges,
+                                &mut widest_visible_line,
                             );
                             if fragment.newline_count > 1 {
                                 let middle_len = fragment.newline_count - 1;
                                 push_source_span(
                                     &mut spans,
+                                    visible_line,
+                                    fragment_ix,
+                                    1,
+                                    middle_len,
+                                );
+                                update_widest_from_source_span(
+                                    &mut widest_visible_line,
+                                    &fragments,
                                     visible_line,
                                     fragment_ix,
                                     1,
@@ -1696,6 +1799,14 @@ impl ResolvedOutputProjection {
                         } else {
                             push_source_span(
                                 &mut spans,
+                                visible_line,
+                                fragment_ix,
+                                0,
+                                fragment.newline_count,
+                            );
+                            update_widest_from_source_span(
+                                &mut widest_visible_line,
+                                &fragments,
                                 visible_line,
                                 fragment_ix,
                                 0,
@@ -1725,9 +1836,12 @@ impl ResolvedOutputProjection {
 
         finalize_pending_line(
             &mut pending,
+            &fragments,
+            segments,
             &mut spans,
             &mut visible_line,
             &mut conflict_ranges,
+            &mut widest_visible_line,
         );
 
         let conflict_line_ranges: Vec<std::ops::Range<usize>> = conflict_ranges
@@ -1757,6 +1871,7 @@ impl ResolvedOutputProjection {
             spans,
             conflict_line_ranges,
             line_count,
+            widest_line_ix: widest_visible_line.0,
             output_hash,
         }
     }
@@ -1767,6 +1882,10 @@ impl ResolvedOutputProjection {
 
     pub fn output_hash(&self) -> u64 {
         self.output_hash
+    }
+
+    pub fn widest_line_ix(&self) -> usize {
+        self.widest_line_ix
     }
 
     /// Approximate heap bytes used by projection metadata, excluding the
@@ -2305,11 +2424,7 @@ fn row_conflict_index_for_lines(
 }
 
 fn text_line_count_usize(text: &str) -> usize {
-    if text.is_empty() {
-        0
-    } else {
-        text.lines().count()
-    }
+    scan_text_line_stats(text).line_count
 }
 
 fn indexed_line_count(text: &str, line_starts: &[usize]) -> usize {
@@ -2342,6 +2457,62 @@ pub(super) fn indexed_line_text<'a>(
         end = end.saturating_sub(1);
     }
     Some(text.get(start..end).unwrap_or(""))
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TextLineStats {
+    pub(super) line_count: usize,
+    pub(super) widest_line_ix: usize,
+    pub(super) widest_line_len: usize,
+}
+
+impl TextLineStats {
+    pub(super) fn widest_line(self) -> Option<(usize, usize)> {
+        (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
+    }
+}
+
+pub(super) fn scan_text_line_stats(text: &str) -> TextLineStats {
+    if text.is_empty() {
+        return TextLineStats::default();
+    }
+
+    let bytes = text.as_bytes();
+    let mut line_count = 1usize;
+    let mut current_line_ix = 0usize;
+    let mut current_line_len = 0usize;
+    let mut widest_line_ix = 0usize;
+    let mut widest_line_len = 0usize;
+
+    let mut finalize_line = |line_ix: usize, line_len: usize| {
+        if line_len > widest_line_len {
+            widest_line_len = line_len;
+            widest_line_ix = line_ix;
+        }
+    };
+
+    for (ix, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            finalize_line(current_line_ix, current_line_len);
+            current_line_len = 0;
+            if ix.saturating_add(1) < bytes.len() {
+                current_line_ix = current_line_ix.saturating_add(1);
+                line_count = line_count.saturating_add(1);
+            }
+        } else {
+            current_line_len = current_line_len.saturating_add(1);
+        }
+    }
+
+    if bytes.last().copied() != Some(b'\n') {
+        finalize_line(current_line_ix, current_line_len);
+    }
+
+    TextLineStats {
+        line_count,
+        widest_line_ix,
+        widest_line_len,
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

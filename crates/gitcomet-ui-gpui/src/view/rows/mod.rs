@@ -4,7 +4,6 @@ use std::hash::BuildHasherDefault;
 use std::num::NonZeroUsize;
 
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
-pub(in crate::view) const MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX: usize = 20_000;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

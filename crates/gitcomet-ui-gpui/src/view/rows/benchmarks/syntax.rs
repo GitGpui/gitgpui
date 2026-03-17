@@ -1039,15 +1039,17 @@ impl MarkdownPreviewFixture {
         let start = start % document.rows.len();
         let end = (start + window).min(document.rows.len());
         super::history::render_markdown_preview_document_rows(
-            self.theme,
             document,
             start..end,
-            None,
-            px(0.0),
-            "benchmark_markdown_preview",
-            None,
-            None,
-            DiffTextRegion::Inline,
+            &super::history::MarkdownPreviewRenderContext {
+                theme: self.theme,
+                bar_color: None,
+                min_width: px(0.0),
+                row_id_prefix: "benchmark_markdown_preview",
+                horizontal_scroll_handle: None,
+                view: None,
+                text_region: DiffTextRegion::Inline,
+            },
         )
     }
 }

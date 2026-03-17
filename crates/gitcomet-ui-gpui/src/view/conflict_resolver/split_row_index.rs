@@ -18,6 +18,8 @@ const CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE: usize = CONFLICT_SPLIT_PAGE_SIZE;
 struct SparseLineIndex {
     line_count: usize,
     checkpoints: Vec<usize>,
+    widest_line_ix: usize,
+    widest_line_len: usize,
 }
 
 impl SparseLineIndex {
@@ -30,23 +32,82 @@ impl SparseLineIndex {
         checkpoints.push(0usize);
         let bytes = text.as_bytes();
         let mut line_count = 1usize;
-        for (ix, byte) in bytes.iter().enumerate() {
-            if *byte == b'\n' && ix.saturating_add(1) < bytes.len() {
-                if line_count.is_multiple_of(CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE) {
-                    checkpoints.push(ix.saturating_add(1));
-                }
-                line_count = line_count.saturating_add(1);
+        let mut current_line_ix = 0usize;
+        let mut current_line_len = 0usize;
+        let mut widest_line_ix = 0usize;
+        let mut widest_line_len = 0usize;
+
+        let mut finalize_line = |line_ix: usize, line_len: usize| {
+            if line_len > widest_line_len {
+                widest_line_len = line_len;
+                widest_line_ix = line_ix;
             }
+        };
+
+        for (ix, byte) in bytes.iter().enumerate() {
+            if *byte == b'\n' {
+                finalize_line(current_line_ix, current_line_len);
+                current_line_len = 0;
+                if ix.saturating_add(1) < bytes.len() {
+                    if line_count.is_multiple_of(CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE) {
+                        checkpoints.push(ix.saturating_add(1));
+                    }
+                    current_line_ix = current_line_ix.saturating_add(1);
+                    line_count = line_count.saturating_add(1);
+                }
+            } else {
+                current_line_len = current_line_len.saturating_add(1);
+            }
+        }
+
+        if bytes.last().copied() != Some(b'\n') {
+            finalize_line(current_line_ix, current_line_len);
         }
 
         Self {
             line_count,
             checkpoints,
+            widest_line_ix,
+            widest_line_len,
         }
     }
 
     fn line_count(&self) -> usize {
         self.line_count
+    }
+
+    fn widest_line(&self) -> Option<(usize, usize)> {
+        (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
+    }
+
+    fn line_range(&self, text: &str, line_ix: usize) -> Option<Range<usize>> {
+        if line_ix >= self.line_count {
+            return None;
+        }
+
+        let checkpoint_line = (line_ix / CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE)
+            * CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE;
+        let checkpoint_ix = checkpoint_line / CONFLICT_SPLIT_LINE_CHECKPOINT_STRIDE;
+        let mut byte_ix = self.checkpoints.get(checkpoint_ix).copied()?;
+        let bytes = text.as_bytes();
+        let mut current_line = checkpoint_line;
+
+        while current_line <= line_ix && byte_ix <= bytes.len() {
+            let line_start = byte_ix;
+            while byte_ix < bytes.len() && bytes[byte_ix] != b'\n' {
+                byte_ix = byte_ix.saturating_add(1);
+            }
+            let line_end = byte_ix;
+            if byte_ix < bytes.len() && bytes[byte_ix] == b'\n' {
+                byte_ix = byte_ix.saturating_add(1);
+            }
+            if current_line == line_ix {
+                return Some(line_start..line_end);
+            }
+            current_line = current_line.saturating_add(1);
+        }
+
+        None
     }
 
     fn line_ranges(&self, text: &str, start_line_ix: usize, max_lines: usize) -> Vec<Range<usize>> {
@@ -84,7 +145,7 @@ impl SparseLineIndex {
     }
 
     fn line_text<'a>(&self, text: &'a str, line_ix: usize) -> Option<&'a str> {
-        let range = self.line_ranges(text, line_ix, 1).into_iter().next()?;
+        let range = self.line_range(text, line_ix)?;
         text.get(range)
     }
 }
@@ -635,6 +696,91 @@ impl ConflictSplitRowIndex {
             }
         }
         out
+    }
+
+    /// Find the source-row indices that contain the widest visible text for the
+    /// left (ours) and right (theirs) sides of the split view.
+    ///
+    /// This scans the indexed source text directly instead of materializing
+    /// `FileDiffRow`s for every row, which keeps measurement selection cheap even
+    /// for large streamed conflicts.
+    pub fn widest_source_rows_by_text_len(
+        &self,
+        segments: &[ConflictSegment],
+        hide_resolved: bool,
+    ) -> [Option<usize>; 2] {
+        let mut best_rows = [None, None];
+        let mut best_lens = [0usize, 0usize];
+
+        let mut update_best = |side_ix: usize, source_row_ix: usize, width: usize| {
+            if width > best_lens[side_ix] {
+                best_lens[side_ix] = width;
+                best_rows[side_ix] = Some(source_row_ix);
+            }
+        };
+
+        for entry in &self.entries {
+            let Some(segment) = segments.get(entry.segment_ix) else {
+                continue;
+            };
+            match (&entry.kind, segment) {
+                (
+                    SplitLayoutKind::Context {
+                        line_index,
+                        leading_row_count,
+                        trailing_row_start,
+                        ..
+                    },
+                    ConflictSegment::Text(text),
+                ) => {
+                    for (offset, range) in line_index
+                        .line_ranges(text, 0, *leading_row_count)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let width = range.len();
+                        let source_row_ix = entry.row_start + offset;
+                        update_best(0, source_row_ix, width);
+                        update_best(1, source_row_ix, width);
+                    }
+
+                    let trailing_row_count = entry.row_count.saturating_sub(*leading_row_count);
+                    for (offset, range) in line_index
+                        .line_ranges(text, *trailing_row_start, trailing_row_count)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        let width = range.len();
+                        let source_row_ix =
+                            entry.row_start + leading_row_count.saturating_add(offset);
+                        update_best(0, source_row_ix, width);
+                        update_best(1, source_row_ix, width);
+                    }
+                }
+                (
+                    SplitLayoutKind::Block {
+                        ours_line_index,
+                        theirs_line_index,
+                        ..
+                    },
+                    ConflictSegment::Block(block),
+                ) => {
+                    if hide_resolved && block.resolved {
+                        continue;
+                    }
+
+                    if let Some((line_ix, width)) = ours_line_index.widest_line() {
+                        update_best(0, entry.row_start + line_ix, width);
+                    }
+                    if let Some((line_ix, width)) = theirs_line_index.widest_line() {
+                        update_best(1, entry.row_start + line_ix, width);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        best_rows
     }
 }
 

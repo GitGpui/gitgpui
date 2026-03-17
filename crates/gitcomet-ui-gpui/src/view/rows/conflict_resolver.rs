@@ -5,6 +5,10 @@ use super::conflict_canvas::{
 };
 use super::diff_text::*;
 use super::*;
+
+const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
+const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
+
 fn build_conflict_cached_diff_styled_text(
     theme: AppTheme,
     text: &str,
@@ -66,6 +70,80 @@ fn build_conflict_row_base_styled(
     ))
 }
 
+fn conflict_display_text(
+    text: &SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    show_whitespace: bool,
+) -> SharedString {
+    match styled {
+        Some(styled) if show_whitespace => whitespace_visible_text(styled.text.as_ref()),
+        Some(styled) => styled.text.clone(),
+        None if show_whitespace => whitespace_visible_text(text.as_ref()),
+        None => text.clone(),
+    }
+}
+
+fn conflict_row_text_width(
+    window: &mut Window,
+    text: &SharedString,
+    font_family: Option<&'static str>,
+) -> Pixels {
+    if text.is_empty() {
+        return px(0.0);
+    }
+
+    let mut style = window.text_style();
+    style.font_weight = FontWeight::NORMAL;
+    if let Some(font_family) = font_family {
+        style.font_family = font_family.into();
+    }
+
+    let font_size = style.font_size.to_pixels(window.rem_size()) * CONFLICT_ROW_FONT_SCALE;
+    if !text.as_ref().contains(['\n', '\r']) {
+        return window
+            .text_system()
+            .shape_line(text.clone(), font_size, &[style.to_run(text.len())], None)
+            .width;
+    }
+
+    text.as_ref()
+        .split(['\n', '\r'])
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            window
+                .text_system()
+                .shape_line(
+                    line.to_string().into(),
+                    font_size,
+                    &[style.to_run(line.len())],
+                    None,
+                )
+                .width
+        })
+        .max_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(px(0.0))
+}
+
+fn conflict_input_row_min_width(window: &mut Window, text: &SharedString) -> Pixels {
+    let pad = window.rem_size() * 0.5;
+    let line_no_width = px(38.0);
+    let gap = pad;
+    let row_extra = pad * 2.0 + line_no_width + gap;
+    (row_extra
+        + conflict_row_text_width(window, text, None)
+        + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
+    .round()
+}
+
+fn conflict_resolved_output_row_min_width(window: &mut Window, text: &SharedString) -> Pixels {
+    let pad = window.rem_size() * 0.5;
+    let row_extra = pad * 2.0;
+    (row_extra
+        + conflict_row_text_width(window, text, Some(crate::view::UI_MONOSPACE_FONT_FAMILY))
+        + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
+    .round()
+}
+
 fn render_conflict_markdown_preview_rows(
     this: &mut MainPaneView,
     range: Range<usize>,
@@ -112,15 +190,17 @@ fn render_conflict_markdown_preview_rows(
         cx,
     );
     super::history::render_markdown_preview_document_rows(
-        theme,
         document.as_ref(),
         range,
-        None,
-        this.diff_horizontal_min_width,
-        row_id_prefix,
-        Some(horizontal_scroll_handle),
-        None,
-        DiffTextRegion::Inline,
+        &super::history::MarkdownPreviewRenderContext {
+            theme,
+            bar_color: None,
+            min_width: this.diff_horizontal_min_width,
+            row_id_prefix,
+            horizontal_scroll_handle: Some(horizontal_scroll_handle),
+            view: None,
+            text_region: DiffTextRegion::Inline,
+        },
     )
 }
 
@@ -152,6 +232,7 @@ impl MainPaneView {
         render_conflict_markdown_preview_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
+    #[allow(dead_code)] // Superseded by per-column render functions
     pub(in super::super) fn render_conflict_resolver_three_way_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -846,6 +927,637 @@ impl MainPaneView {
         elements
     }
 
+    // ── Per-column three-way render functions ──────────────────────────
+
+    pub(in super::super) fn render_conflict_three_way_base_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Base, window, cx)
+    }
+
+    pub(in super::super) fn render_conflict_three_way_ours_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Ours, window, cx)
+    }
+
+    pub(in super::super) fn render_conflict_three_way_theirs_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Theirs, window, cx)
+    }
+
+    fn render_conflict_three_way_column_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        column: ThreeWayColumn,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
+        let theme = this.theme;
+        let show_ws = this.show_whitespace;
+        let word_hl_color = Some(theme.colors.warning);
+        let syntax_lang = this.conflict_row_syntax_language();
+        let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
+
+        let prepared_doc = match column {
+            ThreeWayColumn::Base => prepared_docs.base,
+            ThreeWayColumn::Ours => prepared_docs.ours,
+            ThreeWayColumn::Theirs => prepared_docs.theirs,
+        };
+        let highlights = match column {
+            ThreeWayColumn::Base => &this.conflict_resolver.three_way_word_highlights.base,
+            ThreeWayColumn::Ours => &this.conflict_resolver.three_way_word_highlights.ours,
+            ThreeWayColumn::Theirs => &this.conflict_resolver.three_way_word_highlights.theirs,
+        };
+
+        // Pre-build styled text cache entries for visible lines in this column.
+        let mut needs_chunk_poll = false;
+        for vi in range.clone() {
+            let Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) =
+                this.conflict_resolver.three_way_visible_item(vi)
+            else {
+                continue;
+            };
+            if this
+                .conflict_three_way_segments_cache
+                .contains_key(&(ix, column))
+            {
+                continue;
+            }
+            let word_ranges = highlights.get(&ix).map(|v| v.as_slice()).unwrap_or(&[]);
+            let text = this
+                .conflict_resolver
+                .three_way_line_text(column, ix)
+                .unwrap_or("");
+            if text.is_empty() {
+                continue;
+            }
+            if word_ranges.is_empty() && syntax_lang.is_none() {
+                continue;
+            }
+
+            if let Some(document) = prepared_doc {
+                let prepared_line = PreparedDiffSyntaxLine {
+                    document: Some(document),
+                    line_ix: ix,
+                };
+                let syntax_config = DiffSyntaxConfig {
+                    language: syntax_lang,
+                    mode: DiffSyntaxMode::Auto,
+                };
+                let result = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    syntax_config,
+                    word_hl_color,
+                    prepared_line,
+                );
+                let (styled, is_pending) = result.into_parts();
+                if is_pending {
+                    needs_chunk_poll = true;
+                    // Don't cache — will re-render when chunk completes.
+                } else {
+                    this.conflict_three_way_segments_cache
+                        .insert((ix, column), styled);
+                }
+            } else {
+                let styled = build_conflict_cached_diff_styled_text(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    syntax_lang,
+                    DiffSyntaxMode::Auto,
+                    word_hl_color,
+                );
+                this.conflict_three_way_segments_cache
+                    .insert((ix, column), styled);
+            }
+        }
+        if needs_chunk_poll {
+            this.ensure_prepared_syntax_chunk_poll(cx);
+        }
+
+        let chosen_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.12 });
+        let conflict_choices = this.conflict_resolver.conflict_choices.as_slice();
+
+        let (canvas_id_prefix, div_id_prefix, chunk_menu_prefix, input_menu_prefix) = match column {
+            ThreeWayColumn::Base => (
+                "conflict_canvas_base",
+                "conflict_three_way_col_base",
+                "resolver_three_way_base_chunk_menu",
+                "resolver_three_way_base_input_menu",
+            ),
+            ThreeWayColumn::Ours => (
+                "conflict_canvas_ours",
+                "conflict_three_way_col_ours",
+                "resolver_three_way_ours_chunk_menu",
+                "resolver_three_way_ours_input_menu",
+            ),
+            ThreeWayColumn::Theirs => (
+                "conflict_canvas_theirs",
+                "conflict_three_way_col_theirs",
+                "resolver_three_way_theirs_chunk_menu",
+                "resolver_three_way_theirs_input_menu",
+            ),
+        };
+        let choice_enum = match column {
+            ThreeWayColumn::Base => conflict_resolver::ConflictChoice::Base,
+            ThreeWayColumn::Ours => conflict_resolver::ConflictChoice::Ours,
+            ThreeWayColumn::Theirs => conflict_resolver::ConflictChoice::Theirs,
+        };
+
+        let mut elements = Vec::with_capacity(range.len());
+        for vi in range {
+            let Some(visible_item) = this.conflict_resolver.three_way_visible_item(vi) else {
+                continue;
+            };
+
+            match visible_item {
+                conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
+                    let label: SharedString = if matches!(column, ThreeWayColumn::Base) {
+                        let choice_label = conflict_choices
+                            .get(range_ix)
+                            .map(|c| match c {
+                                conflict_resolver::ConflictChoice::Base => "Base (A)",
+                                conflict_resolver::ConflictChoice::Ours => "Local (B)",
+                                conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
+                                conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                            })
+                            .unwrap_or("?");
+                        format!("  Resolved: picked {choice_label}").into()
+                    } else {
+                        "".into()
+                    };
+                    let has_base = this
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(range_ix)
+                        .copied()
+                        .unwrap_or(false);
+                    let selected_choices =
+                        this.conflict_resolver_selected_choices_for_conflict_ix(range_ix);
+                    let collapsed = div()
+                        .id((div_id_prefix, vi))
+                        .w_full()
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
+                        .bg(with_alpha(
+                            theme.colors.success,
+                            if theme.is_dark { 0.08 } else { 0.06 },
+                        ))
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(label)
+                        .cursor(CursorStyle::PointingHand)
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                let invoker: SharedString = format!(
+                                    "resolver_three_way_collapsed_chunk_menu_{}_{}",
+                                    range_ix, vi
+                                )
+                                .into();
+                                this.open_conflict_resolver_chunk_context_menu(
+                                    invoker,
+                                    range_ix,
+                                    has_base,
+                                    true,
+                                    selected_choices.clone(),
+                                    None,
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        );
+                    elements.push(collapsed.into_any_element());
+                }
+                conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
+                    let line_text = this.conflict_resolver.three_way_line_text(column, ix);
+                    let range_ix = this
+                        .conflict_resolver
+                        .conflict_index_for_side_line(column, ix)
+                        .filter(|_| line_text.is_some());
+                    let is_in_conflict = range_ix.is_some();
+
+                    let choice_for_row = range_ix.and_then(|ri| conflict_choices.get(ri).copied());
+                    let is_chosen = match column {
+                        ThreeWayColumn::Base => {
+                            choice_for_row == Some(conflict_resolver::ConflictChoice::Base)
+                        }
+                        ThreeWayColumn::Ours => matches!(
+                            choice_for_row,
+                            Some(conflict_resolver::ConflictChoice::Ours)
+                                | Some(conflict_resolver::ConflictChoice::Both)
+                        ),
+                        ThreeWayColumn::Theirs => matches!(
+                            choice_for_row,
+                            Some(conflict_resolver::ConflictChoice::Theirs)
+                                | Some(conflict_resolver::ConflictChoice::Both)
+                        ),
+                    };
+
+                    let styled = this.conflict_three_way_segments_cache.get(&(ix, column));
+
+                    let bg = if is_in_conflict && line_text.is_some() {
+                        match column {
+                            ThreeWayColumn::Base => with_alpha(
+                                theme.colors.warning,
+                                if theme.is_dark { 0.10 } else { 0.08 },
+                            ),
+                            ThreeWayColumn::Ours => with_alpha(
+                                theme.colors.success,
+                                if theme.is_dark { 0.10 } else { 0.08 },
+                            ),
+                            ThreeWayColumn::Theirs => with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.14 } else { 0.10 },
+                            ),
+                        }
+                    } else {
+                        with_alpha(theme.colors.surface_bg_elevated, 0.0)
+                    };
+                    let fg = if line_text.is_some() {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    };
+                    let line_no = line_number_string(
+                        line_text
+                            .is_some()
+                            .then(|| u32::try_from(ix + 1).ok())
+                            .flatten(),
+                    );
+                    let line_text = line_text.map(SharedString::new).unwrap_or_default();
+                    let display_text = conflict_display_text(&line_text, styled, show_ws);
+                    let min_width = conflict_input_row_min_width(window, &display_text);
+
+                    if this.conflict_canvas_rows_enabled {
+                        let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
+                            conflict_ix,
+                            has_base: this
+                                .conflict_resolver
+                                .conflict_has_base
+                                .get(conflict_ix)
+                                .copied()
+                                .unwrap_or(false),
+                            selected_choices: this
+                                .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
+                        });
+                        elements.push(conflict_canvas::single_column_conflict_canvas(
+                            theme,
+                            cx.entity(),
+                            canvas_id_prefix,
+                            vi,
+                            ix,
+                            min_width,
+                            line_no,
+                            if is_chosen { chosen_bg } else { bg },
+                            fg,
+                            line_text.clone(),
+                            styled,
+                            show_ws,
+                            chunk_context,
+                            chunk_menu_prefix,
+                            true,
+                        ));
+                        continue;
+                    }
+
+                    let mut cell = div()
+                        .id((div_id_prefix, ix))
+                        .w_full()
+                        .min_w(min_width)
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(fg)
+                        .whitespace_nowrap()
+                        .bg(bg)
+                        .when(is_chosen, |d| d.bg(chosen_bg))
+                        .child(
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(line_no),
+                        )
+                        .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
+
+                    if let Some(conflict_ix) = range_ix {
+                        let has_base = this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false);
+                        let selected_choices =
+                            this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
+                        let (line_label, line_target, chunk_label, chunk_target) =
+                            three_way_input_row_menu_targets(ix, conflict_ix, choice_enum);
+                        cell = cell.on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                if e.modifiers.shift {
+                                    let invoker: SharedString =
+                                        format!("{}_{}_{}", input_menu_prefix, conflict_ix, ix)
+                                            .into();
+                                    this.open_conflict_resolver_input_row_context_menu(
+                                        invoker,
+                                        line_label.clone(),
+                                        line_target.clone(),
+                                        chunk_label.clone(),
+                                        chunk_target.clone(),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    let invoker: SharedString =
+                                        format!("{}_{}_{}", chunk_menu_prefix, conflict_ix, ix)
+                                            .into();
+                                    this.open_conflict_resolver_chunk_context_menu(
+                                        invoker,
+                                        conflict_ix,
+                                        has_base,
+                                        true,
+                                        selected_choices.clone(),
+                                        None,
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        );
+                    }
+
+                    elements.push(cell.into_any_element());
+                }
+            }
+        }
+        elements
+    }
+
+    // ── Per-column two-way diff render functions ────────────────────────
+
+    pub(in super::super) fn render_conflict_diff_left_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Ours, window, cx)
+    }
+
+    pub(in super::super) fn render_conflict_diff_right_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        Self::render_conflict_diff_column_rows(this, range, ConflictPickSide::Theirs, window, cx)
+    }
+
+    fn render_conflict_diff_column_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        side: ConflictPickSide,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
+        let query = this.diff_search_query_or_empty();
+        let query = query.as_ref().trim().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str());
+        let syntax_lang = this.conflict_row_syntax_language();
+        let syntax_mode = DiffSyntaxMode::Auto;
+        let theme = this.theme;
+        let show_ws = this.show_whitespace;
+
+        let (div_id_prefix, canvas_id_prefix, chunk_menu_prefix, input_menu_prefix) = match side {
+            ConflictPickSide::Ours => (
+                "conflict_diff_col_ours",
+                "conflict_diff_canvas_ours",
+                "resolver_two_way_split_ours_chunk_menu",
+                "resolver_two_way_split_ours_input_menu",
+            ),
+            ConflictPickSide::Theirs => (
+                "conflict_diff_col_theirs",
+                "conflict_diff_canvas_theirs",
+                "resolver_two_way_split_theirs_chunk_menu",
+                "resolver_two_way_split_theirs_input_menu",
+            ),
+        };
+
+        range
+            .map(|visible_row_ix| {
+                let Some(visible_row) = this
+                    .conflict_resolver
+                    .two_way_split_visible_row(visible_row_ix)
+                else {
+                    return div()
+                        .id((div_id_prefix, visible_row_ix))
+                        .h(px(20.0))
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("")
+                        .into_any_element();
+                };
+                let conflict_resolver::TwoWaySplitVisibleRow {
+                    source_row_ix: row_ix,
+                    row,
+                    conflict_ix,
+                } = visible_row;
+
+                let (text_opt, line_no, document) = match side {
+                    ConflictPickSide::Ours => (
+                        row.old.as_deref(),
+                        row.old_line,
+                        this.conflict_three_way_prepared_syntax_documents.ours,
+                    ),
+                    ConflictPickSide::Theirs => (
+                        row.new.as_deref(),
+                        row.new_line,
+                        this.conflict_three_way_prepared_syntax_documents.theirs,
+                    ),
+                };
+
+                let text = SharedString::new(text_opt.unwrap_or_default());
+                let styling_enabled = this.conflict_row_styling_enabled();
+                let word_hl_computed = if styling_enabled {
+                    conflict_resolver::compute_word_highlights_for_row(&row)
+                } else {
+                    None
+                };
+                let word_hl_precomputed = if styling_enabled {
+                    this.conflict_resolver.two_way_split_word_highlight(row_ix)
+                } else {
+                    None
+                };
+                let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
+                let word_ranges = match side {
+                    ConflictPickSide::Ours => word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]),
+                    ConflictPickSide::Theirs => word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]),
+                };
+                let q = this.conflict_diff_query_cache_query.as_ref();
+                let styled_result = Self::conflict_split_row_styled(
+                    theme,
+                    &mut this.conflict_diff_segments_cache_split,
+                    &mut this.conflict_diff_query_segments_cache_split,
+                    row_ix,
+                    side,
+                    text_opt,
+                    word_ranges,
+                    q,
+                    syntax_lang,
+                    syntax_mode,
+                    prepared_diff_syntax_line_for_one_based_line(document, line_no),
+                );
+                if styled_result.pending {
+                    this.ensure_prepared_syntax_chunk_poll(cx);
+                }
+                let styled = styled_result.styled;
+
+                let bg = split_cell_bg(theme, row.kind, side);
+                let fg = if text_opt.is_some() {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                };
+                let display_text = conflict_display_text(&text, styled.as_ref(), show_ws);
+                let min_width = conflict_input_row_min_width(window, &display_text);
+
+                if this.conflict_canvas_rows_enabled {
+                    let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
+                        conflict_ix,
+                        has_base: this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false),
+                        selected_choices: this
+                            .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
+                    });
+                    return conflict_canvas::single_column_conflict_canvas(
+                        theme,
+                        cx.entity(),
+                        canvas_id_prefix,
+                        visible_row_ix,
+                        row_ix,
+                        min_width,
+                        line_number_string(line_no),
+                        bg,
+                        fg,
+                        text,
+                        styled.as_ref(),
+                        show_ws,
+                        chunk_context_data,
+                        chunk_menu_prefix,
+                        false,
+                    );
+                }
+
+                let mut cell = div()
+                    .id((div_id_prefix, row_ix))
+                    .w_full()
+                    .min_w(min_width)
+                    .h(px(20.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_xs()
+                    .bg(bg)
+                    .text_color(fg)
+                    .whitespace_nowrap()
+                    .child(
+                        div()
+                            .w(px(38.0))
+                            .text_color(theme.colors.text_muted)
+                            .child(line_number_string(line_no)),
+                    )
+                    .child(conflict_diff_text_cell(
+                        text.clone(),
+                        styled.as_ref(),
+                        show_ws,
+                    ));
+
+                if let Some(conflict_ix) = conflict_ix {
+                    let has_base = this
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(conflict_ix)
+                        .copied()
+                        .unwrap_or(false);
+                    let selected_choices =
+                        this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
+                    let (line_label, line_target, chunk_label, chunk_target) =
+                        two_way_split_input_row_menu_targets(row_ix, conflict_ix, side);
+                    cell = cell.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            if e.modifiers.shift {
+                                let invoker: SharedString =
+                                    format!("{}_{}_{}", input_menu_prefix, conflict_ix, row_ix)
+                                        .into();
+                                this.open_conflict_resolver_input_row_context_menu(
+                                    invoker,
+                                    line_label.clone(),
+                                    line_target.clone(),
+                                    chunk_label.clone(),
+                                    chunk_target.clone(),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                let invoker: SharedString =
+                                    format!("{}_{}_{}", chunk_menu_prefix, conflict_ix, row_ix)
+                                        .into();
+                                this.open_conflict_resolver_chunk_context_menu(
+                                    invoker,
+                                    conflict_ix,
+                                    has_base,
+                                    false,
+                                    selected_choices.clone(),
+                                    None,
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }
+                        }),
+                    );
+                }
+
+                cell.into_any_element()
+            })
+            .collect()
+    }
+
     pub(in super::super) fn render_conflict_resolved_preview_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -1024,7 +1736,7 @@ impl MainPaneView {
     pub(in super::super) fn render_conflict_resolved_output_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
@@ -1056,6 +1768,7 @@ impl MainPaneView {
                         .unwrap_or(std::borrow::Cow::Borrowed(""))
                         .to_string()
                         .into();
+                    let min_width = conflict_resolved_output_row_min_width(window, &line_text);
 
                     let conflict_marker = this
                         .conflict_resolver
@@ -1074,6 +1787,8 @@ impl MainPaneView {
 
                     div()
                         .id(("conflict_resolved_output_row", ix))
+                        .w_full()
+                        .min_w(min_width)
                         .h(px(20.0))
                         .px_2()
                         .flex()
@@ -1165,6 +1880,7 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 }
+                let min_width = conflict_resolved_output_row_min_width(window, &line_text);
 
                 let row_content = if syntax_language.is_some() && !line_text.is_empty() {
                     let prepared_line_highlight = prepared_line_highlights
@@ -1247,6 +1963,8 @@ impl MainPaneView {
 
                 div()
                     .id(("conflict_resolved_output_row", ix))
+                    .w_full()
+                    .min_w(min_width)
                     .h(px(20.0))
                     .px_2()
                     .flex()
@@ -1319,6 +2037,7 @@ impl MainPaneView {
             .collect()
     }
 
+    #[allow(dead_code)] // Superseded by per-column render functions
     pub(in super::super) fn render_conflict_resolver_diff_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -1650,6 +2369,7 @@ impl MainPaneView {
             .into_any_element()
     }
 
+    #[allow(dead_code)] // Superseded by per-column render functions
     fn render_conflict_resolver_split_row(
         &mut self,
         visible_row_ix: usize,

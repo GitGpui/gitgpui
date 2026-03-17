@@ -989,10 +989,8 @@ fn push_paired_replacement_runs_by_position_to_plan(
 fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
     old_lines: &[&str],
     new_lines: &[&str],
-    old_start: usize,
-    old_end: usize,
-    new_start: usize,
-    new_end: usize,
+    old_range: std::ops::Range<usize>,
+    new_range: std::ops::Range<usize>,
     runs: &mut Vec<FileDiffPlanRun>,
     pair_cost_fn: F,
 ) where
@@ -1003,8 +1001,10 @@ fn push_aligned_replacement_runs_to_plan_with_pair_cost<F>(
             &mut LevenshteinScratch,
         ) -> u32,
 {
-    let deletes = &old_lines[old_start..old_end];
-    let inserts = &new_lines[new_start..new_end];
+    let old_start = old_range.start;
+    let new_start = new_range.start;
+    let deletes = &old_lines[old_range.start..old_range.end];
+    let inserts = &new_lines[new_range.start..new_range.end];
 
     if deletes.is_empty() {
         push_plan_run(
@@ -1146,10 +1146,8 @@ where
                     push_aligned_replacement_runs_to_plan_with_pair_cost(
                         old_lines,
                         new_lines,
-                        delete_start,
-                        old_ix,
-                        insert_start,
-                        new_ix,
+                        delete_start..old_ix,
+                        insert_start..new_ix,
                         &mut runs,
                         pair_cost_fn,
                     );

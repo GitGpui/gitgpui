@@ -163,8 +163,8 @@ fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppCon
     );
     assert_eq!(
         bootstrap_event.full_syntax_parse_requested,
-        Some(false),
-        "large fixture bootstrap should skip full prepared syntax requests",
+        Some(true),
+        "large fixture bootstrap should still request prepared syntax for streamed conflict inputs",
     );
     // In giant mode the diff_row_count is the paged index total (large);
     // in eager mode it stays bounded by conflict block size + context.
@@ -343,6 +343,178 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup shared conflict fixture");
+}
+
+#[gpui::test]
+fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    fn assert_horizontal_overflow(handle: &gpui::UniformListScrollHandle, label: &str) {
+        let size = handle
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected rendered list item size");
+        assert!(
+            size.contents.width > size.item.width,
+            "{label} should report horizontal overflow, got item={:?} contents={:?}",
+            size.item,
+            size.contents,
+        );
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(163);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_hscroll_measure",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_resolver_hscroll_measure.txt");
+    let abs_path = workdir.join(&file_rel);
+
+    let long_base = format!("base {}", "X".repeat(320));
+    let long_ours = format!("ours {}", "Y".repeat(320));
+    let long_theirs = format!("theirs {}", "Z".repeat(320));
+    let base_text = ["short", "context", long_base.as_str(), "tail"].join("\n");
+    let ours_text = ["short", "context", long_ours.as_str(), "tail"].join("\n");
+    let theirs_text = ["short", "context", long_theirs.as_str(), "tail"].join("\n");
+    let current_text =
+        format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver hscroll fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver hscroll fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base_text.clone(),
+                ours_text.clone(),
+                theirs_text.clone(),
+                current_text.clone(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.clone().into()),
+                ConflictPayload::Text(ours_text.clone().into()),
+                ConflictPayload::Text(theirs_text.clone().into()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver hscroll fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.two_way_split_visible_len() >= 4
+                && pane.conflict_resolver.three_way_visible_len() >= 4
+        },
+        |pane| {
+            format!(
+                "path={:?} two_way_visible={} three_way_visible={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.two_way_split_visible_len(),
+                pane.conflict_resolver.three_way_visible_len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
+                assert!(
+                    pane.conflict_resolver.two_way_horizontal_measure_row(
+                        crate::view::conflict_resolver::ConflictPickSide::Ours,
+                    ) > 0,
+                    "two-way ours column should not measure only the first short row",
+                );
+                assert!(
+                    pane.conflict_resolver.two_way_horizontal_measure_row(
+                        crate::view::conflict_resolver::ConflictPickSide::Theirs,
+                    ) > 0,
+                    "two-way theirs column should not measure only the first short row",
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let pane = view.read(app).main_pane.read(app);
+        assert_horizontal_overflow(&pane.conflict_resolver_diff_scroll, "two-way ours list");
+        assert_horizontal_overflow(&pane.conflict_preview_theirs_scroll, "two-way theirs list");
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                assert!(
+                    pane.conflict_resolver
+                        .three_way_horizontal_measure_row(ThreeWayColumn::Base)
+                        > 0,
+                    "three-way base column should not measure only the first short row",
+                );
+                assert!(
+                    pane.conflict_resolver
+                        .three_way_horizontal_measure_row(ThreeWayColumn::Ours)
+                        > 0,
+                    "three-way ours column should not measure only the first short row",
+                );
+                assert!(
+                    pane.conflict_resolver
+                        .three_way_horizontal_measure_row(ThreeWayColumn::Theirs)
+                        > 0,
+                    "three-way theirs column should not measure only the first short row",
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let pane = view.read(app).main_pane.read(app);
+        assert_horizontal_overflow(&pane.conflict_resolver_diff_scroll, "three-way base list");
+        assert_horizontal_overflow(&pane.conflict_preview_ours_scroll, "three-way ours list");
+        assert_horizontal_overflow(
+            &pane.conflict_preview_theirs_scroll,
+            "three-way theirs list",
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver hscroll fixture");
 }
 
 struct SyntheticLargeConflictFixture {
@@ -960,32 +1132,161 @@ fn whole_file_conflict_switch_to_three_way_stays_fully_reviewable(cx: &mut gpui:
                     "switching a large whole-file conflict into three-way mode should succeed",
                 );
                 assert_streamed_whole_file_three_way_state(pane, fixture.line_count);
-                assert!(
-                    pane.conflict_three_way_prepared_syntax_documents
-                        .base
-                        .is_none()
-                        && pane
-                            .conflict_three_way_prepared_syntax_documents
-                            .ours
-                            .is_none()
-                        && pane
-                            .conflict_three_way_prepared_syntax_documents
-                            .theirs
-                            .is_none(),
-                    "very large three-way sides should stay on bounded fallback syntax instead of full prepared documents",
-                );
-                assert!(
-                    !pane.conflict_three_way_syntax_inflight.base
-                        && !pane.conflict_three_way_syntax_inflight.ours
-                        && !pane.conflict_three_way_syntax_inflight.theirs,
-                    "very large three-way sides should not schedule background prepared syntax work",
-                );
             });
         });
     });
 
     cx.update(|window, app| {
         let _ = window.draw(app);
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn whole_file_conflict_streamed_three_way_syntax_survives_view_mode_switch(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    disable_view_poller_for_test(cx, &view);
+
+    let repo_id = gitcomet_state::model::RepoId(172);
+    let fixture = SyntheticWholeFileConflictFixture::new(
+        "whole_file_conflict_three_way_streamed_syntax",
+        "fixtures/whole_file_conflict_streamed_syntax.html",
+        crate::view::conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 100,
+    );
+    let ours_body_line = r#"<body class="whole-file-ours">"#;
+
+    load_synthetic_whole_file_conflict(cx, &view, repo_id, &fixture);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "whole-file streamed syntax fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel),
+        |pane| format!("path={:?}", pane.conflict_resolver.path),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = pane
+            .conflict_three_way_segments_cache
+            .get(&(2, ThreeWayColumn::Ours))
+            .expect("three-way draw should cache the visible streamed HTML body row");
+        assert_eq!(
+            styled.text.as_ref(),
+            ours_body_line,
+            "expected the streamed three-way cache to contain the visible ours HTML body row",
+        );
+        assert!(
+            !styled.highlights.is_empty(),
+            "streamed three-way rows above the old 20k line gate should still be syntax highlighted; got {:?}",
+            styled_debug_info_with_styles(styled),
+        );
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "whole-file streamed three-way background syntax completion",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_three_way_prepared_syntax_documents
+                .base
+                .is_some()
+                && pane
+                    .conflict_three_way_prepared_syntax_documents
+                    .ours
+                    .is_some()
+                && pane
+                    .conflict_three_way_prepared_syntax_documents
+                    .theirs
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "base={:?} ours={:?} theirs={:?} inflight={:?}",
+                pane.conflict_three_way_prepared_syntax_documents.base,
+                pane.conflict_three_way_prepared_syntax_documents.ours,
+                pane.conflict_three_way_prepared_syntax_documents.theirs,
+                pane.conflict_three_way_syntax_inflight,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
+                pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = conflict_split_cached_styled(
+            &pane,
+            crate::view::conflict_resolver::ConflictPickSide::Ours,
+            ours_body_line,
+        )
+        .expect("two-way draw should cache the streamed HTML body row after switching from three-way");
+        assert!(
+            !styled.highlights.is_empty(),
+            "streamed two-way rows above the old 20k line gate should stay syntax highlighted after switching from three-way; got {:?}",
+            styled_debug_info_with_styles(styled),
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = pane
+            .conflict_three_way_segments_cache
+            .get(&(2, ThreeWayColumn::Ours))
+            .expect("three-way draw should repopulate the streamed HTML body row cache after toggling back");
+        assert!(
+            !styled.highlights.is_empty(),
+            "streamed three-way rows above the old 20k line gate should stay syntax highlighted after toggling back; got {:?}",
+            styled_debug_info_with_styles(styled),
+        );
     });
 
     fixture.cleanup();
@@ -1500,6 +1801,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         .find("*/")
         .map(|ix| ix + 2)
         .expect("comment line should include a closing block comment delimiter");
+    let ours_comment_line_ix = 2usize;
 
     let mut base_lines = vec![
         opening_line.to_string(),
@@ -1599,8 +1901,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+                pane.conflict_resolver_scroll_all_columns(0, gpui::ScrollStrategy::Top);
                 cx.notify();
             });
         });
@@ -1706,6 +2007,85 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
                 pane.theme.colors.text_muted.into(),
             ),
             "prepared syntax should continue to drive split-row styling after background preparation",
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                assert!(
+                    pane.conflict_diff_segments_cache_split.is_empty(),
+                    "switching to three-way should invalidate stale split-row styling caches",
+                );
+                assert!(
+                    pane.conflict_three_way_segments_cache.is_empty(),
+                    "switching to three-way should invalidate stale three-way styling caches",
+                );
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = pane
+            .conflict_three_way_segments_cache
+            .get(&(ours_comment_line_ix, ThreeWayColumn::Ours))
+            .expect("three-way draw should restyle the visible ours row after toggling from two-way");
+        assert_eq!(
+            styled.text.as_ref(),
+            ours_comment_line,
+            "expected the cached three-way ours row to match the multiline comment text",
+        );
+        assert!(
+            styled_has_leading_muted_highlight(
+                styled,
+                comment_prefix_end,
+                pane.theme.colors.text_muted.into(),
+            ),
+            "prepared syntax should continue to drive three-way row styling after toggling from two-way",
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
+                assert!(
+                    pane.conflict_diff_segments_cache_split.is_empty(),
+                    "switching back to two-way should invalidate stale split-row styling caches",
+                );
+                assert!(
+                    pane.conflict_three_way_segments_cache.is_empty(),
+                    "switching back to two-way should invalidate stale three-way styling caches",
+                );
+            });
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let styled = conflict_split_cached_styled(
+            &pane,
+            crate::view::conflict_resolver::ConflictPickSide::Ours,
+            ours_comment_line,
+        )
+        .expect("split cache should rebuild after returning from three-way mode");
+        assert!(
+            styled_has_leading_muted_highlight(
+                styled,
+                comment_prefix_end,
+                pane.theme.colors.text_muted.into(),
+            ),
+            "prepared syntax should continue to drive split-row styling after toggling back from three-way",
         );
     });
 

@@ -17,6 +17,7 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const CONFLICT_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 32_768;
 
 type HighlightSpans = Arc<Vec<(Range<usize>, HighlightStyle)>>;
+#[allow(dead_code)] // Superseded by single_column_conflict_canvas
 type ThreeWayColumnBounds = (
     Bounds<Pixels>,
     Bounds<Pixels>,
@@ -39,6 +40,7 @@ pub(super) struct ConflictChunkContext {
     pub(super) selected_choices: Vec<conflict_resolver::ConflictChoice>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(super) struct ThreeWayCanvasColumn {
     pub(super) line_no: SharedString,
@@ -47,6 +49,7 @@ pub(super) struct ThreeWayCanvasColumn {
     pub(super) text: SharedString,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(super) struct ThreeWayChunkContext {
     pub(super) base: Option<ConflictChunkContext>,
@@ -228,7 +231,7 @@ pub(super) fn split_conflict_row_canvas(
     .into_any_element()
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(dead_code, clippy::too_many_arguments)]
 pub(super) fn three_way_conflict_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,
@@ -465,6 +468,100 @@ pub(super) fn three_way_conflict_row_canvas(
     .into_any_element()
 }
 
+/// Canvas renderer for a single conflict column (used when per-column lists are active).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn single_column_conflict_canvas(
+    theme: AppTheme,
+    view: Entity<MainPaneView>,
+    id_prefix: &'static str,
+    visible_row_ix: usize,
+    row_ix: usize,
+    min_width: Pixels,
+    line_no: SharedString,
+    bg: gpui::Rgba,
+    fg: gpui::Rgba,
+    text: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    show_whitespace: bool,
+    chunk_context: Option<ConflictChunkContext>,
+    chunk_menu_prefix: &'static str,
+    is_three_way: bool,
+) -> AnyElement {
+    let prepared = prepare_conflict_text_for_canvas(text, styled, show_whitespace);
+
+    keyed_canvas(
+        (id_prefix, visible_row_ix),
+        move |bounds, _window, _cx| bounds,
+        move |bounds, _prepaint, window, cx| {
+            let line_metrics = line_metrics(window);
+            let y = center_text_y(bounds, line_metrics.line_height);
+            let pad = px_2(window);
+            let gap = pad;
+
+            window.paint_quad(fill(bounds, bg));
+
+            paint_gutter_text(
+                &line_no,
+                bounds.left() + pad,
+                y,
+                theme.colors.text_muted,
+                line_metrics,
+                window,
+                cx,
+            );
+
+            let text_bounds = split_column_text_bounds(bounds, pad, gap);
+            window.paint_layer(text_bounds, |window| {
+                paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
+            });
+
+            if let Some(chunk_context) = chunk_context.clone() {
+                let clip_bounds = window.content_mask().bounds;
+                let visible = bounds.intersect(&clip_bounds);
+                window.on_mouse_event({
+                    let view = view.clone();
+                    move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                        if phase != DispatchPhase::Bubble
+                            || event.button != gpui::MouseButton::Right
+                        {
+                            return;
+                        }
+                        if !visible.contains(&event.position) {
+                            return;
+                        }
+                        let invoker: SharedString = format!(
+                            "{}_{}_{}",
+                            chunk_menu_prefix, chunk_context.conflict_ix, row_ix
+                        )
+                        .into();
+                        let anchor = event.position;
+                        view.update(cx, |this, cx| {
+                            this.open_conflict_resolver_chunk_context_menu(
+                                invoker,
+                                chunk_context.conflict_ix,
+                                chunk_context.has_base,
+                                is_three_way,
+                                chunk_context.selected_choices.clone(),
+                                None,
+                                anchor,
+                                window,
+                                cx,
+                            );
+                            cx.notify();
+                        });
+                    }
+                });
+            }
+        },
+    )
+    .h(px(20.0))
+    .min_w(min_width)
+    .w_full()
+    .text_xs()
+    .whitespace_nowrap()
+    .into_any_element()
+}
+
 #[derive(Clone, Debug)]
 struct SplitRowPrepaintState {
     left_col: Bounds<Pixels>,
@@ -472,6 +569,7 @@ struct SplitRowPrepaintState {
     right_col: Bounds<Pixels>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct ThreeWayRowPrepaintState {
     base_col: Bounds<Pixels>,
@@ -658,6 +756,7 @@ fn split_columns_with_widths(
     (left, handle, right)
 }
 
+#[allow(dead_code)]
 fn three_way_columns_with_widths(
     bounds: Bounds<Pixels>,
     base_target_width: Pixels,

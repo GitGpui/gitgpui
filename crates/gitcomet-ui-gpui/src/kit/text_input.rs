@@ -1,5 +1,6 @@
 use super::text_model::{TextModel, TextModelSnapshot};
 use crate::theme::AppTheme;
+use crate::view::components::CONTROL_HEIGHT_PX;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
@@ -3010,7 +3011,7 @@ impl Element for TextElement {
                 let cursor_quad = if selected_range.is_empty() {
                     let (line_ix, local_ix) = line_for_offset(&line_starts, &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
-                    let caret_inset_y = px(2.0);
+                    let caret_inset_y = px(3.0);
                     let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
                     let top = bounds.top() + line_height * line_ix as f32 + caret_inset_y;
                     Some(fill(
@@ -3293,7 +3294,7 @@ impl Element for TextElement {
                 let line_ix = line_index_for_offset(&line_starts, cursor, line_count);
                 let start = line_starts.get(line_ix).copied().unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
-                let caret_inset_y = px(2.0);
+                let caret_inset_y = px(3.0);
                 let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
                 let pos = lines[line_ix]
                     .position_for_index(local, line_height)
@@ -3515,7 +3516,13 @@ impl Render for TextInput {
         let style = self.style;
         let focus = self.focus_handle.clone();
         let chromeless = self.chromeless;
-        let padding = if chromeless { px(0.0) } else { px(8.0) };
+        let multiline = self.multiline;
+        let pad_x = if chromeless { px(0.0) } else { px(8.0) };
+        let pad_y = if chromeless || !multiline {
+            px(0.0)
+        } else {
+            px(8.0)
+        };
         let is_focused = focus.is_focused(window);
 
         if self.has_focus != is_focused {
@@ -3563,7 +3570,8 @@ impl Render for TextInput {
         let text_surface = div()
             .w_full()
             .min_w(px(0.0))
-            .p(padding)
+            .px(pad_x)
+            .py(pad_y)
             .overflow_hidden()
             .child(TextElement { input: cx.entity() });
 
@@ -3612,7 +3620,9 @@ impl Render for TextInput {
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_mouse_down_right))
             .line_height(self.effective_line_height(window))
             .text_size(px(13.0))
-            .when(self.multiline, |d| d.items_start())
+            .when(!multiline && !chromeless, |d| d.h(px(CONTROL_HEIGHT_PX)))
+            .when(!multiline, |d| d.items_center())
+            .when(multiline, |d| d.items_start())
             .child(text_surface);
 
         if !chromeless {

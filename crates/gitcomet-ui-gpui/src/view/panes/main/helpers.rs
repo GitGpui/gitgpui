@@ -2212,6 +2212,7 @@ pub(in crate::view) struct MainPaneView {
         Option<ResolvedOutputSyntaxBackgroundKey>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
     pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
+    pub(in crate::view) conflict_resolved_output_measure_row: usize,
     pub(in crate::view) conflict_resolved_outline_stash: Option<StashedResolvedOutlineState>,
     pub(in crate::view) conflict_resolved_preview_segments_cache:
         HashMap<usize, VersionedCachedDiffStyledText>,

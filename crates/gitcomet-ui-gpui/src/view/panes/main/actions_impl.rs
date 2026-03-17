@@ -459,6 +459,20 @@ impl MainPaneView {
         self.conflict_fallback_nav_entries()
     }
 
+    /// Scroll all conflict resolver column lists to the given item.
+    pub(in crate::view) fn conflict_resolver_scroll_all_columns(
+        &self,
+        target: usize,
+        strategy: gpui::ScrollStrategy,
+    ) {
+        self.conflict_resolver_diff_scroll
+            .scroll_to_item_strict(target, strategy);
+        self.conflict_preview_ours_scroll
+            .scroll_to_item_strict(target, strategy);
+        self.conflict_preview_theirs_scroll
+            .scroll_to_item_strict(target, strategy);
+    }
+
     pub(super) fn conflict_resolver_visible_ix_for_conflict(
         &self,
         conflict_ix: usize,
@@ -511,8 +525,7 @@ impl MainPaneView {
         if let Some(target) = input_visible_hint
             .or_else(|| self.conflict_resolver_visible_ix_for_conflict(conflict_ix))
         {
-            self.conflict_resolver_diff_scroll
-                .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+            self.conflict_resolver_scroll_all_columns(target, gpui::ScrollStrategy::Center);
         }
 
         let output_text = (!self.conflict_resolved_output_is_streamed()).then(|| {
@@ -588,8 +601,7 @@ impl MainPaneView {
                 );
             } else {
                 // Fallback: keep input pane navigation even if conflict mapping is unavailable.
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                self.conflict_resolver_scroll_all_columns(target, gpui::ScrollStrategy::Center);
             }
         }
         self.conflict_resolver.nav_anchor = Some(target);
@@ -650,8 +662,7 @@ impl MainPaneView {
                 );
             } else {
                 // Fallback: keep input pane navigation even if conflict mapping is unavailable.
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+                self.conflict_resolver_scroll_all_columns(target, gpui::ScrollStrategy::Center);
             }
         }
         self.conflict_resolver.nav_anchor = Some(target);
@@ -949,16 +960,9 @@ impl MainPaneView {
         let rendering_mode =
             conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_len);
         let full_syntax_parse_requested = conflict_syntax_language.is_some()
-            && [
-                (base_text, three_way_base_len),
-                (ours_text, three_way_ours_len),
-                (theirs_text, three_way_theirs_len),
-            ]
-            .into_iter()
-            .any(|(text, line_count)| {
-                !text.is_empty()
-                    && line_count <= rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX
-            });
+            && [base_text, ours_text, theirs_text]
+                .into_iter()
+                .any(|text| !text.is_empty());
         let mut trace_decisions = MergetoolBootstrapTraceDecisions {
             rendering_mode: Some(trace_rendering_mode(rendering_mode)),
             full_syntax_parse_requested: Some(full_syntax_parse_requested),
@@ -1173,10 +1177,6 @@ impl MainPaneView {
                 if text.is_empty() {
                     continue;
                 }
-                let line_count = three_way_line_starts[side].line_count();
-                if line_count > rows::MAX_LINES_FOR_PREPARED_CONFLICT_THREE_WAY_SYNTAX {
-                    continue;
-                }
                 let line_starts = three_way_line_starts[side].shared_starts(text.as_ref());
                 match rows::prepare_diff_syntax_document_with_budget_reuse_text(
                     language,
@@ -1220,8 +1220,10 @@ impl MainPaneView {
             three_way_len,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
+            three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
+            two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights,
             nav_anchor,
             hide_resolved,
@@ -1502,9 +1504,11 @@ impl MainPaneView {
         self.conflict_resolver.view_mode = view_mode;
         self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.hovered_conflict = None;
-        // Clear styled-text caches so the target view mode re-computes
-        // syntax highlighting from the prepared documents on next render.
-        self.clear_conflict_diff_style_caches();
+        // View-mode switches rebuild visible projections and can temporarily
+        // reuse the same cache keys with different row text or syntax state.
+        // Drop both caches so the next draw restyles from the current prepared
+        // documents instead of pinning stale fallback output across toggles.
+        self.clear_conflict_diff_style_caches_preserving_query();
         self.conflict_three_way_segments_cache.clear();
         if view_mode == ConflictResolverViewMode::ThreeWay
             && self
@@ -2123,8 +2127,7 @@ impl MainPaneView {
                     ),
             };
             if let Some(vi) = target_visible_ix {
-                self.conflict_resolver_diff_scroll
-                    .scroll_to_item_strict(vi, gpui::ScrollStrategy::Center);
+                self.conflict_resolver_scroll_all_columns(vi, gpui::ScrollStrategy::Center);
             }
         }
     }

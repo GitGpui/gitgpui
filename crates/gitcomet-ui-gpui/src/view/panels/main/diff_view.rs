@@ -1531,56 +1531,245 @@ impl MainPaneView {
                                     .into_any_element(),
                                 }
                             } else {
-                                let list = match view_mode {
-                                    ConflictResolverViewMode::ThreeWay => uniform_list(
-                                        "conflict_resolver_three_way_list",
-                                        diff_len,
-                                        cx.processor(Self::render_conflict_resolver_three_way_rows),
-                                    ),
-                                    ConflictResolverViewMode::TwoWayDiff => uniform_list(
-                                        "conflict_resolver_diff_list",
-                                        diff_len,
-                                        cx.processor(Self::render_conflict_resolver_diff_rows),
-                                    ),
+                                // Sync vertical scrolling across per-column lists.
+                                self.sync_conflict_preview_vertical_scroll();
+
+                                match view_mode {
+                                    ConflictResolverViewMode::ThreeWay => {
+                                        let base_list = uniform_list(
+                                            "conflict_three_way_base_list",
+                                            diff_len,
+                                            cx.processor(Self::render_conflict_three_way_base_rows),
+                                        )
+                                        .with_width_from_item(Some(
+                                            self.conflict_resolver
+                                                .three_way_horizontal_measure_row(
+                                                    ThreeWayColumn::Base,
+                                                ),
+                                        ))
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .with_horizontal_sizing_behavior(
+                                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                        )
+                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+                                        let ours_list = uniform_list(
+                                            "conflict_three_way_ours_list",
+                                            diff_len,
+                                            cx.processor(Self::render_conflict_three_way_ours_rows),
+                                        )
+                                        .with_width_from_item(Some(
+                                            self.conflict_resolver
+                                                .three_way_horizontal_measure_row(
+                                                    ThreeWayColumn::Ours,
+                                                ),
+                                        ))
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .with_horizontal_sizing_behavior(
+                                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                        )
+                                        .track_scroll(self.conflict_preview_ours_scroll.clone());
+
+                                        let theirs_list = uniform_list(
+                                            "conflict_three_way_theirs_list",
+                                            diff_len,
+                                            cx.processor(Self::render_conflict_three_way_theirs_rows),
+                                        )
+                                        .with_width_from_item(Some(
+                                            self.conflict_resolver
+                                                .three_way_horizontal_measure_row(
+                                                    ThreeWayColumn::Theirs,
+                                                ),
+                                        ))
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .with_horizontal_sizing_behavior(
+                                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                        )
+                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+
+                                        div()
+                                            .id("conflict_resolver_diff_scroll")
+                                            .relative()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .bg(theme.colors.window_bg)
+                                            .flex()
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .w(col_a_w)
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(base_list)
+                                                    .child(
+                                                        components::Scrollbar::horizontal(
+                                                            "conflict_base_hscrollbar",
+                                                            self.conflict_resolver_diff_scroll.clone(),
+                                                        )
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    ),
+                                            )
+                                            .child(conflict_hsplit_resize_handle(
+                                                "conflict_hsplit_body_first",
+                                                ConflictHSplitResizeHandle::First,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .w(col_b_w)
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(ours_list)
+                                                    .child(
+                                                        components::Scrollbar::horizontal(
+                                                            "conflict_ours_hscrollbar",
+                                                            self.conflict_preview_ours_scroll.clone(),
+                                                        )
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    ),
+                                            )
+                                            .child(conflict_hsplit_resize_handle(
+                                                "conflict_hsplit_body_second",
+                                                ConflictHSplitResizeHandle::Second,
+                                            ))
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .w(col_c_w)
+                                                    .flex_grow()
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(theirs_list)
+                                                    .child(
+                                                        components::Scrollbar::horizontal(
+                                                            "conflict_theirs_hscrollbar",
+                                                            self.conflict_preview_theirs_scroll.clone(),
+                                                        )
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    ),
+                                            )
+                                            .child(
+                                                components::Scrollbar::new(
+                                                    "conflict_resolver_diff_scrollbar",
+                                                    self.conflict_resolver_diff_scroll.clone(),
+                                                )
+                                                .always_visible()
+                                                .render(theme),
+                                            )
+                                            .into_any_element()
+                                    }
+                                    ConflictResolverViewMode::TwoWayDiff => {
+                                        let [left_w, right_w] =
+                                            self.conflict_diff_split_col_widths;
+
+                                        let left_list = uniform_list(
+                                            "conflict_diff_left_list",
+                                            diff_len,
+                                            cx.processor(Self::render_conflict_diff_left_rows),
+                                        )
+                                        .with_width_from_item(Some(
+                                            self.conflict_resolver
+                                                .two_way_horizontal_measure_row(
+                                                    conflict_resolver::ConflictPickSide::Ours,
+                                                ),
+                                        ))
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .with_horizontal_sizing_behavior(
+                                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                        )
+                                        .track_scroll(self.conflict_resolver_diff_scroll.clone());
+
+                                        let right_list = uniform_list(
+                                            "conflict_diff_right_list",
+                                            diff_len,
+                                            cx.processor(Self::render_conflict_diff_right_rows),
+                                        )
+                                        .with_width_from_item(Some(
+                                            self.conflict_resolver
+                                                .two_way_horizontal_measure_row(
+                                                    conflict_resolver::ConflictPickSide::Theirs,
+                                                ),
+                                        ))
+                                        .h_full()
+                                        .min_h(px(0.0))
+                                        .with_horizontal_sizing_behavior(
+                                            gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                        )
+                                        .track_scroll(self.conflict_preview_theirs_scroll.clone());
+
+                                        div()
+                                            .id("conflict_resolver_diff_scroll")
+                                            .relative()
+                                            .flex_1()
+                                            .min_h(px(0.0))
+                                            .bg(theme.colors.window_bg)
+                                            .flex()
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .w(left_w)
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(left_list)
+                                                    .child(
+                                                        components::Scrollbar::horizontal(
+                                                            "conflict_diff_left_hscrollbar",
+                                                            self.conflict_resolver_diff_scroll.clone(),
+                                                        )
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("conflict_diff_split_body_handle")
+                                                    .w(handle_w)
+                                                    .h_full()
+                                                    .flex()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .child(
+                                                        div()
+                                                            .w(px(1.0))
+                                                            .h_full()
+                                                            .bg(theme.colors.border),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .w(right_w)
+                                                    .flex_grow()
+                                                    .min_w(px(0.0))
+                                                    .h_full()
+                                                    .child(right_list)
+                                                    .child(
+                                                        components::Scrollbar::horizontal(
+                                                            "conflict_diff_right_hscrollbar",
+                                                            self.conflict_preview_theirs_scroll.clone(),
+                                                        )
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    ),
+                                            )
+                                            .child(
+                                                components::Scrollbar::new(
+                                                    "conflict_resolver_diff_scrollbar",
+                                                    self.conflict_resolver_diff_scroll.clone(),
+                                                )
+                                                .always_visible()
+                                                .render(theme),
+                                            )
+                                            .into_any_element()
+                                    }
                                 }
-                                .h_full()
-                                .min_h(px(0.0))
-                                .with_horizontal_sizing_behavior(
-                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                )
-                                .track_scroll(self.conflict_resolver_diff_scroll.clone());
-
-                                let resolver_diff_scroll_handle = self
-                                    .conflict_resolver_diff_scroll
-                                    .0
-                                    .borrow()
-                                    .base_handle
-                                    .clone();
-
-                                div()
-                                    .id("conflict_resolver_diff_scroll")
-                                    .relative()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .bg(theme.colors.window_bg)
-                                    .child(list)
-                                    .child(
-                                        components::Scrollbar::new(
-                                            "conflict_resolver_diff_scrollbar",
-                                            self.conflict_resolver_diff_scroll.clone(),
-                                        )
-                                        .always_visible()
-                                        .render(theme),
-                                    )
-                                    .child(
-                                        components::Scrollbar::horizontal(
-                                            "conflict_resolver_diff_hscrollbar",
-                                            resolver_diff_scroll_handle,
-                                        )
-                                        .always_visible()
-                                        .render(theme),
-                                    )
-                                    .into_any_element()
                             };
 
                             let output_header = div()
@@ -1812,6 +2001,9 @@ impl MainPaneView {
                                                                                             Self::render_conflict_resolved_output_rows,
                                                                                         ),
                                                                                     )
+                                                                                    .with_width_from_item(Some(
+                                                                                        self.conflict_resolved_output_measure_row,
+                                                                                    ))
                                                                                     .h_full()
                                                                                     .min_h(px(0.0))
                                                                                     .track_scroll(
@@ -1838,9 +2030,6 @@ impl MainPaneView {
                                                             components::Scrollbar::horizontal(
                                                                 "conflict_resolver_output_hscrollbar",
                                                                 self.conflict_resolved_preview_scroll
-                                                                    .0
-                                                                    .borrow()
-                                                                    .base_handle
                                                                     .clone(),
                                                             )
                                                             .always_visible()
@@ -2407,6 +2596,27 @@ impl MainPaneView {
                 }
 
                 if !handled
+                    && this.diff_search_active
+                    && key == "enter"
+                    && !mods.control
+                    && !mods.alt
+                    && !mods.platform
+                    && !mods.function
+                    && this
+                        .diff_search_input
+                        .read(cx)
+                        .focus_handle()
+                        .is_focused(window)
+                {
+                    if mods.shift {
+                        this.diff_search_prev_match();
+                    } else {
+                        this.diff_search_next_match();
+                    }
+                    handled = true;
+                }
+
+                if !handled
                     && key == "space"
                     && !mods.control
                     && !mods.alt
@@ -2873,11 +3083,10 @@ impl MainPaneView {
         // Each side needs its own fn item type for `cx.processor()`.
         macro_rules! mk_list {
             ($document:expr, $processor:expr) => {{
-                let scroll_handle = scroll.0.borrow().base_handle.clone();
                 let list = uniform_list(list_id, $document.rows.len(), cx.processor($processor))
                     .h_full()
                     .min_h(px(0.0))
-                    .track_scroll(scroll)
+                    .track_scroll(scroll.clone())
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                     );
@@ -2887,7 +3096,7 @@ impl MainPaneView {
                     .min_h(px(0.0))
                     .child(list)
                     .child(
-                        components::Scrollbar::horizontal(hscrollbar_id, scroll_handle)
+                        components::Scrollbar::horizontal(hscrollbar_id, scroll)
                             .always_visible()
                             .render(theme),
                     )

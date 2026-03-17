@@ -49,6 +49,7 @@ pub(super) struct MarkdownPreviewRow {
 pub(super) enum MarkdownPreviewRowKind {
     Heading { level: u8 },
     Paragraph,
+    DetailsSummary,
     ListItem { number: Option<u64> },
     BlockquoteLine,
     CodeLine { is_first: bool, is_last: bool },
@@ -584,7 +585,7 @@ fn line_range_change_hint(
 
 /// Flatten markdown events into preview rows.
 fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPreviewRow>> {
-    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum ListContext {
@@ -607,11 +608,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
         }
     }
 
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_GFM;
+    let options = markdown_parser_options();
 
     let mut rows = Vec::new();
     let mut text_buf = String::new();
@@ -1091,6 +1088,53 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         }
                         continue;
                     }
+                    HtmlHandling::DetailsSummary(summary_source) => {
+                        if !text_buf.is_empty() {
+                            push_row_with_context(
+                                &mut rows,
+                                MarkdownPreviewRowInput::plain(
+                                    current_row_kind(&list_item_stack, in_blockquote),
+                                    &text_buf,
+                                    &inline_spans,
+                                    source_line_range(
+                                        source_start_byte,
+                                        event_range.start,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
+                                footnote_context.as_mut(),
+                                &mut blockquote_stack,
+                            )?;
+                            text_buf.clear();
+                            inline_spans.clear();
+                        }
+
+                        let (summary_text, summary_spans) =
+                            parse_inline_markdown_fragment(&summary_source);
+                        if !summary_text.is_empty() {
+                            push_row_with_context(
+                                &mut rows,
+                                MarkdownPreviewRowInput::plain(
+                                    MarkdownPreviewRowKind::DetailsSummary,
+                                    &summary_text,
+                                    &summary_spans,
+                                    source_line_range(
+                                        event_range.start,
+                                        event_range.end,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
+                                footnote_context.as_mut(),
+                                &mut blockquote_stack,
+                            )?;
+                        }
+                        source_start_byte = event_range.end;
+                        continue;
+                    }
                     HtmlHandling::StartInlineStyle(style) => {
                         span_stack.push(style);
                         continue;
@@ -1170,6 +1214,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 enum HtmlHandling {
     Ignore,
     HardBreak,
+    DetailsSummary(String),
     StartInlineStyle(MarkdownInlineStyle),
     EndInlineStyle(MarkdownInlineStyle),
     AppendText(String),
@@ -1212,6 +1257,14 @@ fn html_event_should_append(
     in_paragraph || in_heading || in_list || blockquote_level > 0 || in_code_block || in_table_row
 }
 
+fn markdown_parser_options() -> pulldown_cmark::Options {
+    pulldown_cmark::Options::ENABLE_TABLES
+        | pulldown_cmark::Options::ENABLE_STRIKETHROUGH
+        | pulldown_cmark::Options::ENABLE_TASKLISTS
+        | pulldown_cmark::Options::ENABLE_FOOTNOTES
+        | pulldown_cmark::Options::ENABLE_GFM
+}
+
 fn classify_supported_html(html: &str) -> HtmlHandling {
     let trimmed = html.trim();
     if trimmed.is_empty() {
@@ -1221,6 +1274,9 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     let lower = trimmed.to_ascii_lowercase();
     if lower.starts_with("<!--") {
         return HtmlHandling::Ignore;
+    }
+    if let Some(summary_source) = extract_html_summary_content(trimmed) {
+        return HtmlHandling::DetailsSummary(summary_source);
     }
     if let Some(alt_text) = extract_html_image_alt(trimmed) {
         return HtmlHandling::AppendText(alt_text);
@@ -1253,8 +1309,49 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     {
         return HtmlHandling::Ignore;
     }
+    if is_html_open_tag(lower.as_str(), "details") || is_html_close_tag(lower.as_str(), "details") {
+        return HtmlHandling::Ignore;
+    }
 
     HtmlHandling::AppendLiteral
+}
+
+fn is_html_open_tag(lower_html: &str, tag_name: &str) -> bool {
+    if !lower_html.starts_with('<') || lower_html.starts_with("</") {
+        return false;
+    }
+
+    let Some(rest) = lower_html.strip_prefix('<') else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(tag_name) else {
+        return false;
+    };
+
+    rest.is_empty()
+        || rest.starts_with('>')
+        || rest.starts_with('/')
+        || rest.starts_with(char::is_whitespace)
+}
+
+fn is_html_close_tag(lower_html: &str, tag_name: &str) -> bool {
+    let Some(rest) = lower_html.strip_prefix("</") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(tag_name) else {
+        return false;
+    };
+
+    rest.is_empty() || rest.starts_with('>') || rest.starts_with(char::is_whitespace)
+}
+
+fn extract_html_summary_content(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let open_ix = lower.find("<summary")?;
+    let start_tag_end_rel = html[open_ix..].find('>')?;
+    let content_start = open_ix + start_tag_end_rel + 1;
+    let close_rel = lower[content_start..].find("</summary>")?;
+    Some(html[content_start..content_start + close_rel].to_owned())
 }
 
 fn extract_html_image_alt(html: &str) -> Option<String> {
@@ -1306,6 +1403,127 @@ fn pop_matching_inline_style(stack: &mut Vec<MarkdownInlineStyle>, style: Markdo
     }
 }
 
+fn strip_generic_html_tags(fragment: &str) -> String {
+    let mut stripped = String::with_capacity(fragment.len());
+    let mut chars = fragment.chars().peekable();
+    let mut in_tag = false;
+
+    while let Some(ch) = chars.next() {
+        if in_tag {
+            if ch == '>' {
+                in_tag = false;
+            }
+            continue;
+        }
+
+        if ch == '<'
+            && chars
+                .peek()
+                .is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, '/' | '!' | '?'))
+        {
+            in_tag = true;
+            continue;
+        }
+
+        stripped.push(ch);
+    }
+
+    stripped
+}
+
+fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSpan>) {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+
+    let mut text_buf = String::new();
+    let mut span_stack = Vec::new();
+    let mut inline_spans = Vec::new();
+
+    for event in Parser::new_ext(source, markdown_parser_options()) {
+        match event {
+            Event::Start(Tag::Strong) => span_stack.push(MarkdownInlineStyle::Bold),
+            Event::Start(Tag::Emphasis) => span_stack.push(MarkdownInlineStyle::Italic),
+            Event::Start(Tag::Strikethrough) => {
+                span_stack.push(MarkdownInlineStyle::Strikethrough);
+            }
+            Event::Start(Tag::Link { .. }) => span_stack.push(MarkdownInlineStyle::Link),
+            Event::End(
+                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
+            ) => {
+                span_stack.pop();
+            }
+            Event::Text(cow) => {
+                let style = resolve_style_stack(&span_stack);
+                let start = text_buf.len();
+                text_buf.push_str(&cow);
+                let end = text_buf.len();
+                if style != MarkdownInlineStyle::Normal {
+                    inline_spans.push(MarkdownInlineSpan {
+                        byte_range: start..end,
+                        style,
+                    });
+                }
+            }
+            Event::Code(cow) => {
+                let start = text_buf.len();
+                text_buf.push_str(&cow);
+                let end = text_buf.len();
+                inline_spans.push(MarkdownInlineSpan {
+                    byte_range: start..end,
+                    style: MarkdownInlineStyle::Code,
+                });
+            }
+            Event::FootnoteReference(label) => {
+                let start = text_buf.len();
+                text_buf.push('[');
+                text_buf.push_str(&label);
+                text_buf.push(']');
+                let end = text_buf.len();
+                inline_spans.push(MarkdownInlineSpan {
+                    byte_range: start..end,
+                    style: MarkdownInlineStyle::Link,
+                });
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if !text_buf.is_empty() {
+                    text_buf.push(' ');
+                }
+            }
+            Event::Html(cow) | Event::InlineHtml(cow) => {
+                match classify_supported_html(cow.as_ref()) {
+                    HtmlHandling::Ignore => {}
+                    HtmlHandling::HardBreak => {
+                        if !text_buf.is_empty() {
+                            text_buf.push(' ');
+                        }
+                    }
+                    HtmlHandling::DetailsSummary(summary_source) => {
+                        let summary_text = strip_generic_html_tags(&summary_source);
+                        if !summary_text.is_empty() {
+                            if !text_buf.is_empty() {
+                                text_buf.push(' ');
+                            }
+                            text_buf.push_str(&summary_text);
+                        }
+                    }
+                    HtmlHandling::StartInlineStyle(style) => span_stack.push(style),
+                    HtmlHandling::EndInlineStyle(style) => {
+                        pop_matching_inline_style(&mut span_stack, style);
+                    }
+                    HtmlHandling::AppendText(text) => {
+                        text_buf.push_str(&text);
+                    }
+                    HtmlHandling::AppendLiteral => {
+                        text_buf.push_str(&strip_generic_html_tags(cow.as_ref()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    normalize_whitespace_with_spans(&text_buf, &inline_spans)
+}
+
 fn push_row_with_context(
     rows: &mut Vec<MarkdownPreviewRow>,
     row: MarkdownPreviewRowInput<'_>,
@@ -1348,7 +1566,9 @@ fn push_row(
     let (row_text, row_spans) = match row.kind {
         // Paragraph-like rows collapse whitespace, so remap inline spans to
         // the normalized text instead of leaving them pointed at stale bytes.
-        MarkdownPreviewRowKind::Paragraph | MarkdownPreviewRowKind::BlockquoteLine => {
+        MarkdownPreviewRowKind::Paragraph
+        | MarkdownPreviewRowKind::DetailsSummary
+        | MarkdownPreviewRowKind::BlockquoteLine => {
             normalize_whitespace_with_spans(row.text, row.inline_spans)
         }
         _ => (row.text.to_owned(), row.inline_spans.to_vec()),
@@ -2314,6 +2534,44 @@ mod tests {
             doc.rows[0].text.as_ref(),
             "This is a subscript and superscript text"
         );
+    }
+
+    #[test]
+    fn details_summary_renders_as_structured_preview_rows() {
+        let doc = parse(
+            "<details open>\n<summary>**Quick start**</summary>\n\nInstall the package.\n</details>\n",
+        );
+
+        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::DetailsSummary);
+        assert_eq!(doc.rows[0].text.as_ref(), "Quick start");
+        let summary_bold = spans_with_style(&doc.rows[0], MarkdownInlineStyle::Bold);
+        assert_eq!(summary_bold.len(), 1);
+        assert_eq!(
+            &doc.rows[0].text.as_ref()[summary_bold[0].byte_range.clone()],
+            "Quick start"
+        );
+
+        assert_eq!(doc.rows[1].kind, MarkdownPreviewRowKind::Paragraph);
+        assert_eq!(doc.rows[1].text.as_ref(), "Install the package.");
+    }
+
+    #[test]
+    fn details_summary_on_same_html_line_ignores_wrapper_tags() {
+        let doc = parse(
+            "<details><summary><strong>Examples</strong> and `usage`</summary>\n\nBody text.\n</details>\n",
+        );
+
+        assert_eq!(doc.rows.len(), 2);
+        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::DetailsSummary);
+        assert_eq!(doc.rows[0].text.as_ref(), "Examples and usage");
+        let summary_code = spans_with_style(&doc.rows[0], MarkdownInlineStyle::Code);
+        assert_eq!(summary_code.len(), 1);
+        assert_eq!(
+            &doc.rows[0].text.as_ref()[summary_code[0].byte_range.clone()],
+            "usage"
+        );
+        assert_eq!(doc.rows[1].text.as_ref(), "Body text.");
     }
 
     #[test]

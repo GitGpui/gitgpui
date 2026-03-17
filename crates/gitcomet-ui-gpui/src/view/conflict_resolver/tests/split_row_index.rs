@@ -259,6 +259,65 @@ fn two_way_split_projection_hide_resolved() {
 }
 
 #[test]
+fn widest_source_rows_ignore_hidden_middle_context_lines() {
+    let segments = vec![
+        ConflictSegment::Text("ctx\nTHIS_LINE_IS_HIDDEN_BUT_VERY_WIDE\nvisible_tail\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\n".into(),
+            theirs: "b\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, 1);
+
+    let [ours_row, theirs_row] = index.widest_source_rows_by_text_len(&segments, false);
+    let ours_row = index
+        .row_at(&segments, ours_row.expect("expected a visible ours row"))
+        .expect("resolved widest ours row");
+    let theirs_row = index
+        .row_at(
+            &segments,
+            theirs_row.expect("expected a visible theirs row"),
+        )
+        .expect("resolved widest theirs row");
+
+    assert_eq!(ours_row.old.as_deref(), Some("visible_tail"));
+    assert_eq!(theirs_row.new.as_deref(), Some("visible_tail"));
+}
+
+#[test]
+fn widest_source_rows_skip_hidden_resolved_blocks() {
+    let segments = vec![
+        ConflictSegment::Text("ctx\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "THIS_RESOLVED_ROW_IS_HIDDEN_AND_VERY_WIDE\n".into(),
+            theirs: "THIS_RESOLVED_ROW_IS_HIDDEN_AND_VERY_WIDE\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text("visible_tail_is_widest\n".into()),
+    ];
+    let index = ConflictSplitRowIndex::new(&segments, 1);
+
+    let [ours_row, theirs_row] = index.widest_source_rows_by_text_len(&segments, true);
+    let ours_row = index
+        .row_at(&segments, ours_row.expect("expected a visible ours row"))
+        .expect("resolved widest ours row");
+    let theirs_row = index
+        .row_at(
+            &segments,
+            theirs_row.expect("expected a visible theirs row"),
+        )
+        .expect("resolved widest theirs row");
+
+    assert_eq!(ours_row.old.as_deref(), Some("visible_tail_is_widest"));
+    assert_eq!(theirs_row.new.as_deref(), Some("visible_tail_is_widest"));
+}
+
+#[test]
 fn two_way_split_projection_visible_ix_for_conflict() {
     let segments = vec![
         ConflictSegment::Text("ctx\n".into()),
