@@ -175,7 +175,7 @@ jobs:
           gh release view "$tag" --repo "$GITHUB_REPOSITORY"
 
   deploy_homebrew_tap:
-    name: Deploy Homebrew tap formula
+    name: Deploy Homebrew tap packages
     needs: [validate, build_and_upload, publish_release]
     if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
     uses: ./.github/workflows/deploy-homebrew-tap.yml

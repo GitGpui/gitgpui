@@ -110,8 +110,8 @@ linux_name="$(basename "$linux_tar")"
 mkdir -p "$(dirname "$out_path")"
 
 cat > "$out_path" <<EOF2
-class Gitcomet < Formula
-  desc "Fast, resource-efficient Git GUI written in Rust"
+class GitcometCli < Formula
+  desc "GitComet command-line binary"
   homepage "https://github.com/${github_repo}"
   version "${version}"
   license "AGPL-3.0-only"
@@ -136,33 +136,7 @@ class Gitcomet < Formula
   end
 
   def install
-    if OS.mac?
-      libexec.install "GitComet.app"
-      bin.install_symlink libexec/"GitComet.app/Contents/MacOS/gitcomet"
-    else
-      bin.install "gitcomet"
-    end
-  end
-
-  def post_install
-    return unless OS.mac?
-
-    target_app = libexec/"GitComet.app"
-    return unless target_app.exist?
-
-    apps_dir = Pathname.new(File.expand_path("~/Applications"))
-    apps_dir.mkpath unless apps_dir.exist?
-
-    launcher_link = apps_dir/"GitComet.app"
-    if launcher_link.exist? && !launcher_link.symlink?
-      opoo "Skipping ~/Applications/GitComet.app link because a non-symlink path already exists."
-      return
-    end
-
-    launcher_link.unlink if launcher_link.symlink?
-    launcher_link.make_symlink(target_app)
-  rescue StandardError => e
-    opoo "Failed to link GitComet.app into ~/Applications: #{e}"
+    bin.install "gitcomet"
   end
 
   test do

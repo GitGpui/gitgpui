@@ -19,11 +19,17 @@ Download the latest prebuilt binaries/installers from [GitHub Releases](https://
 
 #### Homebrew
 
-install from tap:
+install app from tap (recommended):
 
 ```bash
 brew tap auto-explore/gitcomet
-brew install gitcomet
+brew install --cask gitcomet
+```
+
+optional CLI install:
+
+```bash
+brew install gitcomet-cli
 ```
 
 ### Fast, Free, Familiar
