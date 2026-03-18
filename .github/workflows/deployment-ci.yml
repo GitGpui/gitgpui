@@ -158,18 +158,13 @@ jobs:
           set -euo pipefail
           mkdir -p dist/aur-ci/repo
           cat > dist/aur-ci/repo/PKGBUILD <<'EOF'
-          pkgname=gitcomet-bin
+          pkgname=gitcomet
           pkgver=0.0.0
           pkgrel=1
           pkgdesc="Fast, resource-efficient Git GUI written in Rust"
           arch=('x86_64')
           url="https://gitcomet.dev/"
           license=('AGPL-3.0-only')
-          provides=("${pkgname%-bin}")
-          conflicts=(
-            "${pkgname%-bin}"
-            'gitcomet-git'
-          )
           depends=(
             'fontconfig'
             'freetype2'
