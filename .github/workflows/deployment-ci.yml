@@ -389,14 +389,15 @@ jobs:
       - name: Build release binary
         run: |
           set -euo pipefail
-          cargo_config_flag=()
           cargo_config_output="$(scripts/macos-cargo-config.sh "${{ matrix.arch }}" release)"
+          set --
           if [[ -n "$cargo_config_output" ]]; then
             while IFS= read -r arg; do
-              cargo_config_flag+=("$arg")
+              set -- "$@" "$arg"
             done <<<"$cargo_config_output"
           fi
-          cargo build "${cargo_config_flag[@]}" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          cargo build "$@"
 
       - name: Package macOS artifacts
         run: |

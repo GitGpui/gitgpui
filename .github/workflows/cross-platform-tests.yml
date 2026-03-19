@@ -201,14 +201,15 @@ jobs:
       - name: Gatekeeper and code-signing check (informational)
         run: |
           set -euo pipefail
-          cargo_config_flag=()
           cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
+          set --
           if [[ -n "$cargo_config_output" ]]; then
             while IFS= read -r arg; do
-              cargo_config_flag+=("$arg")
+              set -- "$@" "$arg"
             done <<<"$cargo_config_output"
           fi
-          cargo build "${cargo_config_flag[@]}" -p gitcomet $APP_FEATURES --release --locked
+          set -- "$@" -p gitcomet $APP_FEATURES --release --locked
+          cargo build "$@"
           codesign --verify --verbose target/release/gitcomet || true
           spctl --assess --type execute --verbose target/release/gitcomet || true
 

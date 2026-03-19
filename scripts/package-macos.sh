@@ -101,19 +101,22 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin_src="${repo_root}/target/${mode}/gitcomet"
 
 if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
-  cargo_mode_flag=()
-  cargo_config_flag=()
   cargo_config_output=""
-  if [[ "$mode" == "release" ]]; then
-    cargo_mode_flag=(--release)
-  fi
   cargo_config_output="$("${repo_root}/scripts/macos-cargo-config.sh" "$arch" "$mode")"
-  if [[ -n "$cargo_config_output" ]]; then
-    while IFS= read -r arg; do
-      cargo_config_flag+=("$arg")
-    done <<<"$cargo_config_output"
-  fi
-  (cd "$repo_root" && cargo build "${cargo_config_flag[@]}" -p gitcomet "${cargo_mode_flag[@]}" --locked --features ui-gpui,gix --bins)
+  (
+    cd "$repo_root"
+    set --
+    if [[ -n "$cargo_config_output" ]]; then
+      while IFS= read -r arg; do
+        set -- "$@" "$arg"
+      done <<<"$cargo_config_output"
+    fi
+    if [[ "$mode" == "release" ]]; then
+      set -- "$@" --release
+    fi
+    set -- "$@" -p gitcomet --locked --features ui-gpui,gix --bins
+    cargo build "$@"
+  )
 fi
 
 if [[ ! -x "$bin_src" ]]; then
