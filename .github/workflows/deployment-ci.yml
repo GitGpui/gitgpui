@@ -85,7 +85,9 @@ jobs:
           grep -Fq 'vars.APT_STORAGE_PUBLIC_ACCESS' .github/workflows/deploy-apt-repo.yml
           grep -Fq 'vars.AUR_GITHUB_REPO' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GITHUB_BRANCH' .github/workflows/deploy-aur.yml
-          grep -Fq 'AUR_REPO_TOKEN' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
+          grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
+          grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
 
       - name: Generate Homebrew cask and formula from synthetic artifacts

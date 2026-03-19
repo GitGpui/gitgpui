@@ -188,7 +188,7 @@ jobs:
     secrets: inherit
 
   deploy_aur:
-    name: Deploy AUR mirror metadata
+    name: Deploy AUR metadata
     needs: [validate, build_and_upload, publish_release]
     if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' }}
     uses: ./.github/workflows/deploy-aur.yml
