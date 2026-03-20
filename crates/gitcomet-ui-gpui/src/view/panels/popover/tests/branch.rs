@@ -2,7 +2,7 @@ use super::*;
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, LogPage, ReflogEntry, RepoSpec, RepoStatus, StashEntry,
 };
-use gitcomet_core::services::PullMode;
+use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::{Msg, StoreEvent};
 use std::path::{Path, PathBuf};
@@ -198,6 +198,16 @@ impl GitRepository for TrackingRepo {
 
     fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
         Ok(())
+    }
+
+    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!("tag:{name}:{target}"));
+        Ok(CommandOutput::empty_success(format!(
+            "git tag {name} {target}"
+        )))
     }
 }
 

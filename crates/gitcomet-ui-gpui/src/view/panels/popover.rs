@@ -66,6 +66,7 @@ pub(in super::super) struct PopoverHost {
     settings_submenu_max_h: Option<Pixels>,
     settings_runtime_info: settings::SettingsRuntimeInfo,
     _ui_model_subscription: gpui::Subscription,
+    _create_tag_input_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
@@ -295,6 +296,27 @@ impl PopoverHost {
             )
         });
 
+        let create_tag_input_subscription = cx.observe(&create_tag_input, |this, input, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })) {
+                return;
+            }
+
+            if escape_pressed {
+                this.close_popover(cx);
+                return;
+            }
+
+            if enter_pressed {
+                this.submit_create_tag(cx);
+                return;
+            }
+
+            cx.notify();
+        });
+
         let create_branch_input_subscription =
             cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
@@ -426,6 +448,7 @@ impl PopoverHost {
             settings_submenu_max_h: None,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
             _ui_model_subscription: subscription,
+            _create_tag_input_subscription: create_tag_input_subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
@@ -548,6 +571,33 @@ impl PopoverHost {
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus);
         cx.notify();
+    }
+
+    fn can_submit_create_tag(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CreateTagPrompt { .. }))
+            && self
+                .create_tag_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_create_tag(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::CreateTagPrompt { repo_id, target }) = self.popover.clone() else {
+            return;
+        };
+
+        let name = self
+            .create_tag_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::CreateTag {
+            repo_id,
+            name,
+            target,
+        });
+        self.close_popover(cx);
     }
 
     fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
@@ -761,6 +811,7 @@ impl PopoverHost {
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
