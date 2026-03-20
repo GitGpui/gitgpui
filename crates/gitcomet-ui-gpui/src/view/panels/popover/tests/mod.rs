@@ -16,7 +16,10 @@ impl GitBackend for TestBackend {
     }
 }
 
+mod branch;
+mod context_shortcuts;
 mod file_actions;
+mod picker;
 mod refs;
 mod stash;
 mod status;
