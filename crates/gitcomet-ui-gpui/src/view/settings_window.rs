@@ -7,7 +7,7 @@ const SETTINGS_WINDOW_DEFAULT_WIDTH_PX: f32 = 720.0;
 const SETTINGS_WINDOW_DEFAULT_HEIGHT_PX: f32 = 620.0;
 const SETTINGS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
 const MIN_GIT_MAJOR: u32 = 2;
-const MIN_GIT_MINOR: u32 = 53;
+const MIN_GIT_MINOR: u32 = 50;
 const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
@@ -673,14 +673,28 @@ impl Render for SettingsWindowView {
 
         general_card = general_card.child(show_timezone_row);
 
-        let (git_icon, git_icon_color, git_status_text): (&'static str, gpui::Rgba, SharedString) =
-            match self.runtime_info.git.compatibility {
-                GitCompatibility::Supported => ("OK", theme.colors.success, "Git >= 2.53".into()),
-                GitCompatibility::TooOld => ("!!", theme.colors.warning, "Git < 2.53".into()),
-                GitCompatibility::Unknown => {
-                    ("??", theme.colors.warning, "Git version unknown".into())
-                }
-            };
+        let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
+        let (git_icon_path, git_icon_color, git_status_text): (
+            &'static str,
+            gpui::Rgba,
+            SharedString,
+        ) = match self.runtime_info.git.compatibility {
+            GitCompatibility::Supported => (
+                "icons/check.svg",
+                theme.colors.success,
+                format!("Git >= {min_git_version}").into(),
+            ),
+            GitCompatibility::TooOld => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                format!("Git < {min_git_version}").into(),
+            ),
+            GitCompatibility::Unknown => (
+                "icons/warning.svg",
+                theme.colors.warning,
+                "Git version unknown".into(),
+            ),
+        };
 
         let mut environment_card = self
             .card("settings_window_environment", "Environment", theme)
@@ -700,13 +714,7 @@ impl Render for SettingsWindowView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                                    .text_color(git_icon_color)
-                                    .child(git_icon),
-                            )
+                            .child(svg_icon(git_icon_path, git_icon_color, px(14.0)))
                             .child(
                                 div()
                                     .text_sm()
@@ -971,10 +979,10 @@ mod tests {
     #[test]
     fn parse_git_version_extracts_first_version_token() {
         assert_eq!(
-            parse_git_version("git version 2.53.7"),
+            parse_git_version("git version 2.50.7"),
             Some(GitVersion {
                 major: 2,
-                minor: 53
+                minor: 50
             })
         );
     }
@@ -991,6 +999,26 @@ mod tests {
         assert_eq!(parse_git_version_token("v2.45.1"), None);
         assert_eq!(parse_u32_prefix("53rc1"), Some(53));
         assert_eq!(parse_u32_prefix("rc53"), None);
+    }
+
+    #[test]
+    fn supported_version_requires_minimum_2_50() {
+        assert!(is_supported_git_version(GitVersion {
+            major: MIN_GIT_MAJOR,
+            minor: MIN_GIT_MINOR,
+        }));
+        assert!(is_supported_git_version(GitVersion {
+            major: MIN_GIT_MAJOR,
+            minor: MIN_GIT_MINOR + 1,
+        }));
+        assert!(!is_supported_git_version(GitVersion {
+            major: MIN_GIT_MAJOR,
+            minor: MIN_GIT_MINOR - 1,
+        }));
+        assert!(is_supported_git_version(GitVersion {
+            major: MIN_GIT_MAJOR + 1,
+            minor: 0,
+        }));
     }
 
     #[gpui::test]
