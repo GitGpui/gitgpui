@@ -1,3 +1,4 @@
+use gitcomet_core::process::background_command as no_window_command;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -27,7 +28,7 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_tooling() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let mut cmd = Command::new("git");
+        let mut cmd = no_window_command("git");
         apply_isolated_git_config_env(&mut cmd);
         let output = match cmd.args(["difftool", "--tool-help"]).output() {
             Ok(output) => output,
@@ -97,7 +98,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let mut cmd = Command::new("git");
+    let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     let output = cmd
         .arg("-C")
@@ -115,7 +116,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C")
         .arg(repo)
@@ -125,7 +126,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
 }
 
 fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str>) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-C").arg(repo).args(args);
     if let Some(display) = display {
@@ -137,7 +138,7 @@ fn run_git_capture_with_display(repo: &Path, args: &[&str], display: Option<&str
 }
 
 fn run_git_capture_in(cwd: &Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.current_dir(cwd)
         .args(args)

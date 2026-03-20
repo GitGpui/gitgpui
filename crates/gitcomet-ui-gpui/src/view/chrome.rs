@@ -1,5 +1,4 @@
 use super::*;
-use gpui::ObjectFit;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
@@ -80,12 +79,9 @@ fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
             div()
                 .id("titlebar_app_icon")
                 .size(px(16.0))
-                .rounded(px(2.0))
-                .overflow_hidden()
                 .child(
-                    gpui::img("gitcomet_logo_window.svg")
+                    gpui::img("gitcomet-window-icon.png")
                         .size(px(16.0))
-                        .object_fit(ObjectFit::Contain)
                         .with_fallback(move || {
                             svg_icon("icons/gitcomet_mark.svg", theme.colors.accent, px(16.0))
                                 .into_any_element()

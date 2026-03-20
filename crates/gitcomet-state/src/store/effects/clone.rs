@@ -5,6 +5,7 @@ use gitcomet_core::auth::{
     GitAuthKind, StagedGitAuth, take_staged_git_auth,
 };
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::process::configure_background_command;
 use gitcomet_core::services::CommandOutput;
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _};
@@ -299,6 +300,7 @@ pub(super) fn schedule_clone_repo(
         }
 
         let mut cmd = Command::new("git");
+        configure_background_command(&mut cmd);
         cmd.arg("-c")
             .arg("color.ui=false")
             .arg("clone")

@@ -1,3 +1,12 @@
+// Use the GUI subsystem on Windows for packaged builds so launching
+// `gitcomet.exe` from Explorer or Start Menu shortcuts does not create a
+// separate console window. Keep debug/test builds attached to the invoking
+// console so subprocess-heavy Windows test runs do not pop extra terminals.
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions), not(test)),
+    windows_subsystem = "windows"
+)]
+
 mod cli;
 #[cfg(feature = "ui")]
 mod crashlog;
@@ -284,12 +293,12 @@ const MACOS_BUNDLE_RELAUNCH_ENV: &str = "GITCOMET_SKIP_APP_BUNDLE_RELAUNCH";
 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
 const MACOS_APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/gitcomet-512.png");
 
-#[cfg(feature = "ui-gpui-runtime")]
+#[cfg(all(feature = "ui-gpui-runtime", any(target_os = "macos", all(test, unix))))]
 fn resolve_executable_path_for_bundle_detection(path: &std::path::Path) -> std::path::PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-#[cfg(feature = "ui-gpui-runtime")]
+#[cfg(all(feature = "ui-gpui-runtime", any(target_os = "macos", test)))]
 fn is_macos_app_bundle_executable(path: &std::path::Path) -> bool {
     path.to_string_lossy().contains(".app/Contents/MacOS/")
 }

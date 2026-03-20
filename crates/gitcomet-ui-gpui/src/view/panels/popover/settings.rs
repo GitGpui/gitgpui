@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::process::configure_background_command;
 
 const MIN_GIT_MAJOR: u32 = 2;
 const MIN_GIT_MINOR: u32 = 50;
@@ -99,7 +100,9 @@ fn detect_git_runtime_info() -> GitRuntimeInfo {
          Please use Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer."
     );
 
-    match std::process::Command::new("git").arg("--version").output() {
+    let mut command = std::process::Command::new("git");
+    configure_background_command(&mut command);
+    match command.arg("--version").output() {
         Ok(output) if output.status.success() => {
             let version_output = if !output.stdout.is_empty() {
                 bytes_to_text_preserving_utf8(&output.stdout)

@@ -155,7 +155,7 @@ jobs:
       - name: Build release binary
         shell: pwsh
         run: |
-          cargo build -p gitcomet --release --locked --features ui-gpui,gix --bins
+          cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 
       - name: Package portable ZIP
         shell: pwsh

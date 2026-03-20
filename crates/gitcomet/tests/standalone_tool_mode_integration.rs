@@ -1,3 +1,4 @@
+use gitcomet_core::process::background_command as no_window_command;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,7 +45,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new(gitcomet_bin())
+    no_window_command(gitcomet_bin())
         .args(args)
         .output()
         .expect("gitcomet command to run")
@@ -55,7 +56,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new(gitcomet_bin())
+    no_window_command(gitcomet_bin())
         .current_dir(dir)
         .args(args)
         .output()
@@ -71,7 +72,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut command = Command::new(gitcomet_bin());
+    let mut command = no_window_command(gitcomet_bin());
     env.apply_to_command(&mut command);
     command
         .current_dir(dir)
@@ -81,7 +82,7 @@ where
 }
 
 fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = no_window_command("git")
         .args(["-C"])
         .arg(repo_dir)
         .args(["config", "--get", key])
@@ -95,7 +96,7 @@ fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {
 }
 
 fn git_config_get_local(repo_dir: &Path, key: &str) -> Option<String> {
-    let output = Command::new("git")
+    let output = no_window_command("git")
         .arg("-C")
         .arg(repo_dir)
         .args(["config", "--local", "--get", key])
@@ -109,7 +110,7 @@ fn git_config_get_local(repo_dir: &Path, key: &str) -> Option<String> {
 }
 
 fn git_config_set_local(repo_dir: &Path, key: &str, value: &str) {
-    let output = Command::new("git")
+    let output = no_window_command("git")
         .arg("-C")
         .arg(repo_dir)
         .args(["config", "--local", key, value])
@@ -153,7 +154,7 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_tooling() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git")
+        let output = match no_window_command("git")
             .args(["difftool", "--tool-help"])
             .output()
         {
@@ -176,7 +177,7 @@ fn git_shell_available_for_tooling() -> bool {
 fn posix_sh_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        Command::new("sh")
+        no_window_command("sh")
             .args(["-lc", "exit 0"])
             .output()
             .map(|output| output.status.success())
@@ -1588,7 +1589,7 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
     }
     let dir = tempfile::tempdir().unwrap();
 
-    let init = Command::new("git")
+    let init = no_window_command("git")
         .args(["init", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -1618,7 +1619,7 @@ fn setup_dry_run_commands_execute_verbatim_in_shell() {
     );
 
     for cmd in commands {
-        let apply = Command::new("sh")
+        let apply = no_window_command("sh")
             .current_dir(dir.path())
             .args(["-c", cmd])
             .output()
@@ -1683,7 +1684,7 @@ fn setup_local_writes_config_to_repo() {
     let dir = tempfile::tempdir().unwrap();
 
     // Initialize a git repo.
-    let init = Command::new("git")
+    let init = no_window_command("git")
         .args(["init", dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -2454,7 +2455,7 @@ fn standalone_mergetool_auto_crlf_subchunk_preserves_line_endings() {
 
 /// Run a git command in a repo; assert success.
 fn setup_e2e_git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
+    let output = no_window_command("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -2473,7 +2474,7 @@ fn setup_e2e_git(repo: &Path, args: &[&str]) {
 
 /// Run a git command in a repo; return output (may succeed or fail).
 fn setup_e2e_git_capture(repo: &Path, args: &[&str]) -> Output {
-    Command::new("git")
+    no_window_command("git")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -2540,7 +2541,7 @@ fn setup_e2e_git_capture_with_env(
     args: &[&str],
     env: &IsolatedGlobalGitEnv,
 ) -> Output {
-    let mut command = Command::new("git");
+    let mut command = no_window_command("git");
     env.apply_to_command(&mut command);
     command
         .arg("-C")
@@ -2578,7 +2579,7 @@ fn setup_e2e_commit_with_env(repo: &Path, message: &str, env: &IsolatedGlobalGit
 }
 
 fn git_config_get_global_with_env(env: &IsolatedGlobalGitEnv, key: &str) -> Option<String> {
-    let mut command = Command::new("git");
+    let mut command = no_window_command("git");
     env.apply_to_command(&mut command);
     let output = command
         .args(["config", "--global", "--get", key])

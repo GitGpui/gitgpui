@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::process::configure_background_command;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
@@ -828,7 +829,9 @@ fn detect_git_runtime_info() -> GitRuntimeInfo {
     let compatibility_message =
         format!("GitComet has been tested only with Git {MIN_GIT_MAJOR}.{MIN_GIT_MINOR} or newer.");
 
-    match std::process::Command::new("git").arg("--version").output() {
+    let mut command = std::process::Command::new("git");
+    configure_background_command(&mut command);
+    match command.arg("--version").output() {
         Ok(output) if output.status.success() => {
             let version_output = if !output.stdout.is_empty() {
                 bytes_to_text_preserving_utf8(&output.stdout)
