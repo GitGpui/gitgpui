@@ -594,6 +594,140 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn remote_branch_menu_only_enables_unlink_for_active_branch_upstream(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(230);
+    let enabled_name = "origin/feature/awesome".to_string();
+    let disabled_name = "origin/main".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_remote_branch_menu_unlink",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("feature/local".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Branch {
+                name: "feature/local".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: Some(gitcomet_core::domain::Upstream {
+                    remote: "origin".to_string(),
+                    branch: "feature/awesome".to_string(),
+                }),
+                divergence: None,
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let enabled_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: enabled_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected enabled remote branch context menu model");
+
+        let enabled_entry = enabled_model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                action,
+                disabled,
+                ..
+            } if label.as_ref() == "Unlink upstream branch" => {
+                Some(((**action).clone(), *disabled))
+            }
+            _ => None,
+        });
+
+        match enabled_entry {
+            Some((
+                ContextMenuAction::UnsetUpstreamBranch {
+                    repo_id: rid,
+                    branch,
+                },
+                disabled,
+            )) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(branch, "feature/local");
+                assert!(!disabled);
+            }
+            _ => panic!("expected enabled UnsetUpstreamBranch entry"),
+        }
+
+        let disabled_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Remote,
+                            name: disabled_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected disabled remote branch context menu model");
+
+        let disabled_entry = disabled_model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                action,
+                disabled,
+                ..
+            } if label.as_ref() == "Unlink upstream branch" => {
+                Some(((**action).clone(), *disabled))
+            }
+            _ => None,
+        });
+
+        match disabled_entry {
+            Some((
+                ContextMenuAction::UnsetUpstreamBranch {
+                    repo_id: rid,
+                    branch,
+                },
+                disabled,
+            )) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(branch, "feature/local");
+                assert!(disabled);
+            }
+            _ => panic!("expected disabled UnsetUpstreamBranch entry"),
+        }
+    });
+}
+
+#[gpui::test]
 fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
     cx: &mut gpui::TestAppContext,
 ) {

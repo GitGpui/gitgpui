@@ -319,6 +319,10 @@ pub enum Msg {
         remote: String,
         branch: String,
     },
+    UnsetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
+    },
     DeleteRemoteBranch {
         repo_id: RepoId,
         remote: String,

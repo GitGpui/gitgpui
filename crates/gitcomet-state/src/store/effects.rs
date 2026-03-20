@@ -275,6 +275,9 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_push_set_upstream(
             executor, repos, msg_tx, repo_id, remote, branch,
         ),
+        Effect::UnsetUpstreamBranch { repo_id, branch } => {
+            repo_commands::schedule_unset_upstream_branch(executor, repos, msg_tx, repo_id, branch)
+        }
         Effect::DeleteRemoteBranch {
             repo_id,
             remote,

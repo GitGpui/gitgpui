@@ -89,6 +89,17 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::UnsetUpstreamBranch {
+            repo_id,
+            branch: "main".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
             repo_id,
             command: RepoCommandKind::FetchAll,
@@ -197,6 +208,22 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
         }),
     );
     assert_eq!(state.repos[0].push_in_flight, 0);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::UnsetUpstreamBranch {
+                branch: "main".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git branch --unset-upstream main",
+            )),
+        }),
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
 }
 
 #[test]
@@ -1177,6 +1204,23 @@ fn repo_operations_emit_effects() {
         }]
     ));
 
+    let unset_upstream = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UnsetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch: "feature/foo".to_string(),
+        },
+    );
+    assert!(matches!(
+        unset_upstream.as_slice(),
+        [Effect::UnsetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+        }] if branch == "feature/foo"
+    ));
+
     let stash = reduce(
         &mut repos,
         &id_alloc,
@@ -1314,6 +1358,22 @@ fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
     assert!(
         state.repos[0].ops_rev > ops_after_force_push,
         "ops_rev should bump after PushSetUpstream"
+    );
+    let ops_after_push_set_upstream = state.repos[0].ops_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UnsetUpstreamBranch {
+            repo_id,
+            branch: "feature/test".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 2);
+    assert!(
+        state.repos[0].ops_rev > ops_after_push_set_upstream,
+        "ops_rev should bump after UnsetUpstreamBranch"
     );
 }
 
@@ -1691,8 +1751,25 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         }]
     ));
 
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UnsetUpstreamBranch {
+            repo_id,
+            branch: "feature/current".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::UnsetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+        }] if branch == "feature/current"
+    ));
+
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 7,
+        state.repos[0].local_actions_in_flight, 8,
         "expected begin_local_action for all routed local-action messages"
     );
 
@@ -1880,6 +1957,23 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::UnsetUpstreamBranch {
+            repo_id,
+            branch: "feature/current".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::UnsetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+        }] if branch == "feature/current"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::CheckoutConflictSide {
             repo_id,
             path: PathBuf::from("conflicted.txt"),
@@ -1948,6 +2042,12 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
                 kind: gitcomet_core::services::RemoteUrlKind::Push,
             },
             "Remote",
+        ),
+        (
+            RepoCommandKind::UnsetUpstreamBranch {
+                branch: "feature/current".to_string(),
+            },
+            "Unlink upstream branch",
         ),
         (
             RepoCommandKind::CheckoutConflict {

@@ -140,6 +140,10 @@ enum ContextMenuAction {
     Push {
         repo_id: RepoId,
     },
+    UnsetUpstreamBranch {
+        repo_id: RepoId,
+        branch: String,
+    },
     OpenPopover {
         kind: PopoverKind,
     },

@@ -704,6 +704,10 @@ impl PopoverHost {
             ContextMenuAction::Push { repo_id } => {
                 self.store.dispatch(Msg::Push { repo_id });
             }
+            ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
+                self.store
+                    .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor

@@ -562,6 +562,21 @@ impl GixRepo {
         self.push_set_upstream_with_optional_output_impl(remote, branch, true)
     }
 
+    pub(super) fn unset_upstream_branch_with_output_impl(
+        &self,
+        branch: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(branch, "branch name")?;
+
+        let label = format!("git branch --unset-upstream {branch}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("branch")
+            .arg("--unset-upstream")
+            .arg("--")
+            .arg(branch);
+        run_git_with_output(cmd, &label)
+    }
+
     pub(super) fn delete_remote_branch_with_output_impl(
         &self,
         remote: &str,

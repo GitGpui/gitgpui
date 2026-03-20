@@ -14,16 +14,23 @@ pub(super) fn model(
     items.push(ContextMenuItem::Label(name.clone().into()));
     items.push(ContextMenuItem::Separator);
 
-    let is_current_branch = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .and_then(|r| match &r.head_branch {
-            Loadable::Ready(b) => Some(b == name),
-            _ => None,
-        })
-        .unwrap_or(false);
+    let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+
+    let active_branch_name = repo.and_then(|r| match &r.head_branch {
+        Loadable::Ready(branch) => Some(branch.clone()),
+        _ => None,
+    });
+    let active_upstream_full = repo.and_then(|r| match (&r.branches, &r.head_branch) {
+        (Loadable::Ready(branches), Loadable::Ready(head)) => branches
+            .iter()
+            .find(|branch| branch.name == *head)
+            .and_then(|branch| branch.upstream.as_ref())
+            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch)),
+        _ => None,
+    });
+    let is_current_branch = active_branch_name
+        .as_ref()
+        .is_some_and(|branch| branch == name);
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -148,6 +155,16 @@ pub(super) fn model(
                             branch: branch.to_string(),
                         },
                     ),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Unlink upstream branch".into(),
+                icon: Some("⛓".into()),
+                shortcut: None,
+                disabled: active_upstream_full.as_deref() != Some(name.as_str()),
+                action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
+                    repo_id,
+                    branch: active_branch_name.unwrap_or_default(),
                 }),
             });
             items.push(ContextMenuItem::Separator);

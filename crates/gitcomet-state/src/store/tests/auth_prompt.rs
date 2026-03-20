@@ -697,6 +697,17 @@ fn submit_auth_prompt_replays_expected_repo_command_mappings() {
         }] if remote == "origin" && branch == "main"
     ));
 
+    let unset_upstream_effects = replay_case(RepoCommandKind::UnsetUpstreamBranch {
+        branch: "feature/current".to_string(),
+    });
+    assert!(matches!(
+        unset_upstream_effects.as_slice(),
+        [Effect::UnsetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+        }] if branch == "feature/current"
+    ));
+
     let reset_effects = replay_case(RepoCommandKind::Reset {
         mode: ResetMode::Mixed,
         target: "HEAD~1".to_string(),

@@ -287,6 +287,10 @@ pub(super) fn push_set_upstream(
     }]
 }
 
+pub(super) fn unset_upstream_branch(repo_id: RepoId, branch: String) -> Vec<Effect> {
+    vec![Effect::UnsetUpstreamBranch { repo_id, branch }]
+}
+
 pub(super) fn delete_remote_branch(
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -521,6 +525,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddRemote { .. }
             | RepoCommandKind::RemoveRemote { .. }
             | RepoCommandKind::SetRemoteUrl { .. }
+            | RepoCommandKind::UnsetUpstreamBranch { .. }
             | RepoCommandKind::CheckoutConflict { .. }
             | RepoCommandKind::AcceptConflictDeletion { .. }
             | RepoCommandKind::CheckoutConflictBase { .. }
