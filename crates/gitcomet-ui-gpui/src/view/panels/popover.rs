@@ -5,7 +5,7 @@ mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod clone_repo;
 mod conflict_save_stage_confirm;
-mod context_menu;
+pub(in super::super) mod context_menu;
 mod create_branch;
 mod create_tag_prompt;
 mod delete_remote_branch_confirm;
@@ -20,6 +20,7 @@ mod merge_abort_confirm;
 mod open_source_licenses;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
+mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
@@ -79,6 +80,7 @@ pub(in super::super) struct PopoverHost {
     context_menu_selected_ix: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
+    recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
@@ -403,6 +405,7 @@ impl PopoverHost {
             context_menu_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_search_input: None,
+            recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
@@ -463,6 +466,9 @@ impl PopoverHost {
         if let Some(input) = &self.repo_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
+        if let Some(input) = &self.recent_repo_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         if let Some(input) = &self.branch_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
@@ -483,6 +489,11 @@ impl PopoverHost {
         }
 
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn set_state_for_test(&mut self, state: Arc<AppState>) {
+        self.state = state;
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
@@ -598,6 +609,9 @@ impl PopoverHost {
             match &kind {
                 PopoverKind::RepoPicker => {
                     let _ = self.ensure_repo_picker_search_input(window, cx);
+                }
+                PopoverKind::RecentRepositoryPicker => {
+                    let _ = self.ensure_recent_repo_picker_search_input(window, cx);
                 }
                 PopoverKind::BranchPicker => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
@@ -841,7 +855,7 @@ impl PopoverHost {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(super) fn set_date_time_format(
+    pub(in super::super) fn set_date_time_format(
         &mut self,
         next: DateTimeFormat,
         cx: &mut gpui::Context<Self>,
@@ -855,7 +869,7 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
+    pub(in super::super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         if self.timezone == next {
             return;
         }
@@ -865,7 +879,11 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_show_timezone(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+    pub(in super::super) fn set_show_timezone(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.show_timezone == enabled {
             return;
         }
@@ -875,7 +893,7 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_theme_mode(
+    pub(in super::super) fn set_theme_mode(
         &mut self,
         next: ThemeMode,
         appearance: gpui::WindowAppearance,
@@ -900,13 +918,19 @@ impl PopoverHost {
         let fmt = self.date_time_format;
         let tz = self.timezone;
         let show_tz = self.show_timezone;
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.theme_mode = mode;
-            root.date_time_format = fmt;
-            root.timezone = tz;
-            root.show_timezone = show_tz;
-            root.schedule_ui_settings_persist(cx);
-        });
+        let root_view = self.root_view.clone();
+        cx.spawn(
+            async move |_host: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.theme_mode = mode;
+                    root.date_time_format = fmt;
+                    root.timezone = tz;
+                    root.show_timezone = show_tz;
+                    root.schedule_ui_settings_persist(cx);
+                });
+            },
+        )
+        .detach();
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1114,6 +1138,7 @@ impl PopoverHost {
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::RecentRepositoryPicker => recent_repo_picker::panel(self, cx),
             PopoverKind::Settings => settings::panel(self, cx),
             PopoverKind::OpenSourceLicenses => open_source_licenses::panel(self, cx),
             PopoverKind::BranchPicker => branch_picker::panel(self, cx),

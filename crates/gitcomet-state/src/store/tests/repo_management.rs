@@ -447,6 +447,56 @@ fn close_repo_removes_and_moves_active() {
 }
 
 #[test]
+fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(20);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo3")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: RepoId(20),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo {
+            repo_id: RepoId(20),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistSession { .. }]
+    ));
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(21)));
+}
+
+#[test]
 fn reorder_repo_tabs_moves_repo_and_keeps_active() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

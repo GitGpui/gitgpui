@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH]
+Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
 
 Builds a macOS app bundle and release artifacts:
   - gitcomet-v<VERSION>-macos-<ARCH>.tar.gz
@@ -20,6 +20,8 @@ mode="release"
 build=1
 create_dmg=1
 out_dir="dist"
+codesign_identity=""
+codesign_keychain=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +51,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir)
       out_dir="${2:-}"
+      shift 2
+      ;;
+    --codesign-identity)
+      codesign_identity="${2:-}"
+      shift 2
+      ;;
+    --codesign-keychain)
+      codesign_keychain="${2:-}"
       shift 2
       ;;
     -h|--help)
@@ -180,6 +190,26 @@ cat > "${contents_dir}/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if [[ -n "$codesign_identity" ]]; then
+  if ! command -v codesign >/dev/null 2>&1; then
+    echo "codesign is required when --codesign-identity is set." >&2
+    exit 1
+  fi
+
+  sign_args=(--force --timestamp --options runtime --sign "$codesign_identity")
+  if [[ -n "$codesign_keychain" ]]; then
+    sign_args+=(--keychain "$codesign_keychain")
+  fi
+
+  echo "Signing macOS artifacts with identity: $codesign_identity"
+  codesign "${sign_args[@]}" "${macos_dir}/gitcomet"
+  codesign "${sign_args[@]}" "${release_dir}/gitcomet"
+  codesign "${sign_args[@]}" "$app_bundle"
+
+  codesign --verify --strict --verbose=2 "${release_dir}/gitcomet"
+  codesign --verify --strict --verbose=2 "$app_bundle"
+fi
 
 # Create a deterministic tarball root directory per version/arch.
 tarball_path="${out_abs}/${release_root}.tar.gz"

@@ -1741,6 +1741,7 @@ pub(super) enum ResolverPickTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
+    RecentRepositoryPicker,
     BranchPicker,
     CreateBranch,
     CheckoutRemoteBranchPrompt {
@@ -1760,6 +1761,7 @@ pub(super) enum PopoverKind {
         message: String,
     },
     CloneRepo,
+    #[allow(dead_code)]
     Settings,
     SettingsThemeMenu,
     SettingsDateFormatMenu,
@@ -2271,6 +2273,7 @@ pub struct GitCometView {
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_remove_worktree_prompt: Option<(RepoId, std::path::PathBuf)>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
+    pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,
 
     pub(super) error_banner_input: Entity<components::TextInput>,
     pub(super) transient_error_banner: Option<SharedString>,

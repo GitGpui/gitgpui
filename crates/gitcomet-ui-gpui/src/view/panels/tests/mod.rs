@@ -771,3 +771,4 @@ mod file_diff;
 mod file_status;
 mod large_file_diff;
 mod markdown;
+mod shortcuts;

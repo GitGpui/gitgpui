@@ -17,6 +17,7 @@ impl GitBackend for TestBackend {
 }
 
 mod file_actions;
+mod recent_repo_picker;
 mod refs;
 mod stash;
 mod status;

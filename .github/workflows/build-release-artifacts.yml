@@ -16,6 +16,19 @@ on:
       release_id:
         required: false
         type: string
+    secrets:
+      MACOS_SIGNING_IDENTITY:
+        required: false
+      MACOS_SIGNING_CERT_BASE64:
+        required: false
+      MACOS_SIGNING_CERT_PASSWORD:
+        required: false
+      MACOS_NOTARY_KEY_ID:
+        required: false
+      MACOS_NOTARY_ISSUER_ID:
+        required: false
+      MACOS_NOTARY_API_KEY_P8:
+        required: false
   workflow_dispatch:
     inputs:
       tag:
@@ -315,6 +328,12 @@ jobs:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       ARCH: ${{ matrix.arch }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      MACOS_SIGNING_CERT_BASE64: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
+      MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -327,6 +346,62 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Prepare macOS signing and notarization credentials
+        id: macos_signing
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            MACOS_SIGNING_IDENTITY \
+            MACOS_SIGNING_CERT_BASE64 \
+            MACOS_SIGNING_CERT_PASSWORD \
+            MACOS_NOTARY_KEY_ID \
+            MACOS_NOTARY_ISSUER_ID \
+            MACOS_NOTARY_API_KEY_P8; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error title=Missing macOS signing configuration::Missing required secret(s): ${missing[*]}"
+            echo "::error title=Required secrets::Set MACOS_SIGNING_IDENTITY, MACOS_SIGNING_CERT_BASE64, MACOS_SIGNING_CERT_PASSWORD, MACOS_NOTARY_KEY_ID, MACOS_NOTARY_ISSUER_ID, and MACOS_NOTARY_API_KEY_P8."
+            exit 1
+          fi
+
+          keychain_path="${RUNNER_TEMP}/gitcomet-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          cert_path="${RUNNER_TEMP}/gitcomet-signing-cert.p12"
+          api_key_path="${RUNNER_TEMP}/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
+          default_keychain="$(security default-keychain -d user | tr -d '"')"
+
+          if base64 --help 2>&1 | grep -q -- '--decode'; then
+            printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 --decode > "$cert_path"
+          else
+            printf '%s' "$MACOS_SIGNING_CERT_BASE64" | base64 -D > "$cert_path"
+          fi
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$cert_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_SIGNING_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+          security find-identity -v -p codesigning "$keychain_path"
+
+          printf '%s' "$MACOS_NOTARY_API_KEY_P8" > "$api_key_path"
+          chmod 600 "$api_key_path"
+
+          echo "keychain_path=$keychain_path" >> "$GITHUB_OUTPUT"
+          echo "api_key_path=$api_key_path" >> "$GITHUB_OUTPUT"
+          echo "default_keychain=$default_keychain" >> "$GITHUB_OUTPUT"
+
       - name: Package macOS release assets
         run: |
           set -euo pipefail
@@ -334,7 +409,57 @@ jobs:
             --version "${VERSION}" \
             --arch "${ARCH}" \
             --release \
-            --out-dir dist
+            --out-dir dist \
+            --codesign-identity "${MACOS_SIGNING_IDENTITY}" \
+            --codesign-keychain "${{ steps.macos_signing.outputs.keychain_path }}"
+
+      - name: Notarize and verify macOS artifacts
+        run: |
+          set -euo pipefail
+
+          release_root="gitcomet-v${VERSION}-macos-${ARCH}"
+          dmg_path="dist/${release_root}.dmg"
+          app_path="dist/stage/${release_root}/GitComet.app"
+          app_binary="${app_path}/Contents/MacOS/gitcomet"
+
+          if [ ! -f "$dmg_path" ] || [ ! -d "$app_path" ]; then
+            echo "::error title=Missing macOS package::Expected $dmg_path and $app_path to exist."
+            exit 1
+          fi
+
+          xcrun notarytool submit "$dmg_path" \
+            --key "${{ steps.macos_signing.outputs.api_key_path }}" \
+            --key-id "${MACOS_NOTARY_KEY_ID}" \
+            --issuer "${MACOS_NOTARY_ISSUER_ID}" \
+            --wait
+
+          xcrun stapler staple "$app_path"
+          xcrun stapler staple "$dmg_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "$dmg_path"
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_binary"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
+
+      - name: Cleanup macOS signing keychain
+        if: ${{ always() }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          DEFAULT_KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.default_keychain }}
+          API_KEY_PATH: ${{ steps.macos_signing.outputs.api_key_path }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DEFAULT_KEYCHAIN_PATH:-}" ]; then
+            security default-keychain -d user -s "$DEFAULT_KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${API_KEY_PATH:-}" ] && [ -f "$API_KEY_PATH" ]; then
+            rm -f "$API_KEY_PATH"
+          fi
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7

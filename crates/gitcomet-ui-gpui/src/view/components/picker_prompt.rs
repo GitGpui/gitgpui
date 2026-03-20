@@ -100,6 +100,7 @@ impl PickerPrompt {
                 list = list.child(
                     div()
                         .id(("picker_prompt_item", original_index))
+                        .debug_selector(move || format!("picker_prompt_item_{original_index}"))
                         .h(px(CONTROL_HEIGHT_MD_PX))
                         .w_full()
                         .flex()

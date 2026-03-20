@@ -39,7 +39,15 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     {
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
-        return set_active_repo(state, repo_id);
+        let effects = set_active_repo(state, repo_id);
+        let persist_result = session::persist_recent_repo(&path);
+        handle_session_persist_result(
+            state,
+            Some(repo_id),
+            "updating recent repositories",
+            persist_result,
+        );
+        return effects;
     }
 
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
@@ -58,6 +66,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_state
     });
     state.active_repo = Some(repo_id);
+    let persist_recent_result = session::persist_recent_repo(&spec.workdir);
     let mut effects = vec![Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
@@ -67,6 +76,12 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         Some(repo_id),
         "opening a repository",
     ));
+    handle_session_persist_result(
+        state,
+        Some(repo_id),
+        "updating recent repositories",
+        persist_recent_result,
+    );
     effects
 }
 
@@ -145,10 +160,19 @@ pub(super) fn close_repo(
     state: &mut AppState,
     repo_id: RepoId,
 ) -> Vec<Effect> {
+    let removed_repo_ix = state.repos.iter().position(|repo| repo.id == repo_id);
     state.repos.retain(|r| r.id != repo_id);
     repos.remove(&repo_id);
     if state.active_repo == Some(repo_id) {
-        state.active_repo = state.repos.first().map(|r| r.id);
+        state.active_repo = removed_repo_ix.and_then(|repo_ix| {
+            if state.repos.is_empty() {
+                None
+            } else if repo_ix > 0 {
+                state.repos.get(repo_ix - 1).map(|repo| repo.id)
+            } else {
+                state.repos.first().map(|repo| repo.id)
+            }
+        });
     }
     vec![persist_session_effect(
         state,
@@ -403,6 +427,14 @@ pub(super) fn repo_opened_err(
             state,
             AppNotificationKind::Error,
             format!("Folder is not a git repository: {}", spec.workdir.display()),
+        );
+
+        let remove_recent_result = session::remove_recent_repo(&spec.workdir);
+        handle_session_persist_result(
+            state,
+            Some(repo_id),
+            "removing an invalid repository from recent repositories",
+            remove_recent_result,
         );
 
         repos.remove(&repo_id);

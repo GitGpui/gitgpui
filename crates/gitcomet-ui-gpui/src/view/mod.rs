@@ -58,6 +58,7 @@ pub(super) mod platform_open;
 mod poller;
 mod repo_open;
 pub(crate) mod rows;
+mod settings_window;
 mod state_apply;
 mod toast_host;
 mod tooltip;
@@ -100,6 +101,7 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
 use panes::{DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+pub(crate) use settings_window::open_settings_window;
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
@@ -575,6 +577,7 @@ impl GitCometView {
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
             startup_crash_report,
+            recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
             error_banner_input,
             transient_error_banner: None,
             auth_prompt_username_input,
@@ -1183,6 +1186,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host.read(app).tooltip_text_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn show_timezone_for_test(&self) -> bool {
+        self.show_timezone
     }
 }
 

@@ -69,6 +69,45 @@ fn context_menu_entry_debug_selector(label: &str) -> String {
     }
 }
 
+fn context_menu_entry_action_at(model: &ContextMenuModel, ix: usize) -> Option<ContextMenuAction> {
+    match model.items.get(ix) {
+        Some(ContextMenuItem::Entry { action, .. }) => Some((**action).clone()),
+        _ => None,
+    }
+}
+
+pub(in super::super) fn context_menu_activate_entry_ix(
+    model: &ContextMenuModel,
+    selected_ix: Option<usize>,
+) -> Option<usize> {
+    selected_ix
+        .filter(|&ix| model.is_selectable(ix))
+        .or_else(|| model.first_selectable())
+}
+
+pub(in super::super) fn context_menu_shortcut_entry_ix(
+    model: &ContextMenuModel,
+    key: &str,
+) -> Option<usize> {
+    if key.chars().count() != 1 {
+        return None;
+    }
+
+    model.items.iter().enumerate().find_map(|(ix, item)| {
+        let ContextMenuItem::Entry {
+            shortcut, disabled, ..
+        } = item
+        else {
+            return None;
+        };
+        if *disabled {
+            return None;
+        }
+        let shortcut = shortcut.as_ref()?;
+        shortcut.as_ref().eq_ignore_ascii_case(key).then_some(ix)
+    })
+}
+
 fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.theme_mode;
     let check = |enabled: bool| enabled.then_some("✓".into());
@@ -227,7 +266,7 @@ impl PopoverHost {
         }
     }
 
-    pub(super) fn context_menu_model(
+    pub(in super::super) fn context_menu_model(
         &self,
         kind: &PopoverKind,
         cx: &gpui::Context<Self>,
@@ -1016,45 +1055,25 @@ impl PopoverHost {
                                 cx.notify();
                             }
                             "enter" => {
-                                let Some(ix) = this
-                                    .context_menu_selected_ix
-                                    .filter(|&ix| model_for_keys.is_selectable(ix))
-                                    .or_else(|| model_for_keys.first_selectable())
-                                else {
+                                let Some(ix) = context_menu_activate_entry_ix(
+                                    &model_for_keys,
+                                    this.context_menu_selected_ix,
+                                ) else {
                                     return;
                                 };
-                                if let Some(ContextMenuItem::Entry { action, .. }) =
-                                    model_for_keys.items.get(ix).cloned()
+                                if let Some(action) =
+                                    context_menu_entry_action_at(&model_for_keys, ix)
                                 {
-                                    this.context_menu_activate_action(*action, window, cx);
+                                    this.context_menu_activate_action(action, window, cx);
                                 }
                             }
                             _ => {
-                                if key.chars().count() == 1 {
-                                    let needle = key.to_ascii_uppercase();
-                                    let hit = model_for_keys.items.iter().enumerate().find_map(
-                                        |(ix, item)| {
-                                            let ContextMenuItem::Entry {
-                                                shortcut, disabled, ..
-                                            } = item
-                                            else {
-                                                return None;
-                                            };
-                                            if *disabled {
-                                                return None;
-                                            }
-                                            let shortcut =
-                                                shortcut.as_ref()?.as_ref().to_ascii_uppercase();
-                                            (shortcut == needle).then_some(ix)
-                                        },
-                                    );
-
-                                    if let Some(ix) = hit
-                                        && let Some(ContextMenuItem::Entry { action, .. }) =
-                                            model_for_keys.items.get(ix).cloned()
-                                    {
-                                        this.context_menu_activate_action(*action, window, cx);
-                                    }
+                                if let Some(ix) =
+                                    context_menu_shortcut_entry_ix(&model_for_keys, key)
+                                    && let Some(action) =
+                                        context_menu_entry_action_at(&model_for_keys, ix)
+                                {
+                                    this.context_menu_activate_action(action, window, cx);
                                 }
                             }
                         }
@@ -1134,5 +1153,84 @@ impl PopoverHost {
                 }))
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {
+        let model = ContextMenuModel::new(vec![
+            ContextMenuItem::Header("Test".into()),
+            ContextMenuItem::Entry {
+                label: "Disabled A".into(),
+                icon: None,
+                shortcut: Some("A".into()),
+                disabled: true,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(1) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Enter".into(),
+                icon: None,
+                shortcut: Some("Enter".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(2) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Ctrl Copy".into(),
+                icon: None,
+                shortcut: Some("Ctrl+C".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(3) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Enabled A".into(),
+                icon: None,
+                shortcut: Some("A".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(4) }),
+            },
+        ]);
+
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "a"), Some(4));
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "A"), Some(4));
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "e"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "enter"), None);
+    }
+
+    #[test]
+    fn context_menu_activate_entry_ix_prefers_selected_entry_and_falls_back_to_first_selectable() {
+        let model = ContextMenuModel::new(vec![
+            ContextMenuItem::Header("Test".into()),
+            ContextMenuItem::Entry {
+                label: "Disabled".into(),
+                icon: None,
+                shortcut: Some("D".into()),
+                disabled: true,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(1) }),
+            },
+            ContextMenuItem::Entry {
+                label: "First".into(),
+                icon: None,
+                shortcut: Some("Enter".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(2) }),
+            },
+            ContextMenuItem::Entry {
+                label: "Second".into(),
+                icon: None,
+                shortcut: Some("S".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::FetchAll { repo_id: RepoId(3) }),
+            },
+        ]);
+
+        assert_eq!(context_menu_activate_entry_ix(&model, None), Some(2));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(3)), Some(3));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(1)), Some(2));
+        assert_eq!(context_menu_activate_entry_ix(&model, Some(99)), Some(2));
     }
 }

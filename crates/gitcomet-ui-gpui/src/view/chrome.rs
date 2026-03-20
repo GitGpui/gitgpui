@@ -102,6 +102,22 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
+fn window_frame_visual_inset() -> Pixels {
+    if cfg!(target_os = "macos") {
+        px(0.0)
+    } else {
+        CLIENT_SIDE_DECORATION_INSET
+    }
+}
+
+fn window_frame_outline_color(theme: AppTheme) -> gpui::Rgba {
+    if cfg!(target_os = "macos") {
+        with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.90 })
+    } else {
+        gpui::rgba(WINDOW_OUTLINE_RGBA)
+    }
+}
+
 pub(super) fn cursor_style_for_resize_edge(edge: ResizeEdge) -> CursorStyle {
     match edge {
         ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
@@ -472,6 +488,30 @@ impl Render for TitleBarView {
             .text_color(free_badge_text)
             .child("FREE");
 
+        let macos_brand = div()
+            .id("title_bar_macos_brand")
+            .h_full()
+            .pl_2()
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .h(px(26.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(titlebar_app_icon(theme))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.colors.text)
+                            .whitespace_nowrap()
+                            .child("GitComet"),
+                    ),
+            );
+
         div()
             .id("title_bar")
             .flex()
@@ -488,7 +528,8 @@ impl Render for TitleBarView {
                     .h_full()
                     .gap_0p5()
                     .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
-                    .child(menu_toggle),
+                    .when(is_macos, |d| d.child(macos_brand))
+                    .when(!is_macos, |d| d.child(menu_toggle)),
             )
             .child(drag_region)
             .child(
@@ -509,6 +550,7 @@ pub(crate) fn window_frame(
     decorations: Decorations,
     content: AnyElement,
 ) -> AnyElement {
+    let frame_inset = window_frame_visual_inset();
     let mut outer = div()
         .id("window_frame")
         .size_full()
@@ -516,10 +558,10 @@ pub(crate) fn window_frame(
 
     if let Decorations::Client { tiling } = decorations {
         outer = outer
-            .when(!tiling.top, |d| d.pt(CLIENT_SIDE_DECORATION_INSET))
-            .when(!tiling.bottom, |d| d.pb(CLIENT_SIDE_DECORATION_INSET))
-            .when(!tiling.left, |d| d.pl(CLIENT_SIDE_DECORATION_INSET))
-            .when(!tiling.right, |d| d.pr(CLIENT_SIDE_DECORATION_INSET));
+            .when(!tiling.top, |d| d.pt(frame_inset))
+            .when(!tiling.bottom, |d| d.pb(frame_inset))
+            .when(!tiling.left, |d| d.pl(frame_inset))
+            .when(!tiling.right, |d| d.pr(frame_inset));
     }
 
     let inner = div()
@@ -527,10 +569,11 @@ pub(crate) fn window_frame(
         .size_full()
         .bg(theme.colors.window_bg)
         .border_1()
-        .border_color(gpui::rgba(WINDOW_OUTLINE_RGBA))
-        .rounded(px(theme.radii.panel))
-        .shadow_lg()
+        .border_color(window_frame_outline_color(theme))
         .overflow_hidden()
+        .when(!cfg!(target_os = "macos"), |d| {
+            d.rounded(px(theme.radii.panel)).shadow_lg()
+        })
         .child(content);
 
     outer.child(inner).into_any_element()
@@ -567,5 +610,43 @@ mod tests {
             })
             .is_ok()
         );
+    }
+
+    #[test]
+    fn window_frame_visual_inset_matches_platform_chrome_strategy() {
+        #[cfg(target_os = "macos")]
+        assert_eq!(window_frame_visual_inset(), px(0.0));
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(window_frame_visual_inset(), CLIENT_SIDE_DECORATION_INSET);
+    }
+
+    #[test]
+    fn window_frame_outline_color_tracks_platform_and_theme() {
+        let dark = AppTheme::zed_ayu_dark();
+        let light = AppTheme::zed_one_light();
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                window_frame_outline_color(dark),
+                with_alpha(dark.colors.border, 0.96)
+            );
+            assert_eq!(
+                window_frame_outline_color(light),
+                with_alpha(light.colors.border, 0.90)
+            );
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                window_frame_outline_color(dark),
+                gpui::rgba(WINDOW_OUTLINE_RGBA)
+            );
+            assert_eq!(
+                window_frame_outline_color(light),
+                gpui::rgba(WINDOW_OUTLINE_RGBA)
+            );
+        }
     }
 }
