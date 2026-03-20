@@ -578,6 +578,7 @@ impl GitCometView {
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
             startup_crash_report,
+            #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
             error_banner_input,
             transient_error_banner: None,
@@ -595,7 +596,6 @@ impl GitCometView {
         view.drive_focused_mergetool_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
 
-        #[cfg(target_os = "macos")]
         crate::app::sync_gitcomet_window_state(
             cx,
             view.window_handle,

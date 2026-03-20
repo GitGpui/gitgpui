@@ -134,6 +134,7 @@ impl GitCometView {
         cx.notify();
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn apply_patch_from_file(
         &mut self,
         patch: std::path::PathBuf,

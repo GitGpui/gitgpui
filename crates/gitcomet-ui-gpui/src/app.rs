@@ -13,7 +13,6 @@ use gpui::{
     App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, TitlebarOptions,
     WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
 };
-#[cfg(target_os = "macos")]
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(target_os = "macos")]
 use schemars::JsonSchema;
@@ -531,7 +530,6 @@ pub(crate) fn recent_repository_label(path: &Path) -> String {
     format!("{name} - {}", parent.display())
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Clone)]
 struct GitCometWindowEntry {
     handle: gpui::AnyWindowHandle,
@@ -540,16 +538,13 @@ struct GitCometWindowEntry {
     repo_paths: Vec<PathBuf>,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct GitCometWindowRegistry {
     windows: FxHashMap<gpui::WindowId, GitCometWindowEntry>,
 }
 
-#[cfg(target_os = "macos")]
 impl gpui::Global for GitCometWindowRegistry {}
 
-#[cfg(target_os = "macos")]
 pub(crate) fn sync_gitcomet_window_state<C>(
     cx: &mut C,
     handle: gpui::AnyWindowHandle,
@@ -572,7 +567,6 @@ pub(crate) fn sync_gitcomet_window_state<C>(
     });
 }
 
-#[cfg(target_os = "macos")]
 fn gitcomet_window_entries(cx: &mut App) -> Vec<GitCometWindowEntry> {
     let live_window_ids: FxHashSet<_> = cx
         .windows()
@@ -587,7 +581,6 @@ fn gitcomet_window_entries(cx: &mut App) -> Vec<GitCometWindowEntry> {
     })
 }
 
-#[cfg(target_os = "macos")]
 fn active_gitcomet_window_entry(cx: &mut App) -> Option<GitCometWindowEntry> {
     let active_window_id = cx.active_window()?.window_id();
     gitcomet_window_entries(cx)
@@ -595,18 +588,15 @@ fn active_gitcomet_window_entry(cx: &mut App) -> Option<GitCometWindowEntry> {
         .find(|entry| entry.handle.window_id() == active_window_id)
 }
 
-#[cfg(target_os = "macos")]
 fn entry_contains_repo_path(entry: &GitCometWindowEntry, path: &Path) -> bool {
     entry.repo_paths.iter().any(|repo_path| repo_path == path)
 }
 
-#[cfg(target_os = "macos")]
 fn active_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
     let entry = active_gitcomet_window_entry(cx)?;
     (entry.view_mode == GitCometViewMode::Normal).then_some(entry)
 }
 
-#[cfg(target_os = "macos")]
 fn update_active_normal_gitcomet_window<R>(
     cx: &mut App,
     f: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) -> R,
@@ -615,7 +605,6 @@ fn update_active_normal_gitcomet_window<R>(
     window.view.update(cx, f).ok()
 }
 
-#[cfg(target_os = "macos")]
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
         let _ = window.update(cx, |_root, window, _cx| {
@@ -624,7 +613,6 @@ fn close_active_window(cx: &mut App) {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn find_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
     let entries = gitcomet_window_entries(cx);
     let active_window_id = cx.active_window().map(|window| window.window_id());
@@ -644,7 +632,6 @@ fn find_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
         .find(|entry| entry.view_mode == GitCometViewMode::Normal)
 }
 
-#[cfg(target_os = "macos")]
 fn find_normal_gitcomet_window_for_repo(cx: &mut App, path: &Path) -> Option<GitCometWindowEntry> {
     let entries = gitcomet_window_entries(cx);
     let active_window_id = cx.active_window().map(|window| window.window_id());
@@ -665,14 +652,12 @@ fn find_normal_gitcomet_window_for_repo(cx: &mut App, path: &Path) -> Option<Git
     })
 }
 
-#[cfg(target_os = "macos")]
 fn activate_gitcomet_window(cx: &mut App, window: gpui::AnyWindowHandle) {
     let _ = window.update(cx, |_view, window, _cx| {
         window.activate_window();
     });
 }
 
-#[cfg(target_os = "macos")]
 fn open_repository_in_window(cx: &mut App, window: &GitCometWindowEntry, path: PathBuf) {
     let path_for_window = path.clone();
     let _ = window.view.update(cx, |view, cx| {
@@ -683,7 +668,6 @@ fn open_repository_in_window(cx: &mut App, window: &GitCometWindowEntry, path: P
     }
 }
 
-#[cfg(target_os = "macos")]
 fn focus_existing_repository_window(cx: &mut App, window: &GitCometWindowEntry, path: &Path) {
     let path_for_window = path.to_path_buf();
     let _ = window.view.update(cx, |view, cx| {
@@ -695,18 +679,12 @@ fn focus_existing_repository_window(cx: &mut App, window: &GitCometWindowEntry, 
     cx.add_recent_document(path);
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn focus_existing_repository_window_for_path(cx: &mut App, path: &Path) -> bool {
     let Some(window) = find_normal_gitcomet_window_for_repo(cx, path) else {
         return false;
     };
     focus_existing_repository_window(cx, &window, path);
     true
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn focus_existing_repository_window_for_path(_cx: &mut App, _path: &Path) -> bool {
-    false
 }
 
 fn normalize_repository_open_path(path: PathBuf) -> PathBuf {
@@ -1090,7 +1068,6 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Copy))
                 .on_action(record_action_listener!(crate::kit::Undo))
                 .on_action(record_action_listener!(crate::kit::Redo))
-                .on_action(record_action_listener!(crate::kit::ShowCharacterPalette))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenRepository))
@@ -1106,6 +1083,9 @@ mod tests {
                 .on_action(record_action_listener!(HideOthers))
                 .on_action(record_action_listener!(ShowAll))
                 .on_action(record_action_listener!(Quit));
+
+            #[cfg(target_os = "macos")]
+            let root = root.on_action(record_action_listener!(crate::kit::ShowCharacterPalette));
 
             if let Some(key_context) = self.key_context {
                 root.key_context(key_context)

@@ -135,7 +135,6 @@ impl GitCometView {
         }
         self.drive_focused_mergetool_bootstrap();
 
-        #[cfg(target_os = "macos")]
         crate::app::sync_gitcomet_window_state(
             cx,
             self.window_handle,
