@@ -76,17 +76,14 @@ fn titlebar_control_icon(path: &'static str, color: gpui::Rgba) -> gpui::Svg {
 fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
     gpui::image_cache(gpui::retain_all("titlebar_icon_cache"))
         .child(
-            div()
-                .id("titlebar_app_icon")
-                .size(px(16.0))
-                .child(
-                    gpui::img("gitcomet-window-icon.png")
-                        .size(px(16.0))
-                        .with_fallback(move || {
-                            svg_icon("icons/gitcomet_mark.svg", theme.colors.accent, px(16.0))
-                                .into_any_element()
-                        }),
-                ),
+            div().id("titlebar_app_icon").size(px(16.0)).child(
+                gpui::img("gitcomet-window-icon.png")
+                    .size(px(16.0))
+                    .with_fallback(move || {
+                        svg_icon("icons/gitcomet_mark.svg", theme.colors.accent, px(16.0))
+                            .into_any_element()
+                    }),
+            ),
         )
         .into_any_element()
 }
