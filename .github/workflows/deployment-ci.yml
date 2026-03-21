@@ -257,24 +257,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev gnupg
 
-      - name: Build synthetic .deb
+      - name: Build synthetic .debs
         run: |
           set -euo pipefail
-          pkg_root="dist/apt-ci/pkg"
-          mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
+          for architecture in amd64 arm64; do
+            pkg_root="dist/apt-ci/pkg-${architecture}"
+            mkdir -p "${pkg_root}/DEBIAN" "${pkg_root}/usr/bin"
 
-          printf '%s\n' '#!/usr/bin/env bash' 'echo "GitComet CI"' > "${pkg_root}/usr/bin/gitcomet"
-          chmod +x "${pkg_root}/usr/bin/gitcomet"
+            printf '%s\n' '#!/usr/bin/env bash' "echo \"GitComet CI ${architecture}\"" > "${pkg_root}/usr/bin/gitcomet"
+            chmod +x "${pkg_root}/usr/bin/gitcomet"
 
-          {
-            echo "Package: gitcomet"
-            echo "Version: 0.0.0~ci1"
-            echo "Architecture: amd64"
-            echo "Maintainer: GitComet CI <ci@autoexplore.ai>"
-            echo "Description: Synthetic GitComet package for deployment CI."
-          } > "${pkg_root}/DEBIAN/control"
+            {
+              echo "Package: gitcomet"
+              echo "Version: 0.0.0~ci1"
+              echo "Architecture: ${architecture}"
+              echo "Maintainer: GitComet CI <ci@autoexplore.ai>"
+              echo "Description: Synthetic GitComet package for deployment CI."
+            } > "${pkg_root}/DEBIAN/control"
 
-          dpkg-deb --build "${pkg_root}" "dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb"
+            dpkg-deb --build "${pkg_root}" "dist/apt-ci/gitcomet_0.0.0~ci1_${architecture}.deb"
+          done
 
       - name: Generate temporary signing key
         env:
@@ -307,9 +309,11 @@ jobs:
           scripts/build-apt-repo.sh \
             --repo-dir dist/apt-ci/repo \
             --deb dist/apt-ci/gitcomet_0.0.0~ci1_amd64.deb \
+            --deb dist/apt-ci/gitcomet_0.0.0~ci1_arm64.deb \
             --distribution stable \
             --component main \
             --architecture amd64 \
+            --architecture arm64 \
             --origin GitComet \
             --label GitComet \
             --description "GitComet deployment CI repository" \
@@ -324,6 +328,8 @@ jobs:
           set -euo pipefail
           test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
           test -f dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages.gz
+          test -f dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          test -f dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages.gz
           test -f dist/apt-ci/repo/dists/stable/InRelease
           test -f dist/apt-ci/repo/dists/stable/Release.gpg
           test -f dist/apt-ci/repo/gitcomet-archive-keyring.gpg
@@ -331,7 +337,12 @@ jobs:
 
           grep -q "^Package: gitcomet$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
           grep -q "^Filename: pool/main/g/gitcomet/gitcomet_0.0.0~ci1_amd64.deb$" dist/apt-ci/repo/dists/stable/main/binary-amd64/Packages
+          grep -q "^Package: gitcomet$" dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          grep -q "^Filename: pool/main/g/gitcomet/gitcomet_0.0.0~ci1_arm64.deb$" dist/apt-ci/repo/dists/stable/main/binary-arm64/Packages
+          grep -q "^Architectures: amd64 arm64$" dist/apt-ci/repo/dists/stable/Release
           grep -q "^URIs: https://example.invalid/gitcomet/apt$" dist/apt-ci/repo/gitcomet.sources
+          grep -q "^Architectures: amd64 arm64$" dist/apt-ci/repo/gitcomet.sources
+          grep -q '^deb \[arch=amd64,arm64 signed-by=/usr/share/keyrings/gitcomet-archive-keyring.gpg\] https://example.invalid/gitcomet/apt stable main$' dist/apt-ci/repo/gitcomet.list
 
           mkdir -p "$GNUPGHOME"
           chmod 700 "$GNUPGHOME"
