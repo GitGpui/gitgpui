@@ -117,14 +117,56 @@ impl GitCometView {
             host.sync_clone_progress(next.clone.as_ref(), cx)
         });
 
+        #[cfg(target_os = "macos")]
+        if self.view_mode == GitCometViewMode::Normal {
+            for path in newly_opened_repo_paths(&self.state, next.as_ref()) {
+                cx.add_recent_document(&path);
+            }
+            let recent_repos = session::load().recent_repos;
+            if self.recent_repos_menu_fingerprint != recent_repos {
+                self.recent_repos_menu_fingerprint = recent_repos;
+                crate::app::refresh_macos_app_menus(cx);
+            }
+        }
+
         self.state = next;
         if prev_auth_prompt != self.state.auth_prompt {
             self.auth_prompt_key = None;
         }
         self.drive_focused_mergetool_bootstrap();
 
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            self.window_handle,
+            cx.weak_entity(),
+            self.view_mode,
+            self.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
+
         prev_error != next_error || prev_auth_prompt != self.state.auth_prompt
     }
+}
+
+#[cfg(target_os = "macos")]
+fn newly_opened_repo_paths(prev: &AppState, next: &AppState) -> Vec<std::path::PathBuf> {
+    next.repos
+        .iter()
+        .filter_map(|next_repo| {
+            if !matches!(next_repo.open, Loadable::Ready(())) {
+                return None;
+            }
+            let was_ready = prev
+                .repos
+                .iter()
+                .find(|repo| repo.id == next_repo.id)
+                .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())));
+            (!was_ready).then(|| next_repo.spec.workdir.clone())
+        })
+        .collect()
 }
 
 fn parse_force_delete_branch_name(message: &str) -> Option<String> {
@@ -179,6 +221,20 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[cfg(target_os = "macos")]
+    fn repo_with_open_state(repo_id: RepoId, path: &str, ready: bool) -> RepoState {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        );
+        if ready {
+            repo.open = Loadable::Ready(());
+        }
+        repo
+    }
+
     #[test]
     fn parse_force_remove_worktree_path_prefers_fatal_path() {
         let command = "git worktree remove /tmp/from-command";
@@ -211,5 +267,48 @@ mod tests {
         let command = "git worktree remove --force /tmp/worktree";
         let stderr = "contains modified or untracked files, use --force to delete it";
         assert_eq!(parse_force_remove_worktree_path(command, stderr), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn newly_opened_repo_paths_returns_only_repos_that_become_ready() {
+        let prev = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(1), "/tmp/repo-a", false),
+                repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
+            ],
+            ..Default::default()
+        };
+        let next = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(1), "/tmp/repo-a", true),
+                repo_with_open_state(RepoId(2), "/tmp/repo-b", true),
+                repo_with_open_state(RepoId(3), "/tmp/repo-c", false),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            newly_opened_repo_paths(&prev, &next),
+            vec![PathBuf::from("/tmp/repo-a")]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn newly_opened_repo_paths_includes_brand_new_ready_repos_and_ignores_loading_ones() {
+        let prev = AppState::default();
+        let next = AppState {
+            repos: vec![
+                repo_with_open_state(RepoId(10), "/tmp/repo-new", true),
+                repo_with_open_state(RepoId(11), "/tmp/repo-loading", false),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            newly_opened_repo_paths(&prev, &next),
+            vec![PathBuf::from("/tmp/repo-new")]
+        );
     }
 }

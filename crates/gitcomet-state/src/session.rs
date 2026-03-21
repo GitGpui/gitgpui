@@ -12,6 +12,7 @@ use std::{env, fs, io};
 pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
+    pub recent_repos: Vec<PathBuf>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
@@ -62,6 +63,7 @@ struct UiSessionFileV2 {
     version: u32,
     open_repos: Vec<String>,
     active_repo: Option<String>,
+    recent_repos: Option<Vec<String>>,
     window_width: Option<u32>,
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
@@ -80,6 +82,7 @@ struct UiSessionFileV2 {
 const SESSION_FILE_VERSION_V1: u32 = 1;
 const SESSION_FILE_VERSION_V2: u32 = 2;
 const CURRENT_SESSION_FILE_VERSION: u32 = SESSION_FILE_VERSION_V2;
+const MAX_RECENT_REPOS: usize = 15;
 #[cfg(unix)]
 const SESSION_PATH_BYTES_PREFIX: &str = "gitcomet-path-bytes:";
 #[cfg(windows)]
@@ -102,9 +105,11 @@ pub fn load_from_path(path: &Path) -> UiSession {
     };
 
     let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
+    let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
     UiSession {
         open_repos,
         active_repo,
+        recent_repos,
         window_width: file.window_width,
         window_height: file.window_height,
         sidebar_width: file.sidebar_width,
@@ -177,6 +182,49 @@ pub fn persist_repos_snapshot_to_path(
     file.active_repo = snapshot.active_repo.clone();
 
     persist_to_path(path, &file)
+}
+
+pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_recent_repo_to_path(workdir, &path)
+}
+
+pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
+    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+
+    let workdir_key = path_storage_key(workdir);
+    let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
+    recent_repos.retain(|path| path.trim() != workdir_key);
+    recent_repos.retain(|path| !path.trim().is_empty());
+    recent_repos.insert(0, workdir_key);
+    if recent_repos.len() > MAX_RECENT_REPOS {
+        recent_repos.truncate(MAX_RECENT_REPOS);
+    }
+
+    persist_to_path(session_file_path, &file)
+}
+
+pub fn remove_recent_repo(workdir: &Path) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    remove_recent_repo_to_path(workdir, &path)
+}
+
+pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
+    let mut file = load_file_v2(session_file_path).unwrap_or_default();
+    file.version = CURRENT_SESSION_FILE_VERSION;
+
+    let workdir_key = path_storage_key(workdir);
+    let Some(recent_repos) = file.recent_repos.as_mut() else {
+        return Ok(());
+    };
+    recent_repos.retain(|path| path.trim() != workdir_key);
+
+    persist_to_path(session_file_path, &file)
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -359,19 +407,8 @@ fn parse_repos(
     open_repos_raw: Vec<String>,
     active_repo_raw: Option<String>,
 ) -> (Vec<PathBuf>, Option<PathBuf>) {
-    let mut open_repos: Vec<PathBuf> = Vec::with_capacity(open_repos_raw.len());
-    let mut seen: FxHashSet<PathBuf> = FxHashSet::default();
-    for repo in open_repos_raw {
-        let repo = repo.trim();
-        if repo.is_empty() {
-            continue;
-        }
-        let repo = path_from_storage_key(repo);
-        if !seen.insert(repo.clone()) {
-            continue;
-        }
-        open_repos.push(repo);
-    }
+    let open_repos = parse_path_list(open_repos_raw);
+    let seen: FxHashSet<PathBuf> = open_repos.iter().cloned().collect();
 
     let active_repo = active_repo_raw
         .as_deref()
@@ -386,6 +423,23 @@ fn parse_repos(
         .filter(|active| seen.contains(active));
 
     (open_repos, active_repo)
+}
+
+fn parse_path_list(paths_raw: Vec<String>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::with_capacity(paths_raw.len());
+    let mut seen: FxHashSet<PathBuf> = FxHashSet::default();
+    for raw in paths_raw {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let path = path_from_storage_key(raw);
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths
 }
 
 fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
@@ -423,7 +477,7 @@ fn active_repo_path(state: &AppState, active_repo_id: Option<RepoId>) -> Option<
         .map(|r| r.spec.workdir.as_path())
 }
 
-pub(crate) fn path_storage_key(path: &Path) -> String {
+pub fn path_storage_key(path: &Path) -> String {
     if let Some(text) = path.to_str() {
         return text.to_string();
     }
@@ -459,7 +513,7 @@ pub(crate) fn path_storage_key(path: &Path) -> String {
     }
 }
 
-fn path_from_storage_key(raw: &str) -> PathBuf {
+pub fn path_from_storage_key(raw: &str) -> PathBuf {
     #[cfg(unix)]
     {
         use std::ffi::OsString;
@@ -809,8 +863,173 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.open_repos, vec![repo_a, repo_b.clone()]);
         assert_eq!(loaded.active_repo, Some(repo_b));
+        assert!(loaded.recent_repos.is_empty());
         assert_eq!(loaded.window_width, None);
         assert_eq!(loaded.date_time_format, None);
+    }
+
+    #[test]
+    fn persist_recent_repo_round_trips_dedup_and_reorders() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-recent-repos-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+        let _ = fs::create_dir_all(&repo_a);
+        let _ = fs::create_dir_all(&repo_b);
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_recent_repo_to_path(&repo_a, &path).expect("persist first repo");
+        persist_recent_repo_to_path(&repo_b, &path).expect("persist second repo");
+        persist_recent_repo_to_path(&repo_a, &path).expect("move repo to front");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.recent_repos, vec![repo_a, repo_b]);
+    }
+
+    #[test]
+    fn remove_recent_repo_drops_matching_entry() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-repo-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+        let _ = fs::create_dir_all(&repo_a);
+        let _ = fs::create_dir_all(&repo_b);
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![path_storage_key(&repo_a), path_storage_key(&repo_b)]),
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&repo_b, &path).expect("remove invalid recent repo");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.recent_repos, vec![repo_a]);
+    }
+
+    #[test]
+    fn persist_recent_repo_truncates_to_max_entries_and_skips_blank_values() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-recent-repo-truncate-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let repo_new = dir.join("repo-new");
+
+        let mut recent_repos = vec!["   ".to_string()];
+        recent_repos.extend(
+            (0..MAX_RECENT_REPOS).map(|ix| path_storage_key(&dir.join(format!("repo-{ix}")))),
+        );
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(recent_repos),
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_recent_repo_to_path(&repo_new, &path).expect("persist latest repo");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.recent_repos.len(), MAX_RECENT_REPOS);
+        assert_eq!(loaded.recent_repos.first(), Some(&repo_new));
+        assert_eq!(
+            loaded.recent_repos.last(),
+            Some(&dir.join(format!("repo-{}", MAX_RECENT_REPOS - 2)))
+        );
+        assert!(
+            !loaded
+                .recent_repos
+                .contains(&dir.join(format!("repo-{}", MAX_RECENT_REPOS - 1)))
+        );
+        assert!(
+            !loaded
+                .recent_repos
+                .iter()
+                .any(|path| path.as_os_str().is_empty())
+        );
+    }
+
+    #[test]
+    fn load_from_path_filters_blank_and_duplicate_recent_repos() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-recent-repo-load-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![
+                    "   ".to_string(),
+                    path_storage_key(&repo_a),
+                    path_storage_key(&repo_a),
+                    path_storage_key(&repo_b),
+                    "".to_string(),
+                ]),
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.recent_repos, vec![repo_a, repo_b]);
     }
 
     #[test]

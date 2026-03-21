@@ -1,5 +1,14 @@
 use super::*;
 
+fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
+    div()
+        .debug_selector(move || debug_selector.to_string())
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let can_create = this.can_submit_create_branch(cx);
@@ -34,6 +43,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("create_branch_cancel", "Cancel")
+                        .separated_end_slot(hotkey_hint(theme, "create_branch_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_inline_popover(window, cx);
@@ -41,6 +51,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 )
                 .child(
                     components::Button::new("create_branch_go", "Create")
+                        .separated_end_slot(hotkey_hint(theme, "create_branch_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_create)
                         .on_click(theme, cx, |this, _e, window, cx| {

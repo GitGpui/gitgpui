@@ -321,7 +321,8 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
         fetch_without_prune.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: false
+            prune: false,
+            ..
         }]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
@@ -332,7 +333,8 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
         fetch_with_prune.as_slice(),
         [Effect::FetchAll {
             repo_id: RepoId(1),
-            prune: true
+            prune: true,
+            ..
         }]
     ));
     assert_eq!(state.repos[0].pull_in_flight, 2);
@@ -363,7 +365,7 @@ fn commit_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::Commit { repo_id: RepoId(1), message } ] if message == "hello"
+        [Effect::Commit { repo_id: RepoId(1), message, .. } ] if message == "hello"
     ));
 }
 
@@ -515,7 +517,7 @@ fn commit_amend_emits_effect() {
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CommitAmend { repo_id: RepoId(1), message }] if message == "amended"
+        [Effect::CommitAmend { repo_id: RepoId(1), message, .. }] if message == "amended"
     ));
 }
 
@@ -910,7 +912,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::PushTag { repo_id: RepoId(1), remote, name }] if remote == "origin" && name == "v1.0.0"
+        [Effect::PushTag { repo_id: RepoId(1), remote, name, .. }] if remote == "origin" && name == "v1.0.0"
     ));
 
     let effects = reduce(
@@ -925,7 +927,7 @@ fn create_and_delete_tag_emit_effects() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::DeleteRemoteTag { repo_id: RepoId(1), remote, name }] if remote == "origin" && name == "v1.0.0"
+        [Effect::DeleteRemoteTag { repo_id: RepoId(1), remote, name, .. }] if remote == "origin" && name == "v1.0.0"
     ));
 }
 
@@ -1177,7 +1179,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         push.as_slice(),
-        [Effect::Push { repo_id: RepoId(1) }]
+        [Effect::Push {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
 
     let force_push = reduce(
@@ -1188,7 +1193,10 @@ fn repo_operations_emit_effects() {
     );
     assert!(matches!(
         force_push.as_slice(),
-        [Effect::ForcePush { repo_id: RepoId(1) }]
+        [Effect::ForcePush {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
 
     let push_set_upstream = reduce(
@@ -2492,7 +2500,10 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
     );
     assert!(matches!(
         update_submodules.as_slice(),
-        [Effect::UpdateSubmodules { repo_id: RepoId(1) }]
+        [Effect::UpdateSubmodules {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
 
     let remove_submodule = reduce(
@@ -2542,7 +2553,8 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
         [Effect::PullBranch {
             repo_id: RepoId(1),
             remote,
-            branch
+            branch,
+            ..
         }] if remote == "origin" && branch == "main"
     ));
     assert_eq!(state.repos[0].pull_in_flight, 1);
@@ -2555,7 +2567,10 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
     );
     assert!(matches!(
         force_push.as_slice(),
-        [Effect::ForcePush { repo_id: RepoId(1) }]
+        [Effect::ForcePush {
+            repo_id: RepoId(1),
+            ..
+        }]
     ));
     assert_eq!(state.repos[0].push_in_flight, 1);
 
@@ -2574,7 +2589,8 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
         [Effect::PushSetUpstream {
             repo_id: RepoId(1),
             remote,
-            branch
+            branch,
+            ..
         }] if remote == "origin" && branch == "feature/xyz"
     ));
     assert_eq!(state.repos[0].push_in_flight, 2);

@@ -1,4 +1,4 @@
-use crate::test_support::lock_clipboard_test;
+use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
 use crate::{theme::AppTheme, view};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -63,6 +63,10 @@ fn builds_pure_components_without_panics() {
             let _ = components::Button::new("z4", "Disabled")
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
+                .render(theme);
+            let _ = components::Button::new("z5", "Create")
+                .style(components::ButtonStyle::Filled)
+                .separated_end_slot(div().text_xs().child("Enter"))
                 .render(theme);
         });
 
@@ -1595,6 +1599,73 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
         assert!(
             !view.read(app).is_popover_open(app),
             "expected popover to close when clicking outside"
+        );
+    });
+}
+
+#[gpui::test]
+fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let brand_bounds = cx
+        .debug_bounds("titlebar_brand")
+        .expect("expected titlebar brand bounds");
+    cx.simulate_mouse_move(brand_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(
+        brand_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        brand_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).is_popover_open(app),
+            "expected titlebar brand pill click to leave the app menu closed"
+        );
+    });
+
+    let menu_bounds = cx
+        .debug_bounds("app_menu")
+        .expect("expected app menu hamburger bounds");
+    cx.simulate_mouse_move(menu_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(
+        menu_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        menu_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).is_popover_open(app),
+            "expected hamburger click to open the app menu"
         );
     });
 }

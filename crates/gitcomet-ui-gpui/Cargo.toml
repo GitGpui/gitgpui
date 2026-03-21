@@ -38,6 +38,7 @@ pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
 rustc-hash = { workspace = true }
 semver = { workspace = true }
+schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol = { workspace = true }
@@ -55,6 +56,7 @@ tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter-xml = { workspace = true, optional = true }
 tree-sitter-yaml = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
+url = { workspace = true }
 zed-reqwest = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

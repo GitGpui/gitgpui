@@ -1,3 +1,4 @@
+use gitcomet_core::process::background_command as no_window_command;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,14 +56,14 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Command::new(gitcomet_bin())
+    no_window_command(gitcomet_bin())
         .args(args)
         .output()
         .expect("gitcomet command to run")
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new("git");
+    let mut cmd = no_window_command("git");
     apply_isolated_git_config_env(&mut cmd);
     cmd.arg("-c")
         .arg("commit.gpgsign=false")

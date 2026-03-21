@@ -5,7 +5,7 @@ mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod clone_repo;
 mod conflict_save_stage_confirm;
-mod context_menu;
+pub(in super::super) mod context_menu;
 mod create_branch;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
@@ -21,6 +21,7 @@ mod merge_abort_confirm;
 mod open_source_licenses;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
+mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
@@ -67,6 +68,11 @@ pub(in super::super) struct PopoverHost {
     settings_submenu_max_h: Option<Pixels>,
     settings_runtime_info: settings::SettingsRuntimeInfo,
     _ui_model_subscription: gpui::Subscription,
+    _clone_repo_url_input_subscription: gpui::Subscription,
+    _clone_repo_parent_dir_input_subscription: gpui::Subscription,
+    _create_tag_input_subscription: gpui::Subscription,
+    _repo_picker_search_input_subscription: Option<gpui::Subscription>,
+    _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
@@ -80,6 +86,7 @@ pub(in super::super) struct PopoverHost {
     context_menu_selected_ix: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
+    recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
@@ -197,6 +204,50 @@ impl PopoverHost {
             )
         });
 
+        let clone_repo_url_input_subscription =
+            cx.observe(&clone_repo_url_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
+        let clone_repo_parent_dir_input_subscription =
+            cx.observe(&clone_repo_parent_dir_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.close_popover(cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_clone_repo(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
         let rebase_onto_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -295,30 +346,75 @@ impl PopoverHost {
             )
         });
 
+        let create_tag_input_subscription = cx.observe(&create_tag_input, |this, input, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })) {
+                return;
+            }
+
+            if escape_pressed {
+                this.close_popover(cx);
+                return;
+            }
+
+            if enter_pressed {
+                this.submit_create_tag(cx);
+                return;
+            }
+
+            cx.notify();
+        });
+
         let create_branch_input_subscription =
             cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
                 let is_create_branch_prompt = matches!(
                     this.popover,
                     Some(PopoverKind::CreateBranch)
                         | Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                 );
 
-                if enter_pressed && is_create_branch_prompt {
+                if !is_create_branch_prompt {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.dismiss_inline_popover(window, cx);
+                    return;
+                }
+
+                if enter_pressed {
                     this.submit_create_branch(window, cx);
                     return;
                 }
 
-                if is_create_branch_prompt {
-                    cx.notify();
-                }
+                cx.notify();
             });
 
-        let stash_message_input_subscription = cx.observe(&stash_message_input, |this, _, cx| {
-            if matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+        let stash_message_input_subscription =
+            cx.observe_in(&stash_message_input, window, |this, input, window, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::StashPrompt)) {
+                    return;
+                }
+
+                if escape_pressed {
+                    this.dismiss_inline_popover(window, cx);
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_stash(window, cx);
+                    return;
+                }
+
                 cx.notify();
-            }
-        });
+            });
 
         let push_upstream_branch_input = cx.new(|cx| {
             components::TextInput::new(
@@ -407,6 +503,11 @@ impl PopoverHost {
             settings_submenu_max_h: None,
             settings_runtime_info: settings::SettingsRuntimeInfo::detect(),
             _ui_model_subscription: subscription,
+            _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
+            _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
+            _create_tag_input_subscription: create_tag_input_subscription,
+            _repo_picker_search_input_subscription: None,
+            _branch_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
             notify_fingerprint: 0,
@@ -418,6 +519,7 @@ impl PopoverHost {
             context_menu_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_search_input: None,
+            recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
@@ -479,6 +581,9 @@ impl PopoverHost {
         if let Some(input) = &self.repo_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
+        if let Some(input) = &self.recent_repo_picker_search_input {
+            input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         if let Some(input) = &self.branch_picker_search_input {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
@@ -499,6 +604,11 @@ impl PopoverHost {
         }
 
         cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn set_state_for_test(&mut self, state: Arc<AppState>) {
+        self.state = state;
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
@@ -767,6 +877,9 @@ impl PopoverHost {
                 PopoverKind::RepoPicker => {
                     let _ = self.ensure_repo_picker_search_input(window, cx);
                 }
+                PopoverKind::RecentRepositoryPicker => {
+                    let _ = self.ensure_recent_repo_picker_search_input(window, cx);
+                }
                 PopoverKind::BranchPicker => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
                 }
@@ -774,6 +887,7 @@ impl PopoverHost {
                     let theme = self.theme;
                     self.create_branch_checkout_enabled = true;
                     self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -787,6 +901,7 @@ impl PopoverHost {
                     let theme = self.theme;
                     self.create_branch_checkout_enabled = true;
                     self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -799,6 +914,7 @@ impl PopoverHost {
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
                     self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(branch.clone(), cx);
                         cx.notify();
@@ -811,6 +927,7 @@ impl PopoverHost {
                 PopoverKind::StashPrompt => {
                     let theme = self.theme;
                     self.stash_message_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -829,11 +946,13 @@ impl PopoverHost {
                         .clone_repo_parent_dir_input
                         .read_with(cx, |i, _| i.text().to_string());
                     self.clone_repo_url_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(url_text, cx);
                         cx.notify();
                     });
                     self.clone_repo_parent_dir_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text(parent_text, cx);
                         cx.notify();
@@ -846,6 +965,7 @@ impl PopoverHost {
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -1023,7 +1143,7 @@ impl PopoverHost {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    pub(super) fn set_date_time_format(
+    pub(in super::super) fn set_date_time_format(
         &mut self,
         next: DateTimeFormat,
         cx: &mut gpui::Context<Self>,
@@ -1037,7 +1157,7 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
+    pub(in super::super) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {
         if self.timezone == next {
             return;
         }
@@ -1047,7 +1167,11 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_show_timezone(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+    pub(in super::super) fn set_show_timezone(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.show_timezone == enabled {
             return;
         }
@@ -1057,7 +1181,7 @@ impl PopoverHost {
         self.schedule_ui_settings_persist(cx);
     }
 
-    pub(super) fn set_theme_mode(
+    pub(in super::super) fn set_theme_mode(
         &mut self,
         next: ThemeMode,
         appearance: gpui::WindowAppearance,
@@ -1082,13 +1206,19 @@ impl PopoverHost {
         let fmt = self.date_time_format;
         let tz = self.timezone;
         let show_tz = self.show_timezone;
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.theme_mode = mode;
-            root.date_time_format = fmt;
-            root.timezone = tz;
-            root.show_timezone = show_tz;
-            root.schedule_ui_settings_persist(cx);
-        });
+        let root_view = self.root_view.clone();
+        cx.spawn(
+            async move |_host: WeakEntity<Self>, cx: &mut gpui::AsyncApp| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.theme_mode = mode;
+                    root.date_time_format = fmt;
+                    root.timezone = tz;
+                    root.show_timezone = show_tz;
+                    root.schedule_ui_settings_persist(cx);
+                });
+            },
+        )
+        .detach();
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -1301,6 +1431,7 @@ impl PopoverHost {
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
+            PopoverKind::RecentRepositoryPicker => recent_repo_picker::panel(self, cx),
             PopoverKind::Settings => settings::panel(self, cx),
             PopoverKind::OpenSourceLicenses => open_source_licenses::panel(self, cx),
             PopoverKind::BranchPicker => branch_picker::panel(self, cx),

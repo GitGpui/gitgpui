@@ -54,6 +54,7 @@ fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
         Effect::CloneRepo {
             url: src.display().to_string(),
             dest: dest.clone(),
+            auth: None,
         },
     );
 
@@ -3222,10 +3223,17 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 url: "https://example.com/repo.git".to_string(),
                 path: PathBuf::from("sub"),
+                auth: None,
             },
             1,
         ),
-        (Effect::UpdateSubmodules { repo_id }, 1),
+        (
+            Effect::UpdateSubmodules {
+                repo_id,
+                auth: None,
+            },
+            1,
+        ),
         (
             Effect::RemoveSubmodule {
                 repo_id,
@@ -3301,6 +3309,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::Commit {
                 repo_id,
                 message: "msg".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3308,6 +3317,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CommitAmend {
                 repo_id,
                 message: "msg".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3315,6 +3325,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::FetchAll {
                 repo_id,
                 prune: true,
+                auth: None,
             },
             1,
         ),
@@ -3324,6 +3335,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::Pull {
                 repo_id,
                 mode: PullMode::FastForwardOnly,
+                auth: None,
             },
             1,
         ),
@@ -3332,6 +3344,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3349,13 +3362,26 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             },
             1,
         ),
-        (Effect::Push { repo_id }, 1),
-        (Effect::ForcePush { repo_id }, 1),
+        (
+            Effect::Push {
+                repo_id,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ForcePush {
+                repo_id,
+                auth: None,
+            },
+            1,
+        ),
         (
             Effect::PushSetUpstream {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3379,6 +3405,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3420,6 +3447,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 name: "v1.0.0".to_string(),
+                auth: None,
             },
             1,
         ),
@@ -3428,6 +3456,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 remote: "origin".to_string(),
                 name: "v1.0.0".to_string(),
+                auth: None,
             },
             1,
         ),

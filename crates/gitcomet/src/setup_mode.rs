@@ -4,6 +4,7 @@
 //! `git difftool` and `git mergetool` invoke gitcomet automatically.
 //! Uninstall removes those entries while preserving unrelated tool settings.
 
+use gitcomet_core::process::configure_background_command;
 use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 
@@ -90,7 +91,12 @@ fn shell_single_quote(value: &str) -> String {
 /// Resolve the absolute path to the current executable.
 fn current_exe_path() -> Result<PathBuf, String> {
     std::env::current_exe()
-        .and_then(|p| p.canonicalize())
+        .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
+        .and_then(canonicalize_setup_path)
+}
+
+fn canonicalize_setup_path(path: PathBuf) -> Result<PathBuf, String> {
+    path.canonicalize()
         .map_err(|e| format!("Cannot determine gitcomet binary path: {e}"))
 }
 
@@ -105,6 +111,12 @@ fn executable_path_for_shell(bin_path: &Path) -> Result<String, String> {
 
 fn quoted_env_var(name: &str) -> String {
     format!("\"${name}\"")
+}
+
+fn git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    configure_background_command(&mut command);
+    command
 }
 
 /// Build the list of git config entries for difftool/mergetool setup.
@@ -421,7 +433,7 @@ fn parse_git_config_values(output: &[u8]) -> Result<Vec<String>, String> {
 }
 
 fn read_git_config_values(scope: &str, key: &str) -> Result<Vec<String>, String> {
-    let output = std::process::Command::new("git")
+    let output = git_command()
         .args(["config", scope, "--null", "--get-all", key])
         .output()
         .map_err(|e| format!("Failed to run git config --get-all for {key}: {e}"))?;
@@ -448,7 +460,7 @@ fn unset_all_config_values(scope: &str, key: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    let output = std::process::Command::new("git")
+    let output = git_command()
         .args(["config", scope, "--unset-all", key])
         .output()
         .map_err(|e| format!("Failed to run git config --unset-all for {key}: {e}"))?;
@@ -466,7 +478,7 @@ fn unset_all_config_values(scope: &str, key: &str) -> Result<(), String> {
 }
 
 fn set_single_config_value(scope: &str, key: &str, value: &str) -> Result<(), String> {
-    let output = std::process::Command::new("git")
+    let output = git_command()
         .args(["config", scope, key, value])
         .output()
         .map_err(|e| format!("Failed to run git config for {key}: {e}"))?;
@@ -484,7 +496,7 @@ fn set_single_config_value(scope: &str, key: &str, value: &str) -> Result<(), St
 }
 
 fn add_config_value(scope: &str, key: &str, value: &str) -> Result<(), String> {
-    let output = std::process::Command::new("git")
+    let output = git_command()
         .args(["config", scope, "--add", key, value])
         .output()
         .map_err(|e| format!("Failed to run git config --add for {key}: {e}"))?;
@@ -718,7 +730,7 @@ fn apply_uninstall_plan(plan: &[UninstallPlanItem], scope: &str) -> Result<usize
         if item.decision != UninstallDecision::Unset {
             continue;
         }
-        let output = std::process::Command::new("git")
+        let output = git_command()
             .args(["config", scope, "--unset-all", item.key])
             .output()
             .map_err(|e| format!("Failed to run git config --unset-all for {}: {e}", item.key))?;
@@ -753,7 +765,7 @@ fn format_commands(entries: &[ConfigEntry], scope: &str) -> String {
 /// Run `git config` for each entry.
 fn apply_config(entries: &[ConfigEntry], scope: &str) -> Result<(), String> {
     for entry in entries {
-        let output = std::process::Command::new("git")
+        let output = git_command()
             .args(["config", scope, entry.key, &entry.value])
             .output()
             .map_err(|e| format!("Failed to run git config: {e}"))?;
@@ -870,6 +882,7 @@ pub fn run_uninstall(dry_run: bool, local: bool) -> Result<UninstallResult, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
     use std::fs;
 
     fn count_occurrences(haystack: &str, needle: &str) -> usize {
@@ -1353,7 +1366,7 @@ mod tests {
 
     #[test]
     fn unset_and_apply_paths_report_git_failures() {
-        let (_dir, scope, config_path) = temp_file_scope();
+        let (_dir, scope, _config_path) = temp_file_scope();
         set_single_config_value(&scope, "foo.readonly", "value").unwrap();
 
         #[cfg(not(windows))]
@@ -1361,7 +1374,7 @@ mod tests {
             // Simulate a write-time git config failure in a way that does not
             // depend on filesystem permissions (root in containers can bypass
             // readonly directory bits on some CI runners).
-            let lock_path = config_path.with_extension("lock");
+            let lock_path = _config_path.with_extension("lock");
             fs::write(&lock_path, b"lock").expect("create config lock file");
             let unset_result = unset_all_config_values(&scope, "foo.readonly");
             fs::remove_file(&lock_path).expect("remove config lock file");

@@ -65,15 +65,6 @@
                                 Source='$(var.CargoTargetBinDir)\gitcomet.exe'
                                 KeyPath='yes'/>
                         </Component>
-
-                        <Component Id='LauncherBinary' Guid='*'>
-                            <File
-                                Id='LauncherExeFile'
-                                Name='gitcomet-launcher.exe'
-                                DiskId='1'
-                                Source='$(var.CargoTargetBinDir)\gitcomet-launcher.exe'
-                                KeyPath='yes'/>
-                        </Component>
                     </Directory>
                 </Directory>
             </Directory>
@@ -86,7 +77,7 @@
                             Directory='GitCometProgramMenuDir'
                             Name='GitComet'
                             Description='Git GUI built with GPUI'
-                            Target='[Bin]gitcomet-launcher.exe'
+                            Target='[Bin]gitcomet.exe'
                             WorkingDirectory='APPLICATIONFOLDER'
                             Icon='ProductICO'
                             IconIndex='0'
@@ -115,7 +106,6 @@
             Absent='disallow'>
             <ComponentRef Id='License'/>
             <ComponentRef Id='MainBinary'/>
-            <ComponentRef Id='LauncherBinary'/>
             <ComponentRef Id='StartMenuShortcut'/>
 
             <Feature

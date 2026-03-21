@@ -49,6 +49,7 @@ mod icons;
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
+mod open_source_licenses_data;
 mod panels;
 mod panes;
 mod patch_split;
@@ -58,6 +59,7 @@ pub(super) mod platform_open;
 mod poller;
 mod repo_open;
 pub(crate) mod rows;
+mod settings_window;
 mod state_apply;
 mod toast_host;
 mod tooltip;
@@ -100,6 +102,7 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, PopoverHost, RepoTabsBarView};
 use panes::{DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
+pub(crate) use settings_window::open_settings_window;
 use toast_host::ToastHost;
 use tooltip_host::TooltipHost;
 
@@ -531,6 +534,7 @@ impl GitCometView {
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
+            window_handle: window.window_handle(),
             _ui_model: ui_model,
             store,
             _poller: poller,
@@ -575,6 +579,8 @@ impl GitCometView {
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
             startup_crash_report,
+            #[cfg(target_os = "macos")]
+            recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),
             error_banner_input,
             transient_error_banner: None,
             auth_prompt_username_input,
@@ -590,6 +596,18 @@ impl GitCometView {
 
         view.drive_focused_mergetool_bootstrap();
         view.maybe_check_for_updates_on_startup(cx);
+
+        crate::app::sync_gitcomet_window_state(
+            cx,
+            view.window_handle,
+            cx.weak_entity(),
+            view.view_mode,
+            view.state
+                .repos
+                .iter()
+                .map(|repo| repo.spec.workdir.clone())
+                .collect(),
+        );
 
         view
     }
@@ -1183,6 +1201,11 @@ impl GitCometView {
     #[cfg(test)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host.read(app).tooltip_text_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn show_timezone_for_test(&self) -> bool {
+        self.show_timezone
     }
 }
 

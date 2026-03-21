@@ -1,4 +1,5 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
+use gitcomet_core::process::configure_background_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,7 @@ pub fn run_difftool(config: &DifftoolConfig) -> Result<DifftoolRunResult, String
     let prepared_inputs = prepare_diff_inputs(config)?;
 
     let mut cmd = Command::new("git");
+    configure_background_command(&mut cmd);
     cmd.arg("diff").arg("--no-index").arg("--no-ext-diff");
     // When launched from `git difftool`, Git sets `GIT_EXTERNAL_DIFF` to its
     // helper. Remove it so this nested `git diff --no-index` cannot recurse.
