@@ -2,9 +2,7 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let is_empty = this
-        .create_branch_input
-        .read_with(cx, |i, _| i.text().trim().is_empty());
+    let can_create = this.can_submit_create_branch(cx);
 
     div()
         .flex()
@@ -37,29 +35,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .child(
                     components::Button::new("create_branch_cancel", "Cancel")
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_inline_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_branch_go", "Create")
                         .style(components::ButtonStyle::Filled)
-                        .disabled(is_empty)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            let name = this
-                                .create_branch_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if let Some(repo_id) = this.active_repo_id()
-                                && !name.is_empty()
-                            {
-                                this.store
-                                    .dispatch(Msg::CreateBranchAndCheckout { repo_id, name });
-                            }
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .disabled(!can_create)
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.submit_create_branch(window, cx);
                         }),
                 ),
         )

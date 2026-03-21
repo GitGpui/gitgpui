@@ -1743,6 +1743,10 @@ pub(super) enum PopoverKind {
     RepoPicker,
     BranchPicker,
     CreateBranch,
+    CreateBranchFromRefPrompt {
+        repo_id: RepoId,
+        target: String,
+    },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
         remote: String,

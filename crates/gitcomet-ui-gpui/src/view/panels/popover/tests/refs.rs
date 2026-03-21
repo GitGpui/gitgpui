@@ -455,6 +455,22 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
             _ => panic!("expected Squash into current entry with SquashRef action"),
         }
 
+        let create_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Create branch" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            create_entry,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id: rid,
+                    target
+                }
+            }) if rid == repo_id && target == branch_name
+        ));
+
         let has_pull_into_current = model.items.iter().any(|item| match item {
             ContextMenuItem::Entry { label, .. } => label.as_ref() == "Pull into current",
             _ => false,
@@ -590,6 +606,22 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
             }
             _ => panic!("expected Squash into current entry with SquashRef action"),
         }
+
+        let create_entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Create branch" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            create_entry,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromRefPrompt {
+                    repo_id: rid,
+                    target
+                }
+            }) if rid == repo_id && target == branch_name
+        ));
     });
 }
 

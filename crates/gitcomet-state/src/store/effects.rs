@@ -153,12 +153,20 @@ pub(super) fn schedule_effect(
         Effect::RevertCommit { repo_id, commit_id } => {
             repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-        Effect::CreateBranch { repo_id, name } => {
-            repo_actions::schedule_create_branch(executor, repos, msg_tx, repo_id, name);
+        Effect::CreateBranch {
+            repo_id,
+            name,
+            target,
+        } => {
+            repo_actions::schedule_create_branch(executor, repos, msg_tx, repo_id, name, target);
         }
-        Effect::CreateBranchAndCheckout { repo_id, name } => {
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name,
+            target,
+        } => {
             repo_actions::schedule_create_branch_and_checkout(
-                executor, repos, msg_tx, repo_id, name,
+                executor, repos, msg_tx, repo_id, name, target,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {

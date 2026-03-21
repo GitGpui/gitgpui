@@ -3161,6 +3161,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CreateBranch {
                 repo_id,
                 name: "topic".to_string(),
+                target: "HEAD".to_string(),
             },
             1,
         ),
@@ -3168,6 +3169,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CreateBranchAndCheckout {
                 repo_id,
                 name: "topic2".to_string(),
+                target: "HEAD".to_string(),
             },
             1,
         ),

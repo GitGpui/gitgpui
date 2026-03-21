@@ -128,10 +128,12 @@ pub enum Effect {
     CreateBranch {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     CreateBranchAndCheckout {
         repo_id: RepoId,
         name: String,
+        target: String,
     },
     DeleteBranch {
         repo_id: RepoId,

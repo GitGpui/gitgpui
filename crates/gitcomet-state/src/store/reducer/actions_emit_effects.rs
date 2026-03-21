@@ -52,12 +52,24 @@ pub(super) fn revert_commit(
     vec![Effect::RevertCommit { repo_id, commit_id }]
 }
 
-pub(super) fn create_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
-    vec![Effect::CreateBranch { repo_id, name }]
+pub(super) fn create_branch(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
+    vec![Effect::CreateBranch {
+        repo_id,
+        name,
+        target,
+    }]
 }
 
-pub(super) fn create_branch_and_checkout(repo_id: RepoId, name: String) -> Vec<Effect> {
-    vec![Effect::CreateBranchAndCheckout { repo_id, name }]
+pub(super) fn create_branch_and_checkout(
+    repo_id: RepoId,
+    name: String,
+    target: String,
+) -> Vec<Effect> {
+    vec![Effect::CreateBranchAndCheckout {
+        repo_id,
+        name,
+        target,
+    }]
 }
 
 pub(super) fn delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {

@@ -401,16 +401,24 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
         }
-        Msg::CreateBranch { repo_id, name } => {
+        Msg::CreateBranch {
+            repo_id,
+            name,
+            target,
+        } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch(repo_id, name)
+            actions_emit_effects::create_branch(repo_id, name, target)
         }
-        Msg::CreateBranchAndCheckout { repo_id, name } => {
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name,
+            target,
+        } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);

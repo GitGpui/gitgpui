@@ -7,6 +7,7 @@ mod clone_repo;
 mod conflict_save_stage_confirm;
 mod context_menu;
 mod create_branch;
+mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
 mod delete_remote_branch_confirm;
 mod diff_hunks;
@@ -95,6 +96,7 @@ pub(in super::super) struct PopoverHost {
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
     create_branch_input: Entity<components::TextInput>,
+    create_branch_checkout_enabled: bool,
     stash_message_input: Entity<components::TextInput>,
     push_upstream_branch_input: Entity<components::TextInput>,
     worktree_path_input: Entity<components::TextInput>,
@@ -293,11 +295,24 @@ impl PopoverHost {
             )
         });
 
-        let create_branch_input_subscription = cx.observe(&create_branch_input, |this, _, cx| {
-            if matches!(this.popover, Some(PopoverKind::CreateBranch)) {
-                cx.notify();
-            }
-        });
+        let create_branch_input_subscription =
+            cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let is_create_branch_prompt = matches!(
+                    this.popover,
+                    Some(PopoverKind::CreateBranch)
+                        | Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                );
+
+                if enter_pressed && is_create_branch_prompt {
+                    this.submit_create_branch(window, cx);
+                    return;
+                }
+
+                if is_create_branch_prompt {
+                    cx.notify();
+                }
+            });
 
         let stash_message_input_subscription = cx.observe(&stash_message_input, |this, _, cx| {
             if matches!(this.popover, Some(PopoverKind::StashPrompt)) {
@@ -418,6 +433,7 @@ impl PopoverHost {
             remote_url_input,
             remote_url_edit_input,
             create_branch_input,
+            create_branch_checkout_enabled: true,
             stash_message_input,
             push_upstream_branch_input,
             worktree_path_input,
@@ -505,6 +521,153 @@ impl PopoverHost {
         self.popover.is_some()
     }
 
+    fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.popover = None;
+        self.popover_anchor = None;
+        self.clear_active_context_menu_invoker(cx);
+        let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        window.focus(&focus);
+        cx.notify();
+    }
+
+    fn can_submit_create_tag(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CreateTagPrompt { .. }))
+            && self
+                .create_tag_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn can_submit_clone_repo(&self, cx: &mut gpui::Context<Self>) -> bool {
+        matches!(self.popover, Some(PopoverKind::CloneRepo))
+            && self
+                .clone_repo_url_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+            && self
+                .clone_repo_parent_dir_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_create_tag(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::CreateTagPrompt { repo_id, target }) = self.popover.clone() else {
+            return;
+        };
+
+        let name = self
+            .create_tag_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::CreateTag {
+            repo_id,
+            name,
+            target,
+        });
+        self.close_popover(cx);
+    }
+
+    fn submit_clone_repo(&mut self, cx: &mut gpui::Context<Self>) {
+        if !matches!(self.popover, Some(PopoverKind::CloneRepo)) {
+            return;
+        }
+
+        let url = self
+            .clone_repo_url_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        let parent = self
+            .clone_repo_parent_dir_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if url.is_empty() || parent.is_empty() {
+            return;
+        }
+
+        let repo_name = clone_repo_name_from_url(&url);
+        let dest = std::path::PathBuf::from(parent).join(repo_name);
+        self.store.dispatch(Msg::CloneRepo { url, dest });
+        self.close_popover(cx);
+    }
+
+    fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.create_branch_prompt_repo_and_target().is_some()
+            && self
+                .create_branch_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn create_branch_prompt_repo_and_target(&self) -> Option<(RepoId, String)> {
+        match &self.popover {
+            Some(PopoverKind::CreateBranch) => self
+                .active_repo_id()
+                .map(|repo_id| (repo_id, "HEAD".to_string())),
+            Some(PopoverKind::CreateBranchFromRefPrompt { repo_id, target }) => {
+                Some((*repo_id, target.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn submit_create_branch(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some((repo_id, target)) = self.create_branch_prompt_repo_and_target() else {
+            return;
+        };
+        let name = self
+            .create_branch_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+
+        let checkout = match self.popover {
+            Some(PopoverKind::CreateBranch) => true,
+            Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
+                self.create_branch_checkout_enabled
+            }
+            _ => return,
+        };
+
+        if checkout {
+            self.store.dispatch(Msg::CreateBranchAndCheckout {
+                repo_id,
+                name,
+                target,
+            });
+        } else {
+            self.store.dispatch(Msg::CreateBranch {
+                repo_id,
+                name,
+                target,
+            });
+        }
+        self.dismiss_inline_popover(window, cx);
+    }
+
+    fn can_submit_stash(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.active_repo_id().is_some()
+            && self
+                .stash_message_input
+                .read_with(cx, |input, _| !input.text().trim().is_empty())
+    }
+
+    fn submit_stash(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let message = self
+            .stash_message_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if message.is_empty() {
+            return;
+        }
+
+        self.store.dispatch(Msg::Stash {
+            repo_id,
+            message,
+            include_untracked: true,
+        });
+        self.dismiss_inline_popover(window, cx);
+    }
+
     pub(in super::super) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -579,7 +742,12 @@ impl PopoverHost {
                 | PopoverKind::TagMenu { .. }
         );
         let keep_active_invoker = is_context_menu
-            || matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+            || matches!(
+                &kind,
+                PopoverKind::CreateBranch
+                    | PopoverKind::CreateBranchFromRefPrompt { .. }
+                    | PopoverKind::StashPrompt
+            );
         if !keep_active_invoker {
             self.clear_active_context_menu_invoker(cx);
         }
@@ -604,6 +772,20 @@ impl PopoverHost {
                 }
                 PopoverKind::CreateBranch => {
                     let theme = self.theme;
+                    self.create_branch_checkout_enabled = true;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus);
+                }
+                PopoverKind::CreateBranchFromRefPrompt { .. } => {
+                    let theme = self.theme;
+                    self.create_branch_checkout_enabled = true;
                     self.create_branch_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
@@ -987,8 +1169,12 @@ impl PopoverHost {
             &kind,
             PopoverKind::Settings | PopoverKind::OpenSourceLicenses
         );
-        let is_create_branch_or_stash_prompt =
-            matches!(&kind, PopoverKind::CreateBranch | PopoverKind::StashPrompt);
+        let is_create_branch_or_stash_prompt = matches!(
+            &kind,
+            PopoverKind::CreateBranch
+                | PopoverKind::CreateBranchFromRefPrompt { .. }
+                | PopoverKind::StashPrompt
+        );
         let is_context_menu = matches!(
             &kind,
             PopoverKind::PullPicker
@@ -1029,6 +1215,7 @@ impl PopoverHost {
             PopoverKind::PullPicker
             | PopoverKind::PushPicker
             | PopoverKind::CreateBranch
+            | PopoverKind::CreateBranchFromRefPrompt { .. }
             | PopoverKind::StashPrompt
             | PopoverKind::StashDropConfirm { .. }
             | PopoverKind::CloneRepo
@@ -1118,6 +1305,9 @@ impl PopoverHost {
             PopoverKind::OpenSourceLicenses => open_source_licenses::panel(self, cx),
             PopoverKind::BranchPicker => branch_picker::panel(self, cx),
             PopoverKind::CreateBranch => create_branch::panel(self, cx),
+            PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
+                create_branch_from_ref_prompt::panel(self, repo_id, target, cx)
+            }
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,

@@ -60,6 +60,18 @@ pub(super) fn model(
             }
         }),
     });
+    items.push(ContextMenuItem::Entry {
+        label: "Create branch".into(),
+        icon: Some("+".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::CreateBranchFromRefPrompt {
+                repo_id,
+                target: name.clone(),
+            },
+        }),
+    });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);
         if !is_current_branch {

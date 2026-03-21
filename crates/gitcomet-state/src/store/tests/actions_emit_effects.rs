@@ -815,11 +815,16 @@ fn create_and_delete_branch_emit_effects() {
         Msg::CreateBranch {
             repo_id: RepoId(1),
             name: "feature".to_string(),
+            target: "HEAD".to_string(),
         },
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateBranch { repo_id: RepoId(1), name }] if name == "feature"
+        [Effect::CreateBranch {
+            repo_id: RepoId(1),
+            name,
+            target,
+        }] if name == "feature" && target == "HEAD"
     ));
 
     let effects = reduce(
@@ -1690,14 +1695,16 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::CreateBranchAndCheckout {
             repo_id,
             name: "feature/new".to_string(),
+            target: "HEAD".to_string(),
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CreateBranchAndCheckout {
             repo_id: RepoId(1),
+            target,
             ..
-        }]
+        }] if target == "HEAD"
     ));
 
     let effects = reduce(
