@@ -162,6 +162,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
 
       - name: Build release binary
         shell: pwsh
