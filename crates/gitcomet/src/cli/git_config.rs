@@ -1,4 +1,11 @@
 use super::*;
+use gitcomet_core::process::configure_background_command;
+
+fn git_command() -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    configure_background_command(&mut command);
+    command
+}
 
 fn trim_git_stdout_bytes(bytes: &[u8]) -> &[u8] {
     bytes.trim_ascii_end()
@@ -40,7 +47,7 @@ fn decode_git_path_stdout(bytes: &[u8]) -> Option<PathBuf> {
 /// Read a single git config value from an explicit repository root.
 /// Returns `None` if the key is not set or git is not available.
 fn read_git_config_at_repo(repo_root: &Path, key: &str) -> Option<String> {
-    std::process::Command::new("git")
+    git_command()
         .arg("-C")
         .arg(repo_root)
         .args(["config", "--get", key])
@@ -51,7 +58,7 @@ fn read_git_config_at_repo(repo_root: &Path, key: &str) -> Option<String> {
 }
 
 fn git_repo_toplevel_from_probe_dir(probe_dir: &Path) -> Option<PathBuf> {
-    std::process::Command::new("git")
+    git_command()
         .arg("-C")
         .arg(probe_dir)
         .args(["rev-parse", "--show-toplevel"])

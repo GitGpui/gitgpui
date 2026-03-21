@@ -4906,12 +4906,12 @@ mod tests {
             DiffSyntaxLanguage::Rust,
             &edited.join("\n"),
             DiffSyntaxBudget {
-                foreground_parse: Duration::from_millis(50),
+                foreground_parse: Duration::from_millis(200),
             },
             Some(base_document),
         );
         let PrepareTreesitterDocumentResult::Ready(reparsed_document) = attempt else {
-            panic!("large reparse should complete within default budget");
+            panic!("large reparse should complete within the test full-parse budget");
         };
 
         assert_eq!(

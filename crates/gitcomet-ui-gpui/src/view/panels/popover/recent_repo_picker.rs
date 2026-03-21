@@ -58,15 +58,5 @@ fn select_recent_repository(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     this.close_popover(cx);
-    let root_view = this.root_view.clone();
-    cx.defer(move |cx| {
-        if crate::app::focus_existing_repository_window_for_path(cx, path.as_path()) {
-            return;
-        }
-
-        let path_for_open = path.clone();
-        let _ = root_view.update(cx, |root, cx| {
-            root.open_repo_path(path_for_open, cx);
-        });
-    });
+    this.store.dispatch(Msg::OpenRepo(path));
 }

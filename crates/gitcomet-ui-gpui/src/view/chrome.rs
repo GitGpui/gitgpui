@@ -1,5 +1,4 @@
 use super::*;
-use gpui::ObjectFit;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
 pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
@@ -14,20 +13,20 @@ pub(super) struct TitleBarView {
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
-struct TitleBarDragState {
+pub(super) struct TitleBarDragState {
     should_move: bool,
 }
 
 impl TitleBarDragState {
-    fn on_left_mouse_down(&mut self, click_count: usize) {
+    pub(super) fn on_left_mouse_down(&mut self, click_count: usize) {
         self.should_move = click_count < 2;
     }
 
-    fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         self.should_move = false;
     }
 
-    fn take_move_request(&mut self) -> bool {
+    pub(super) fn take_move_request(&mut self) -> bool {
         let should_move = self.should_move;
         self.should_move = false;
         should_move
@@ -40,7 +39,10 @@ enum TitleBarDoubleClickAction {
     ToggleZoom,
 }
 
-fn should_handle_titlebar_double_click(click_count: usize, standard_click: bool) -> bool {
+pub(super) fn should_handle_titlebar_double_click(
+    click_count: usize,
+    standard_click: bool,
+) -> bool {
     standard_click && click_count == 2
 }
 
@@ -52,7 +54,7 @@ fn titlebar_double_click_action() -> TitleBarDoubleClickAction {
     }
 }
 
-fn handle_titlebar_double_click(window: &mut Window) {
+pub(super) fn handle_titlebar_double_click(window: &mut Window) {
     match titlebar_double_click_action() {
         TitleBarDoubleClickAction::PlatformDefault => window.titlebar_double_click(),
         TitleBarDoubleClickAction::ToggleZoom => window.zoom_window(),
@@ -70,32 +72,26 @@ pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> 
     }
 }
 
-fn titlebar_control_icon(path: &'static str, color: gpui::Rgba) -> gpui::Svg {
+pub(super) fn titlebar_control_icon(path: &'static str, color: gpui::Rgba) -> gpui::Svg {
     svg_icon(path, color, px(16.0))
 }
 
 fn titlebar_app_icon(theme: AppTheme) -> AnyElement {
     gpui::image_cache(gpui::retain_all("titlebar_icon_cache"))
         .child(
-            div()
-                .id("titlebar_app_icon")
-                .size(px(16.0))
-                .rounded(px(2.0))
-                .overflow_hidden()
-                .child(
-                    gpui::img("gitcomet_logo_window.svg")
-                        .size(px(16.0))
-                        .object_fit(ObjectFit::Contain)
-                        .with_fallback(move || {
-                            svg_icon("icons/gitcomet_mark.svg", theme.colors.accent, px(16.0))
-                                .into_any_element()
-                        }),
-                ),
+            div().id("titlebar_app_icon").size(px(16.0)).child(
+                gpui::img("gitcomet-window-icon.png")
+                    .size(px(16.0))
+                    .with_fallback(move || {
+                        svg_icon("icons/gitcomet_mark.svg", theme.colors.accent, px(16.0))
+                            .into_any_element()
+                    }),
+            ),
         )
         .into_any_element()
 }
 
-fn titlebar_control_button(
+pub(super) fn titlebar_control_button(
     theme: AppTheme,
     id: &'static str,
     icon: gpui::Svg,
@@ -332,10 +328,10 @@ impl Render for TitleBarView {
                 div()
                     .id("app_menu_btn")
                     .h(px(26.0))
-                    .px_2()
+                    .w(px(26.0))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .justify_center()
                     .rounded(px(theme.radii.pill))
                     .when(app_menu_open, move |s| s.bg(app_menu_open_bg))
                     .hover(move |s| {
@@ -352,17 +348,7 @@ impl Render for TitleBarView {
                             s.bg(app_menu_active_bg)
                         }
                     })
-                    .child(titlebar_app_icon(theme))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(gpui::rgba(0xFFFFFFFF))
-                            .whitespace_nowrap()
-                            .child("GITCOMET"),
-                    ),
+                    .child(svg_icon("icons/menu.svg", theme.colors.text, px(14.0))),
             )
             .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
                 this.set_app_menu_open(true, cx);
@@ -375,6 +361,32 @@ impl Render for TitleBarView {
                     cx.stop_propagation();
                     window.show_window_menu(window_top_left_corner(window));
                 }),
+            );
+
+        let windows_brand = div()
+            .id("titlebar_brand")
+            .debug_selector(|| "titlebar_brand".to_string())
+            .h_full()
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .h(px(26.0))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(titlebar_app_icon(theme))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.colors.text)
+                            .whitespace_nowrap()
+                            .child("GITCOMET"),
+                    ),
             );
 
         let drag_region = div()
@@ -584,7 +596,7 @@ impl Render for TitleBarView {
                     .gap_0p5()
                     .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
                     .when(is_macos, |d| d.child(macos_brand))
-                    .when(!is_macos, |d| d.child(menu_toggle)),
+                    .when(!is_macos, |d| d.child(menu_toggle).child(windows_brand)),
             )
             .child(drag_region)
             .child(

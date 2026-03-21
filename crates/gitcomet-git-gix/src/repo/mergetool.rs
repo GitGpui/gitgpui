@@ -1,12 +1,14 @@
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_simple};
 use gitcomet_core::error::{Error, ErrorKind};
+use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+#[cfg(any(not(windows), test))]
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 
@@ -68,7 +70,7 @@ impl GixRepo {
             // No custom command — try invoking the tool name directly with
             // the standard argument convention used by many merge tools.
             let tool_executable = tool_path.as_deref().unwrap_or(&tool_name);
-            Command::new(tool_executable)
+            no_window_command(tool_executable)
                 .arg(local_path)
                 .arg(base_path)
                 .arg(remote_path)
@@ -183,7 +185,7 @@ fn env_has_display() -> bool {
 
 #[cfg(all(windows, test))]
 fn shell_command(custom_cmd: &str) -> Command {
-    let mut command = Command::new("cmd");
+    let mut command = no_window_command("cmd");
     command.arg("/C").arg(custom_cmd);
     command
 }
@@ -215,7 +217,7 @@ fn run_custom_mergetool_command(
         script.push_str("\r\n");
         std::fs::write(&script_path, script).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
 
-        let mut command = Command::new("cmd");
+        let mut command = no_window_command("cmd");
         command.arg("/C").arg(&script_path);
         command
             .env("BASE", base_path)

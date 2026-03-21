@@ -49,6 +49,7 @@ mod icons;
 mod linux_desktop_integration;
 mod markdown_preview;
 mod mod_helpers;
+mod open_source_licenses_data;
 mod panels;
 mod panes;
 mod patch_split;

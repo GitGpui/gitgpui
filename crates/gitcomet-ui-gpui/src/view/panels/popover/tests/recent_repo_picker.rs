@@ -1,7 +1,64 @@
 use super::*;
-use std::process::Command;
+use gitcomet_core::process::background_command as no_window_command;
+use std::time::{Duration, Instant};
 
 const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
+
+fn wait_until(cx: &mut gpui::VisualTestContext, description: &str, ready: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        if ready() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for {description}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn normalize_existing_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    strip_windows_verbatim_prefix(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
+#[cfg(windows)]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path;
+    };
+
+    let mut out = match prefix.kind() {
+        Prefix::VerbatimDisk(letter) => {
+            std::path::PathBuf::from(format!("{}:", char::from(letter)))
+        }
+        Prefix::VerbatimUNC(server, share) => {
+            let mut out = std::path::PathBuf::from(r"\\");
+            out.push(server);
+            out.push(share);
+            out
+        }
+        Prefix::Verbatim(raw) => std::path::PathBuf::from(raw),
+        _ => return path,
+    };
+
+    for component in components {
+        out.push(component.as_os_str());
+    }
+    out
+}
+
+#[cfg(not(windows))]
+fn strip_windows_verbatim_prefix(path: std::path::PathBuf) -> std::path::PathBuf {
+    path
+}
 
 #[gpui::test]
 fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::TestAppContext) {
@@ -100,7 +157,7 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_wrapper() {
         .expect("seed recent repo session");
 
     let current_exe = std::env::current_exe().expect("locate current test binary");
-    let output = Command::new(current_exe)
+    let output = no_window_command(current_exe)
         .arg("recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess")
         .arg("--nocapture")
         .env(SESSION_FILE_ENV, &session_file)
@@ -127,9 +184,8 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
         .recent_repos
         .into_iter()
         .next()
-        .expect("seeded recent repo")
-        .canonicalize()
-        .expect("canonicalize recent repo");
+        .expect("seeded recent repo");
+    let expected_path = normalize_existing_path(expected_path);
 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
@@ -170,12 +226,11 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
             "expected recent repository picker to close after selection"
         );
     });
-    assert!(
+    wait_until(cx, "selected recent repository to open", || {
         store_for_assert
             .snapshot()
             .repos
             .iter()
-            .any(|repo| repo.spec.workdir == expected_path),
-        "expected selected recent repository to open without panicking"
-    );
+            .any(|repo| repo.spec.workdir == expected_path)
+    });
 }

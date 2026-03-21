@@ -1,5 +1,10 @@
 use super::*;
 
+fn copied_path_ends_with(text: &str, suffix: &std::path::Path) -> bool {
+    let normalize = |value: &str| value.replace('\\', "/");
+    normalize(text).ends_with(&normalize(&suffix.to_string_lossy()))
+}
+
 fn declared_shortcuts(model: &ContextMenuModel) -> Vec<String> {
     model
         .items
@@ -689,7 +694,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         commit_file_model,
         "C",
-        ContextMenuAction::CopyText { text } if text.contains("src/main.rs")
+        ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &commit_file_path)
     );
 
     let unstaged_status_model = cx.update(|_window, app| {
@@ -740,7 +745,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         unstaged_status_model,
         "C",
-        ContextMenuAction::CopyText { text } if text.contains("unstaged.rs")
+        ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &unstaged_path)
     );
 
     let staged_status_model = cx.update(|_window, app| {
@@ -791,7 +796,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         staged_status_model,
         "C",
-        ContextMenuAction::CopyText { text } if text.contains("staged_added.rs")
+        ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &staged_path)
     );
 
     let conflicted_status_model = cx.update(|_window, app| {
@@ -867,7 +872,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         conflicted_status_model,
         "C",
-        ContextMenuAction::CopyText { text } if text.contains("conflicted.rs")
+        ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &conflicted_path)
     );
 
     let diff_editor_unstaged_model = cx.update(|_window, app| {
