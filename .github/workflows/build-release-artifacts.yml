@@ -194,14 +194,30 @@ jobs:
           retention-days: 7
 
   build_linux:
-    name: Build Linux artifacts
-    runs-on: ubuntu-22.04
+    name: Build Linux artifacts (${{ matrix.target_platform }})
+    runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 120
     needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_platform: x86_64-linux
+            artifact_arch: x86_64
+            deb_arch: amd64
+            runs_on: ubuntu-22.04
+            build_appimage: true
+          - target_platform: aarch64-linux
+            artifact_arch: arm64
+            deb_arch: arm64
+            runs_on: ubuntu-24.04-arm
+            build_appimage: false
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       DEB_REVISION: ${{ needs.prepare.outputs.deb_revision }}
+      ARTIFACT_ARCH: ${{ matrix.artifact_arch }}
+      DEB_ARCH: ${{ matrix.deb_arch }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -238,7 +254,7 @@ jobs:
       - name: Package tar.gz
         run: |
           set -euo pipefail
-          root="gitcomet-v${VERSION}-linux-x86_64"
+          root="gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}"
           mkdir -p "dist/stage/${root}"
           install -m755 target/release/gitcomet "dist/stage/${root}/gitcomet"
           install -m644 README.md "dist/stage/${root}/README.md"
@@ -265,7 +281,7 @@ jobs:
           {
             echo "Package: gitcomet"
             echo "Version: ${deb_version}"
-            echo "Architecture: amd64"
+            echo "Architecture: ${DEB_ARCH}"
             echo "Maintainer: AutoExplore Oy <info@autoexplore.ai>"
             echo "Depends: git"
             echo "Section: utils"
@@ -273,9 +289,10 @@ jobs:
             echo "Description: Fast, resource-efficient Git GUI written in Rust."
           } > "${pkg_root}/DEBIAN/control"
 
-          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${deb_version}_amd64.deb"
+          dpkg-deb --build "${pkg_root}" "dist/gitcomet_${deb_version}_${DEB_ARCH}.deb"
 
       - name: Package AppImage
+        if: ${{ matrix.build_appimage }}
         run: |
           set -euo pipefail
           appdir="dist/AppDir"
@@ -298,12 +315,12 @@ jobs:
           echo "${APPIMAGETOOL_X86_64_SHA256}  /tmp/appimagetool.AppImage" | sha256sum -c -
           chmod +x /tmp/appimagetool.AppImage
           ARCH=x86_64 /tmp/appimagetool.AppImage --appimage-extract-and-run \
-            "${appdir}" "dist/gitcomet-v${VERSION}-linux-x86_64.AppImage"
+            "${appdir}" "dist/gitcomet-v${VERSION}-linux-${ARTIFACT_ARCH}.AppImage"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: linux-release-artifacts
+          name: linux-release-artifacts-${{ matrix.target_platform }}
           path: |
             dist/*.tar.gz
             dist/*.AppImage
@@ -312,7 +329,7 @@ jobs:
           retention-days: 7
 
   build_macos:
-    name: Build macOS artifacts (${{ matrix.arch }})
+    name: Build macOS artifacts (${{ matrix.target_platform }})
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: 120
     needs: prepare
@@ -320,9 +337,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
+          - target_platform: aarch64-darwin
+            arch: arm64
             runs_on: macos-latest
-          - arch: x86_64
+          - target_platform: x86_64-darwin
+            arch: x86_64
             runs_on: macos-15-intel
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
@@ -495,7 +514,7 @@ jobs:
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: macos-release-artifacts-${{ matrix.arch }}
+          name: macos-release-artifacts-${{ matrix.target_platform }}
           path: |
             dist/*.tar.gz
             dist/*.dmg
@@ -525,8 +544,9 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: linux-release-artifacts
+          pattern: linux-release-artifacts-*
           path: dist/linux
+          merge-multiple: true
 
       - uses: actions/download-artifact@v8
         with:
@@ -553,17 +573,19 @@ jobs:
           set -euo pipefail
           arm_tar="gitcomet-v${VERSION}-macos-arm64.tar.gz"
           intel_tar="gitcomet-v${VERSION}-macos-x86_64.tar.gz"
-          linux_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
+          linux_arm_tar="gitcomet-v${VERSION}-linux-arm64.tar.gz"
+          linux_intel_tar="gitcomet-v${VERSION}-linux-x86_64.tar.gz"
           arm_dmg="gitcomet-v${VERSION}-macos-arm64.dmg"
           intel_dmg="gitcomet-v${VERSION}-macos-x86_64.dmg"
           arm_path="dist/release/${arm_tar}"
           intel_path="dist/release/${intel_tar}"
-          linux_path="dist/release/${linux_tar}"
+          linux_arm_path="dist/release/${linux_arm_tar}"
+          linux_intel_path="dist/release/${linux_intel_tar}"
           arm_dmg_path="dist/release/${arm_dmg}"
           intel_dmg_path="dist/release/${intel_dmg}"
 
-          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
-            echo "::error title=Missing release assets::Expected ${arm_tar}, ${intel_tar}, ${linux_tar}, ${arm_dmg}, and ${intel_dmg} in dist/release."
+          if [ ! -f "${arm_path}" ] || [ ! -f "${intel_path}" ] || [ ! -f "${linux_arm_path}" ] || [ ! -f "${linux_intel_path}" ] || [ ! -f "${arm_dmg_path}" ] || [ ! -f "${intel_dmg_path}" ]; then
+            echo "::error title=Missing release assets::Expected ${arm_tar}, ${intel_tar}, ${linux_arm_tar}, ${linux_intel_tar}, ${arm_dmg}, and ${intel_dmg} in dist/release."
             exit 1
           fi
 
@@ -572,7 +594,8 @@ jobs:
             --github-repo "${GITHUB_REPOSITORY}" \
             --arm-tar "${arm_path}" \
             --intel-tar "${intel_path}" \
-            --linux-tar "${linux_path}" \
+            --linux-arm-tar "${linux_arm_path}" \
+            --linux-intel-tar "${linux_intel_path}" \
             --output "dist/release/gitcomet-cli.rb"
 
           scripts/generate-homebrew-cask.sh \
