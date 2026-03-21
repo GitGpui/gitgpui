@@ -486,6 +486,7 @@ fn summarize_command(
             RepoCommandKind::Push => "Push",
             RepoCommandKind::ForcePush => "Force push",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
+            RepoCommandKind::SetUpstreamBranch { .. } => "Set as tracking upstream",
             RepoCommandKind::UnsetUpstreamBranch { .. } => "Unlink upstream branch",
             RepoCommandKind::DeleteRemoteBranch { .. } => "Delete remote branch",
             RepoCommandKind::PushTag { .. } => "Push tag",
@@ -622,6 +623,9 @@ fn summarize_command(
                 "Completed"
             };
             format!("Push -u {remote}/{branch}: {base}")
+        }
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => {
+            format!("Branch {branch}: Upstream set to {upstream}")
         }
         RepoCommandKind::UnsetUpstreamBranch { branch } => {
             format!("Branch {branch}: Upstream unlinked")
@@ -1177,6 +1181,13 @@ mod tests {
                 "Push",
             ),
             (
+                RepoCommandKind::SetUpstreamBranch {
+                    branch: "main".into(),
+                    upstream: "origin/main".into(),
+                },
+                "Set as tracking upstream",
+            ),
+            (
                 RepoCommandKind::UnsetUpstreamBranch {
                     branch: "main".into(),
                 },
@@ -1375,6 +1386,24 @@ mod tests {
         assert_eq!(
             push_upstream_uptodate,
             "Push -u origin/main: Everything up-to-date"
+        );
+
+        let (_, set_upstream_summary) = summarize_command(
+            &RepoCommandKind::SetUpstreamBranch {
+                branch: "feature".into(),
+                upstream: "origin/feature".into(),
+            },
+            &command_output(
+                "git branch --set-upstream-to origin/feature feature",
+                "",
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            set_upstream_summary,
+            "Branch feature: Upstream set to origin/feature"
         );
 
         let (_, unset_upstream_summary) = summarize_command(

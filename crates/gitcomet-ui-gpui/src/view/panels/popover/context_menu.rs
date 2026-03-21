@@ -704,6 +704,17 @@ impl PopoverHost {
             ContextMenuAction::Push { repo_id } => {
                 self.store.dispatch(Msg::Push { repo_id });
             }
+            ContextMenuAction::SetUpstreamBranch {
+                repo_id,
+                branch,
+                upstream,
+            } => {
+                self.store.dispatch(Msg::SetUpstreamBranch {
+                    repo_id,
+                    branch,
+                    upstream,
+                });
+            }
             ContextMenuAction::UnsetUpstreamBranch { repo_id, branch } => {
                 self.store
                     .dispatch(Msg::UnsetUpstreamBranch { repo_id, branch });

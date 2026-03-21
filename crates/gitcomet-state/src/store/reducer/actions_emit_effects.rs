@@ -299,6 +299,18 @@ pub(super) fn push_set_upstream(
     }]
 }
 
+pub(super) fn set_upstream_branch(
+    repo_id: RepoId,
+    branch: String,
+    upstream: String,
+) -> Vec<Effect> {
+    vec![Effect::SetUpstreamBranch {
+        repo_id,
+        branch,
+        upstream,
+    }]
+}
+
 pub(super) fn unset_upstream_branch(repo_id: RepoId, branch: String) -> Vec<Effect> {
     vec![Effect::UnsetUpstreamBranch { repo_id, branch }]
 }
@@ -537,6 +549,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::AddRemote { .. }
             | RepoCommandKind::RemoveRemote { .. }
             | RepoCommandKind::SetRemoteUrl { .. }
+            | RepoCommandKind::SetUpstreamBranch { .. }
             | RepoCommandKind::UnsetUpstreamBranch { .. }
             | RepoCommandKind::CheckoutConflict { .. }
             | RepoCommandKind::AcceptConflictDeletion { .. }

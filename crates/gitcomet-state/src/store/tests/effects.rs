@@ -3360,6 +3360,14 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::SetUpstreamBranch {
+                repo_id,
+                branch: "main".to_string(),
+                upstream: "origin/main".to_string(),
+            },
+            1,
+        ),
+        (
             Effect::UnsetUpstreamBranch {
                 repo_id,
                 branch: "main".to_string(),

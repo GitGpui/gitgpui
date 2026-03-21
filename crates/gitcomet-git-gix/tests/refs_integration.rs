@@ -328,6 +328,86 @@ fn list_branches_reflects_new_upstream_without_reopen() {
 }
 
 #[test]
+fn list_branches_reflects_tracking_upstream_set_without_push() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+
+    run_git(&work_repo, &["init", "-b", "main"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "You"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    let origin_url = git_remote_url(&remote_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", "origin", origin_url.as_str()],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").unwrap();
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    run_git(&work_repo, &["push", "origin", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+
+    let before = opened.list_branches().unwrap();
+    let feature_before = before
+        .iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch present");
+    assert_eq!(feature_before.upstream, None);
+
+    let output = opened
+        .set_upstream_branch_with_output("feature", "origin/feature")
+        .expect("set upstream");
+    assert_eq!(output.exit_code, Some(0));
+
+    let upstream_after = run_git_capture(
+        &work_repo,
+        &[
+            "for-each-ref",
+            "--format=%(upstream:short)",
+            "refs/heads/feature",
+        ],
+    );
+    assert_eq!(upstream_after.trim(), "origin/feature");
+
+    let after = opened.list_branches().unwrap();
+    let feature_after = after
+        .iter()
+        .find(|branch| branch.name == "feature")
+        .expect("feature branch present");
+    assert_eq!(
+        feature_after.upstream,
+        Some(Upstream {
+            remote: "origin".to_string(),
+            branch: "feature".to_string(),
+        })
+    );
+}
+
+#[test]
 fn list_branches_reflects_removed_upstream_without_reopen() {
     if !require_git_shell_for_refs_integration_tests() {
         return;

@@ -1209,6 +1209,25 @@ fn repo_operations_emit_effects() {
         }]
     ));
 
+    let set_upstream_branch = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch: "feature/local".to_string(),
+            upstream: "origin/feature/foo".to_string(),
+        },
+    );
+    assert!(matches!(
+        set_upstream_branch.as_slice(),
+        [Effect::SetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+            upstream,
+        }] if branch == "feature/local" && upstream == "origin/feature/foo"
+    ));
+
     let unset_upstream = reduce(
         &mut repos,
         &id_alloc,
@@ -1370,6 +1389,23 @@ fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch: "feature/test".to_string(),
+            upstream: "origin/feature/test".to_string(),
+        },
+    );
+    assert_eq!(state.repos[0].push_in_flight, 2);
+    assert!(
+        state.repos[0].ops_rev > ops_after_push_set_upstream,
+        "ops_rev should bump after SetUpstreamBranch"
+    );
+    let ops_after_set_upstream_branch = state.repos[0].ops_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::UnsetUpstreamBranch {
             repo_id,
             branch: "feature/test".to_string(),
@@ -1377,7 +1413,7 @@ fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
     );
     assert_eq!(state.repos[0].push_in_flight, 2);
     assert!(
-        state.repos[0].ops_rev > ops_after_push_set_upstream,
+        state.repos[0].ops_rev > ops_after_set_upstream_branch,
         "ops_rev should bump after UnsetUpstreamBranch"
     );
 }
@@ -1762,6 +1798,25 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch: "feature/current".to_string(),
+            upstream: "origin/feature/current".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+            upstream,
+        }] if branch == "feature/current" && upstream == "origin/feature/current"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::UnsetUpstreamBranch {
             repo_id,
             branch: "feature/current".to_string(),
@@ -1776,7 +1831,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     ));
 
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 8,
+        state.repos[0].local_actions_in_flight, 9,
         "expected begin_local_action for all routed local-action messages"
     );
 
@@ -1964,6 +2019,25 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch: "feature/current".to_string(),
+            upstream: "origin/feature/current".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+            upstream,
+        }] if branch == "feature/current" && upstream == "origin/feature/current"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::UnsetUpstreamBranch {
             repo_id,
             branch: "feature/current".to_string(),
@@ -2049,6 +2123,13 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
                 kind: gitcomet_core::services::RemoteUrlKind::Push,
             },
             "Remote",
+        ),
+        (
+            RepoCommandKind::SetUpstreamBranch {
+                branch: "feature/current".to_string(),
+                upstream: "origin/feature/current".to_string(),
+            },
+            "Set as tracking upstream",
         ),
         (
             RepoCommandKind::UnsetUpstreamBranch {
@@ -2495,6 +2576,26 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
             remote,
             branch
         }] if remote == "origin" && branch == "feature/xyz"
+    ));
+    assert_eq!(state.repos[0].push_in_flight, 2);
+
+    let set_upstream_branch = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch: "feature/local".to_string(),
+            upstream: "origin/feature/xyz".to_string(),
+        },
+    );
+    assert!(matches!(
+        set_upstream_branch.as_slice(),
+        [Effect::SetUpstreamBranch {
+            repo_id: RepoId(1),
+            branch,
+            upstream
+        }] if branch == "feature/local" && upstream == "origin/feature/xyz"
     ));
     assert_eq!(state.repos[0].push_in_flight, 2);
 }

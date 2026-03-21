@@ -154,6 +154,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             remote,
             branch,
         },
+        RepoCommandKind::SetUpstreamBranch { branch, upstream } => Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        },
         RepoCommandKind::UnsetUpstreamBranch { branch } => {
             Msg::UnsetUpstreamBranch { repo_id, branch }
         }
@@ -581,6 +586,14 @@ pub(super) fn reduce(
             remote,
             branch,
         } => actions_emit_effects::push_set_upstream(repos, state, repo_id, remote, branch),
+        Msg::SetUpstreamBranch {
+            repo_id,
+            branch,
+            upstream,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::set_upstream_branch(repo_id, branch, upstream)
+        }
         Msg::UnsetUpstreamBranch { repo_id, branch } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::unset_upstream_branch(repo_id, branch)

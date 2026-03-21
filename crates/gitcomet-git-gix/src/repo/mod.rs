@@ -351,6 +351,14 @@ impl GitRepository for GixRepo {
         self.push_set_upstream_with_output_impl(remote, branch)
     }
 
+    fn set_upstream_branch_with_output(
+        &self,
+        branch: &str,
+        upstream: &str,
+    ) -> Result<CommandOutput> {
+        self.set_upstream_branch_with_output_impl(branch, upstream)
+    }
+
     fn unset_upstream_branch_with_output(&self, branch: &str) -> Result<CommandOutput> {
         self.unset_upstream_branch_with_output_impl(branch)
     }

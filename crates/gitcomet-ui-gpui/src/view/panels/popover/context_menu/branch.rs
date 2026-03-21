@@ -20,14 +20,20 @@ pub(super) fn model(
         Loadable::Ready(branch) => Some(branch.clone()),
         _ => None,
     });
-    let active_upstream_full = repo.and_then(|r| match (&r.branches, &r.head_branch) {
-        (Loadable::Ready(branches), Loadable::Ready(head)) => branches
-            .iter()
-            .find(|branch| branch.name == *head)
-            .and_then(|branch| branch.upstream.as_ref())
-            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch)),
+    let active_branch = repo.and_then(|r| match (&r.branches, active_branch_name.as_ref()) {
+        (Loadable::Ready(branches), Some(head)) => {
+            branches.iter().find(|branch| branch.name == *head)
+        }
         _ => None,
     });
+    let active_upstream_full = active_branch.and_then(|branch| {
+        branch
+            .upstream
+            .as_ref()
+            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+    });
+    let active_branch_has_no_upstream =
+        active_branch.is_some_and(|branch| branch.upstream.is_none());
     let is_current_branch = active_branch_name
         .as_ref()
         .is_some_and(|branch| branch == name);
@@ -169,6 +175,22 @@ pub(super) fn model(
                     ),
                 }),
             });
+            if active_branch_has_no_upstream
+                && let Some(active_branch_name) = active_branch_name.clone()
+                && name.split_once('/').is_some()
+            {
+                items.push(ContextMenuItem::Entry {
+                    label: "Set as tracking upstream".into(),
+                    icon: Some("⛓".into()),
+                    shortcut: None,
+                    disabled: false,
+                    action: Box::new(ContextMenuAction::SetUpstreamBranch {
+                        repo_id,
+                        branch: active_branch_name,
+                        upstream: name.clone(),
+                    }),
+                });
+            }
             items.push(ContextMenuItem::Entry {
                 label: "Unlink upstream branch".into(),
                 icon: Some("⛓".into()),
