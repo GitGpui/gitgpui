@@ -1746,6 +1746,125 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn staged_section_remains_visible_after_window_resize_with_saved_split_height(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(51);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_resize_window_shrink",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![gitcomet_core::domain::FileStatus {
+                        path: std::path::PathBuf::from("staged.txt"),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                    unstaged: (0..30)
+                        .map(|ix| gitcomet_core::domain::FileStatus {
+                            path: std::path::PathBuf::from(format!("unstaged-{ix}.txt")),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        })
+                        .collect(),
+                }
+                .into(),
+            );
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let mut initial_window_size = gpui::size(px(0.0), px(0.0));
+    let mut initial_status_height = px(0.0);
+    cx.update(|window, app| {
+        initial_window_size = window.viewport_size();
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        initial_status_height = pane
+            .current_status_sections_bounds()
+            .expect("expected status section bounds before shrinking the window")
+            .size
+            .height;
+    });
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.change_tracking_height = Some(initial_status_height);
+            cx.notify();
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_resize(gpui::size(
+        initial_window_size.width,
+        initial_window_size.height - px(120.0),
+    ));
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    let staged_header_bounds = cx
+        .debug_bounds("staged_header")
+        .expect("expected staged header bounds after shrinking the window");
+
+    let mut staged_viewport_height = 0.0f32;
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let pane = details_pane.read(app);
+        staged_viewport_height = pane
+            .staged_scroll
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected staged list viewport after shrinking the window")
+            .item
+            .height
+            .into();
+    });
+
+    assert!(
+        staged_viewport_height > 0.0,
+        "expected staged section to keep a visible list viewport after shrinking the window (staged_header={staged_header_bounds:?}, staged_viewport_height={staged_viewport_height})"
+    );
+}
+
+#[gpui::test]
 fn split_status_section_resize_moves_untracked_section(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

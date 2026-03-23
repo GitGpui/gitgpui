@@ -84,17 +84,10 @@ fn resolved_vertical_split_height(
     )
 }
 
-fn union_children_bounds(children_bounds: &[Bounds<Pixels>]) -> Option<Bounds<Pixels>> {
-    let mut bounds = children_bounds.iter().copied();
-    let first = bounds.next()?;
-
-    Some(bounds.fold(first, |acc, next| {
-        let left = acc.left().min(next.left());
-        let top = acc.top().min(next.top());
-        let right = acc.right().max(next.right());
-        let bottom = acc.bottom().max(next.bottom());
-        Bounds::new(point(left, top), size(right - left, bottom - top))
-    }))
+fn visible_bounds_probe() -> Div {
+    // Use a fill probe to capture the clipped viewport bounds for a container.
+    // Unioning child bounds can stay larger than the visible area after window resizes.
+    div().absolute().top_0().left_0().size_full()
 }
 
 impl DetailsPaneView {
@@ -1435,6 +1428,7 @@ impl DetailsPaneView {
             let change_tracking_stack_bounds_for_prepaint =
                 std::rc::Rc::clone(&self.change_tracking_stack_bounds_ref);
             let stack_container = div()
+                .relative()
                 .flex()
                 .flex_col()
                 .w_full()
@@ -1447,7 +1441,7 @@ impl DetailsPaneView {
                 ))
                 .overflow_hidden()
                 .on_children_prepainted(move |children_bounds, window, _app| {
-                    let next_bounds = union_children_bounds(&children_bounds);
+                    let next_bounds = children_bounds.first().copied();
                     let mut measured = change_tracking_stack_bounds_for_prepaint.borrow_mut();
                     if *measured != next_bounds {
                         *measured = next_bounds;
@@ -1462,6 +1456,7 @@ impl DetailsPaneView {
                 })
                 .unwrap_or((1.0, 1.0));
             stack_container
+                .child(visible_bounds_probe())
                 .child(
                     with_split_sizing(
                         untracked_section,
@@ -1508,6 +1503,7 @@ impl DetailsPaneView {
         let status_sections_bounds_for_prepaint =
             std::rc::Rc::clone(&self.status_sections_bounds_ref);
         let status_sections_container = div()
+            .relative()
             .w_full()
             .min_w_full()
             .max_w_full()
@@ -1516,7 +1512,7 @@ impl DetailsPaneView {
             .min_h(px(0.0))
             .overflow_hidden()
             .on_children_prepainted(move |children_bounds, window, _app| {
-                let next_bounds = union_children_bounds(&children_bounds);
+                let next_bounds = children_bounds.first().copied();
                 let mut measured = status_sections_bounds_for_prepaint.borrow_mut();
                 if *measured != next_bounds {
                     *measured = next_bounds;
@@ -1524,6 +1520,7 @@ impl DetailsPaneView {
                 }
             });
         let status_sections = status_sections_container
+            .child(visible_bounds_probe())
             .flex()
             .flex_col()
             .child(change_tracking_section)
@@ -1862,23 +1859,6 @@ mod tests {
         assert_eq!(
             DetailsPaneView::sanitized_restored_untracked_height(Some(1)),
             Some(px(STATUS_SECTION_MIN_HEIGHT_PX))
-        );
-    }
-
-    #[test]
-    fn union_children_bounds_spans_entire_vertical_stack() {
-        let children = [
-            Bounds::new(point(px(20.0), px(10.0)), size(px(180.0), px(120.0))),
-            Bounds::new(point(px(20.0), px(130.0)), size(px(180.0), px(5.0))),
-            Bounds::new(point(px(20.0), px(135.0)), size(px(180.0), px(140.0))),
-        ];
-
-        assert_eq!(
-            union_children_bounds(&children),
-            Some(Bounds::new(
-                point(px(20.0), px(10.0)),
-                size(px(180.0), px(265.0)),
-            ))
         );
     }
 }
