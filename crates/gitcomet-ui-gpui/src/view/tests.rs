@@ -396,6 +396,114 @@ fn branch_sidebar_starts_with_local_and_remote_branch_sections() {
 }
 
 #[test]
+fn branch_sidebar_sorts_local_and_remote_branch_rows_case_insensitively() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.branches = Loadable::Ready(Arc::new(vec![
+        Branch {
+            name: "zeta".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "topic/zeta".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "Alpha".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "topic/beta".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "topic/Alpha".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+    ]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "release/zeta".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "Main".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "release/beta".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "release/Alpha".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+    ]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let local_names = rows
+        .iter()
+        .filter_map(|row| match row {
+            BranchSidebarRow::Branch {
+                section: BranchSection::Local,
+                name,
+                ..
+            } => Some(name.as_ref().to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let remote_names = rows
+        .iter()
+        .filter_map(|row| match row {
+            BranchSidebarRow::Branch {
+                section: BranchSection::Remote,
+                name,
+                ..
+            } => Some(name.as_ref().to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        local_names,
+        vec![
+            "Alpha".to_string(),
+            "topic/Alpha".to_string(),
+            "topic/beta".to_string(),
+            "topic/zeta".to_string(),
+            "zeta".to_string(),
+        ]
+    );
+    assert_eq!(
+        remote_names,
+        vec![
+            "origin/Main".to_string(),
+            "origin/release/Alpha".to_string(),
+            "origin/release/beta".to_string(),
+            "origin/release/zeta".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
     let mut repo = RepoState::new_opening(
         RepoId(1),

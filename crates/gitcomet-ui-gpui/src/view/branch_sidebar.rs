@@ -142,6 +142,12 @@ impl SlashTree {
     }
 }
 
+fn cmp_case_insensitive_then_case_sensitive(left: &str, right: &str) -> std::cmp::Ordering {
+    left.to_lowercase()
+        .cmp(&right.to_lowercase())
+        .then_with(|| left.cmp(right))
+}
+
 fn defaults_to_collapsed(collapse_key: &str) -> bool {
     matches!(
         collapse_key,
@@ -337,8 +343,15 @@ pub(super) fn branch_sidebar_rows(
                     message: "No remotes".into(),
                 });
             } else {
+                let mut remotes = remotes.into_iter().collect::<Vec<_>>();
+                remotes.sort_by(|(left, _), (right, _)| {
+                    cmp_case_insensitive_then_case_sensitive(left, right)
+                });
+
                 for (remote, mut branches) in remotes {
-                    branches.sort_unstable();
+                    branches.sort_by(|left, right| {
+                        cmp_case_insensitive_then_case_sensitive(left, right)
+                    });
                     branches.dedup();
 
                     let remote_collapse_key = remote_header_storage_key(&remote);
@@ -562,7 +575,10 @@ fn push_slash_tree_rows(
     remote_name: Option<&str>,
     collapsed_items: &BTreeSet<String>,
 ) {
-    for (label, node) in &tree.children {
+    let mut children = tree.children.iter().collect::<Vec<_>>();
+    children.sort_by(|(left, _), (right, _)| cmp_case_insensitive_then_case_sensitive(left, right));
+
+    for (label, node) in children {
         if node.children.is_empty() {
             if node.is_leaf {
                 push_branch_leaf(
