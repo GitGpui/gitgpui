@@ -1149,6 +1149,10 @@ fn repo_action_finished_clears_error_and_refreshes() {
     ));
     state.active_repo = Some(RepoId(1));
     state.repos[0].last_error = Some("boom".to_string());
+    state.banner_error = Some(crate::model::BannerErrorState {
+        repo_id: Some(RepoId(1)),
+        message: "boom".to_string(),
+    });
 
     let effects = reduce(
         &mut repos,
@@ -1161,6 +1165,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
     );
 
     assert!(state.repos[0].last_error.is_none());
+    assert!(state.banner_error.is_none());
     assert!(
         effects
             .iter()
