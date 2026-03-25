@@ -113,7 +113,8 @@ impl SidebarPaneView {
     ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
         self.sidebar_collapsed_items_by_repo
             .iter()
-            .filter_map(|(repo, items)| (!items.is_empty()).then(|| (repo.clone(), items.clone())))
+            .filter(|&(_repo, items)| !items.is_empty())
+            .map(|(repo, items)| (repo.clone(), items.clone()))
             .collect()
     }
 
@@ -210,6 +211,8 @@ impl SidebarPaneView {
     }
 
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+        const SIDEBAR_TOP_INSET_PX: f32 = 2.0;
+
         let theme = self.theme;
         let Some(rows) = self.branch_sidebar_rows_cached() else {
             return div()
@@ -240,6 +243,7 @@ impl SidebarPaneView {
         let list = div()
             .flex_1()
             .min_h(px(0.0))
+            .pt(px(SIDEBAR_TOP_INSET_PX))
             .pl(px(2.0))
             .pr(px(2.0) + scrollbar_gutter)
             .child(list);

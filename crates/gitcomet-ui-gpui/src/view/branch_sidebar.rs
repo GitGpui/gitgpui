@@ -7,6 +7,7 @@ const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const STASH_SECTION_KEY: &str = "section:stash";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
+const TRAILING_BOTTOM_SPACERS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BranchSection {
@@ -515,6 +516,11 @@ pub(super) fn branch_sidebar_rows(
                 message: e.clone().into(),
             }),
         }
+    }
+
+    // Add rows to the end of the side to make room for side panel toggler.
+    for _ in 0..TRAILING_BOTTOM_SPACERS {
+        rows.push(BranchSidebarRow::SectionSpacer);
     }
 
     rows

@@ -657,6 +657,7 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
+    disable_view_poller_for_test(cx, &view);
 
     let repo_id = gitcomet_state::model::RepoId(46);
     let workdir = std::env::temp_dir().join(format!(
@@ -711,12 +712,42 @@ fn smoke_tests_diff_draw_stabilizes_without_notify_churn(cx: &mut gpui::TestAppC
         })
     });
 
-    for _ in 0..4 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "steady smoke_tests.rs diff warmup",
+        |pane| {
+            let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+            let right_doc =
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && left_doc.is_some()
+                && right_doc.is_some()
+                && left_doc.is_some_and(|document| {
+                    !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                })
+                && right_doc.is_some_and(|document| {
+                    !rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document)
+                })
+                && pane.syntax_chunk_poll_task.is_none()
+        },
+        |pane| {
+            let left_doc = pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft);
+            let right_doc =
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight);
+            (
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_path.clone(),
+                pane.is_file_diff_view_active(),
+                left_doc,
+                right_doc,
+                left_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                right_doc.map(rows::has_pending_prepared_diff_syntax_chunk_builds_for_document),
+                pane.syntax_chunk_poll_task.is_some(),
+            )
+        },
+    );
 
     root_notifies.store(0, Ordering::Relaxed);
     main_notifies.store(0, Ordering::Relaxed);
