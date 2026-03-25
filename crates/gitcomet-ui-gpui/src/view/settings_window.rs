@@ -196,6 +196,7 @@ impl SettingsWindowView {
             window_height: None,
             sidebar_width: None,
             details_width: None,
+            repo_sidebar_collapsed_items: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             date_time_format: Some(self.date_time_format.key().to_string()),
             timezone: Some(self.timezone.key()),

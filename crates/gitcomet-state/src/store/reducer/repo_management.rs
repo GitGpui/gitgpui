@@ -395,7 +395,7 @@ pub(super) fn repo_opened_ok(
         repo_state.set_status(Loadable::Loading);
         repo_state.set_log(Loadable::Loading);
         repo_state.set_log_loading_more(false);
-        repo_state.set_stashes(Loadable::Loading);
+        repo_state.set_stashes(Loadable::NotLoaded);
         repo_state.reflog = Loadable::NotLoaded;
         repo_state.set_rebase_in_progress(Loadable::Loading);
         repo_state.set_merge_commit_message(Loadable::Loading);

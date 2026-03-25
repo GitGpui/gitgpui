@@ -2,7 +2,7 @@ use crate::model::{AppState, RepoId};
 use gitcomet_core::domain::LogScope;
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
+    pub repo_sidebar_collapsed_items: BTreeMap<PathBuf, BTreeSet<String>>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
@@ -67,6 +68,7 @@ struct UiSessionFileV2 {
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
+    repo_sidebar_collapsed_items: Option<BTreeMap<String, BTreeSet<String>>>,
     window_width: Option<u32>,
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
@@ -112,10 +114,13 @@ pub fn load_from_path(path: &Path) -> UiSession {
 
     let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
+    let repo_sidebar_collapsed_items =
+        parse_path_keyed_string_sets(file.repo_sidebar_collapsed_items.unwrap_or_default());
     UiSession {
         open_repos,
         active_repo,
         recent_repos,
+        repo_sidebar_collapsed_items,
         window_width: file.window_width,
         window_height: file.window_height,
         sidebar_width: file.sidebar_width,
@@ -242,6 +247,7 @@ pub struct UiSettings {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub repo_sidebar_collapsed_items: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub date_time_format: Option<String>,
     pub timezone: Option<String>,
@@ -273,6 +279,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(w) = settings.details_width {
         file.details_width = Some(w);
+    }
+    if let Some(items) = settings.repo_sidebar_collapsed_items {
+        let items = path_keyed_string_sets_to_storage(items);
+        file.repo_sidebar_collapsed_items = (!items.is_empty()).then_some(items);
     }
     if let Some(theme_mode) = settings.theme_mode {
         file.theme_mode = Some(theme_mode);
@@ -461,6 +471,50 @@ fn parse_path_list(paths_raw: Vec<String>) -> Vec<PathBuf> {
         paths.push(path);
     }
     paths
+}
+
+fn parse_path_keyed_string_sets(
+    paths_raw: BTreeMap<String, BTreeSet<String>>,
+) -> BTreeMap<PathBuf, BTreeSet<String>> {
+    let mut paths: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
+    for (raw_path, values) in paths_raw {
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            continue;
+        }
+        let path = path_from_storage_key(raw_path);
+        let entry = paths.entry(path).or_default();
+        for value in values {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            entry.insert(value.to_string());
+        }
+    }
+    paths.retain(|_, values| !values.is_empty());
+    paths
+}
+
+fn path_keyed_string_sets_to_storage(
+    paths: BTreeMap<PathBuf, BTreeSet<String>>,
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut stored = BTreeMap::new();
+    for (path, values) in paths {
+        let mut normalized = BTreeSet::new();
+        for value in values {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+            normalized.insert(value.to_string());
+        }
+        if normalized.is_empty() {
+            continue;
+        }
+        stored.insert(path_storage_key(&path), normalized);
+    }
+    stored
 }
 
 fn load_file_v2(path: &Path) -> Option<UiSessionFileV2> {
@@ -1054,6 +1108,74 @@ mod tests {
     }
 
     #[test]
+    fn persist_ui_settings_round_trips_repo_sidebar_collapsed_items() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+
+        persist_to_path(
+            &path,
+            &UiSessionFileV2 {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFileV2::default()
+            },
+        )
+        .expect("seed session file");
+
+        let mut repo_sidebar_collapsed_items = BTreeMap::new();
+        repo_sidebar_collapsed_items.insert(
+            repo_a.clone(),
+            BTreeSet::from([
+                "section:branches".to_string(),
+                "group:local:feature".to_string(),
+            ]),
+        );
+        repo_sidebar_collapsed_items.insert(
+            repo_b.clone(),
+            BTreeSet::from(["section:worktrees".to_string()]),
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                window_width: None,
+                window_height: None,
+                sidebar_width: None,
+                details_width: None,
+                repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items.clone()),
+                theme_mode: None,
+                date_time_format: None,
+                timezone: None,
+                show_timezone: None,
+                change_tracking_view: None,
+                change_tracking_height: None,
+                untracked_height: None,
+                history_show_author: None,
+                history_show_date: None,
+                history_show_sha: None,
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.repo_sidebar_collapsed_items,
+            repo_sidebar_collapsed_items
+        );
+    }
+
+    #[test]
     fn persist_ui_settings_round_trips_date_time_format() {
         let dir = env::temp_dir().join(format!(
             "gitcomet-ui-settings-test-{}-{}",
@@ -1083,6 +1205,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                repo_sidebar_collapsed_items: None,
                 theme_mode: None,
                 date_time_format: Some("ymd_hm_utc".to_string()),
                 timezone: None,
@@ -1132,6 +1255,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                repo_sidebar_collapsed_items: None,
                 theme_mode: None,
                 date_time_format: None,
                 timezone: None,
@@ -1181,6 +1305,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                repo_sidebar_collapsed_items: None,
                 theme_mode: None,
                 date_time_format: None,
                 timezone: None,
@@ -1233,6 +1358,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                repo_sidebar_collapsed_items: None,
                 theme_mode: None,
                 date_time_format: None,
                 timezone: None,
@@ -1283,6 +1409,7 @@ mod tests {
                 window_height: None,
                 sidebar_width: None,
                 details_width: None,
+                repo_sidebar_collapsed_items: None,
                 theme_mode: Some("dark".to_string()),
                 date_time_format: None,
                 timezone: None,

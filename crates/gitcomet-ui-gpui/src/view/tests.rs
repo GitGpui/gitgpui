@@ -1,5 +1,8 @@
 use super::*;
-use gitcomet_core::domain::{Branch, CommitId, Remote, RemoteBranch, RepoSpec, Upstream, Worktree};
+use gitcomet_core::domain::{
+    Branch, CommitId, Remote, RemoteBranch, RepoSpec, StashEntry, Submodule, SubmoduleStatus,
+    Upstream, Worktree,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
 use gitcomet_state::store::AppStore;
@@ -147,7 +150,7 @@ fn remote_headers_include_remotes_with_no_branches() {
     let mut headers = rows
         .iter()
         .filter_map(|r| match r {
-            BranchSidebarRow::RemoteHeader { name } => Some(name.as_ref().to_owned()),
+            BranchSidebarRow::RemoteHeader { name, .. } => Some(name.as_ref().to_owned()),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -266,7 +269,11 @@ fn worktree_tooltip_includes_branch_name() {
         detached: false,
     }]));
 
-    let rows = GitCometView::branch_sidebar_rows(&repo);
+    let expanded_key = branch_sidebar::expanded_default_section_storage_key(
+        branch_sidebar::worktrees_section_storage_key(),
+    )
+    .expect("worktrees should support explicit expansion");
+    let rows = GitCometView::branch_sidebar_rows_with_collapsed(&repo, &[expanded_key.as_str()]);
     let row = rows
         .iter()
         .find_map(|row| match row {
@@ -276,6 +283,518 @@ fn worktree_tooltip_includes_branch_name() {
         .expect("expected worktree row");
 
     assert_eq!(row, "feature/tooltip  linked-worktree");
+}
+
+#[test]
+fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        path: PathBuf::from("linked-worktree"),
+        head: None,
+        branch: Some("main".to_string()),
+        detached: false,
+    }]));
+    repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
+        path: PathBuf::from("vendor/lib"),
+        head: CommitId("beadfeed".into()),
+        status: SubmoduleStatus::UpToDate,
+    }]));
+    repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
+        index: 0,
+        id: CommitId("c0ffee".into()),
+        message: "stash message".into(),
+        created_at: None,
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::WorktreesHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected Worktrees to start collapsed"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::SubmodulesHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected Submodules to start collapsed"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::StashHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected Stash to start collapsed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::WorktreeItem { .. })),
+        "expected Worktrees rows to stay hidden until expanded"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::SubmoduleItem { .. })),
+        "expected Submodules rows to stay hidden until expanded"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::StashItem { .. })),
+        "expected Stash rows to stay hidden until expanded"
+    );
+}
+
+#[test]
+fn branch_sidebar_includes_top_level_branches_header() {
+    let repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::new(),
+        },
+    );
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+    assert!(
+        matches!(rows.first(), Some(BranchSidebarRow::BranchesHeader { .. })),
+        "expected Branches header to be the first sidebar row"
+    );
+}
+
+#[test]
+fn branch_sidebar_collapses_top_level_sections() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+        path: PathBuf::from("linked-worktree"),
+        head: None,
+        branch: Some("main".to_string()),
+        detached: false,
+    }]));
+    repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
+        path: PathBuf::from("vendor/lib"),
+        head: CommitId("beadfeed".into()),
+        status: SubmoduleStatus::UpToDate,
+    }]));
+    repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
+        index: 0,
+        id: CommitId("c0ffee".into()),
+        message: "stash message".into(),
+        created_at: None,
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows_with_collapsed(
+        &repo,
+        &[
+            branch_sidebar::branches_section_storage_key(),
+            branch_sidebar::worktrees_section_storage_key(),
+            branch_sidebar::submodules_section_storage_key(),
+            branch_sidebar::stash_section_storage_key(),
+        ],
+    );
+
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::BranchesHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected collapsed Branches header"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::SectionHeader { .. })),
+        "expected Local/Remote rows to be hidden when Branches is collapsed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::Branch { .. })),
+        "expected branch rows to be hidden when Branches is collapsed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::RemoteHeader { .. })),
+        "expected remote headers to be hidden when Branches is collapsed"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::WorktreesHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected collapsed Worktrees header"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::SubmodulesHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected collapsed Submodules header"
+    );
+    assert!(
+        rows.iter().any(|row| matches!(
+            row,
+            BranchSidebarRow::StashHeader {
+                collapsed: true,
+                ..
+            }
+        )),
+        "expected collapsed Stash header"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::WorktreeItem { .. })),
+        "expected worktree rows to be hidden when Worktrees is collapsed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::SubmoduleItem { .. })),
+        "expected submodule rows to be hidden when Submodules is collapsed"
+    );
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::StashItem { .. })),
+        "expected stash rows to be hidden when Stash is collapsed"
+    );
+}
+
+#[test]
+fn branch_sidebar_collapses_local_branch_groups() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.branches = Loadable::Ready(Arc::new(vec![
+        Branch {
+            name: "feature".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "feature/one".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "feature/two".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+        Branch {
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+            upstream: None,
+            divergence: None,
+        },
+    ]));
+
+    let feature_group_key = branch_sidebar::local_group_storage_key("feature");
+    let rows =
+        GitCometView::branch_sidebar_rows_with_collapsed(&repo, &[feature_group_key.as_str()]);
+
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::GroupHeader {
+                label,
+                collapsed: true,
+                ..
+            } if label.as_ref() == "feature/"
+        )
+    }));
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::Branch { name, .. } if name.as_ref() == "main"
+        )
+    }));
+    for hidden in ["feature", "feature/one", "feature/two"] {
+        assert!(
+            !rows.iter().any(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::Branch { name, .. } if name.as_ref() == hidden
+                )
+            }),
+            "expected {hidden} to be hidden by collapsed feature/ group"
+        );
+    }
+}
+
+#[test]
+fn branch_sidebar_collapses_local_section_without_hiding_remote_rows() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "main".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows_with_collapsed(
+        &repo,
+        &[branch_sidebar::local_section_storage_key()],
+    );
+
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Local,
+                collapsed: true,
+                ..
+            }
+        )
+    }));
+    assert!(
+        !rows.iter().any(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Local,
+                    ..
+                }
+            )
+        }),
+        "expected local branches to be hidden when Local section is collapsed"
+    );
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::RemoteHeader { name, .. } if name.as_ref() == "origin"
+        )
+    }));
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::Branch {
+                section: BranchSection::Remote,
+                name,
+                ..
+            } if name.as_ref() == "origin/main"
+        )
+    }));
+}
+
+#[test]
+fn branch_sidebar_collapses_remote_section_and_remote_groups() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+        RemoteBranch {
+            remote: "origin".to_string(),
+            name: "release/one".to_string(),
+            target: CommitId("deadbeef".into()),
+        },
+    ]));
+
+    let rows = GitCometView::branch_sidebar_rows_with_collapsed(
+        &repo,
+        &[branch_sidebar::remote_section_storage_key()],
+    );
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Remote,
+                collapsed: true,
+                ..
+            }
+        )
+    }));
+    assert!(
+        !rows
+            .iter()
+            .any(|row| matches!(row, BranchSidebarRow::RemoteHeader { .. })),
+        "expected remote rows to be hidden when Remote section is collapsed"
+    );
+
+    let origin_key = branch_sidebar::remote_header_storage_key("origin");
+    let rows = GitCometView::branch_sidebar_rows_with_collapsed(&repo, &[origin_key.as_str()]);
+    assert!(rows.iter().any(|row| {
+        matches!(
+            row,
+            BranchSidebarRow::RemoteHeader {
+                name,
+                collapsed: true,
+                ..
+            } if name.as_ref() == "origin"
+        )
+    }));
+    assert!(
+        !rows.iter().any(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    section: BranchSection::Remote,
+                    ..
+                }
+            )
+        }),
+        "expected origin branches to be hidden when the remote group is collapsed"
+    );
+}
+
+#[test]
+fn branch_sidebar_exposes_stable_collapse_keys_for_persistence() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("repo"),
+        },
+    );
+    repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature/one".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "release/one".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+
+    let rows = GitCometView::branch_sidebar_rows(&repo);
+
+    let branches_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::BranchesHeader { collapse_key, .. } => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        branches_key,
+        Some(branch_sidebar::branches_section_storage_key())
+    );
+
+    let local_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::SectionHeader {
+            section: BranchSection::Local,
+            collapse_key,
+            ..
+        } => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(local_key, Some(branch_sidebar::local_section_storage_key()));
+
+    let remote_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::SectionHeader {
+            section: BranchSection::Remote,
+            collapse_key,
+            ..
+        } => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        remote_key,
+        Some(branch_sidebar::remote_section_storage_key())
+    );
+
+    let origin_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::RemoteHeader {
+            name, collapse_key, ..
+        } if name.as_ref() == "origin" => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        origin_key,
+        Some(branch_sidebar::remote_header_storage_key("origin").as_str())
+    );
+
+    let local_group_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::GroupHeader {
+            label,
+            collapse_key,
+            ..
+        } if label.as_ref() == "feature/" => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        local_group_key,
+        Some(branch_sidebar::local_group_storage_key("feature").as_str())
+    );
+
+    let remote_group_key = rows.iter().find_map(|row| match row {
+        BranchSidebarRow::GroupHeader {
+            label,
+            collapse_key,
+            ..
+        } if label.as_ref() == "release/" => Some(collapse_key.as_ref()),
+        _ => None,
+    });
+    assert_eq!(
+        remote_group_key,
+        Some(branch_sidebar::remote_group_storage_key("origin", "release").as_str())
+    );
 }
 
 #[test]

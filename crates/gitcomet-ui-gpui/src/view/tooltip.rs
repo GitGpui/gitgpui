@@ -28,6 +28,8 @@ impl GitCometView {
                             .history_visible_column_preferences(cx);
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
+                        let repo_sidebar_collapsed_items =
+                            this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
 
                         let settings = session::UiSettings {
                             window_width,
@@ -36,6 +38,7 @@ impl GitCometView {
                                 .then_some(sidebar_width as u32),
                             details_width: (details_width.is_finite() && details_width >= 1.0)
                                 .then_some(details_width as u32),
+                            repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             date_time_format: Some(this.date_time_format.key().to_string()),
                             timezone: Some(this.timezone.key()),

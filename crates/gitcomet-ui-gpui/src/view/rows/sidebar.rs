@@ -17,15 +17,23 @@ impl SidebarPaneView {
         let theme = this.theme;
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
-        let show_worktrees_spinner = this
-            .active_repo()
-            .is_some_and(|r| r.worktrees_in_flight > 0 || matches!(r.worktrees, Loadable::Loading));
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, px(size_px))
         };
         let svg_spinner = |id: (&'static str, u64), color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_spinner(id, color, px(size_px))
+        };
+        let svg_collapse = |collapsed: bool| {
+            svg_icon(
+                if collapsed {
+                    "icons/arrow_right.svg"
+                } else {
+                    "icons/chevron_down.svg"
+                },
+                icon_muted,
+                10.0,
+            )
         };
 
         fn indent_px(depth: usize) -> Pixels {
@@ -35,9 +43,42 @@ impl SidebarPaneView {
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
+                BranchSidebarRow::BranchesHeader {
+                    collapsed,
+                    collapse_key,
+                } => div()
+                    .id(("branches_section", ix))
+                    .h(px(26.0))
+                    .w_full()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .bg(theme.colors.surface_bg_elevated)
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(svg_collapse(collapsed))
+                    .child(svg_icon("icons/git_branch.svg", icon_primary, 14.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.colors.text)
+                            .child("Branches"),
+                    )
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        if !e.standard_click() || e.click_count() != 1 {
+                            return;
+                        }
+                        this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                    }))
+                    .into_any_element(),
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border,
+                    collapsed,
+                    collapse_key,
                 } => {
                     let (icon_path, label) = match section {
                         BranchSection::Local => ("icons/computer.svg", "Local"),
@@ -55,7 +96,6 @@ impl SidebarPaneView {
                         format!("branch_section_menu_{}_{}", repo_id.0, section_key).into();
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
-                    let context_menu_invoker_for_click = context_menu_invoker.clone();
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
 
                     div()
@@ -84,6 +124,7 @@ impl SidebarPaneView {
                         .when(top_border, |d| {
                             d.border_t_1().border_color(theme.colors.border)
                         })
+                        .child(svg_collapse(collapsed))
                         .child(svg_icon(icon_path, icon_primary, 14.0))
                         .child(
                             div()
@@ -104,18 +145,11 @@ impl SidebarPaneView {
                                 cx.notify();
                             }
                         }))
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.activate_context_menu_invoker(
-                                context_menu_invoker_for_click.clone(),
-                                cx,
-                            );
-                            this.open_popover_at(
-                                PopoverKind::BranchSectionMenu { repo_id, section },
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                            cx.notify();
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                         }))
                         .on_mouse_down(
                             MouseButton::Right,
@@ -140,40 +174,73 @@ impl SidebarPaneView {
                     .h(px(10.0))
                     .w_full()
                     .into_any_element(),
-                BranchSidebarRow::StashHeader { top_border } => div()
-                    .id(("stash_section", ix))
-                    .h(px(24.0))
-                    .w_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .bg(theme.colors.surface_bg_elevated)
-                    .when(top_border, |d| {
-                        d.border_t_1().border_color(theme.colors.border)
-                    })
-                    .child(svg_icon("icons/box.svg", icon_primary, 14.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.text)
-                            .child("Stash"),
-                    )
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString =
-                            "Stashes (Right-click for actions, double-click to apply)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }))
-                    .into_any_element(),
+                BranchSidebarRow::StashHeader {
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let show_stash_spinner = this.active_repo().is_some_and(|r| {
+                        matches!(r.stashes, Loadable::Loading)
+                            || (!collapsed && matches!(r.stashes, Loadable::NotLoaded))
+                    });
+
+                    div()
+                        .id(("stash_section", ix))
+                        .h(px(24.0))
+                        .w_full()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .bg(theme.colors.surface_bg_elevated)
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .when(top_border, |d| {
+                            d.border_t_1().border_color(theme.colors.border)
+                        })
+                        .child(svg_collapse(collapsed))
+                        .child(svg_icon("icons/box.svg", icon_primary, 14.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text)
+                                .child("Stash"),
+                        )
+                        .when(show_stash_spinner, |d| {
+                            d.child(
+                                div()
+                                    .debug_selector(move || format!("stash_spinner_{}", repo_id.0))
+                                    .child(svg_spinner(
+                                        ("stash_spinner", repo_id.0),
+                                        icon_muted,
+                                        12.0,
+                                    )),
+                            )
+                        })
+                        .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
+                            let text: SharedString =
+                                "Stashes (Right-click for actions, double-click to apply)".into();
+                            let mut changed = false;
+                            if *hovering {
+                                changed |= this.set_tooltip_text_if_changed(Some(text), cx);
+                            } else {
+                                changed |= this.clear_tooltip_if_matches(&text, cx);
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
+                        .into_any_element()
+                }
                 BranchSidebarRow::StashPlaceholder { message } => div()
                     .id(("stash_placeholder", ix))
                     .h(px(22.0))
@@ -279,12 +346,20 @@ impl SidebarPaneView {
                     .text_color(theme.colors.text_muted)
                     .child(message)
                     .into_any_element(),
-                BranchSidebarRow::WorktreesHeader { top_border } => {
+                BranchSidebarRow::WorktreesHeader {
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let show_worktrees_spinner = this.active_repo().is_some_and(|r| {
+                        r.worktrees_in_flight > 0
+                            || matches!(r.worktrees, Loadable::Loading)
+                            || (!collapsed && matches!(r.worktrees, Loadable::NotLoaded))
+                    });
                     let context_menu_invoker: SharedString =
                         format!("worktrees_section_menu_{}", repo_id.0).into();
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
-                    let context_menu_invoker_for_click = context_menu_invoker.clone();
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
 
                     div()
@@ -309,6 +384,7 @@ impl SidebarPaneView {
                         .when(top_border, |d| {
                             d.border_t_1().border_color(theme.colors.border)
                         })
+                        .child(svg_collapse(collapsed))
                         .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
                         .child(
                             div()
@@ -344,18 +420,11 @@ impl SidebarPaneView {
                                 cx.notify();
                             }
                         }))
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.activate_context_menu_invoker(
-                                context_menu_invoker_for_click.clone(),
-                                cx,
-                            );
-                            this.open_popover_at(
-                                PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                            cx.notify();
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                         }))
                         .on_mouse_down(
                             MouseButton::Right,
@@ -482,12 +551,19 @@ impl SidebarPaneView {
                         }))
                         .into_any_element()
                 }
-                BranchSidebarRow::SubmodulesHeader { top_border } => {
+                BranchSidebarRow::SubmodulesHeader {
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let show_submodules_spinner = this.active_repo().is_some_and(|r| {
+                        matches!(r.submodules, Loadable::Loading)
+                            || (!collapsed && matches!(r.submodules, Loadable::NotLoaded))
+                    });
                     let context_menu_invoker: SharedString =
                         format!("submodules_section_menu_{}", repo_id.0).into();
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
-                    let context_menu_invoker_for_click = context_menu_invoker.clone();
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
 
                     div()
@@ -512,14 +588,29 @@ impl SidebarPaneView {
                         .when(top_border, |d| {
                             d.border_t_1().border_color(theme.colors.border)
                         })
+                        .child(svg_collapse(collapsed))
                         .child(svg_icon("icons/box.svg", icon_primary, 14.0))
                         .child(
                             div()
+                                .flex_1()
                                 .text_sm()
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child("Submodules"),
                         )
+                        .when(show_submodules_spinner, |d| {
+                            d.child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("submodules_spinner_{}", repo_id.0)
+                                    })
+                                    .child(svg_spinner(
+                                        ("submodules_spinner", repo_id.0),
+                                        icon_muted,
+                                        12.0,
+                                    )),
+                            )
+                        })
                         .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
                             let text: SharedString =
                                 "Submodules (Add / Update / Open / Remove)".into();
@@ -533,18 +624,11 @@ impl SidebarPaneView {
                                 cx.notify();
                             }
                         }))
-                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                            this.activate_context_menu_invoker(
-                                context_menu_invoker_for_click.clone(),
-                                cx,
-                            );
-                            this.open_popover_at(
-                                PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
-                                e.position(),
-                                window,
-                                cx,
-                            );
-                            cx.notify();
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                         }))
                         .on_mouse_down(
                             MouseButton::Right,
@@ -667,7 +751,11 @@ impl SidebarPaneView {
                         }))
                         .into_any_element()
                 }
-                BranchSidebarRow::RemoteHeader { name } => {
+                BranchSidebarRow::RemoteHeader {
+                    name,
+                    collapsed,
+                    collapse_key,
+                } => {
                     let remote_name: String = name.as_ref().to_owned();
                     let context_menu_invoker: SharedString =
                         format!("remote_menu_{}_{}", repo_id.0, remote_name).into();
@@ -686,6 +774,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap_2()
                         .rounded(px(theme.radii.row))
+                        .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
@@ -698,8 +787,15 @@ impl SidebarPaneView {
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.colors.text)
+                        .child(svg_collapse(collapsed))
                         .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
                         .child(div().flex_1().min_w(px(0.0)).line_clamp(1).child(name))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -723,7 +819,12 @@ impl SidebarPaneView {
                         )
                         .into_any_element()
                 }
-                BranchSidebarRow::GroupHeader { label, depth } => div()
+                BranchSidebarRow::GroupHeader {
+                    label,
+                    depth,
+                    collapsed,
+                    collapse_key,
+                } => div()
                     .id(("branch_group", ix))
                     .h(px(22.0))
                     .w_full()
@@ -732,11 +833,22 @@ impl SidebarPaneView {
                     .flex()
                     .items_center()
                     .gap_2()
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme.colors.text_muted)
+                    .child(svg_collapse(collapsed))
                     .child(svg_icon("icons/folder.svg", icon_primary, 14.0))
                     .child(label)
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                        if !e.standard_click() || e.click_count() != 1 {
+                            return;
+                        }
+                        this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                    }))
                     .into_any_element(),
                 BranchSidebarRow::Branch {
                     label,

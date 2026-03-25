@@ -385,6 +385,7 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
+                ui_session.repo_sidebar_collapsed_items.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,

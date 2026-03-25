@@ -1704,11 +1704,13 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
         let _ = window.draw(app);
     });
 
+    let mut initial_status_sections_bounds = None;
     cx.update(|_window, app| {
         let details_pane = view.read(app).details_pane.clone();
         let pane = details_pane.read(app);
+        initial_status_sections_bounds = pane.current_status_sections_bounds();
         assert!(
-            pane.current_status_sections_bounds().is_some(),
+            initial_status_sections_bounds.is_some(),
             "expected status sections to report measured bounds after draw"
         );
         assert_eq!(
@@ -1718,20 +1720,39 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
         );
     });
 
-    let handle_center = cx
+    let initial_handle_bounds = cx
         .debug_bounds("status_resize_change_tracking_staged")
-        .expect("expected status resize handle bounds")
-        .center();
+        .expect("expected status resize handle bounds");
+    let handle_center = initial_handle_bounds.center();
     let drag_target = gpui::point(handle_center.x, handle_center.y + px(48.0));
+    let initial_change_tracking_height = initial_handle_bounds.top()
+        - initial_status_sections_bounds
+            .expect("expected status section bounds while computing drag start height")
+            .top();
 
-    cx.simulate_mouse_move(handle_center, None, Modifiers::default());
-    cx.simulate_mouse_down(handle_center, MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_move(drag_target, Some(MouseButton::Left), Modifiers::default());
-    cx.simulate_mouse_move(
-        gpui::point(drag_target.x, drag_target.y + px(1.0)),
-        Some(MouseButton::Left),
-        Modifiers::default(),
-    );
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.status_section_resize = Some(StatusSectionResizeState {
+                handle: StatusSectionResizeHandle::ChangeTrackingAndStaged,
+                start_y: handle_center.y,
+                start_height: initial_change_tracking_height,
+            });
+            assert!(
+                pane.update_status_section_resize(drag_target.y, cx),
+                "expected direct resize update to change the saved change-tracking height"
+            );
+            assert!(
+                pane.finish_status_section_resize(cx),
+                "expected direct resize finish to persist the updated change-tracking height"
+            );
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
 
     cx.update(|_window, app| {
         let details_pane = view.read(app).details_pane.clone();
@@ -1740,9 +1761,18 @@ fn status_section_drag_updates_saved_height(cx: &mut gpui::TestAppContext) {
             pane.change_tracking_height.is_some(),
             "expected dragging the resize handle to store a height"
         );
+        assert!(
+            pane.saved_status_section_heights().0.is_some(),
+            "expected dragging the resize handle to persist a saved change-tracking height"
+        );
     });
-
-    cx.simulate_mouse_up(drag_target, MouseButton::Left, Modifiers::default());
+    let updated_handle_bounds = cx
+        .debug_bounds("status_resize_change_tracking_staged")
+        .expect("expected updated status resize handle bounds after dragging");
+    assert!(
+        updated_handle_bounds.top() > initial_handle_bounds.top(),
+        "expected resizing the outer divider downward to move the staged section downward"
+    );
 }
 
 #[gpui::test]

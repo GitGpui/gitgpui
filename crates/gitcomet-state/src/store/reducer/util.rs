@@ -260,12 +260,6 @@ pub(super) fn refresh_full_effects(repo_state: &mut RepoState) -> Vec<Effect> {
     }
     if repo_state
         .loads_in_flight
-        .request(RepoLoadsInFlight::STASHES)
-    {
-        effects.push(Effect::LoadStashes { repo_id, limit: 50 });
-    }
-    if repo_state
-        .loads_in_flight
         .request(RepoLoadsInFlight::REBASE_STATE)
     {
         effects.push(Effect::LoadRebaseState { repo_id });
@@ -1034,12 +1028,18 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full);
-        assert_eq!(full_effects.len(), 12);
+        assert_eq!(full_effects.len(), 11);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. }))
+        );
+        assert!(
+            !full_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadStashes { .. })),
+            "stashes should now lazy-load from the sidebar instead of refresh_full_effects"
         );
         assert!(
             full_effects

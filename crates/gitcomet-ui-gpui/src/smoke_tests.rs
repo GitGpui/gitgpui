@@ -1,8 +1,10 @@
 use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
 use crate::{theme::AppTheme, view};
+use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
+use gitcomet_state::model::Loadable;
 use gitcomet_state::model::RepoId;
 use gitcomet_state::msg::Msg;
 use gitcomet_state::store::AppStore;
@@ -994,12 +996,155 @@ impl GitBackend for TestBackend {
     }
 }
 
+struct SlowStashBackend;
+
+impl GitBackend for SlowStashBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        Ok(Arc::new(SlowStashRepo {
+            spec: RepoSpec {
+                workdir: workdir.to_path_buf(),
+            },
+        }))
+    }
+}
+
+struct SlowStashRepo {
+    spec: RepoSpec,
+}
+
+impl SlowStashRepo {
+    fn unsupported<T>() -> Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "Slow stash test repo does not implement this operation",
+        )))
+    }
+}
+
+impl GitRepository for SlowStashRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        Self::unsupported()
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        Self::unsupported()
+    }
+
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        Self::unsupported()
+    }
+
+    fn current_branch(&self) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        Self::unsupported()
+    }
+
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        Self::unsupported()
+    }
+
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        Self::unsupported()
+    }
+
+    fn status(&self) -> Result<RepoStatus> {
+        Self::unsupported()
+    }
+
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        Self::unsupported()
+    }
+
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        std::thread::sleep(Duration::from_millis(250));
+        Ok(Vec::new())
+    }
+
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn commit(&self, _message: &str) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn fetch_all(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn push(&self) -> Result<()> {
+        Self::unsupported()
+    }
+
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        Self::unsupported()
+    }
+}
+
 fn repo_tab_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("repo_tab_{}", repo_id.0).into_boxed_str())
 }
 
 fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn submodules_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("submodules_spinner_{}", repo_id.0).into_boxed_str())
+}
+
+fn stash_spinner_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("stash_spinner_{}", repo_id.0).into_boxed_str())
 }
 
 fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
@@ -1029,6 +1174,25 @@ fn wait_for_repo_order(store: &AppStore, expected: &[RepoId]) {
         }
         if Instant::now() >= deadline {
             panic!("timed out waiting for repo order {expected:?}, got {got:?}");
+        }
+        std::thread::yield_now();
+    }
+}
+
+fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        let state = store.snapshot();
+        if state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| matches!(repo.open, Loadable::Ready(())))
+        {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for repo {repo_id:?} to open");
         }
         std::thread::yield_now();
     }
@@ -1255,6 +1419,81 @@ fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAp
 
         if Instant::now() >= deadline {
             panic!("timed out waiting for worktrees spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+#[gpui::test]
+fn submodules_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_submodules_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+
+    store_for_test.dispatch(Msg::LoadSubmodules { repo_id });
+
+    let selector = submodules_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for submodules spinner to render");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
+#[gpui::test]
+fn stash_section_shows_spinner_while_loading(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowStashBackend));
+    let store_for_test = store.clone();
+    let (_view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_stash_spinner_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    store_for_test.dispatch(Msg::LoadStashes { repo_id });
+
+    let selector = stash_spinner_selector(repo_id);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        if cx.debug_bounds(selector).is_some() {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for stash spinner to render");
         }
 
         cx.run_until_parked();
