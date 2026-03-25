@@ -228,11 +228,15 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .text_sm()
                     .text_color(theme.colors.text_muted)
                     .child(value)
-                    .child(
-                        div()
-                            .font_family("monospace")
-                            .child(if open { "▴" } else { "▾" }),
-                    ),
+                    .child(crate::view::icons::svg_icon(
+                        if open {
+                            "icons/arrow_down.svg"
+                        } else {
+                            "icons/arrow_right.svg"
+                        },
+                        theme.colors.text_muted,
+                        px(12.0),
+                    )),
             )
     };
 
@@ -635,7 +639,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child(runtime.github_url.clone())
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             let url = this.settings_runtime_info.github_url.clone().to_string();
@@ -674,7 +682,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child(LICENSE_NAME)
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             let url = this.settings_runtime_info.license_url.clone().to_string();
@@ -713,7 +725,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .text_sm()
                 .text_color(theme.colors.accent)
                 .child("Show")
-                .child(div().font_family("monospace").child("↗")),
+                .child(crate::view::icons::svg_icon(
+                    "icons/open_external.svg",
+                    theme.colors.accent,
+                    px(12.0),
+                )),
         )
         .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
             this.open_popover_at(

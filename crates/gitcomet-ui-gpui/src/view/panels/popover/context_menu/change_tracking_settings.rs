@@ -5,7 +5,7 @@ pub(super) fn model(host: &PopoverHost) -> ContextMenuModel {
 }
 
 fn model_for_view(view: ChangeTrackingView) -> ContextMenuModel {
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Change tracking".into()),
@@ -46,7 +46,9 @@ mod tests {
                 item,
                 ContextMenuItem::Entry { label, icon, .. }
                     if label.as_ref() == ChangeTrackingView::SplitUntracked.menu_label()
-                        && icon.as_ref().is_some_and(|icon| icon.as_ref() == "✓")
+                        && icon
+                            .as_ref()
+                            .is_some_and(|icon| icon.as_ref() == "icons/check.svg")
             )
         }));
     }

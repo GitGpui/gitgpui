@@ -40,7 +40,7 @@ pub(super) fn model(
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
-        icon: Some("⎇".into()),
+        icon: Some("icons/git_branch.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(match section {
@@ -68,7 +68,7 @@ pub(super) fn model(
     });
     items.push(ContextMenuItem::Entry {
         label: "Create branch".into(),
-        icon: Some("+".into()),
+        icon: Some("icons/plus.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
@@ -83,7 +83,7 @@ pub(super) fn model(
         if !is_current_branch {
             items.push(ContextMenuItem::Entry {
                 label: "Pull into current".into(),
-                icon: Some("↓".into()),
+                icon: Some("icons/arrow_down.svg".into()),
                 shortcut: Some("P".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::PullBranch {
@@ -94,7 +94,7 @@ pub(super) fn model(
             });
             items.push(ContextMenuItem::Entry {
                 label: "Merge into current".into(),
-                icon: Some("⇄".into()),
+                icon: Some("icons/swap.svg".into()),
                 shortcut: Some("M".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
@@ -104,7 +104,7 @@ pub(super) fn model(
             });
             items.push(ContextMenuItem::Entry {
                 label: "Squash into current".into(),
-                icon: Some("⇉".into()),
+                icon: Some("icons/arrow_right.svg".into()),
                 shortcut: Some("S".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
@@ -115,7 +115,7 @@ pub(super) fn model(
         }
         items.push(ContextMenuItem::Entry {
             label: "Delete branch".into(),
-            icon: Some("🗑".into()),
+            icon: Some("icons/trash.svg".into()),
             shortcut: None,
             disabled: is_current_branch,
             action: Box::new(ContextMenuAction::DeleteBranch {
@@ -130,7 +130,7 @@ pub(super) fn model(
         if let Some((remote, branch)) = name.split_once('/') {
             items.push(ContextMenuItem::Entry {
                 label: "Pull into current".into(),
-                icon: Some("↓".into()),
+                icon: Some("icons/arrow_down.svg".into()),
                 shortcut: Some("P".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::PullBranch {
@@ -141,7 +141,7 @@ pub(super) fn model(
             });
             items.push(ContextMenuItem::Entry {
                 label: "Merge into current".into(),
-                icon: Some("⇄".into()),
+                icon: Some("icons/swap.svg".into()),
                 shortcut: Some("M".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::MergeRef {
@@ -151,7 +151,7 @@ pub(super) fn model(
             });
             items.push(ContextMenuItem::Entry {
                 label: "Squash into current".into(),
-                icon: Some("⇉".into()),
+                icon: Some("icons/arrow_right.svg".into()),
                 shortcut: Some("S".into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::SquashRef {
@@ -162,7 +162,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Separator);
             items.push(ContextMenuItem::Entry {
                 label: "Delete remote branch…".into(),
-                icon: Some("🗑".into()),
+                icon: Some("icons/trash.svg".into()),
                 shortcut: None,
                 disabled: false,
                 action: Box::new(ContextMenuAction::OpenPopover {
@@ -181,7 +181,7 @@ pub(super) fn model(
             {
                 items.push(ContextMenuItem::Entry {
                     label: "Set as tracking upstream".into(),
-                    icon: Some("link".into()),
+                    icon: Some("icons/link.svg".into()),
                     shortcut: None,
                     disabled: false,
                     action: Box::new(ContextMenuAction::SetUpstreamBranch {
@@ -194,7 +194,7 @@ pub(super) fn model(
             if active_upstream_full.is_some() {
                 items.push(ContextMenuItem::Entry {
                     label: "Unlink upstream branch".into(),
-                    icon: Some("unlink".into()),
+                    icon: Some("icons/unlink.svg".into()),
                     shortcut: None,
                     disabled: active_upstream_full.as_deref() != Some(name.as_str()),
                     action: Box::new(ContextMenuAction::UnsetUpstreamBranch {
@@ -207,21 +207,21 @@ pub(super) fn model(
         }
         items.push(ContextMenuItem::Entry {
             label: "Fetch all".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("F".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Prune merged branches".into(),
-            icon: Some("🧹".into()),
+            icon: Some("icons/broom.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::PruneMergedBranches { repo_id }),
         });
         items.push(ContextMenuItem::Entry {
             label: "Prune local tags".into(),
-            icon: Some("🏷".into()),
+            icon: Some("icons/tag.svg".into()),
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),

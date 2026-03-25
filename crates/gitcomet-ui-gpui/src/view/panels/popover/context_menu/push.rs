@@ -14,14 +14,14 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Push".into(),
-            icon: Some("↑".into()),
+            icon: Some("icons/arrow_up.svg".into()),
             shortcut: None,
             disabled,
             action: Box::new(ContextMenuAction::Push { repo_id }),
         },
         ContextMenuItem::Entry {
             label: "Force push (with lease)…".into(),
-            icon: Some("⚠".into()),
+            icon: Some("icons/warning.svg".into()),
             shortcut: Some("F".into()),
             disabled,
             action: Box::new(ContextMenuAction::OpenPopover {

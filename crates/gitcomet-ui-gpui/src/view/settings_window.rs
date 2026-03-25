@@ -767,7 +767,7 @@ impl Render for SettingsWindowView {
         .window_control_area(WindowControlArea::Max)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            window.zoom_window();
+            crate::app::toggle_window_zoom(window);
             cx.notify();
         }));
 

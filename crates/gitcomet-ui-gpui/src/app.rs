@@ -10,9 +10,11 @@ use gitcomet_state::store::AppStore;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, TitlebarOptions,
+    App, AppContext, Application, BorrowAppContext, Bounds, KeyBinding, TitlebarOptions, Window,
     WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
 };
+#[cfg(target_os = "windows")]
+use raw_window_handle::RawWindowHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(target_os = "macos")]
 use schemars::JsonSchema;
@@ -153,6 +155,48 @@ fn focused_mergetool_window_title(conflicted_file_path: &Path) -> String {
         .and_then(|name| name.to_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| format!("{conflicted_file_path:?}"));
     format!("GitComet - Mergetool ({display})")
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowZoomAction {
+    Zoom,
+    Restore,
+}
+
+pub(crate) fn window_zoom_action(is_maximized: bool) -> WindowZoomAction {
+    if cfg!(target_os = "windows") && is_maximized {
+        WindowZoomAction::Restore
+    } else {
+        WindowZoomAction::Zoom
+    }
+}
+
+pub(crate) fn toggle_window_zoom(window: &Window) {
+    match window_zoom_action(window.is_maximized()) {
+        WindowZoomAction::Zoom => window.zoom_window(),
+        WindowZoomAction::Restore => {
+            #[cfg(target_os = "windows")]
+            if restore_maximized_window(window) {
+                return;
+            }
+
+            window.zoom_window();
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn restore_maximized_window(window: &Window) -> bool {
+    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return false;
+    };
+
+    // GPUI's Windows zoom path currently maps directly to SW_MAXIMIZE, so
+    // restore must go through the native Win32 API until upstream toggles.
+    gitcomet_win32_window_utils::restore_window(handle.hwnd.get())
 }
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
@@ -333,7 +377,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(|cx| {
             if let Some(window) = cx.active_window() {
                 let _ = window.update(cx, |_root, window, _cx| {
-                    window.zoom_window();
+                    toggle_window_zoom(window);
                 });
             }
         });
@@ -993,6 +1037,18 @@ mod tests {
                 "test backend does not open repositories",
             )))
         }
+    }
+
+    #[test]
+    fn window_zoom_action_restores_only_on_windows_when_already_maximized() {
+        assert_eq!(window_zoom_action(false), WindowZoomAction::Zoom);
+
+        let expected = if cfg!(target_os = "windows") {
+            WindowZoomAction::Restore
+        } else {
+            WindowZoomAction::Zoom
+        };
+        assert_eq!(window_zoom_action(true), expected);
     }
 
     struct KeyBindingProbe {

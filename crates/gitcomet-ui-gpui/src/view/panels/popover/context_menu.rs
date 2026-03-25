@@ -135,7 +135,7 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 
 fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.theme_mode;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Theme".into()),
@@ -172,7 +172,7 @@ fn settings_theme_model(host: &PopoverHost) -> ContextMenuModel {
 
 fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.date_time_format;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
     let mut items = vec![
         ContextMenuItem::Header("Date format".into()),
         ContextMenuItem::Separator,
@@ -194,7 +194,7 @@ fn settings_date_format_model(host: &PopoverHost) -> ContextMenuModel {
 
 fn settings_timezone_model(host: &PopoverHost) -> ContextMenuModel {
     let selected = host.timezone;
-    let check = |enabled: bool| enabled.then_some("✓".into());
+    let check = |enabled: bool| enabled.then_some("icons/check.svg".into());
     let mut items = vec![
         ContextMenuItem::Header("Date timezone".into()),
         ContextMenuItem::Separator,

@@ -14,7 +14,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Pull (default)".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: None,
             disabled,
             action: Box::new(ContextMenuAction::Pull {
@@ -24,7 +24,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         },
         ContextMenuItem::Entry {
             label: "Pull (fast-forward if possible)".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("F".into()),
             disabled,
             action: Box::new(ContextMenuAction::Pull {
@@ -34,7 +34,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         },
         ContextMenuItem::Entry {
             label: "Pull (fast-forward only)".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("O".into()),
             disabled,
             action: Box::new(ContextMenuAction::Pull {
@@ -44,7 +44,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         },
         ContextMenuItem::Entry {
             label: "Pull (rebase)".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("R".into()),
             disabled,
             action: Box::new(ContextMenuAction::Pull {
@@ -55,21 +55,21 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Fetch all".into(),
-            icon: Some("↓".into()),
+            icon: Some("icons/arrow_down.svg".into()),
             shortcut: Some("A".into()),
             disabled,
             action: Box::new(ContextMenuAction::FetchAll { repo_id }),
         },
         ContextMenuItem::Entry {
             label: "Prune merged branches".into(),
-            icon: Some("🧹".into()),
+            icon: Some("icons/broom.svg".into()),
             shortcut: None,
             disabled,
             action: Box::new(ContextMenuAction::PruneMergedBranches { repo_id }),
         },
         ContextMenuItem::Entry {
             label: "Prune local tags".into(),
-            icon: Some("🏷".into()),
+            icon: Some("icons/tag.svg".into()),
             shortcut: None,
             disabled,
             action: Box::new(ContextMenuAction::PruneLocalTags { repo_id }),

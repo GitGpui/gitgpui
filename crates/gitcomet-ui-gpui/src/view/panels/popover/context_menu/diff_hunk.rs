@@ -5,10 +5,10 @@ fn diff_hunk_primary_metadata(
 ) -> (bool, &'static str, &'static str, Option<&'static str>) {
     match diff_target {
         Some(DiffTarget::WorkingTree { area, .. }) => match area {
-            DiffArea::Unstaged => (false, "Stage hunk", "+", Some("S")),
-            DiffArea::Staged => (false, "Unstage hunk", "−", Some("U")),
+            DiffArea::Unstaged => (false, "Stage hunk", "icons/plus.svg", Some("S")),
+            DiffArea::Staged => (false, "Unstage hunk", "icons/minus.svg", Some("U")),
         },
-        _ => (true, "Stage/Unstage hunk", "+", None),
+        _ => (true, "Stage/Unstage hunk", "icons/plus.svg", None),
     }
 }
 
@@ -65,7 +65,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
 
     items.push(ContextMenuItem::Entry {
         label: "Discard hunk".into(),
-        icon: Some("↺".into()),
+        icon: Some("icons/refresh.svg".into()),
         shortcut: Some("D".into()),
         disabled: !is_unstaged || patch.is_none(),
         action: Box::new(ContextMenuAction::ApplyWorktreePatch {
@@ -92,7 +92,7 @@ mod tests {
         let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(Some(&target));
         assert!(!disabled);
         assert_eq!(label, "Stage hunk");
-        assert_eq!(icon, "+");
+        assert_eq!(icon, "icons/plus.svg");
         assert_eq!(shortcut, Some("S"));
         assert!(matches!(
             diff_hunk_primary_action(RepoId(9), 4, Some(&target)),
@@ -113,7 +113,7 @@ mod tests {
         let (disabled, label, icon, shortcut) = diff_hunk_primary_metadata(Some(&target));
         assert!(!disabled);
         assert_eq!(label, "Unstage hunk");
-        assert_eq!(icon, "−");
+        assert_eq!(icon, "icons/minus.svg");
         assert_eq!(shortcut, Some("U"));
         assert!(matches!(
             diff_hunk_primary_action(RepoId(10), 5, Some(&target)),

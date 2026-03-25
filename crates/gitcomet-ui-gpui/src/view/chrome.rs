@@ -57,7 +57,7 @@ fn titlebar_double_click_action() -> TitleBarDoubleClickAction {
 pub(super) fn handle_titlebar_double_click(window: &mut Window) {
     match titlebar_double_click_action() {
         TitleBarDoubleClickAction::PlatformDefault => window.titlebar_double_click(),
-        TitleBarDoubleClickAction::ToggleZoom => window.zoom_window(),
+        TitleBarDoubleClickAction::ToggleZoom => crate::app::toggle_window_zoom(window),
     }
 }
 
@@ -487,7 +487,7 @@ impl Render for TitleBarView {
         .window_control_area(WindowControlArea::Max)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            window.zoom_window();
+            crate::app::toggle_window_zoom(window);
             cx.notify();
         }))
         .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {

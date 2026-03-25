@@ -359,8 +359,9 @@ impl Button {
 }
 
 fn looks_like_icon_button(label: &str) -> bool {
-    matches!(label.trim(), "✕" | "＋" | "▾" | "≡" | "" | "⋯" | "⟳" | "↻")
-        || (label.chars().count() <= 2 && !label.chars().any(|c| c.is_alphanumeric()))
+    let trimmed = label.trim();
+    trimmed.is_empty()
+        || (trimmed.chars().count() <= 2 && !trimmed.chars().any(|c| c.is_alphanumeric()))
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {

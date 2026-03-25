@@ -62,6 +62,10 @@ zed-reqwest = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+gitcomet-win32-window-utils = { path = "../win32-window-utils" }
+raw-window-handle = { workspace = true }
+
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
