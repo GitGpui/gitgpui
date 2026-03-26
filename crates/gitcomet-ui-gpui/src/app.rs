@@ -339,9 +339,6 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 
     cx.on_action(|_: &OpenSettings, cx| {
         cx.defer(|cx| {
-            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
-                return;
-            }
             crate::view::open_settings_window(cx);
         });
     });

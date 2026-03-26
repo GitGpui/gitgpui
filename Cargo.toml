@@ -73,7 +73,7 @@ tree-sitter-rust = "0.24.1"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
-unicode-segmentation = "1.13.1"
+unicode-segmentation = "1.13.2"
 url = "2.5.8"
 windows = "0.62"
 zed-reqwest = { version = "0.12.15-zed", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
