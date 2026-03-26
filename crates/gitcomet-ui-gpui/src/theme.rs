@@ -1,20 +1,50 @@
 use gpui::Rgba;
 use gpui::WindowAppearance;
+use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap};
+use std::error::Error;
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-#[derive(Clone, Copy)]
+pub(crate) const DEFAULT_DARK_THEME_KEY: &str = "gitcomet_dark";
+pub(crate) const DEFAULT_LIGHT_THEME_KEY: &str = "gitcomet_light";
+pub(crate) const GRAPH_LANE_PALETTE_SIZE: usize = 64;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ThemeOption {
+    pub key: String,
+    pub label: String,
+}
+
+struct EmbeddedThemeSpec {
+    key: &'static str,
+    label: &'static str,
+    json: &'static str,
+}
+
+include!(concat!(env!("OUT_DIR"), "/embedded_themes.rs"));
+
+static EMBEDDED_THEME_CACHE: OnceLock<HashMap<&'static str, AppTheme>> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppTheme {
     pub is_dark: bool,
     pub colors: Colors,
+    pub graph_lane_palette: GraphLanePalette,
     pub radii: Radii,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Colors {
     pub window_bg: Rgba,
     pub surface_bg: Rgba,
     pub surface_bg_elevated: Rgba,
     pub active_section: Rgba,
     pub border: Rgba,
+    pub tooltip_bg: Rgba,
+    pub tooltip_text: Rgba,
     pub text: Rgba,
     pub text_muted: Rgba,
     pub accent: Rgba,
@@ -28,9 +58,92 @@ pub struct Colors {
     pub danger: Rgba,
     pub warning: Rgba,
     pub success: Rgba,
+    pub diff_add_bg: Rgba,
+    pub diff_add_text: Rgba,
+    pub diff_remove_bg: Rgba,
+    pub diff_remove_text: Rgba,
+    pub input_placeholder: Rgba,
+    pub accent_text: Rgba,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GraphLanePalette {
+    colors: [Rgba; GRAPH_LANE_PALETTE_SIZE],
+    len: u8,
+}
+
+impl GraphLanePalette {
+    fn generated(is_dark: bool) -> Self {
+        let mut colors = [Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }; GRAPH_LANE_PALETTE_SIZE];
+        for (i, color) in colors.iter_mut().enumerate() {
+            let hue = (i as f32 * 0.13) % 1.0;
+            let sat = 0.75;
+            let light = if is_dark { 0.62 } else { 0.45 };
+            *color = gpui::hsla(hue, sat, light, 1.0).into();
+        }
+        Self {
+            colors,
+            len: GRAPH_LANE_PALETTE_SIZE as u8,
+        }
+    }
+
+    fn from_theme_colors(
+        is_dark: bool,
+        palette: Option<Vec<ThemeColor>>,
+        hues: Option<Vec<f32>>,
+    ) -> Self {
+        if let Some(palette) = palette.filter(|palette| !palette.is_empty()) {
+            return Self::from_rgba_slice(
+                &palette
+                    .into_iter()
+                    .map(ThemeColor::into_rgba)
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        if let Some(hues) = hues.filter(|hues| !hues.is_empty()) {
+            let sat = 0.75;
+            let light = if is_dark { 0.62 } else { 0.45 };
+            let colors = hues
+                .into_iter()
+                .map(|hue| gpui::hsla(hue.rem_euclid(1.0), sat, light, 1.0).into())
+                .collect::<Vec<_>>();
+            return Self::from_rgba_slice(&colors);
+        }
+
+        Self::generated(is_dark)
+    }
+
+    fn from_rgba_slice(colors: &[Rgba]) -> Self {
+        let mut out = [Rgba {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.0,
+        }; GRAPH_LANE_PALETTE_SIZE];
+        let len = colors.len().min(GRAPH_LANE_PALETTE_SIZE);
+        for (slot, color) in out.iter_mut().zip(colors.iter().take(len)) {
+            *slot = *color;
+        }
+        Self {
+            colors: out,
+            len: len as u8,
+        }
+    }
+
+    pub fn as_slice(&self) -> &[Rgba] {
+        let len = usize::from(self.len).max(1);
+        &self.colors[..len]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Radii {
     pub panel: f32,
     pub pill: f32,
@@ -38,104 +151,477 @@ pub struct Radii {
 }
 
 impl AppTheme {
+    pub(crate) fn from_json_str(json: &str) -> Result<Self, serde_json::Error> {
+        let theme: ThemeFile = serde_json::from_str(json)?;
+        Ok(theme.into())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn from_json_path(path: impl AsRef<Path>) -> Result<Self, ThemeLoadError> {
+        let path = path.as_ref();
+        let json = fs::read_to_string(path).map_err(|source| ThemeLoadError::Read {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+        Self::from_json_str(&json).map_err(|source| ThemeLoadError::Parse {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
+
     pub fn default_for_window_appearance(appearance: WindowAppearance) -> Self {
         match appearance {
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::zed_one_light(),
-            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::zed_ayu_dark(),
+            WindowAppearance::Light | WindowAppearance::VibrantLight => {
+                Self::from_key(DEFAULT_LIGHT_THEME_KEY).unwrap_or_else(|| {
+                    panic!("missing default light theme `{DEFAULT_LIGHT_THEME_KEY}`")
+                })
+            }
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => {
+                Self::from_key(DEFAULT_DARK_THEME_KEY).unwrap_or_else(|| {
+                    panic!("missing default dark theme `{DEFAULT_DARK_THEME_KEY}`")
+                })
+            }
         }
     }
 
-    /// Zed's "Ayu Dark" theme (ported from `zed/assets/themes/ayu/ayu.json`).
-    pub fn zed_ayu_dark() -> Self {
-        let accent = gpui::rgba(0x5ac1feff);
-        let hover = gpui::rgba(0x2d2f34ff);
-        let text_muted = gpui::rgba(0x8a8986ff);
-        Self {
-            is_dark: true,
-            colors: Colors {
-                // editor.background
-                window_bg: gpui::rgba(0x0d1016ff),
-                // surface.background
-                surface_bg: gpui::rgba(0x1f2127ff),
-                // elevated_surface.background
-                surface_bg_elevated: gpui::rgba(0x1f2127ff),
-                active_section: hover,
-                // border.variant
-                border: gpui::rgba(0x2d2f34ff),
-                // text
-                text: gpui::rgba(0xbfbdb6ff),
-                // text.muted
-                text_muted,
-                // text.accent
-                accent,
-                // element.hover
-                hover,
-                active: with_alpha(hover, 0.78),
-                focus_ring: with_alpha(accent, 0.60),
-                focus_ring_bg: with_alpha(accent, 0.16),
-                scrollbar_thumb: with_alpha(text_muted, 0.30),
-                scrollbar_thumb_hover: with_alpha(text_muted, 0.42),
-                scrollbar_thumb_active: with_alpha(text_muted, 0.52),
-                // terminal.ansi.red
-                danger: gpui::rgba(0xef7177ff),
-                // terminal.ansi.yellow
-                warning: gpui::rgba(0xfeb454ff),
-                // terminal.ansi.green
-                success: gpui::rgba(0xaad84cff),
-            },
-            radii: Radii {
-                panel: 2.0,
-                pill: 2.0,
-                row: 2.0,
-            },
-        }
+    pub(crate) fn from_key(key: &str) -> Option<Self> {
+        runtime_themes()
+            .get(key)
+            .map(|spec| spec.theme)
+            .or_else(|| embedded_theme_cache().get(key).copied())
     }
 
-    /// Zed's "One Light" theme (ported from `zed/assets/themes/one/one.json`).
-    pub fn zed_one_light() -> Self {
-        let accent = gpui::rgba(0x5c78e2ff);
-        let hover = gpui::rgba(0xdfdfe0ff);
-        let text_muted = gpui::rgba(0x58585aff);
-        Self {
-            is_dark: false,
-            colors: Colors {
-                // editor.background
-                window_bg: gpui::rgba(0xfafafaff),
-                // surface.background
-                surface_bg: gpui::rgba(0xebebecff),
-                // elevated_surface.background
-                surface_bg_elevated: gpui::rgba(0xebebecff),
-                active_section: gpui::rgba(0xfafafaff),
-                // border.variant
-                border: gpui::rgba(0xdfdfe0ff),
-                // text
-                text: gpui::rgba(0x242529ff),
-                // text.muted
-                text_muted,
-                // text.accent
-                accent,
-                // element.hover
-                hover,
-                active: with_alpha(hover, 0.88),
-                focus_ring: with_alpha(accent, 0.52),
-                focus_ring_bg: with_alpha(accent, 0.12),
-                scrollbar_thumb: with_alpha(text_muted, 0.26),
-                scrollbar_thumb_hover: with_alpha(text_muted, 0.36),
-                scrollbar_thumb_active: with_alpha(text_muted, 0.46),
-                // terminal.ansi.red
-                danger: gpui::rgba(0xde3e35ff),
-                // terminal.ansi.yellow
-                warning: gpui::rgba(0xd2b67cff),
-                // terminal.ansi.green
-                success: gpui::rgba(0x3f953aff),
-            },
-            radii: Radii {
-                panel: 2.0,
-                pill: 2.0,
-                row: 2.0,
-            },
+    /// GitComet's default dark theme loaded from an embedded JSON definition.
+    #[allow(dead_code)]
+    pub fn gitcomet_dark() -> Self {
+        Self::from_key(DEFAULT_DARK_THEME_KEY)
+            .unwrap_or_else(|| panic!("missing default dark theme `{DEFAULT_DARK_THEME_KEY}`"))
+    }
+
+    /// GitComet's default light theme loaded from an embedded JSON definition.
+    #[allow(dead_code)]
+    pub fn gitcomet_light() -> Self {
+        Self::from_key(DEFAULT_LIGHT_THEME_KEY)
+            .unwrap_or_else(|| panic!("missing default light theme `{DEFAULT_LIGHT_THEME_KEY}`"))
+    }
+}
+
+pub(crate) fn available_themes() -> Vec<ThemeOption> {
+    merged_theme_options(None, true)
+}
+
+pub(crate) fn has_theme_key(key: &str) -> bool {
+    merged_theme_options(None, true)
+        .iter()
+        .any(|option| option.key == key)
+}
+
+pub(crate) fn theme_label(key: &str) -> Option<String> {
+    merged_theme_options(None, true)
+        .into_iter()
+        .find(|option| option.key == key)
+        .map(|option| option.label)
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(crate) enum ThemeLoadError {
+    Read {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+    Parse {
+        path: std::path::PathBuf,
+        source: serde_json::Error,
+    },
+}
+
+impl fmt::Display for ThemeLoadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Read { path, source } => {
+                write!(
+                    f,
+                    "failed to read theme JSON from {}: {source}",
+                    path.display()
+                )
+            }
+            Self::Parse { path, source } => {
+                write!(
+                    f,
+                    "failed to parse theme JSON from {}: {source}",
+                    path.display()
+                )
+            }
         }
     }
+}
+
+impl Error for ThemeLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Read { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFile {
+    #[serde(default)]
+    name: Option<String>,
+    is_dark: bool,
+    colors: ThemeFileColors,
+    radii: Radii,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFileColors {
+    window_bg: ThemeColor,
+    surface_bg: ThemeColor,
+    surface_bg_elevated: ThemeColor,
+    active_section: ThemeColor,
+    border: ThemeColor,
+    #[serde(default = "default_tooltip_bg_theme_color")]
+    tooltip_bg: ThemeColor,
+    #[serde(default = "default_tooltip_text_theme_color")]
+    tooltip_text: ThemeColor,
+    text: ThemeColor,
+    text_muted: ThemeColor,
+    accent: ThemeColor,
+    hover: ThemeColor,
+    active: ThemeColor,
+    focus_ring: ThemeColor,
+    focus_ring_bg: ThemeColor,
+    scrollbar_thumb: ThemeColor,
+    scrollbar_thumb_hover: ThemeColor,
+    scrollbar_thumb_active: ThemeColor,
+    danger: ThemeColor,
+    warning: ThemeColor,
+    success: ThemeColor,
+    #[serde(default)]
+    diff_add_bg: Option<ThemeColor>,
+    #[serde(default)]
+    diff_add_text: Option<ThemeColor>,
+    #[serde(default)]
+    diff_remove_bg: Option<ThemeColor>,
+    #[serde(default)]
+    diff_remove_text: Option<ThemeColor>,
+    #[serde(default)]
+    input_placeholder: Option<ThemeColor>,
+    #[serde(default)]
+    accent_text: Option<ThemeColor>,
+    #[serde(default)]
+    graph_lane_palette: Option<Vec<ThemeColor>>,
+    #[serde(default)]
+    graph_lane_hues: Option<Vec<f32>>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(untagged)]
+enum ThemeColor {
+    Hex(Rgba),
+    HexWithAlpha { hex: Rgba, alpha: f32 },
+}
+
+impl ThemeColor {
+    fn into_rgba(self) -> Rgba {
+        match self {
+            Self::Hex(color) => color,
+            Self::HexWithAlpha { hex, alpha } => with_alpha(hex, alpha),
+        }
+    }
+}
+
+impl From<ThemeFile> for AppTheme {
+    fn from(theme: ThemeFile) -> Self {
+        let ThemeFile {
+            is_dark,
+            colors,
+            radii,
+            ..
+        } = theme;
+        let ThemeFileColors {
+            window_bg,
+            surface_bg,
+            surface_bg_elevated,
+            active_section,
+            border,
+            tooltip_bg,
+            tooltip_text,
+            text,
+            text_muted,
+            accent,
+            hover,
+            active,
+            focus_ring,
+            focus_ring_bg,
+            scrollbar_thumb,
+            scrollbar_thumb_hover,
+            scrollbar_thumb_active,
+            danger,
+            warning,
+            success,
+            diff_add_bg,
+            diff_add_text,
+            diff_remove_bg,
+            diff_remove_text,
+            input_placeholder,
+            accent_text,
+            graph_lane_palette,
+            graph_lane_hues,
+        } = colors;
+        let graph_lane_palette =
+            GraphLanePalette::from_theme_colors(is_dark, graph_lane_palette, graph_lane_hues);
+
+        Self {
+            is_dark,
+            colors: Colors {
+                window_bg: window_bg.into_rgba(),
+                surface_bg: surface_bg.into_rgba(),
+                surface_bg_elevated: surface_bg_elevated.into_rgba(),
+                active_section: active_section.into_rgba(),
+                border: border.into_rgba(),
+                tooltip_bg: tooltip_bg.into_rgba(),
+                tooltip_text: tooltip_text.into_rgba(),
+                text: text.into_rgba(),
+                text_muted: text_muted.into_rgba(),
+                accent: accent.into_rgba(),
+                hover: hover.into_rgba(),
+                active: active.into_rgba(),
+                focus_ring: focus_ring.into_rgba(),
+                focus_ring_bg: focus_ring_bg.into_rgba(),
+                scrollbar_thumb: scrollbar_thumb.into_rgba(),
+                scrollbar_thumb_hover: scrollbar_thumb_hover.into_rgba(),
+                scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
+                danger: danger.into_rgba(),
+                warning: warning.into_rgba(),
+                success: success.into_rgba(),
+                diff_add_bg: diff_add_bg
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(|| default_diff_add_bg(is_dark)),
+                diff_add_text: diff_add_text
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(|| default_diff_add_text(is_dark)),
+                diff_remove_bg: diff_remove_bg
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(|| default_diff_remove_bg(is_dark)),
+                diff_remove_text: diff_remove_text
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(|| default_diff_remove_text(is_dark)),
+                input_placeholder: input_placeholder
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(|| default_input_placeholder(is_dark)),
+                accent_text: accent_text
+                    .map(ThemeColor::into_rgba)
+                    .unwrap_or_else(default_accent_text),
+            },
+            graph_lane_palette,
+            radii,
+        }
+    }
+}
+
+fn default_tooltip_bg_theme_color() -> ThemeColor {
+    ThemeColor::Hex(gpui::rgba(0x000000ff))
+}
+
+fn default_tooltip_text_theme_color() -> ThemeColor {
+    ThemeColor::Hex(gpui::rgba(0xffffffff))
+}
+
+fn default_diff_add_bg(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0x0B2E1C)
+    } else {
+        gpui::rgba(0xe6ffedff)
+    }
+}
+
+fn default_diff_add_text(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0xBBF7D0)
+    } else {
+        gpui::rgba(0x22863aff)
+    }
+}
+
+fn default_diff_remove_bg(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0x3A0D13)
+    } else {
+        gpui::rgba(0xffeef0ff)
+    }
+}
+
+fn default_diff_remove_text(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0xFECACA)
+    } else {
+        gpui::rgba(0xcb2431ff)
+    }
+}
+
+fn default_input_placeholder(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::hsla(0.0, 0.0, 1.0, 0.35).into()
+    } else {
+        gpui::hsla(0.0, 0.0, 0.0, 0.2).into()
+    }
+}
+
+fn default_accent_text() -> Rgba {
+    gpui::rgba(0xffffffff)
+}
+
+fn embedded_theme_cache() -> &'static HashMap<&'static str, AppTheme> {
+    EMBEDDED_THEME_CACHE.get_or_init(|| {
+        EMBEDDED_THEME_SPECS
+            .iter()
+            .map(|spec| {
+                let theme = AppTheme::from_json_str(spec.json).unwrap_or_else(|err| {
+                    panic!("failed to load built-in theme {}: {err}", spec.key)
+                });
+                (spec.key, theme)
+            })
+            .collect()
+    })
+}
+
+#[derive(Clone)]
+struct RuntimeThemeSpec {
+    option: ThemeOption,
+    theme: AppTheme,
+}
+
+fn merged_theme_options(runtime_dir: Option<&Path>, seed_embedded: bool) -> Vec<ThemeOption> {
+    let mut options = BTreeMap::<String, ThemeOption>::new();
+    for spec in EMBEDDED_THEME_SPECS {
+        options.insert(
+            spec.key.to_string(),
+            ThemeOption {
+                key: spec.key.to_string(),
+                label: spec.label.to_string(),
+            },
+        );
+    }
+
+    for spec in runtime_themes_with_dir(runtime_dir, seed_embedded).into_values() {
+        options.insert(spec.option.key.clone(), spec.option);
+    }
+
+    options.into_values().collect()
+}
+
+fn runtime_themes() -> HashMap<String, RuntimeThemeSpec> {
+    runtime_themes_with_dir(None, true)
+}
+
+fn runtime_themes_with_dir(
+    runtime_dir: Option<&Path>,
+    seed_embedded: bool,
+) -> HashMap<String, RuntimeThemeSpec> {
+    let Some(dir) = resolved_runtime_themes_dir(runtime_dir, seed_embedded) else {
+        return HashMap::default();
+    };
+
+    load_runtime_themes_from_dir(&dir)
+}
+
+fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) -> Option<PathBuf> {
+    let dir = match runtime_dir {
+        Some(path) => path.to_path_buf(),
+        None => gitcomet_state::session::user_themes_dir()?,
+    };
+
+    if fs::create_dir_all(&dir).is_err() {
+        return None;
+    }
+
+    if seed_embedded {
+        seed_runtime_themes_dir(&dir);
+    }
+
+    Some(dir)
+}
+
+fn seed_runtime_themes_dir(dir: &Path) {
+    for spec in EMBEDDED_THEME_SPECS {
+        let path = dir.join(format!("{}.json", spec.key));
+        if path.exists() {
+            continue;
+        }
+        let _ = fs::write(path, spec.json);
+    }
+}
+
+fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return HashMap::default();
+    };
+
+    let mut files = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect::<Vec<_>>();
+    files.sort();
+
+    let mut themes = HashMap::default();
+    for path in files {
+        let Some(key) = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+
+        let Ok(json) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = serde_json::from_str::<ThemeFile>(&json) else {
+            continue;
+        };
+
+        let label = file
+            .name
+            .clone()
+            .unwrap_or_else(|| humanize_theme_key(&key));
+        themes.insert(
+            key.clone(),
+            RuntimeThemeSpec {
+                option: ThemeOption { key, label },
+                theme: file.into(),
+            },
+        );
+    }
+
+    themes
+}
+
+fn humanize_theme_key(key: &str) -> String {
+    key.split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            if part.eq_ignore_ascii_case("gitcomet") {
+                return "GitComet".to_string();
+            }
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut word = String::new();
+                    word.push(first.to_ascii_uppercase());
+                    word.extend(chars.map(|ch| ch.to_ascii_lowercase()));
+                    word
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
@@ -145,7 +631,12 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 
 #[cfg(test)]
 mod tests {
-    use super::{Rgba, with_alpha};
+    use super::{
+        AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, GRAPH_LANE_PALETTE_SIZE, Rgba,
+        available_themes, has_theme_key, merged_theme_options, theme_label, with_alpha,
+    };
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn with_alpha_preserves_rgb_and_overwrites_alpha() {
@@ -162,5 +653,226 @@ mod tests {
         assert_eq!(adjusted.g, color.g);
         assert_eq!(adjusted.b, color.b);
         assert_eq!(adjusted.a, 0.75);
+    }
+
+    #[test]
+    fn parses_theme_json_with_alpha_overrides() {
+        let json = r##"{
+            "is_dark": true,
+            "colors": {
+                "window_bg": "#0d1016ff",
+                "surface_bg": "#1f2127ff",
+                "surface_bg_elevated": "#1f2127ff",
+                "active_section": "#2d2f34ff",
+                "border": "#2d2f34ff",
+                "tooltip_bg": "#000000ff",
+                "tooltip_text": "#ffffffff",
+                "text": "#bfbdb6ff",
+                "text_muted": "#8a8986ff",
+                "accent": "#5ac1feff",
+                "hover": "#2d2f34ff",
+                "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                "danger": "#ef7177ff",
+                "warning": "#feb454ff",
+                "success": "#aad84cff",
+                "diff_add_bg": "#102030ff",
+                "diff_add_text": "#405060ff",
+                "diff_remove_bg": "#203040ff",
+                "diff_remove_text": "#506070ff",
+                "input_placeholder": "#708090ff",
+                "accent_text": "#112233ff",
+                "graph_lane_hues": [0.25, 0.75]
+            },
+            "radii": {
+                "panel": 2.0,
+                "pill": 2.0,
+                "row": 2.0
+            }
+        }"##;
+
+        let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
+
+        assert!(theme.is_dark);
+        assert_eq!(theme.colors.window_bg, gpui::rgba(0x0d1016ff));
+        assert_eq!(theme.colors.border, gpui::rgba(0x2d2f34ff));
+        assert_eq!(theme.colors.tooltip_bg, gpui::rgba(0x000000ff));
+        assert_eq!(theme.colors.tooltip_text, gpui::rgba(0xffffffff));
+        assert_eq!(
+            theme.colors.active,
+            with_alpha(gpui::rgba(0x2d2f34ff), 0.78)
+        );
+        assert_eq!(
+            theme.colors.scrollbar_thumb_active,
+            with_alpha(gpui::rgba(0x8a8986ff), 0.52)
+        );
+        assert_eq!(theme.colors.diff_add_bg, gpui::rgba(0x102030ff));
+        assert_eq!(theme.colors.diff_add_text, gpui::rgba(0x405060ff));
+        assert_eq!(theme.colors.diff_remove_bg, gpui::rgba(0x203040ff));
+        assert_eq!(theme.colors.diff_remove_text, gpui::rgba(0x506070ff));
+        assert_eq!(theme.colors.input_placeholder, gpui::rgba(0x708090ff));
+        assert_eq!(theme.colors.accent_text, gpui::rgba(0x112233ff));
+        assert_eq!(theme.graph_lane_palette.as_slice().len(), 2);
+        assert_eq!(
+            theme.graph_lane_palette.as_slice()[0],
+            gpui::hsla(0.25, 0.75, 0.62, 1.0).into()
+        );
+        assert_eq!(theme.radii.panel, 2.0);
+    }
+
+    #[test]
+    fn loads_theme_json_from_file() {
+        let dir = tempdir().expect("temp dir should exist");
+        let path = dir.path().join("theme.json");
+        fs::write(
+            &path,
+            r##"{
+                "is_dark": false,
+                "colors": {
+                    "window_bg": "#fafafaff",
+                    "surface_bg": "#ebebecff",
+                    "surface_bg_elevated": "#ebebecff",
+                    "active_section": "#fafafaff",
+                    "border": "#dfdfe0ff",
+                    "text": "#242529ff",
+                    "text_muted": "#58585aff",
+                    "accent": "#5c78e2ff",
+                    "hover": "#dfdfe0ff",
+                    "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                    "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                    "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                    "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                    "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                    "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                    "danger": "#de3e35ff",
+                    "warning": "#d2b67cff",
+                    "success": "#3f953aff"
+                },
+                "radii": {
+                    "panel": 2.0,
+                    "pill": 2.0,
+                    "row": 2.0
+                }
+            }"##,
+        )
+        .expect("theme file should be written");
+
+        let theme = AppTheme::from_json_path(&path).expect("theme file should load");
+
+        assert!(!theme.is_dark);
+        assert_eq!(theme.colors.text, gpui::rgba(0x242529ff));
+        assert_eq!(theme.colors.tooltip_bg, gpui::rgba(0x000000ff));
+        assert_eq!(theme.colors.tooltip_text, gpui::rgba(0xffffffff));
+        assert_eq!(
+            theme.colors.active,
+            with_alpha(gpui::rgba(0xdfdfe0ff), 0.88)
+        );
+        assert_eq!(theme.colors.diff_add_bg, gpui::rgba(0xe6ffedff));
+        assert_eq!(theme.colors.diff_add_text, gpui::rgba(0x22863aff));
+        assert_eq!(theme.colors.diff_remove_bg, gpui::rgba(0xffeef0ff));
+        assert_eq!(theme.colors.diff_remove_text, gpui::rgba(0xcb2431ff));
+        assert_eq!(theme.colors.input_placeholder, gpui::rgba(0x00000033));
+        assert_eq!(theme.colors.accent_text, gpui::rgba(0xffffffff));
+        assert_eq!(
+            theme.graph_lane_palette.as_slice().len(),
+            GRAPH_LANE_PALETTE_SIZE
+        );
+    }
+
+    #[test]
+    fn built_in_themes_load_from_embedded_json() {
+        let dark = AppTheme::gitcomet_dark();
+        let light = AppTheme::gitcomet_light();
+
+        assert!(dark.is_dark);
+        assert!(!light.is_dark);
+        assert_eq!(
+            dark.colors.focus_ring,
+            with_alpha(gpui::rgba(0x5ac1feff), 0.60)
+        );
+        assert_eq!(
+            light.colors.scrollbar_thumb_hover,
+            with_alpha(gpui::rgba(0x58585aff), 0.36)
+        );
+        assert_eq!(dark.colors.diff_add_bg, gpui::rgba(0x0b2e1cff));
+        assert_eq!(light.colors.diff_remove_text, gpui::rgba(0xcb2431ff));
+        assert_eq!(dark.colors.input_placeholder, gpui::rgba(0xffffff59));
+        assert_eq!(light.colors.accent_text, gpui::rgba(0xffffffff));
+        assert_eq!(
+            dark.graph_lane_palette.as_slice().len(),
+            GRAPH_LANE_PALETTE_SIZE
+        );
+    }
+
+    #[test]
+    fn embedded_theme_registry_exposes_default_keys() {
+        let themes = available_themes();
+
+        assert!(!themes.is_empty());
+        assert!(has_theme_key(DEFAULT_DARK_THEME_KEY));
+        assert!(has_theme_key(DEFAULT_LIGHT_THEME_KEY));
+        assert_eq!(
+            theme_label(DEFAULT_DARK_THEME_KEY),
+            Some("GitComet Dark".to_string())
+        );
+        assert_eq!(
+            theme_label(DEFAULT_LIGHT_THEME_KEY),
+            Some("GitComet Light".to_string())
+        );
+    }
+
+    #[test]
+    fn runtime_theme_dir_overrides_and_extends_embedded_themes() {
+        let dir = tempdir().expect("temp dir should exist");
+        fs::write(
+            dir.path().join("custom_theme.json"),
+            r##"{
+                "name": "Custom Theme",
+                "is_dark": true,
+                "colors": {
+                    "window_bg": "#000000ff",
+                    "surface_bg": "#111111ff",
+                    "surface_bg_elevated": "#222222ff",
+                    "active_section": "#333333ff",
+                    "border": "#444444ff",
+                    "text": "#eeeeeeff",
+                    "text_muted": "#999999ff",
+                    "accent": "#abcdef12",
+                    "hover": "#555555ff",
+                    "active": { "hex": "#666666ff", "alpha": 0.9 },
+                    "focus_ring": { "hex": "#777777ff", "alpha": 0.5 },
+                    "focus_ring_bg": { "hex": "#777777ff", "alpha": 0.2 },
+                    "scrollbar_thumb": "#88888880",
+                    "scrollbar_thumb_hover": "#888888ff",
+                    "scrollbar_thumb_active": "#999999ff",
+                    "danger": "#aa0000ff",
+                    "warning": "#bb9900ff",
+                    "success": "#00aa00ff"
+                },
+                "radii": {
+                    "panel": 2.0,
+                    "pill": 2.0,
+                    "row": 2.0
+                }
+            }"##,
+        )
+        .expect("custom theme file should be written");
+
+        let themes = merged_theme_options(Some(dir.path()), false);
+        let custom = themes
+            .iter()
+            .find(|theme| theme.key == "custom_theme")
+            .expect("custom theme should be discovered");
+
+        assert_eq!(custom.label, "Custom Theme");
+        assert!(
+            themes
+                .iter()
+                .any(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
+        );
     }
 }

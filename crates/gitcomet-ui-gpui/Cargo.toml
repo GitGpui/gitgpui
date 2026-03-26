@@ -1,5 +1,6 @@
 [package]
 name = "gitcomet-ui-gpui"
+build = "build.rs"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -7,8 +7,10 @@ use gpui::{
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
     ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
-    WrappedLine, actions, anchored, deferred, div, fill, hsla, point, px, relative, size,
+    WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
 };
+#[cfg(test)]
+use gpui::hsla;
 use rustc_hash::{FxHashMap as HashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
@@ -326,11 +328,6 @@ impl TextInputStyle {
             if theme.is_dark { 0.55 } else { 0.40 },
         );
         let focus_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.98 } else { 0.92 });
-        let placeholder = if theme.is_dark {
-            hsla(0., 0., 1., 0.35)
-        } else {
-            hsla(0., 0., 0., 0.2)
-        };
         Self {
             background,
             border: base_border,
@@ -338,7 +335,7 @@ impl TextInputStyle {
             focus_border,
             radius: theme.radii.row,
             text: theme.colors.text.into(),
-            placeholder,
+            placeholder: theme.colors.input_placeholder.into(),
             cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),
             selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
         }
@@ -458,7 +455,7 @@ impl TextInput {
             soft_wrap: options.soft_wrap,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
-            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
+            style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             highlights: Arc::new(Vec::new()),
             highlight_provider: None,
             highlight_provider_binding_key: None,
@@ -516,7 +513,7 @@ impl TextInput {
             soft_wrap: options.soft_wrap,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
-            style: TextInputStyle::from_theme(AppTheme::zed_ayu_dark()),
+            style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             highlights: Arc::new(Vec::new()),
             highlight_provider: None,
             highlight_provider_binding_key: None,

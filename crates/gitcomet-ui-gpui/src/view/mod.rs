@@ -433,7 +433,7 @@ impl GitCometView {
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
-                theme_mode,
+                theme_mode.clone(),
                 date_time_format,
                 timezone,
                 show_timezone,
@@ -469,7 +469,7 @@ impl GitCometView {
                     return;
                 }
                 let _ = view.update(app, |this, cx| {
-                    if this.theme_mode != ThemeMode::Automatic {
+                    if !this.theme_mode.is_automatic() {
                         return;
                     }
                     let theme = this.theme_mode.resolve_theme(window.appearance());
@@ -666,7 +666,7 @@ impl GitCometView {
             return;
         }
 
-        self.theme_mode = mode;
+        self.theme_mode = mode.clone();
         self.set_theme(mode.resolve_theme(appearance), cx);
         self.schedule_ui_settings_persist(cx);
     }

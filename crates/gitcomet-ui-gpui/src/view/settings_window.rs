@@ -180,7 +180,7 @@ impl SettingsWindowView {
                 }
 
                 let _ = view.update(app, |this, cx| {
-                    if this.theme_mode != ThemeMode::Automatic {
+                    if !this.theme_mode.is_automatic() {
                         return;
                     }
                     this.theme = this.theme_mode.resolve_theme(window.appearance());
@@ -292,13 +292,13 @@ impl SettingsWindowView {
             return;
         }
 
-        self.theme_mode = mode;
+        self.theme_mode = mode.clone();
         self.theme = mode.resolve_theme(window.appearance());
         self.expanded_section = None;
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, root_window, cx| {
             view.popover_host.update(cx, |host, cx| {
-                host.set_theme_mode(mode, root_window.appearance(), cx);
+                host.set_theme_mode(mode.clone(), root_window.appearance(), cx);
             });
         });
         cx.notify();
@@ -902,22 +902,35 @@ impl Render for SettingsWindowView {
                     .child(theme_row);
 
                 if self.expanded_section == Some(SettingsSection::Theme) {
-                    for option in [ThemeMode::Automatic, ThemeMode::Light, ThemeMode::Dark] {
+                    let automatic = ThemeMode::Automatic;
+                    general_card = general_card.child(
+                        self.option_row(
+                            "settings_window_theme_automatic",
+                            automatic.label(),
+                            None,
+                            self.theme_mode == automatic,
+                            theme,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _e: &ClickEvent, window, cx| {
+                                this.set_theme_mode(automatic.clone(), window, cx);
+                            },
+                        )),
+                    );
+
+                    for available in crate::theme::available_themes() {
+                        let option = ThemeMode::Named(available.key.to_string());
                         general_card = general_card.child(
                             self.option_row(
-                                match option {
-                                    ThemeMode::Automatic => "settings_window_theme_auto",
-                                    ThemeMode::Light => "settings_window_theme_light",
-                                    ThemeMode::Dark => "settings_window_theme_dark",
-                                },
-                                option.label(),
+                                format!("settings_window_theme_{}", available.key),
+                                available.label,
                                 None,
                                 self.theme_mode == option,
                                 theme,
                             )
                             .on_click(cx.listener(
                                 move |this, _e: &ClickEvent, window, cx| {
-                                    this.set_theme_mode(option, window, cx);
+                                    this.set_theme_mode(option.clone(), window, cx);
                                 },
                             )),
                         );

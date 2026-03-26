@@ -1319,25 +1319,15 @@ pub(super) fn diff_line_colors(
             theme.colors.accent,
             theme.colors.text_muted,
         ),
-        (true, Add) => (
-            gpui::rgb(0x0B2E1C),
-            gpui::rgb(0xBBF7D0),
-            gpui::rgb(0x86EFAC),
+        (_, Add) => (
+            theme.colors.diff_add_bg,
+            theme.colors.diff_add_text,
+            theme.colors.diff_add_text,
         ),
-        (true, Remove) => (
-            gpui::rgb(0x3A0D13),
-            gpui::rgb(0xFECACA),
-            gpui::rgb(0xFCA5A5),
-        ),
-        (false, Add) => (
-            gpui::rgba(0xe6ffedff),
-            gpui::rgba(0x22863aff),
-            theme.colors.text_muted,
-        ),
-        (false, Remove) => (
-            gpui::rgba(0xffeef0ff),
-            gpui::rgba(0xcb2431ff),
-            theme.colors.text_muted,
+        (_, Remove) => (
+            theme.colors.diff_remove_bg,
+            theme.colors.diff_remove_text,
+            theme.colors.diff_remove_text,
         ),
         (_, Context) => (
             theme.colors.window_bg,
@@ -1436,7 +1426,7 @@ mod tests {
 
     #[test]
     fn build_cached_styled_text_plain_has_no_highlights() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let styled =
             build_cached_diff_styled_text(theme, "a\tb", &[], "", None, DiffSyntaxMode::Auto, None);
         assert_eq!(styled.text.as_ref(), "a    b");
@@ -1458,7 +1448,7 @@ mod tests {
 
     #[test]
     fn styled_text_highlights_cover_combined_ranges() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = vec![
             CachedDiffTextSegment {
                 text: "abc".into(),
@@ -1498,7 +1488,7 @@ mod tests {
 
     #[test]
     fn cached_styled_text_highlights_all_query_occurrences() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let styled = build_cached_diff_styled_text(
             theme,
             "abxxab",
@@ -1515,7 +1505,7 @@ mod tests {
 
     #[test]
     fn styled_text_word_highlight_sets_background() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let segments = vec![CachedDiffTextSegment {
             text: "x".into(),
             in_word: true,
@@ -1523,7 +1513,7 @@ mod tests {
             syntax: SyntaxTokenKind::None,
         }];
         let (text, highlights) =
-            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.danger));
+            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.diff_remove_text));
         assert_eq!(text.as_ref(), "x");
         assert_eq!(highlights.len(), 1);
         assert!(highlights[0].1.background_color.is_some());
@@ -1531,7 +1521,7 @@ mod tests {
 
     #[test]
     fn syntax_colors_are_softened_for_keywords() {
-        let theme = AppTheme::zed_one_light();
+        let theme = AppTheme::gitcomet_light();
         let segments = vec![CachedDiffTextSegment {
             text: "fn".into(),
             in_word: false,
@@ -1547,7 +1537,7 @@ mod tests {
 
     #[test]
     fn doc_comment_renders_italic() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let style = syntax_highlight_style(theme, SyntaxTokenKind::CommentDoc);
         assert!(style.is_some());
         let style = style.unwrap();
@@ -1559,7 +1549,7 @@ mod tests {
 
     #[test]
     fn keyword_control_renders_semibold() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let style = syntax_highlight_style(theme, SyntaxTokenKind::KeywordControl);
         assert!(style.is_some());
         let style = style.unwrap();
@@ -1629,7 +1619,7 @@ mod tests {
 
     #[test]
     fn prepared_document_byte_range_highlights_multiline_comment_continuation() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "/* open comment\nstill comment */ let x = 1;";
         let line_starts = vec![0, "/* open comment\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1662,7 +1652,7 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_document_byte_range_upgrades_after_chunk_build() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "/* open comment\nstill comment */ let x = 1;";
         let line_starts = vec![0, "/* open comment\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1716,7 +1706,7 @@ mod tests {
 
     #[test]
     fn prepared_document_line_range_reports_ready_and_pending_rows_per_chunk() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let lines: Vec<String> = (0..70)
             .map(|ix| format!("let chunk_boundary_value_{ix} = {ix};"))
             .collect();
@@ -1776,7 +1766,7 @@ mod tests {
 
     #[test]
     fn prepared_document_line_range_clamps_beyond_document_bounds() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "let a = 1;\nlet b = 2;";
         let line_starts = vec![0, "let a = 1;\n".len()];
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
@@ -1813,7 +1803,7 @@ mod tests {
 
     #[test]
     fn nonblocking_prepared_line_helper_transitions_from_pending_to_cacheable() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text = "let value = 1;";
         let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
 
@@ -2149,7 +2139,7 @@ mod tests {
 
     #[test]
     fn query_overlay_reuses_base_when_query_is_empty_or_missing() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text: SharedString = "abcdef".into();
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);
@@ -2176,7 +2166,7 @@ mod tests {
 
     #[test]
     fn query_overlay_adds_background_without_losing_existing_color() {
-        let theme = AppTheme::zed_ayu_dark();
+        let theme = AppTheme::gitcomet_dark();
         let text: SharedString = "abcdef".into();
         let mut text_hasher = FxHasher::default();
         text.as_ref().hash(&mut text_hasher);

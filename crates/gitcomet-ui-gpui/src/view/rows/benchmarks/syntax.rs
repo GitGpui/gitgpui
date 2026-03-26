@@ -25,7 +25,7 @@ impl FileDiffSyntaxPrepareFixture {
         Self {
             lines: build_synthetic_source_lines(lines, line_bytes),
             language,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             budget: DiffSyntaxBudget::default(),
         }
     }
@@ -36,7 +36,7 @@ impl FileDiffSyntaxPrepareFixture {
         Self {
             lines: build_synthetic_nested_query_stress_lines(lines, line_bytes, nesting_depth),
             language,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             budget: DiffSyntaxBudget::default(),
         }
     }
@@ -213,7 +213,7 @@ impl FileDiffSyntaxReparseFixture {
         Self {
             lines: build_synthetic_source_lines(lines, line_bytes),
             language,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             budget: DiffSyntaxBudget::default(),
             nonce: 0,
             prepared_document: None,
@@ -421,7 +421,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
             inline_rows,
             inline_word_highlights,
             language,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             old_document,
             new_document,
         }
@@ -514,8 +514,8 @@ impl FileDiffInlineSyntaxProjectionFixture {
             let syntax_mode =
                 super::diff_text::syntax_mode_for_prepared_document(projected.document);
             let word_color = match line.kind {
-                DiffLineKind::Add => Some(self.theme.colors.success),
-                DiffLineKind::Remove => Some(self.theme.colors.danger),
+                DiffLineKind::Add => Some(self.theme.colors.diff_add_text),
+                DiffLineKind::Remove => Some(self.theme.colors.diff_remove_text),
                 _ => None,
             };
             let (styled, is_pending) =
@@ -599,7 +599,7 @@ impl LargeHtmlSyntaxFixture {
             text,
             line_starts,
             line_count,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
             prepared_document,
         }
     }
@@ -867,7 +867,7 @@ impl WorktreePreviewRenderFixture {
             language,
             syntax_mode,
             prepared_document,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
@@ -965,7 +965,7 @@ impl MarkdownPreviewFixture {
             new_source,
             single_document,
             diff_preview,
-            theme: AppTheme::zed_ayu_dark(),
+            theme: AppTheme::gitcomet_dark(),
         }
     }
 
