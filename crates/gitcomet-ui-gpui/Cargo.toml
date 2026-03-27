@@ -31,9 +31,11 @@ syntax-shell = ["dep:tree-sitter-bash"]
 syntax-xml = ["dep:tree-sitter-xml"]
 
 [dependencies]
+fontdb = { workspace = true }
 gitcomet-core = { workspace = true }
 gitcomet-state = { workspace = true }
 gpui = { workspace = true }
+image = { workspace = true }
 lru = { workspace = true }
 pulldown-cmark = { workspace = true }
 resvg = { workspace = true }
@@ -82,6 +84,9 @@ tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-xml = { workspace = true }
 tree-sitter-yaml = { workspace = true }
+
+[build-dependencies]
+resvg = { workspace = true }
 
 [[bench]]
 name = "performance"

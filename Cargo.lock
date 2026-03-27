@@ -2309,10 +2309,12 @@ name = "gitcomet-ui-gpui"
 version = "0.1.7"
 dependencies = [
  "criterion",
+ "fontdb 0.23.0",
  "gitcomet-core",
  "gitcomet-state",
  "gitcomet-win32-window-utils",
  "gpui",
+ "image",
  "lru",
  "metal 0.33.0",
  "pulldown-cmark",
@@ -7561,9 +7563,9 @@ checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.13.1"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da36089a805484bcccfffe0739803392c8298778a2d2f09febf76fac5ad9025b"
+checksum = "9629274872b2bfaf8d66f5f15725007f635594914870f65218920345aa11aa8c"
 
 [[package]]
 name = "unicode-vo"
