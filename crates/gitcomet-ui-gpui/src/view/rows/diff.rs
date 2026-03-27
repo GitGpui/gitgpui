@@ -17,20 +17,6 @@ fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgb
     }
 }
 
-/// Applies query overlay to pending styled text if a query is active, returning
-/// the final styled text for rendering before it can be cached.
-fn pending_styled_with_query_overlay(
-    styled: CachedDiffStyledText,
-    query: &str,
-    theme: AppTheme,
-) -> CachedDiffStyledText {
-    if query.is_empty() {
-        styled
-    } else {
-        build_cached_diff_query_overlay_styled_text(theme, &styled, query)
-    }
-}
-
 /// Returns the word-highlight color for a file diff split column.
 /// Left highlights Remove/Modify in danger; Right highlights Add/Modify in success.
 fn file_diff_split_word_color(
@@ -137,7 +123,6 @@ impl MainPaneView {
                     let Some(line) = this.file_diff_inline_row(inline_ix) else {
                         return diff_placeholder_row(("diff_oob", visible_ix), theme);
                     };
-                    let mut pending_styled = None;
                     let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
                     if this
                         .diff_text_segments_cache_get(inline_ix, cache_epoch)
@@ -186,11 +171,8 @@ impl MainPaneView {
                             .into_parts();
                         if is_pending {
                             this.ensure_prepared_syntax_chunk_poll(cx);
-                            pending_styled =
-                                Some(pending_styled_with_query_overlay(styled, &query, theme));
-                        } else {
-                            this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                         }
+                        this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                     }
 
                     let cached_styled = this.diff_text_segments_cache_get_for_query(
@@ -198,9 +180,9 @@ impl MainPaneView {
                         query.as_ref(),
                         cache_epoch,
                     );
-                    let styled = pending_styled.as_ref().or(cached_styled.as_ref());
+                    let styled = cached_styled.as_ref();
                     debug_assert!(
-                        pending_styled.is_some() || styled.is_some(),
+                        styled.is_some(),
                         "diff text segment cache missing for inline row {inline_ix} after populate"
                     );
 
@@ -411,7 +393,6 @@ impl MainPaneView {
                         );
                     };
                     let key = this.file_diff_split_cache_key(row_ix, region);
-                    let mut pending_styled = None;
                     if let Some(key) = key
                         && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                     {
@@ -455,12 +436,8 @@ impl MainPaneView {
                             .into_parts();
                             if is_pending {
                                 this.ensure_prepared_syntax_chunk_poll(cx);
-                                pending_styled = Some(pending_styled_with_query_overlay(
-                                    styled, &query, theme,
-                                ));
-                            } else {
-                                this.diff_text_segments_cache_set(key, cache_epoch, styled);
                             }
+                            this.diff_text_segments_cache_set(key, cache_epoch, styled);
                         }
                     }
 
@@ -480,9 +457,9 @@ impl MainPaneView {
                     } else {
                         None
                     };
-                    let styled = pending_styled.as_ref().or(cached_styled.as_ref());
+                    let styled = cached_styled.as_ref();
                     debug_assert!(
-                        !row_has_content || key.is_none() || pending_styled.is_some() || styled.is_some(),
+                        !row_has_content || key.is_none() || styled.is_some(),
                         "diff text segment cache missing for split-{column:?} row {row_ix} after populate"
                     );
 

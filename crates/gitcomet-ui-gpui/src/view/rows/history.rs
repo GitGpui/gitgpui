@@ -46,6 +46,8 @@ impl MainPaneView {
         let highlight_palette = syntax_highlight_palette(theme);
 
         let bar_color = worktree_preview_bar_color(this, theme);
+        let defer_cache_write = this.worktree_preview_cache_write_blocked_until_rev
+            == Some(this.worktree_preview_content_rev);
 
         range
             .take_while(|ix| *ix < line_count)
@@ -77,6 +79,8 @@ impl MainPaneView {
                         .into_parts();
                     if is_pending {
                         this.ensure_prepared_syntax_chunk_poll(cx);
+                    }
+                    if defer_cache_write {
                         pending_styled = Some(styled);
                     } else {
                         this.worktree_preview_segments_cache_set(ix, styled);

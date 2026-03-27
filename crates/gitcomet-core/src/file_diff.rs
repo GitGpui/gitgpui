@@ -2452,6 +2452,30 @@ mod tests {
     }
 
     #[test]
+    fn ascii_prepared_replacement_line_defers_char_allocation_until_needed() {
+        let line = PreparedReplacementLine::new("plain-ascii");
+
+        assert_eq!(line.ascii_bytes(), Some("plain-ascii".as_bytes()));
+        assert!(line.chars.get().is_none());
+
+        let chars = line.chars();
+        assert_eq!(
+            chars,
+            ['p', 'l', 'a', 'i', 'n', '-', 'a', 's', 'c', 'i', 'i']
+        );
+        assert!(line.chars.get().is_some());
+    }
+
+    #[test]
+    fn prepare_replacement_text_cache_ids_dedups_duplicate_texts() {
+        let lines = prepare_replacement_lines(&["alpha", "beta", "alpha", "gamma", "beta"]);
+        let (ids, unique_count) = prepare_replacement_text_cache_ids(&lines);
+
+        assert_eq!(ids, vec![0, 1, 0, 2, 1]);
+        assert_eq!(unique_count, 3);
+    }
+
+    #[test]
     fn shared_boundary_counts_unicode_codepoints() {
         let old = PreparedReplacementLine::new("prefix-é-suffix");
         let new = PreparedReplacementLine::new("prefix-ê-suffix");
@@ -2756,6 +2780,16 @@ mod tests {
                 EditKind::Equal
             ]
         );
+    }
+
+    #[test]
+    fn patience_lis_handles_empty_and_descending_inputs_without_panicking() {
+        assert!(patience_lis(&[]).is_empty());
+
+        let descending = [(0usize, 3usize), (1, 2), (2, 1)];
+        let lis = patience_lis(&descending);
+        assert_eq!(lis.len(), 1);
+        assert!(descending.contains(&lis[0]));
     }
 
     #[test]

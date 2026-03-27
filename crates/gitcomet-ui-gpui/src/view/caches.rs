@@ -474,6 +474,8 @@ impl GitCometView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn commit_id(id: &str) -> CommitId {
         CommitId(id.into())
@@ -532,6 +534,66 @@ mod tests {
         assert_eq!(
             head_branches_text.as_ref().map(SharedString::as_ref),
             Some("HEAD → main, feature, origin/main")
+        );
+    }
+
+    #[test]
+    fn history_branch_text_dedups_and_orders_duplicate_names() {
+        let commit = commit_id("a");
+        let branches = vec![
+            Branch {
+                name: "topic".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "apple".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "topic".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+        ];
+        let remote_branches = vec![
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "zzz".to_string(),
+                target: commit.clone(),
+            },
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit.clone(),
+            },
+            RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit.clone(),
+            },
+        ];
+
+        let (branch_text_by_target, head_branches_text) = build_history_branch_text_by_target(
+            &branches,
+            &remote_branches,
+            Some("topic"),
+            Some(commit.as_ref()),
+        );
+
+        assert_eq!(
+            branch_text_by_target
+                .get(commit.as_ref())
+                .map(SharedString::as_ref),
+            Some("apple, origin/main, origin/zzz")
+        );
+        assert_eq!(
+            head_branches_text.as_ref().map(SharedString::as_ref),
+            Some("HEAD → topic, apple, origin/main, origin/zzz")
         );
     }
 
@@ -601,5 +663,143 @@ mod tests {
         assert_eq!(first, "01234567");
         assert_eq!(first, second);
         assert!(short_sha.formatted.borrow().is_some());
+    }
+
+    #[test]
+    fn history_short_sha_vm_preserves_short_ids_without_padding() {
+        let short_sha = HistoryShortShaVm::new("abc");
+
+        assert_eq!(short_sha.as_str(), "abc");
+        assert_eq!(short_sha.resolve().as_ref(), "abc");
+    }
+
+    #[test]
+    fn detached_head_history_branch_text_adds_head_label_once() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+
+        let (branch_text_by_target, head_branches_text) = build_history_branch_text_by_target(
+            &branches,
+            &remote_branches,
+            Some("HEAD"),
+            Some(commit.as_ref()),
+        );
+
+        assert_eq!(
+            branch_text_by_target
+                .get(commit.as_ref())
+                .map(SharedString::as_ref),
+            Some("main, origin/main")
+        );
+        assert_eq!(
+            head_branches_text.as_ref().map(SharedString::as_ref),
+            Some("HEAD, main, origin/main")
+        );
+    }
+
+    #[test]
+    fn branch_sidebar_cache_lookup_by_source_reuses_rows_and_updates_fingerprint() {
+        let repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let (source_fingerprint, source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
+        let rows: Arc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let mut cache = None;
+
+        branch_sidebar_cache_store(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 1 },
+            source_fingerprint,
+            source_parts.clone(),
+            Arc::clone(&rows),
+        );
+
+        let hit = branch_sidebar_cache_lookup_by_source(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 2 },
+            source_fingerprint,
+            &source_parts,
+        )
+        .expect("matching source fingerprints should reuse cached rows");
+
+        assert!(Arc::ptr_eq(&hit, &rows));
+        let cached = cache
+            .as_ref()
+            .expect("branch sidebar cache should stay populated");
+        assert_eq!(
+            cached.fingerprint,
+            BranchSidebarFingerprint { cache_rev: 2 }
+        );
+        assert_eq!(cached.source_fingerprint, source_fingerprint);
+        assert_eq!(cached.source_parts, source_parts);
+    }
+
+    #[test]
+    fn branch_sidebar_cache_lookup_by_source_rejects_repo_and_source_mismatches() {
+        let repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let (source_fingerprint, source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
+        let rows: Arc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let mut cache = None;
+
+        branch_sidebar_cache_store(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 1 },
+            source_fingerprint,
+            source_parts,
+            rows,
+        );
+
+        let other_repo = RepoState::new_opening(
+            RepoId(8),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/other"),
+            },
+        );
+        let (other_source_fingerprint, other_source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&other_repo, None);
+
+        assert!(
+            branch_sidebar_cache_lookup_by_source(
+                &mut cache,
+                other_repo.id,
+                BranchSidebarFingerprint { cache_rev: 2 },
+                source_fingerprint,
+                &other_source_parts,
+            )
+            .is_none()
+        );
+        assert!(
+            branch_sidebar_cache_lookup_by_source(
+                &mut cache,
+                repo.id,
+                BranchSidebarFingerprint { cache_rev: 2 },
+                other_source_fingerprint,
+                &other_source_parts,
+            )
+            .is_none()
+        );
     }
 }

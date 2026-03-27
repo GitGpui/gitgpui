@@ -861,6 +861,12 @@ mod tests {
     use gitcomet_core::domain::LogScope;
     use gitcomet_core::domain::RepoSpec;
 
+    fn clear_session_repos_snapshot_cache() {
+        SESSION_REPOS_SNAPSHOT_CACHE.with(|cache| {
+            cache.borrow_mut().take();
+        });
+    }
+
     #[test]
     fn session_file_round_trips() {
         let dir = env::temp_dir().join(format!("gitcomet-session-test-{}", std::process::id()));
@@ -1069,6 +1075,125 @@ mod tests {
         let second = snapshot_repos_from_state(&state);
 
         assert!(Arc::ptr_eq(&first.open_repos, &second.open_repos));
+        assert_eq!(second.active_repo_index, Some(0));
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_preserves_first_seen_order_for_repeated_workdirs() {
+        clear_session_repos_snapshot_cache();
+
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+        let state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: repo_b.clone(),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(3),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+            ],
+            active_repo: Some(RepoId(3)),
+            ..Default::default()
+        };
+
+        let snapshot = snapshot_repos_from_state(&state);
+        assert_eq!(
+            snapshot.open_repos.as_ref(),
+            &[
+                path_storage_key_shared(&repo_a),
+                path_storage_key_shared(&repo_b)
+            ]
+        );
+        assert_eq!(snapshot.active_repo_index, Some(0));
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_cache_invalidates_when_repo_order_changes() {
+        clear_session_repos_snapshot_cache();
+
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+        let mut state = AppState {
+            repos: vec![
+                RepoState::new_opening(
+                    RepoId(1),
+                    RepoSpec {
+                        workdir: repo_a.clone(),
+                    },
+                ),
+                RepoState::new_opening(
+                    RepoId(2),
+                    RepoSpec {
+                        workdir: repo_b.clone(),
+                    },
+                ),
+            ],
+            active_repo: Some(RepoId(1)),
+            ..Default::default()
+        };
+
+        let first = snapshot_repos_from_state(&state);
+        state.repos.swap(0, 1);
+        let second = snapshot_repos_from_state(&state);
+
+        assert!(
+            !Arc::ptr_eq(&first.open_repos, &second.open_repos),
+            "reordering repos should invalidate the cached open-repo slice"
+        );
+        assert_eq!(
+            second.open_repos.as_ref(),
+            &[
+                path_storage_key_shared(&repo_b),
+                path_storage_key_shared(&repo_a)
+            ]
+        );
+        assert_eq!(second.active_repo_index, Some(1));
+    }
+
+    #[test]
+    fn snapshot_repos_from_state_cache_invalidates_when_repo_spec_changes() {
+        clear_session_repos_snapshot_cache();
+
+        let repo_a = PathBuf::from("/tmp/repo-a");
+        let repo_b = PathBuf::from("/tmp/repo-b");
+        let mut state = AppState {
+            repos: vec![RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: repo_a.clone(),
+                },
+            )],
+            active_repo: Some(RepoId(1)),
+            ..Default::default()
+        };
+
+        let first = snapshot_repos_from_state(&state);
+        state.repos[0].set_spec(RepoSpec {
+            workdir: repo_b.clone(),
+        });
+        let second = snapshot_repos_from_state(&state);
+
+        assert!(
+            !Arc::ptr_eq(&first.open_repos, &second.open_repos),
+            "changing the repo spec should invalidate the cached open-repo slice"
+        );
+        assert_eq!(
+            second.open_repos.as_ref(),
+            &[path_storage_key_shared(&repo_b)]
+        );
         assert_eq!(second.active_repo_index, Some(0));
     }
 

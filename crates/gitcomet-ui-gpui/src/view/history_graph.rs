@@ -688,4 +688,69 @@ mod tests {
         assert_eq!(graph[0].node_col, 1);
         assert_eq!(graph[1].node_col, 0);
     }
+
+    #[test]
+    fn duplicate_branch_heads_do_not_create_extra_lanes() {
+        let theme = AppTheme::zed_ayu_dark();
+        let commits = vec![
+            commit("feature", vec!["base"]),
+            commit("main", vec!["base"]),
+            commit("base", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+
+        let unique = compute_graph(&commits, theme, ["feature", "main"], None);
+        let duplicate = compute_graph(&commits, theme, ["feature", "feature", "main"], None);
+
+        assert_eq!(duplicate.len(), unique.len());
+        for (duplicate_row, unique_row) in duplicate.iter().zip(unique.iter()) {
+            let duplicate_now = duplicate_row
+                .lanes_now
+                .iter()
+                .map(|lane| (lane.color_ix, lane.incoming, lane.from_col))
+                .collect::<Vec<_>>();
+            let unique_now = unique_row
+                .lanes_now
+                .iter()
+                .map(|lane| (lane.color_ix, lane.incoming, lane.from_col))
+                .collect::<Vec<_>>();
+            let duplicate_next = duplicate_row
+                .lanes_next
+                .iter()
+                .map(|lane| (lane.color_ix, lane.incoming, lane.from_col))
+                .collect::<Vec<_>>();
+            let unique_next = unique_row
+                .lanes_next
+                .iter()
+                .map(|lane| (lane.color_ix, lane.incoming, lane.from_col))
+                .collect::<Vec<_>>();
+            let duplicate_joins = duplicate_row
+                .joins_in
+                .iter()
+                .map(|edge| (edge.from_col, edge.to_col, edge.color_ix))
+                .collect::<Vec<_>>();
+            let unique_joins = unique_row
+                .joins_in
+                .iter()
+                .map(|edge| (edge.from_col, edge.to_col, edge.color_ix))
+                .collect::<Vec<_>>();
+            let duplicate_edges = duplicate_row
+                .edges_out
+                .iter()
+                .map(|edge| (edge.from_col, edge.to_col, edge.color_ix))
+                .collect::<Vec<_>>();
+            let unique_edges = unique_row
+                .edges_out
+                .iter()
+                .map(|edge| (edge.from_col, edge.to_col, edge.color_ix))
+                .collect::<Vec<_>>();
+
+            assert_eq!(duplicate_now, unique_now);
+            assert_eq!(duplicate_next, unique_next);
+            assert_eq!(duplicate_joins, unique_joins);
+            assert_eq!(duplicate_edges, unique_edges);
+            assert_eq!(duplicate_row.node_col, unique_row.node_col);
+            assert_eq!(duplicate_row.is_merge, unique_row.is_merge);
+        }
+    }
 }

@@ -708,3 +708,69 @@ impl Render for DetailsPaneView {
             .child(StatusSectionResizeTracker { view: cx.entity() })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn repo_state(id: RepoId, path: &str) -> RepoState {
+        RepoState::new_opening(
+            id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        )
+    }
+
+    #[test]
+    fn notify_fingerprint_ignores_inactive_repo_revisions() {
+        let active = repo_state(RepoId(1), "/tmp/active");
+        let inactive = repo_state(RepoId(2), "/tmp/inactive");
+        let mut state = AppState {
+            repos: vec![active, inactive],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[1].status_rev = 1;
+        state.repos[1].ops_rev = 1;
+        state.repos[1].history_state.selected_commit_rev = 1;
+        state.repos[1].history_state.commit_details_rev = 1;
+        state.repos[1].merge_message_rev = 1;
+
+        assert_eq!(DetailsPaneView::notify_fingerprint(&state), initial);
+    }
+
+    #[test]
+    fn notify_fingerprint_tracks_active_repo_relevant_revisions() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[0].status_rev = 1;
+        let after_status = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_status, initial);
+
+        state.repos[0].ops_rev = 1;
+        let after_ops = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_ops, after_status);
+
+        state.repos[0].history_state.selected_commit_rev = 1;
+        let after_selected = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_selected, after_ops);
+
+        state.repos[0].history_state.commit_details_rev = 1;
+        let after_details = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_details, after_selected);
+
+        state.repos[0].merge_message_rev = 1;
+        assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
+    }
+}

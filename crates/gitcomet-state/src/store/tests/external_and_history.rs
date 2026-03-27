@@ -843,6 +843,83 @@ fn log_loaded_appends_when_loading_more() {
     assert_eq!(page.next_cursor, None);
 }
 
+#[test]
+fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("c1".into()),
+            parent_ids: Vec::new(),
+            summary: "s1".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+        }),
+    })));
+    repo_state.history_state.log_loading_more = true;
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: Some(LogCursor {
+                last_seen: CommitId("c1".into()),
+                resume_from: None,
+            }),
+            result: Ok(LogPage {
+                commits: vec![Commit {
+                    id: CommitId("c2".into()),
+                    parent_ids: Vec::new(),
+                    summary: "s2".into(),
+                    author: "a".into(),
+                    time: SystemTime::UNIX_EPOCH,
+                }],
+                next_cursor: Some(LogCursor {
+                    last_seen: CommitId("c2".into()),
+                    resume_from: None,
+                }),
+            }),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    let Loadable::Ready(repo_log) = &repo_state.log else {
+        panic!("expected repo log ready");
+    };
+    let Loadable::Ready(history_log) = &repo_state.history_state.log else {
+        panic!("expected history log ready");
+    };
+
+    assert!(Arc::ptr_eq(repo_log, history_log));
+    assert_eq!(repo_log.commits.len(), 2);
+    assert_eq!(repo_log.commits[1].id.as_ref(), "c2");
+    assert_eq!(
+        repo_log
+            .next_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.last_seen.as_ref().strip_prefix('c')),
+        Some("2")
+    );
+}
+
 // --- Revision counter regression tests ---
 
 #[test]

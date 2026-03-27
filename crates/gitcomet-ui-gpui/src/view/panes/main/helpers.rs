@@ -2209,6 +2209,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
+    pub(in crate::view) worktree_preview_cache_write_blocked_until_rev: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache:
         HashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,

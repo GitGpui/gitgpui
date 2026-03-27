@@ -392,6 +392,15 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn repo_state(id: RepoId, path: &str) -> RepoState {
+        RepoState::new_opening(
+            id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        )
+    }
+
     #[test]
     fn pending_sidebar_lazy_loads_defaults_secondary_sections_to_closed() {
         let repo = RepoState::new_opening(
@@ -496,5 +505,50 @@ mod tests {
             "closing a default-closed section should drop the override"
         );
         assert!(collapsed_items.is_empty());
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_ignores_inactive_repo_changes() {
+        let active = repo_state(RepoId(1), "/tmp/active");
+        let inactive = repo_state(RepoId(2), "/tmp/inactive");
+        let mut state = AppState {
+            repos: vec![active, inactive],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[1].head_branch_rev = 1;
+        state.repos[1].branches_rev = 1;
+        state.repos[1].remote_branches_rev = 1;
+        state.repos[1].worktrees_rev = 1;
+        state.repos[1].submodules_rev = 1;
+        state.repos[1].stashes_rev = 1;
+        state.repos[1].branch_sidebar_rev = 1;
+
+        assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_active_repo_branch_sidebar_changes() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[0].head_branch_rev = 1;
+        let after_head = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(after_head, initial);
+
+        state.repos[0].branches_rev = 1;
+        let after_branches = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(after_branches, after_head);
+
+        state.repos[0].branch_sidebar_rev = 42;
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), after_branches);
     }
 }

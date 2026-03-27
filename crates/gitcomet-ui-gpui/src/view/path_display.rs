@@ -269,8 +269,32 @@ mod tests {
         PathDisplayBenchSnapshot, PathDisplayCache, bench_reset, bench_snapshot,
         cached_path_display, format_windows_path_for_display,
     };
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, Barrier};
+
+    #[cfg(not(windows))]
+    fn cache_contains_recent(cache: &PathDisplayCache, path: &Path) -> bool {
+        cache
+            .recent
+            .contains_key(path.to_str().expect("test paths should be utf-8"))
+    }
+
+    #[cfg(windows)]
+    fn cache_contains_recent(cache: &PathDisplayCache, path: &Path) -> bool {
+        cache.recent.contains_key(path)
+    }
+
+    #[cfg(not(windows))]
+    fn cache_contains_previous(cache: &PathDisplayCache, path: &Path) -> bool {
+        cache
+            .previous
+            .contains_key(path.to_str().expect("test paths should be utf-8"))
+    }
+
+    #[cfg(windows)]
+    fn cache_contains_previous(cache: &PathDisplayCache, path: &Path) -> bool {
+        cache.previous.contains_key(path)
+    }
 
     #[cfg(windows)]
     #[test]
@@ -333,6 +357,85 @@ mod tests {
 
         assert!(Arc::ptr_eq(&key_arc, &value_arc));
         assert!(Arc::ptr_eq(&value_arc, &display_arc));
+    }
+
+    #[test]
+    fn previous_generation_hit_promotes_into_recent() {
+        let mut cache = PathDisplayCache::default();
+        let promoted = PathBuf::from("src/promoted.rs");
+
+        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
+            let path = if ix == 0 {
+                promoted.clone()
+            } else {
+                PathBuf::from(format!("src/previous_{ix}.rs"))
+            };
+            let _ = cached_path_display(&mut cache, &path);
+        }
+        let _ = cached_path_display(&mut cache, Path::new("src/rotate.rs"));
+
+        assert!(
+            !cache_contains_recent(&cache, &promoted),
+            "promoted path should start in the previous generation"
+        );
+        assert!(cache_contains_previous(&cache, &promoted));
+
+        let display = cached_path_display(&mut cache, &promoted);
+        assert_eq!(display.as_ref(), promoted.to_str().unwrap_or_default());
+        assert!(
+            cache_contains_recent(&cache, &promoted),
+            "previous-generation hits should be promoted into recent"
+        );
+        assert!(
+            !cache_contains_previous(&cache, &promoted),
+            "promoted entries should be removed from the previous generation"
+        );
+    }
+
+    #[test]
+    fn overflow_miss_preserves_full_two_generation_hot_set() {
+        bench_reset();
+
+        let mut cache = PathDisplayCache::default();
+        let previous_hot = PathBuf::from("src/previous_hot.rs");
+        let recent_hot = PathBuf::from("src/recent_hot.rs");
+
+        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
+            let path = if ix == 0 {
+                previous_hot.clone()
+            } else {
+                PathBuf::from(format!("src/previous_{ix}.rs"))
+            };
+            let _ = cached_path_display(&mut cache, &path);
+        }
+        for ix in 0..PathDisplayCache::RECENT_MAX_ENTRIES {
+            let path = if ix == 0 {
+                recent_hot.clone()
+            } else {
+                PathBuf::from(format!("src/recent_{ix}.rs"))
+            };
+            let _ = cached_path_display(&mut cache, &path);
+        }
+
+        let before = bench_snapshot();
+        assert_eq!(cache.len(), PathDisplayCache::MAX_ENTRIES);
+        assert!(cache_contains_previous(&cache, &previous_hot));
+        assert!(cache_contains_recent(&cache, &recent_hot));
+
+        let overflow = PathBuf::from("src/overflow.rs");
+        let _ = cached_path_display(&mut cache, &overflow);
+
+        let after = bench_snapshot();
+        assert_eq!(cache.len(), PathDisplayCache::MAX_ENTRIES);
+        assert_eq!(
+            after.cache_clears, before.cache_clears,
+            "overflow misses should not rotate a full two-generation cache"
+        );
+        assert_eq!(after.cache_misses, before.cache_misses + 1);
+        assert!(cache_contains_previous(&cache, &previous_hot));
+        assert!(cache_contains_recent(&cache, &recent_hot));
+        assert!(!cache_contains_recent(&cache, &overflow));
+        assert!(!cache_contains_previous(&cache, &overflow));
     }
 
     #[test]

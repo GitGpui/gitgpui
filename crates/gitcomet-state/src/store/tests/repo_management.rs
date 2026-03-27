@@ -1,5 +1,30 @@
 use super::*;
 
+fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
+    repo.branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remotes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+    repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+    repo.rebase_in_progress = Loadable::Ready(false);
+    repo.merge_commit_message = Loadable::Ready(None);
+}
+
+fn has_secondary_refresh_effects(effects: &[Effect], repo_id: RepoId) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadBranches { repo_id: candidate }
+                | Effect::LoadTags { repo_id: candidate }
+                | Effect::LoadRemoteTags { repo_id: candidate }
+                | Effect::LoadRemotes { repo_id: candidate }
+                | Effect::LoadRemoteBranches { repo_id: candidate }
+                if *candidate == repo_id
+        )
+    })
+}
+
 #[test]
 fn open_repo_sets_opening_and_emits_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -1071,6 +1096,149 @@ fn set_active_repo_selected_conflict_target_reuses_existing_conflict_state() {
             mode: crate::model::ConflictFileLoadMode::CurrentOnly,
         } if *repo_id == repo1 && path == &conflict_path
     )));
+}
+
+#[test]
+fn set_active_repo_hot_switch_skips_secondary_refresh_when_metadata_is_ready() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        !has_secondary_refresh_effects(&effects, repo1),
+        "hot repo switches with ready metadata should stay on the primary refresh path"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadStatus { repo_id } if *repo_id == repo1))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == repo1))
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadRebaseState { repo_id } if *repo_id == repo1)
+        )
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadMergeCommitMessage { repo_id } if *repo_id == repo1
+    )));
+}
+
+#[test]
+fn set_active_repo_uses_full_refresh_when_hot_switch_metadata_is_incomplete() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.tags = Loadable::NotLoaded;
+    repo1_state.last_active_at = Some(SystemTime::now());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_secondary_refresh_effects(&effects, repo1),
+        "missing secondary metadata should force the full refresh path"
+    );
+}
+
+#[test]
+fn set_active_repo_uses_full_refresh_when_hot_switch_window_expires() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1 = RepoId(1);
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    mark_repo_switch_secondary_metadata_ready(repo1_state);
+    repo1_state.last_active_at = Some(SystemTime::now() - Duration::from_secs(6));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(
+        has_secondary_refresh_effects(&effects, repo1),
+        "stale repo switches should fall back to the full refresh path"
+    );
 }
 
 #[test]

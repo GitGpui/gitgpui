@@ -912,6 +912,7 @@ impl MainPaneView {
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_style_cache_epoch: 0,
+            worktree_preview_cache_write_blocked_until_rev: None,
             worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
             conflict_resolver_input,
@@ -1452,6 +1453,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn clear_worktree_preview_segments_cache(&mut self) {
         self.worktree_preview_segments_cache.clear();
+        self.worktree_preview_cache_write_blocked_until_rev = None;
     }
 
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {

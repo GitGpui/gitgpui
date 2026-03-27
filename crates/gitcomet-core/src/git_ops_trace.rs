@@ -321,6 +321,47 @@ mod tests {
     }
 
     #[test]
+    fn nested_capture_restores_previous_enabled_state() {
+        clear();
+        assert!(!is_enabled());
+
+        let outer = capture();
+        assert!(is_enabled());
+        {
+            let _scope = scope(GitOpTraceKind::Status);
+        }
+        assert_eq!(snapshot().status.calls, 1);
+
+        {
+            let _inner = capture();
+            assert!(is_enabled());
+            {
+                let _scope = scope(GitOpTraceKind::Diff);
+            }
+            assert_eq!(snapshot().diff.calls, 1);
+        }
+
+        assert!(
+            is_enabled(),
+            "dropping the inner capture should restore the outer enabled state"
+        );
+        assert_eq!(
+            snapshot(),
+            GitOpTraceSnapshot::default(),
+            "inner capture drop should clear its stats before restoring the outer capture"
+        );
+
+        {
+            let _scope = scope(GitOpTraceKind::Blame);
+        }
+        assert_eq!(snapshot().blame.calls, 1);
+
+        drop(outer);
+        assert!(!is_enabled());
+        assert_eq!(snapshot(), GitOpTraceSnapshot::default());
+    }
+
+    #[test]
     fn snapshot_stats_route_by_kind() {
         let _capture = capture();
         {

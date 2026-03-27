@@ -595,6 +595,7 @@ impl MainPaneView {
             || self.worktree_preview_text.as_ref() != source_text.as_ref();
         let cache_binding_changed =
             self.worktree_preview_segments_cache_path.as_ref() != Some(&path);
+        let same_path_source_refresh = source_changed && !cache_binding_changed;
 
         self.worktree_preview_path = Some(path.clone());
         self.worktree_preview = Loadable::Ready(line_count);
@@ -602,6 +603,7 @@ impl MainPaneView {
         self.worktree_preview_line_starts = line_starts;
         self.worktree_preview_syntax_language = rows::diff_syntax_language_for_path(&path);
         self.worktree_preview_segments_cache_path = Some(path);
+        self.worktree_preview_cache_write_blocked_until_rev = None;
         if source_changed || cache_binding_changed {
             self.worktree_preview_segments_cache.clear();
         }
@@ -614,6 +616,20 @@ impl MainPaneView {
             self.worktree_markdown_preview_source_rev = 0;
             self.worktree_markdown_preview = Loadable::NotLoaded;
             self.worktree_markdown_preview_inflight = None;
+        }
+
+        if same_path_source_refresh {
+            let blocked_rev = self.worktree_preview_content_rev;
+            self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
+            cx.spawn(async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                gpui::Timer::after(std::time::Duration::from_millis(1)).await;
+                let _ = view.update(cx, |this, _cx| {
+                    if this.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev) {
+                        this.worktree_preview_cache_write_blocked_until_rev = None;
+                    }
+                });
+            })
+            .detach();
         }
 
         self.refresh_worktree_preview_syntax_document(cx);

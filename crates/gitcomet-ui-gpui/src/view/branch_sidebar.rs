@@ -950,3 +950,207 @@ fn push_branch_sidebar_branch_row(
         is_upstream,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{
+        Branch, CommitId, FileStatus, FileStatusKind, Remote, RemoteBranch, RepoSpec, RepoStatus,
+        StashEntry, Submodule, SubmoduleStatus, Upstream, Worktree,
+    };
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn commit_id(id: &str) -> CommitId {
+        CommitId(id.into())
+    }
+
+    fn populated_repo() -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "main".to_string(),
+            target: commit_id("aaaaaaaa"),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "main".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.branches_rev = 1;
+        repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: Some("https://example.com/origin.git".to_string()),
+        }]));
+        repo.remotes_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit_id("aaaaaaaa"),
+        }]));
+        repo.remote_branches_rev = 1;
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: PathBuf::from("/tmp/repo"),
+                head: Some(commit_id("aaaaaaaa")),
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: PathBuf::from("/tmp/repo-linked"),
+                head: Some(commit_id("bbbbbbbb")),
+                branch: Some("feature/topic".to_string()),
+                detached: false,
+            },
+        ]));
+        repo.worktrees_rev = 1;
+        repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
+            path: PathBuf::from("vendor/lib"),
+            head: commit_id("cccccccc"),
+            status: SubmoduleStatus::UpToDate,
+        }]));
+        repo.submodules_rev = 1;
+        repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
+            index: 0,
+            id: commit_id("dddddddd"),
+            message: "stash message".into(),
+            created_at: None,
+        }]));
+        repo.stashes_rev = 1;
+        repo
+    }
+
+    #[test]
+    fn source_fingerprint_ignores_status_only_changes() {
+        let mut repo = populated_repo();
+        let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);
+
+        repo.status = Loadable::Ready(Arc::new(RepoStatus {
+            staged: vec![],
+            unstaged: vec![FileStatus {
+                path: PathBuf::from("src/lib.rs"),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            }],
+        }));
+
+        let (after_fingerprint, after_parts) =
+            branch_sidebar_source_fingerprint(&repo, Some(&before_parts));
+
+        assert_eq!(after_fingerprint, before_fingerprint);
+        assert_eq!(after_parts, before_parts);
+    }
+
+    #[test]
+    fn source_fingerprint_reuses_unchanged_partitions_when_worktrees_change() {
+        let mut repo = populated_repo();
+        let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);
+
+        repo.worktrees = Loadable::Ready(Arc::new(vec![
+            Worktree {
+                path: PathBuf::from("/tmp/repo"),
+                head: Some(commit_id("aaaaaaaa")),
+                branch: Some("main".to_string()),
+                detached: false,
+            },
+            Worktree {
+                path: PathBuf::from("/tmp/repo-linked"),
+                head: Some(commit_id("eeeeeeee")),
+                branch: None,
+                detached: true,
+            },
+        ]));
+        repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+
+        let (after_fingerprint, after_parts) =
+            branch_sidebar_source_fingerprint(&repo, Some(&before_parts));
+
+        assert_ne!(after_fingerprint, before_fingerprint);
+        assert_eq!(after_parts.local_hash, before_parts.local_hash);
+        assert_eq!(after_parts.remote_hash, before_parts.remote_hash);
+        assert_ne!(after_parts.worktree_hash, before_parts.worktree_hash);
+        assert_eq!(after_parts.submodule_hash, before_parts.submodule_hash);
+        assert_eq!(after_parts.stash_hash, before_parts.stash_hash);
+    }
+
+    #[test]
+    fn remote_rows_dedup_upstream_branches_that_also_exist_as_remote_refs() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("feature".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "feature".to_string(),
+            target: commit_id("aaaaaaaa"),
+            upstream: Some(Upstream {
+                remote: "origin".to_string(),
+                branch: "feature".to_string(),
+            }),
+            divergence: None,
+        }]));
+        repo.branches_rev = 1;
+        repo.remotes = Loadable::Ready(Arc::new(vec![Remote {
+            name: "origin".to_string(),
+            url: Some("https://example.com/origin.git".to_string()),
+        }]));
+        repo.remotes_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "feature".to_string(),
+            target: commit_id("aaaaaaaa"),
+        }]));
+        repo.remote_branches_rev = 1;
+
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new());
+        let matches = rows
+            .iter()
+            .filter(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::Branch {
+                        section: BranchSection::Remote,
+                        name,
+                        ..
+                    } if name.as_ref() == "origin/feature"
+                )
+            })
+            .count();
+
+        assert_eq!(matches, 1, "remote branch rows should be deduplicated");
+    }
+
+    #[test]
+    fn worktree_label_handles_branchless_and_detached_states() {
+        assert_eq!(
+            branch_sidebar_worktree_label(None, false, "/tmp/repo").as_ref(),
+            "/tmp/repo"
+        );
+        assert_eq!(
+            branch_sidebar_worktree_label(None, true, "/tmp/repo").as_ref(),
+            "(detached)  /tmp/repo"
+        );
+    }
+
+    #[test]
+    fn branch_tooltip_only_appends_upstream_note_when_requested() {
+        assert_eq!(
+            branch_sidebar_branch_tooltip("origin/main", false).as_ref(),
+            "Branch: origin/main"
+        );
+        assert_eq!(
+            branch_sidebar_branch_tooltip("origin/main", true).as_ref(),
+            "Branch: origin/main (upstream for current branch)"
+        );
+    }
+}

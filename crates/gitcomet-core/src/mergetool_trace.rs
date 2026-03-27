@@ -461,6 +461,7 @@ fn current_rss_kib() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::sync::{Arc, Barrier};
 
     #[test]
@@ -529,5 +530,117 @@ mod tests {
             snapshot.events[0].stage,
             MergetoolTraceStage::LoadCurrentReuse
         );
+    }
+
+    #[test]
+    fn record_with_skips_builder_when_capture_is_disabled() {
+        let invoked = Cell::new(false);
+
+        record_with(|| {
+            invoked.set(true);
+            MergetoolTraceEvent::new(
+                MergetoolTraceStage::GenerateResolvedText,
+                None,
+                Duration::from_millis(1),
+            )
+        });
+
+        assert!(
+            !invoked.get(),
+            "record_with should not construct events when tracing is disabled"
+        );
+    }
+
+    #[test]
+    fn nested_capture_restores_previous_sink() {
+        clear();
+        assert!(!is_enabled());
+
+        let outer = capture();
+        record(MergetoolTraceEvent::new(
+            MergetoolTraceStage::LoadConflictSession,
+            None,
+            Duration::from_millis(1),
+        ));
+        assert_eq!(snapshot().events.len(), 1);
+
+        {
+            let _inner = capture();
+            record(MergetoolTraceEvent::new(
+                MergetoolTraceStage::GenerateResolvedText,
+                None,
+                Duration::from_millis(2),
+            ));
+            let inner_snapshot = snapshot();
+            assert_eq!(inner_snapshot.events.len(), 1);
+            assert_eq!(
+                inner_snapshot.events[0].stage,
+                MergetoolTraceStage::GenerateResolvedText
+            );
+        }
+
+        assert!(is_enabled());
+        let restored = snapshot();
+        assert_eq!(restored.events.len(), 1);
+        assert_eq!(
+            restored.events[0].stage,
+            MergetoolTraceStage::LoadConflictSession
+        );
+
+        record(MergetoolTraceEvent::new(
+            MergetoolTraceStage::LoadCurrentRead,
+            None,
+            Duration::from_millis(3),
+        ));
+        let restored = snapshot();
+        assert_eq!(restored.events.len(), 2);
+        assert_eq!(
+            restored.events[1].stage,
+            MergetoolTraceStage::LoadCurrentRead
+        );
+
+        drop(outer);
+        assert!(!is_enabled());
+        assert!(snapshot().events.is_empty());
+    }
+
+    #[test]
+    fn attach_capture_restores_previous_sink_after_drop() {
+        let outer = capture();
+        let outer_context = current_capture_context().expect("outer capture context");
+
+        let inner = capture();
+        record(MergetoolTraceEvent::new(
+            MergetoolTraceStage::GenerateResolvedText,
+            None,
+            Duration::from_millis(1),
+        ));
+
+        {
+            let _attached = attach_capture(&outer_context);
+            record(MergetoolTraceEvent::new(
+                MergetoolTraceStage::LoadCurrentReuse,
+                None,
+                Duration::from_millis(1),
+            ));
+        }
+
+        let inner_snapshot = snapshot();
+        assert_eq!(inner_snapshot.events.len(), 1);
+        assert_eq!(
+            inner_snapshot.events[0].stage,
+            MergetoolTraceStage::GenerateResolvedText
+        );
+
+        drop(inner);
+
+        let outer_snapshot = snapshot();
+        assert_eq!(outer_snapshot.events.len(), 1);
+        assert_eq!(
+            outer_snapshot.events[0].stage,
+            MergetoolTraceStage::LoadCurrentReuse
+        );
+
+        drop(outer);
     }
 }

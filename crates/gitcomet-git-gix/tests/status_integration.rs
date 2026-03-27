@@ -790,6 +790,107 @@ fn status_separates_staged_and_unstaged() {
 }
 
 #[test]
+fn repeated_status_on_same_repo_instance_reuses_staged_state_and_invalidates_on_index_change() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    write(repo, "b.txt", "base\n");
+    run_git(repo, &["add", "a.txt", "b.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened.status().unwrap();
+    assert_eq!(first.staged.len(), 1);
+    assert_eq!(first.staged[0].path, PathBuf::from("a.txt"));
+    assert!(first.unstaged.is_empty());
+
+    write(repo, "b.txt", "base\nworktree\n");
+    let second = opened.status().unwrap();
+    assert_eq!(second.staged.len(), 1);
+    assert_eq!(second.staged[0].path, PathBuf::from("a.txt"));
+    assert_eq!(second.unstaged.len(), 1);
+    assert_eq!(second.unstaged[0].path, PathBuf::from("b.txt"));
+    assert_eq!(second.unstaged[0].kind, FileStatusKind::Modified);
+
+    run_git(repo, &["add", "b.txt"]);
+    let third = opened.status().unwrap();
+    assert_eq!(third.staged.len(), 2);
+    assert!(
+        third
+            .staged
+            .iter()
+            .any(|entry| entry.path == Path::new("a.txt"))
+    );
+    assert!(
+        third
+            .staged
+            .iter()
+            .any(|entry| entry.path == Path::new("b.txt"))
+    );
+    assert!(third.unstaged.is_empty());
+}
+
+#[test]
+fn repeated_status_on_same_repo_instance_invalidates_when_head_moves_without_index_change() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    write(repo, "a.txt", "one\ntwo\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let clean = opened.status().unwrap();
+    assert!(clean.staged.is_empty());
+    assert!(clean.unstaged.is_empty());
+
+    run_git(repo, &["reset", "--soft", "HEAD~1"]);
+
+    let after_reset = opened.status().unwrap();
+    assert_eq!(after_reset.staged.len(), 1);
+    assert_eq!(after_reset.staged[0].path, Path::new("a.txt"));
+    assert_eq!(after_reset.staged[0].kind, FileStatusKind::Modified);
+    assert!(after_reset.unstaged.is_empty());
+}
+
+#[test]
 fn status_lists_untracked_files_in_directories() {
     if !require_git_shell_for_status_integration_tests() {
         return;

@@ -302,7 +302,9 @@ fn branch_upstream_and_divergence(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_upstream_short;
+    use super::{cached_commit_id, parse_upstream_short};
+    use rustc_hash::FxHashMap as HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn parse_upstream_short_requires_remote_and_branch() {
@@ -312,5 +314,28 @@ mod tests {
             parse_upstream_short("origin/main").map(|upstream| (upstream.remote, upstream.branch)),
             Some(("origin".to_string(), "main".to_string()))
         );
+    }
+
+    #[test]
+    fn parse_upstream_short_preserves_nested_branch_names() {
+        assert_eq!(
+            parse_upstream_short("origin/feature/topic")
+                .map(|upstream| (upstream.remote, upstream.branch)),
+            Some(("origin".to_string(), "feature/topic".to_string()))
+        );
+    }
+
+    #[test]
+    fn cached_commit_id_reuses_existing_arc_for_same_object_id() {
+        let oid = gix::ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567")
+            .expect("valid object id");
+        let mut cache = HashMap::default();
+
+        let first = cached_commit_id(&mut cache, oid);
+        let second = cached_commit_id(&mut cache, oid);
+
+        assert_eq!(first, second);
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+        assert_eq!(cache.len(), 1);
     }
 }

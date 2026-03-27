@@ -289,6 +289,9 @@ pub(in crate::view) use diff_text::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
+    use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn reset_line_number_string_cache() {
         LINE_NUMBER_STRINGS.with(|cache| {
@@ -422,5 +425,63 @@ mod tests {
                 clears: 1,
             }
         );
+    }
+
+    #[test]
+    fn commit_file_path_labels_cache_reuses_same_key_and_invalidates_on_new_key() {
+        let mut cache: CommitFilePathLabelsCache<u64> = CommitFilePathLabelsCache::default();
+        let files = vec![
+            CommitFileChange {
+                path: PathBuf::from("src/lib.rs"),
+                kind: FileStatusKind::Modified,
+            },
+            CommitFileChange {
+                path: PathBuf::from("README.md"),
+                kind: FileStatusKind::Added,
+            },
+        ];
+
+        let first = cache.labels_for(&7, &files);
+        let reused = cache.labels_for(
+            &7,
+            &[CommitFileChange {
+                path: PathBuf::from("should/not/appear.rs"),
+                kind: FileStatusKind::Deleted,
+            }],
+        );
+
+        assert!(Arc::ptr_eq(&first, &reused));
+        assert_eq!(
+            first.iter().map(SharedString::as_ref).collect::<Vec<_>>(),
+            vec!["src/lib.rs", "README.md"]
+        );
+
+        let replacement = cache.labels_for(
+            &8,
+            &[CommitFileChange {
+                path: PathBuf::from("docs/guide.md"),
+                kind: FileStatusKind::Renamed,
+            }],
+        );
+
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        assert_eq!(
+            replacement
+                .iter()
+                .map(SharedString::as_ref)
+                .collect::<Vec<_>>(),
+            vec!["docs/guide.md"]
+        );
+    }
+
+    #[test]
+    fn commit_file_path_labels_cache_handles_empty_file_lists() {
+        let mut cache: CommitFilePathLabelsCache<u64> = CommitFilePathLabelsCache::default();
+
+        let first = cache.labels_for(&1, &[]);
+        let second = cache.labels_for(&1, &[]);
+
+        assert!(first.is_empty());
+        assert!(Arc::ptr_eq(&first, &second));
     }
 }

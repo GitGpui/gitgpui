@@ -102,6 +102,10 @@ fn patch_split_row_canvas_revision_key(
     hasher.finish()
 }
 
+fn semantic_diff_row_bg(theme: AppTheme, bg: gpui::Rgba) -> Option<gpui::Rgba> {
+    (bg != theme.colors.window_bg).then_some(bg)
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::view) struct DiffPaintRecord {
@@ -172,6 +176,7 @@ pub(super) fn inline_diff_line_row_canvas(
     let revision =
         inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
     let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
+    let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
         (canvas_id, format!("{revision:016x}")),
@@ -222,7 +227,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
-                    Some(bg),
+                    test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,
@@ -316,6 +321,8 @@ pub(super) fn split_diff_line_row_canvas(
         right_highlights_hash,
     );
     let canvas_id: gpui::ElementId = ("diff_row_canvas_split", visible_ix).into();
+    let left_test_row_bg = semantic_diff_row_bg(theme, left_bg);
+    let right_test_row_bg = semantic_diff_row_bg(theme, right_bg);
 
     keyed_canvas(
         (canvas_id, format!("{revision:016x}")),
@@ -379,7 +386,7 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.left_text_bounds,
                     &left_text,
                     &left_highlights,
-                    Some(left_bg),
+                    left_test_row_bg,
                     left_highlights_hash,
                     left_text_hash,
                     y,
@@ -398,7 +405,7 @@ pub(super) fn split_diff_line_row_canvas(
                     prepaint.right_text_bounds,
                     &right_text,
                     &right_highlights,
-                    Some(right_bg),
+                    right_test_row_bg,
                     right_highlights_hash,
                     right_text_hash,
                     y,
@@ -488,6 +495,7 @@ pub(super) fn patch_split_column_row_canvas(
         visible_ix,
     )
         .into();
+    let test_row_bg = semantic_diff_row_bg(theme, bg);
 
     keyed_canvas(
         (canvas_id, format!("{revision:016x}")),
@@ -529,7 +537,7 @@ pub(super) fn patch_split_column_row_canvas(
                     prepaint.text_bounds,
                     &text,
                     &highlights,
-                    Some(bg),
+                    test_row_bg,
                     highlights_hash,
                     text_hash,
                     y,

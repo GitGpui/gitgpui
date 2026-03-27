@@ -748,4 +748,104 @@ mod tests {
         assert!(sel.unstaged.is_empty());
         assert_eq!(sel.untracked, vec![pb("new.txt")]);
     }
+
+    #[test]
+    fn status_selection_shift_click_uses_index_hints_without_scanning() {
+        bench_reset_status_selection();
+
+        let mut sel = StatusMultiSelection::default();
+        let entries = vec![pb("a"), pb("b"), pb("c"), pb("d")];
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::CombinedUnstaged,
+            pb("b"),
+            Some(1),
+            gpui::Modifiers::default(),
+            Some(&entries),
+        );
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::CombinedUnstaged,
+            pb("d"),
+            Some(3),
+            gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            Some(&entries),
+        );
+
+        assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
+        assert_eq!(sel.unstaged_anchor, Some(pb("b")));
+        assert_eq!(sel.unstaged_anchor_index, Some(1));
+        assert_eq!(bench_snapshot_status_selection().position_scan_steps, 0);
+    }
+
+    #[test]
+    fn status_selection_shift_click_falls_back_when_index_hint_is_stale() {
+        bench_reset_status_selection();
+
+        let mut sel = StatusMultiSelection::default();
+        let entries = vec![pb("a"), pb("b"), pb("c"), pb("d")];
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::CombinedUnstaged,
+            pb("b"),
+            Some(1),
+            gpui::Modifiers::default(),
+            Some(&entries),
+        );
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::CombinedUnstaged,
+            pb("d"),
+            Some(0),
+            gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            Some(&entries),
+        );
+
+        assert_eq!(sel.unstaged, vec![pb("b"), pb("c"), pb("d")]);
+        assert_eq!(sel.unstaged_anchor, Some(pb("b")));
+        assert_eq!(sel.unstaged_anchor_index, Some(1));
+        #[cfg(any(debug_assertions, feature = "benchmarks"))]
+        assert!(
+            bench_snapshot_status_selection().position_scan_steps > 0,
+            "stale index hints should fall back to a path scan"
+        );
+    }
+
+    #[test]
+    fn staged_selection_clears_other_section_anchor_indexes() {
+        let mut sel = StatusMultiSelection {
+            untracked: vec![pb("new.txt")],
+            untracked_anchor: Some(pb("new.txt")),
+            unstaged: vec![pb("tracked.txt")],
+            unstaged_anchor: Some(pb("tracked.txt")),
+            unstaged_anchor_index: Some(4),
+            ..Default::default()
+        };
+
+        apply_status_multi_selection_click(
+            &mut sel,
+            StatusSection::Staged,
+            pb("staged.txt"),
+            Some(2),
+            gpui::Modifiers::default(),
+            None,
+        );
+
+        assert!(sel.untracked.is_empty());
+        assert!(sel.unstaged.is_empty());
+        assert!(sel.untracked_anchor.is_none());
+        assert!(sel.unstaged_anchor.is_none());
+        assert!(sel.unstaged_anchor_index.is_none());
+        assert_eq!(sel.staged, vec![pb("staged.txt")]);
+        assert_eq!(sel.staged_anchor, Some(pb("staged.txt")));
+        assert_eq!(sel.staged_anchor_index, Some(2));
+    }
 }

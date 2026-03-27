@@ -650,6 +650,29 @@ mod tests {
     }
 
     #[test]
+    fn word_diff_ranges_insert_only_reports_new_tokens() {
+        let (old_ranges, new_ranges) = word_diff_ranges("", "hello world");
+        assert!(old_ranges.is_empty());
+        assert_eq!(new_ranges, vec![0.."hello world".len()]);
+    }
+
+    #[test]
+    fn word_diff_ranges_delete_only_reports_old_tokens() {
+        let (old_ranges, new_ranges) = word_diff_ranges("hello world", "");
+        assert!(new_ranges.is_empty());
+        assert_eq!(old_ranges, vec![0.."hello world".len()]);
+    }
+
+    #[test]
+    fn word_diff_ranges_single_ascii_token_fast_path_marks_whole_token() {
+        let (old, new) = ("value123", "value456");
+        let (old_ranges, new_ranges) = word_diff_ranges(old, new);
+
+        assert_eq!(old_ranges, vec![0..old.len()]);
+        assert_eq!(new_ranges, vec![0..new.len()]);
+    }
+
+    #[test]
     fn word_diff_ranges_many_edits_near_token_limit() {
         fn words(prefix: &str, count: usize) -> String {
             (0..count)

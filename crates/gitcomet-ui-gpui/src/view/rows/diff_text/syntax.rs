@@ -4604,6 +4604,24 @@ mod tests {
         }
     }
 
+    fn assert_token_ranges_are_utf8_safe(text: &str, tokens: &[SyntaxToken]) {
+        for token in tokens {
+            assert!(
+                token.range.start <= token.range.end,
+                "{token:?} in {text:?}"
+            );
+            assert!(token.range.end <= text.len(), "{token:?} in {text:?}");
+            assert!(
+                text.is_char_boundary(token.range.start),
+                "{token:?} start is not a char boundary in {text:?}"
+            );
+            assert!(
+                text.is_char_boundary(token.range.end),
+                "{token:?} end is not a char boundary in {text:?}"
+            );
+        }
+    }
+
     fn wait_for_background_chunk_build_for_document(
         document: PreparedSyntaxDocument,
         timeout: Duration,
@@ -4879,6 +4897,23 @@ mod tests {
     }
 
     #[test]
+    fn markdown_inline_code_handles_unterminated_and_multibyte_spans_without_invalid_ranges() {
+        for text in [
+            "Use `cafe` here",
+            "Use `café` here",
+            "Use ``naïve `code` span`` here",
+            "emoji `😀` end",
+            "unterminated `😀",
+            "`",
+            "````",
+            "prefix ``😀`` suffix",
+        ] {
+            let tokens = syntax_tokens_for_line_markdown(text);
+            assert_token_ranges_are_utf8_safe(text, &tokens);
+        }
+    }
+
+    #[test]
     fn treesitter_variable_capture_maps_but_gets_no_color() {
         // `@variable` now maps to `Variable` (tracked but rendered without color)
         // so the capture info is preserved for potential theme use.
@@ -5102,6 +5137,133 @@ mod tests {
             "rust parse after parser slot reset should still contain keyword highlights: {reparsed:?}"
         );
         assert_eq!(ts_parser_set_language_call_count(), 2);
+    }
+
+    #[cfg(any(test, feature = "syntax-xml"))]
+    #[test]
+    fn single_line_syntax_cache_isolated_by_mode_for_xml_markup() {
+        reset_ts_parser_test_state();
+
+        let text = r#"<item enabled="true">value</item>"#;
+        let auto = syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
+        assert!(
+            auto.iter().any(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Tag | SyntaxTokenKind::Attribute
+                )
+            }),
+            "tree-sitter XML mode should classify markup tokens: {auto:?}"
+        );
+
+        let heuristic =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::HeuristicOnly);
+        assert!(
+            !heuristic.iter().any(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Tag | SyntaxTokenKind::Attribute
+                )
+            }),
+            "heuristic XML mode should not reuse tree-sitter markup tokens: {heuristic:?}"
+        );
+
+        let auto_again =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
+        assert_eq!(auto_again, auto);
+    }
+
+    #[test]
+    fn single_line_syntax_cache_isolated_by_language_for_same_markup_text() {
+        reset_ts_parser_test_state();
+
+        let text = r#"<div class="demo">ok</div>"#;
+        let html = syntax_tokens_for_line(text, DiffSyntaxLanguage::Html, DiffSyntaxMode::Auto);
+        assert!(
+            html.iter().any(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Tag | SyntaxTokenKind::Attribute
+                )
+            }),
+            "HTML mode should classify markup tokens: {html:?}"
+        );
+
+        let json = syntax_tokens_for_line(text, DiffSyntaxLanguage::Json, DiffSyntaxMode::Auto);
+        assert!(
+            !json.iter().any(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Tag | SyntaxTokenKind::Attribute
+                )
+            }),
+            "JSON mode should not reuse HTML markup tokens: {json:?}"
+        );
+        assert_ne!(json, html);
+
+        let html_again =
+            syntax_tokens_for_line(text, DiffSyntaxLanguage::Html, DiffSyntaxMode::Auto);
+        assert_eq!(html_again, html);
+    }
+
+    #[cfg(any(test, feature = "syntax-xml"))]
+    #[test]
+    fn prepared_document_cache_isolated_by_language_for_same_script_markup() {
+        reset_ts_parser_test_state();
+        reset_prepared_syntax_cache();
+
+        let text = "<script>\nconst value = 1;\n</script>";
+        let html = prepare_test_document(DiffSyntaxLanguage::Html, text);
+        let xml = prepare_test_document(DiffSyntaxLanguage::Xml, text);
+
+        let html_tokens = syntax_tokens_for_prepared_document_line(html, 1)
+            .expect("HTML script line tokens should be available");
+        assert!(
+            html_tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "HTML document should inject JavaScript keyword highlighting: {html_tokens:?}"
+        );
+        assert!(
+            html_tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Number),
+            "HTML document should inject JavaScript number highlighting: {html_tokens:?}"
+        );
+
+        let xml_tokens = syntax_tokens_for_prepared_document_line(xml, 1)
+            .expect("XML script line tokens should be available");
+        assert!(
+            !xml_tokens.iter().any(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Keyword | SyntaxTokenKind::Number
+                )
+            }),
+            "XML document should not reuse HTML script injection tokens: {xml_tokens:?}"
+        );
+        assert_ne!(xml_tokens, html_tokens);
+    }
+
+    #[test]
+    fn single_line_syntax_cache_drops_text_hash_collisions_on_text_mismatch() {
+        let mut cache = SingleLineSyntaxTokenCache::new();
+        let key = SingleLineSyntaxTokenCacheKey {
+            language: DiffSyntaxLanguage::Html,
+            mode: DiffSyntaxMode::Auto,
+            text_hash: 7,
+        };
+        let tokens: Arc<[SyntaxToken]> = vec![SyntaxToken {
+            range: 0..5,
+            kind: SyntaxTokenKind::Tag,
+        }]
+        .into();
+
+        cache.insert(key, "<div>", Arc::clone(&tokens));
+
+        assert!(cache.get(key, "<span>").is_none());
+        assert!(cache.by_key.is_empty());
+        assert!(cache.lru_order.is_empty());
     }
 
     #[test]
@@ -6721,6 +6883,24 @@ mod tests {
                 .any(|token| { token.kind == SyntaxTokenKind::String && token.range == (11..43) }),
             "YAML fallback should highlight GitHub expression scalars as strings: {expression_value:?}"
         );
+    }
+
+    #[test]
+    fn yaml_heuristic_handles_malformed_and_unicode_scalars_without_invalid_ranges() {
+        for text in [
+            r#"emoji: "😀"#,
+            "emoji: 😀 # note",
+            "ключ: значение",
+            "- 😀",
+            "name: ",
+            "name:#not-a-comment",
+            "  - name: café",
+            "script: |+9 trailing",
+            "script: >-2",
+        ] {
+            let tokens = syntax_tokens_for_line_heuristic(text, DiffSyntaxLanguage::Yaml);
+            assert_token_ranges_are_utf8_safe(text, &tokens);
+        }
     }
 
     #[test]

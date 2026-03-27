@@ -392,3 +392,101 @@ pub(super) fn format_datetime_into(
 pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
     format_datetime(time, format, Timezone::Utc, true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn date_time_format_keys_round_trip_and_labels_are_unique() {
+        let mut seen_labels = HashSet::new();
+
+        for &format in DateTimeFormat::all() {
+            assert_eq!(DateTimeFormat::from_key(format.key()), Some(format));
+            assert!(
+                seen_labels.insert(format.label()),
+                "date-time format labels should stay unique"
+            );
+        }
+    }
+
+    #[test]
+    fn timezone_keys_round_trip_for_all_supported_offsets() {
+        for &timezone in Timezone::all() {
+            let key = timezone.key();
+            assert_eq!(Timezone::from_key(&key), Some(timezone));
+            assert_eq!(
+                Timezone::from_key(&key).map(Timezone::offset_seconds),
+                Some(timezone.offset_seconds())
+            );
+        }
+
+        assert_eq!(Timezone::from_key("fixed_not_a_number"), None);
+    }
+
+    #[test]
+    fn format_datetime_into_reuses_buffer_and_clears_previous_suffix() {
+        let mut buf = String::from("stale-data");
+
+        format_datetime_into(
+            &mut buf,
+            UNIX_EPOCH,
+            DateTimeFormat::YmdHm,
+            Timezone::Fixed(2 * 3600),
+            true,
+        );
+        assert_eq!(buf, "1970-01-01 02:00 UTC+2");
+
+        format_datetime_into(
+            &mut buf,
+            UNIX_EPOCH,
+            DateTimeFormat::DmyHm,
+            Timezone::Utc,
+            false,
+        );
+        assert_eq!(buf, "01.01.1970 00:00");
+    }
+
+    #[test]
+    fn format_datetime_handles_negative_epoch_and_day_rollover() {
+        let before_epoch = UNIX_EPOCH - Duration::from_secs(1);
+
+        assert_eq!(
+            format_datetime(before_epoch, DateTimeFormat::YmdHms, Timezone::Utc, true),
+            "1969-12-31 23:59:59 UTC"
+        );
+        assert_eq!(
+            format_datetime(
+                before_epoch,
+                DateTimeFormat::YmdHms,
+                Timezone::Fixed(3600),
+                true
+            ),
+            "1970-01-01 00:59:59 UTC+1"
+        );
+    }
+
+    #[test]
+    fn format_datetime_supports_fractional_hour_offsets() {
+        assert_eq!(
+            format_datetime(
+                UNIX_EPOCH,
+                DateTimeFormat::YmdHm,
+                Timezone::Fixed(5 * 3600 + 45 * 60),
+                true
+            ),
+            "1970-01-01 05:45 UTC+5:45"
+        );
+        assert_eq!(
+            format_datetime(
+                UNIX_EPOCH,
+                DateTimeFormat::MdyHm,
+                Timezone::Fixed(-3 * 3600 - 30 * 60),
+                true
+            ),
+            format!("12/31/1969 20:30 UTC\u{2212}3:30")
+        );
+    }
+}

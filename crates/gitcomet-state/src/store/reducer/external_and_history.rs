@@ -372,7 +372,7 @@ pub(super) fn repo_action_finished(
 
 #[cfg(test)]
 mod tests {
-    use super::should_reserve_log_append_exact;
+    use super::{reserve_log_append_capacity, should_reserve_log_append_exact};
 
     #[test]
     fn large_history_small_page_uses_exact_append_growth() {
@@ -390,5 +390,27 @@ mod tests {
     fn larger_pages_keep_amortized_append_growth() {
         assert!(!should_reserve_log_append_exact(5_000, 700));
         assert!(!should_reserve_log_append_exact(16_000, 2_001));
+    }
+
+    #[test]
+    fn reserve_log_append_capacity_skips_zero_additional_items() {
+        let mut values = vec![1, 2, 3];
+        values.reserve(8);
+        let capacity = values.capacity();
+
+        reserve_log_append_capacity(&mut values, 0);
+
+        assert_eq!(values.capacity(), capacity);
+    }
+
+    #[test]
+    fn reserve_log_append_capacity_skips_growth_when_spare_capacity_is_enough() {
+        let mut values = Vec::with_capacity(8);
+        values.extend([1, 2, 3, 4]);
+        let capacity = values.capacity();
+
+        reserve_log_append_capacity(&mut values, 4);
+
+        assert_eq!(values.capacity(), capacity);
     }
 }

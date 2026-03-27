@@ -888,6 +888,89 @@ mod tests {
     }
 
     #[test]
+    fn yaml_block_scalar_indicator_accepts_list_items_and_chomping_modifiers() {
+        assert_eq!(yaml_block_scalar_indicator_indent("- script: |-2"), Some(0));
+        assert_eq!(
+            yaml_block_scalar_indicator_indent("  - script: >+"),
+            Some(2)
+        );
+        assert_eq!(yaml_block_scalar_indicator_indent("script: value"), None);
+    }
+
+    #[test]
+    fn yaml_block_scalar_state_resets_when_diff_switches_files() {
+        let file_a: Arc<str> = Arc::from("a.yml");
+        let file_b: Arc<str> = Arc::from("b.yml");
+        let diff = vec![
+            dl(K::Add, "+script: |"),
+            dl(K::Add, "+  echo one"),
+            dl(K::Add, "+plain: value"),
+        ];
+        let files = vec![
+            Some(Arc::clone(&file_a)),
+            Some(Arc::clone(&file_a)),
+            Some(file_b),
+        ];
+        let languages = vec![
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+        ];
+
+        let flags = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.as_slice(),
+            files.as_slice(),
+            languages.as_slice(),
+        );
+
+        assert_eq!(flags, vec![false, true, false]);
+    }
+
+    #[test]
+    fn parse_diff_and_hunk_headers_reject_malformed_inputs() {
+        for text in ["", "diff --git", "diff --git ", "index 123..456 100644"] {
+            assert_eq!(parse_diff_git_header_path(text), None, "{text:?}");
+        }
+
+        for text in [
+            "",
+            "@@",
+            "@@ -1,2",
+            "@@ -1,2 @@",
+            "@@ -1,2 +3,4",
+            "@@ start @@ heading",
+        ] {
+            assert!(
+                parse_unified_hunk_header_for_display(text).is_none(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn yaml_block_scalar_state_tolerates_short_metadata_arrays() {
+        let diff = vec![
+            dl(K::Header, "diff --git a/workflow.yml b/workflow.yml"),
+            dl(K::Add, "+script: |"),
+            dl(K::Add, "+  echo one"),
+            dl(K::Add, "+  echo two"),
+        ];
+        let files = vec![Some(Arc::<str>::from("workflow.yml"))];
+        let languages = vec![
+            Some(rows::DiffSyntaxLanguage::Yaml),
+            Some(rows::DiffSyntaxLanguage::Yaml),
+        ];
+
+        let flags = compute_diff_yaml_block_scalar_for_src_ix(
+            diff.as_slice(),
+            files.as_slice(),
+            languages.as_slice(),
+        );
+
+        assert_eq!(flags, vec![false, false, false, false]);
+    }
+
+    #[test]
     fn build_unified_patch_for_hunks_includes_multiple_hunks() {
         let diff = example_two_hunk_diff();
         let patch = build_unified_patch_for_hunks(&diff, &[4, 9]).expect("patch");

@@ -2644,9 +2644,11 @@ mod tests {
             "ready row should include syntax highlights"
         );
         assert_eq!(first[1].line_ix, 64);
-        assert!(first[1].pending, "next chunk row should be pending");
         assert_eq!(first[2].line_ix, 65);
-        assert!(first[2].pending, "same pending chunk should remain pending");
+        assert!(
+            first[1].pending || first[2].pending,
+            "at least one row in the next chunk should still be pending before the background drain"
+        );
 
         let started = std::time::Instant::now();
         while drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0

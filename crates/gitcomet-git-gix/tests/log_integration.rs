@@ -348,6 +348,79 @@ fn log_head_page_limit_sets_next_cursor_and_supports_pagination() {
 }
 
 #[test]
+fn log_head_page_resume_hint_follows_first_parent_after_merge_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("a.txt"), "base\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    std::fs::write(repo.join("feature.txt"), "feature\n").unwrap();
+    run_git(repo, &["add", "feature.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature"],
+    );
+    let feature_tip = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["checkout", "main"]);
+    std::fs::write(repo.join("main.txt"), "main\n").unwrap();
+    run_git(repo, &["add", "main.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "main"],
+    );
+    let first_parent_tip = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    run_git(
+        repo,
+        &["merge", "--no-ff", "feature", "-m", "merge feature"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let first = opened.log_head_page(1, None).unwrap();
+    assert_eq!(first.commits.len(), 1);
+    assert_eq!(&*first.commits[0].summary, "merge feature");
+    assert_eq!(
+        first.commits[0].parent_ids.first().map(CommitId::as_ref),
+        Some(first_parent_tip.as_str())
+    );
+
+    let cursor = first.next_cursor.as_ref().expect("next cursor");
+    assert_eq!(
+        cursor.resume_from,
+        Some(CommitId(first_parent_tip.clone().into()))
+    );
+
+    let second = opened.log_head_page(10, Some(cursor)).unwrap();
+    let second_summaries: Vec<&str> = second.commits.iter().map(|c| &*c.summary).collect();
+    assert_eq!(second_summaries, vec!["main", "base"]);
+    assert!(
+        second.commits.iter().all(|c| c.id.as_ref() != feature_tip),
+        "first-parent pagination should not revisit merged side-branch commits"
+    );
+
+    let legacy_cursor = LogCursor {
+        last_seen: first.commits[0].id.clone(),
+        resume_from: None,
+    };
+    let legacy_second = opened.log_head_page(10, Some(&legacy_cursor)).unwrap();
+    assert_eq!(legacy_second.commits, second.commits);
+}
+
+#[test]
 fn log_head_page_exact_limit_has_no_next_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();

@@ -509,3 +509,29 @@ impl GitRepository for GixRepo {
         self.discard_worktree_changes_impl(paths)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oid_to_arc_str_round_trips_hex_object_id() {
+        let expected = "0123456789abcdef0123456789abcdef01234567";
+        let oid = gix::ObjectId::from_hex(expected.as_bytes()).expect("valid object id");
+
+        assert_eq!(oid_to_arc_str(oid.as_ref()).as_ref(), expected);
+    }
+
+    #[test]
+    fn bstr_to_arc_str_preserves_utf8_bytes() {
+        assert_eq!(
+            bstr_to_arc_str("hello git".as_bytes()).as_ref(),
+            "hello git"
+        );
+    }
+
+    #[test]
+    fn bstr_to_arc_str_uses_lossy_conversion_for_invalid_utf8() {
+        assert_eq!(bstr_to_arc_str(b"foo\x80bar").as_ref(), "foo\u{fffd}bar");
+    }
+}

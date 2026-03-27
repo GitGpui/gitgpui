@@ -6291,6 +6291,20 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
         let _ = window.draw(app);
     });
 
+    let inline_visible_indices = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        new_lines
+            .iter()
+            .copied()
+            .map(|line_no| {
+                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                    panic!("expected inline visible row for deployment-ci line {line_no}")
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in new_lines {
@@ -6309,20 +6323,6 @@ fn yaml_file_diff_fallback_matches_prepared_document_for_deployment_ci(
             );
         }
     });
-
-    let inline_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        new_lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
-                    panic!("expected inline visible row for deployment-ci line {line_no}")
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
 
     for (&line_no, &visible_ix) in new_lines.iter().zip(inline_visible_indices.iter()) {
         let record =
@@ -7455,6 +7455,20 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
         let _ = window.draw(app);
     });
 
+    let inline_visible_indices = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        new_lines
+            .iter()
+            .copied()
+            .map(|line_no| {
+                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
+                    panic!("expected inline visible row for build-release new line {line_no}")
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
+
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         for line_no in new_lines {
@@ -7473,20 +7487,6 @@ fn yaml_file_diff_matches_prepared_document_for_build_release_artifacts(
             );
         }
     });
-
-    let inline_visible_indices = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        new_lines
-            .iter()
-            .copied()
-            .map(|line_no| {
-                inline_visible_ix_by_new_line(&pane, line_no).unwrap_or_else(|| {
-                    panic!("expected inline visible row for build-release new line {line_no}")
-                })
-            })
-            .collect::<Vec<_>>()
-    });
-    draw_rows_for_visible_indices(cx, &view, inline_visible_indices.as_slice());
 
     for (&line_no, &visible_ix) in new_lines.iter().zip(inline_visible_indices.iter()) {
         let record =

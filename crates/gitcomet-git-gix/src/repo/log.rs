@@ -598,4 +598,68 @@ mod tests {
         assert!(!gate.should_skip("c3"));
         assert!(!gate.should_skip("c4"));
     }
+
+    #[test]
+    fn object_id_from_commit_id_rejects_invalid_hex() {
+        assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn apply_first_parent_resume_hint_uses_first_parent_of_last_commit() {
+        let mut page = LogPage {
+            commits: vec![
+                Commit {
+                    id: CommitId("c1".into()),
+                    parent_ids: vec![CommitId("p0".into())],
+                    summary: Arc::from("one"),
+                    author: Arc::from("you"),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                },
+                Commit {
+                    id: CommitId("c2".into()),
+                    parent_ids: vec![CommitId("p1".into()), CommitId("p2".into())],
+                    summary: Arc::from("two"),
+                    author: Arc::from("you"),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                },
+            ],
+            next_cursor: Some(LogCursor {
+                last_seen: CommitId("c2".into()),
+                resume_from: None,
+            }),
+        };
+
+        apply_first_parent_resume_hint(&mut page);
+
+        assert_eq!(
+            page.next_cursor
+                .as_ref()
+                .and_then(|cursor| cursor.resume_from.clone()),
+            Some(CommitId("p1".into()))
+        );
+    }
+
+    #[test]
+    fn apply_first_parent_resume_hint_clears_stale_resume_hint_when_no_parent_exists() {
+        let mut page = LogPage {
+            commits: vec![Commit {
+                id: CommitId("c1".into()),
+                parent_ids: Vec::new(),
+                summary: Arc::from("one"),
+                author: Arc::from("you"),
+                time: std::time::SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: Some(LogCursor {
+                last_seen: CommitId("c1".into()),
+                resume_from: Some(CommitId("stale".into())),
+            }),
+        };
+
+        apply_first_parent_resume_hint(&mut page);
+
+        assert_eq!(
+            page.next_cursor.as_ref().expect("next cursor").resume_from,
+            None
+        );
+    }
 }
