@@ -4762,15 +4762,15 @@ mod tests {
         let line_starts = compute_line_starts(text.as_str());
 
         let style_a = gpui::HighlightStyle {
-            color: Some(hsla(0.0, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_b = gpui::HighlightStyle {
-            color: Some(hsla(0.33, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.33, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_c = gpui::HighlightStyle {
-            color: Some(hsla(0.66, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)> = Vec::new();
@@ -4803,7 +4803,7 @@ mod tests {
 
         let visible_range = 47..121;
         let base_font = gpui::font(".SystemUIFont");
-        let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
         let streamed = build_streamed_highlight_runs_for_visible_window(
             &base_font,
             base_color,
@@ -4838,18 +4838,18 @@ mod tests {
         let text = "abcdefghijklmnop";
         let line_starts = compute_line_starts(text);
         let style_low = gpui::HighlightStyle {
-            color: Some(hsla(0.0, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let style_high = gpui::HighlightStyle {
-            color: Some(hsla(0.66, 1.0, 0.5, 1.0)),
+            color: Some(gpui::hsla(0.66, 1.0, 0.5, 1.0)),
             ..gpui::HighlightStyle::default()
         };
         let mut highlights = vec![(2..12, style_low.clone()), (4..10, style_high.clone())];
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
 
         let base_font = gpui::font(".SystemUIFont");
-        let base_color = hsla(0.0, 0.0, 1.0, 1.0);
+        let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
         let streamed = build_streamed_highlight_runs_for_visible_window(
             &base_font,
             base_color,
