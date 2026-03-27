@@ -1762,6 +1762,39 @@ fn markdown_preview_fixture_runs_render_steps() {
 }
 
 #[test]
+fn markdown_preview_fixture_reports_scroll_metrics() {
+    let fixture = MarkdownPreviewScrollFixture::new_sectioned(128, 112);
+    let (hash, metrics) = fixture.run_scroll_step_with_metrics(24, 200, 24);
+    assert_ne!(hash, 0);
+    assert!(metrics.total_rows > metrics.window_size);
+    assert_eq!(metrics.start_row, 24);
+    assert_eq!(metrics.window_size, 200);
+    assert_eq!(metrics.rows_rendered, 200);
+    assert_eq!(metrics.scroll_step_rows, 24);
+    assert_eq!(metrics.long_rows, 0);
+}
+
+#[test]
+fn markdown_preview_scroll_fixture_reports_rich_5000_row_metrics() {
+    let fixture = MarkdownPreviewScrollFixture::new_rich_5000_rows();
+    let (hash, metrics) = fixture.run_scroll_step_with_metrics(24, 200, 24);
+    assert_ne!(hash, 0);
+    assert_eq!(metrics.total_rows, 5_000);
+    assert_eq!(metrics.long_rows, 500);
+    assert_eq!(metrics.long_row_bytes, 2_000);
+    assert_eq!(metrics.start_row, 24);
+    assert_eq!(metrics.window_size, 200);
+    assert_eq!(metrics.rows_rendered, 200);
+    assert_eq!(metrics.scroll_step_rows, 24);
+    assert!(metrics.heading_rows > 0);
+    assert!(metrics.list_rows > 0);
+    assert!(metrics.table_rows > 0);
+    assert!(metrics.code_rows > 0);
+    assert!(metrics.blockquote_rows > 0);
+    assert!(metrics.details_rows > 0);
+}
+
+#[test]
 fn streamed_provider_fixture_builds_with_expected_row_counts() {
     let fixture = ConflictStreamedProviderFixture::new(1_000);
     // Total rows should cover all lines (ours + theirs via anchor mapping).

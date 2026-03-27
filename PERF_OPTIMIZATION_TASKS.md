@@ -128,6 +128,13 @@ This file is intentionally cleared. Recreate tasks only after the suite has been
 - `conflict_load_duplication/duplicated_text_and_bytes/low_density` and `conflict_load_duplication/duplicated_text_and_bytes/high_density` remain the clearest duplication-specific allocation regressions at `56,529,548 B` and `56,479,766 B`, while the paired `shared_payload_forwarding/{low_density,high_density}` cases stay at `28 B`.
 - By retained bytes rather than total churn, the current fresh leaders are `diff_open_markdown_preview_first_window/200` (`6,793,344 B` net), `markdown_preview_render_diff/window_rows/200` (`5,732,864 B` net), and `markdown_preview_render_single/window_rows/200` (`3,930,376 B` net); `app_launch/*` remains excluded here because this runner still could not refresh those sidecars.
 
+## New Benchmark Coverage (March 27, 2026)
+
+- Added `markdown_preview_scroll/window_rows/200` to track steady-state Preview-mode scrolling over the existing large single-document markdown preview fixture.
+- Added `markdown_preview_scroll/rich_5000_rows_window_rows/200` to track steady-state scrolling over a rendered 5,000-row markdown preview document with `500` long rows at roughly `2,000` characters each, plus headings, lists, tables, blockquotes, details summaries, paragraphs, and code rows mixed throughout.
+- The rich `markdown_preview_scroll/rich_5000_rows_window_rows/200` fixture is built directly as rendered preview rows so it can model that document shape without tripping the production single-file `1 MiB` markdown preview source limit.
+- Both new markdown scroll cases are wired into `perf_budget_report` and the auto-synced benchmark checklist below, but they still need their first fresh timing/allocation baselines on this worktree.
+
 <!-- BEGIN AUTO BENCHMARK TASKS -->
 ## Benchmark Optimization Tasks
 
@@ -255,6 +262,8 @@ Every benchmark gets its own task. Do not check off a task until the before/afte
 - [ ] `markdown_preview_parse_build/two_sided_diff/large` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
 - [ ] `markdown_preview_render_single/window_rows/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
 - [ ] `markdown_preview_render_diff/window_rows/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
+- [ ] `markdown_preview_scroll/window_rows/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
+- [ ] `markdown_preview_scroll/rich_5000_rows_window_rows/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
 - [ ] `diff_open_markdown_preview_first_window/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
 - [ ] `diff_open_image_preview_first_paint` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:
 - [ ] `diff_open_svg_dual_path_first_window/200` -- baseline CPU: pending; baseline alloc bytes: pending; baseline alloc ops: pending; post CPU: pending; post alloc bytes: pending; post alloc ops: pending; notes:

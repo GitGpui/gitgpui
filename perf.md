@@ -1,6 +1,6 @@
 # Performance Iteration Reset
 
-Updated: March 25, 2026
+Updated: March 27, 2026
 
 ## What changed
 
@@ -58,6 +58,8 @@ Recent additions already in the suite:
 
 - `search/file_diff_ctrl_f_open_and_type_100k_lines`
 - `open_repo/extreme_metadata_fanout`
+- `markdown_preview_scroll/window_rows/200`
+- `markdown_preview_scroll/rich_5000_rows_window_rows/200`
 
 `open_repo/extreme_metadata_fanout` uses this default shape:
 
@@ -66,6 +68,13 @@ Recent additions already in the suite:
 - 10,000 remote branches
 - 5,000 worktrees
 - 1,000 submodules
+
+`markdown_preview_scroll/rich_5000_rows_window_rows/200` uses this default shape:
+
+- 5,000 rendered markdown preview rows
+- 500 long rows at roughly 2,000 characters each
+- headings, lists, tables, blockquotes, details summaries, paragraphs, and code rows mixed throughout
+- a 200-row viewport with a 24-row scroll step
 
 ## Fresh-start rules
 

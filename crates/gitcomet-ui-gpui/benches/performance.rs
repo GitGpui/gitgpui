@@ -26,14 +26,15 @@ use gitcomet_ui_gpui::benchmarks::{
     KeyboardStageUnstageToggleMetrics, KeyboardTabFocusCycleFixture, KeyboardTabFocusCycleMetrics,
     LargeFileDiffScrollFixture, LargeFileDiffScrollMetrics, LargeHtmlSyntaxFixture,
     LargeHtmlSyntaxMetrics, MarkdownPreviewFirstWindowMetrics, MarkdownPreviewFixture,
-    MergeOpenBootstrapFixture, MergeOpenBootstrapMetrics, NetworkFixture, NetworkMetrics,
-    OpenRepoFixture, OpenRepoMetrics, PaneResizeDragMetrics, PaneResizeDragStepFixture,
-    PaneResizeTarget, PatchDiffFirstWindowMetrics, PatchDiffPagedRowsFixture,
-    PatchDiffSearchQueryUpdateFixture, PathDisplayCacheChurnFixture, PathDisplayCacheChurnMetrics,
-    RapidCommitSelectionFixture, RapidCommitSelectionMetrics, RealRepoFixture, RealRepoMetrics,
-    RealRepoScenario, ReplacementAlignmentFixture, RepoSwitchDuringScrollFixture,
-    RepoSwitchDuringScrollMetrics, RepoSwitchFixture, RepoSwitchMetrics, RepoTabDragFixture,
-    RepoTabDragMetrics, ResolvedOutputRecomputeIncrementalFixture, ResolvedOutputRecomputeMetrics,
+    MarkdownPreviewScrollFixture, MarkdownPreviewScrollMetrics, MergeOpenBootstrapFixture,
+    MergeOpenBootstrapMetrics, NetworkFixture, NetworkMetrics, OpenRepoFixture, OpenRepoMetrics,
+    PaneResizeDragMetrics, PaneResizeDragStepFixture, PaneResizeTarget,
+    PatchDiffFirstWindowMetrics, PatchDiffPagedRowsFixture, PatchDiffSearchQueryUpdateFixture,
+    PathDisplayCacheChurnFixture, PathDisplayCacheChurnMetrics, RapidCommitSelectionFixture,
+    RapidCommitSelectionMetrics, RealRepoFixture, RealRepoMetrics, RealRepoScenario,
+    ReplacementAlignmentFixture, RepoSwitchDuringScrollFixture, RepoSwitchDuringScrollMetrics,
+    RepoSwitchFixture, RepoSwitchMetrics, RepoTabDragFixture, RepoTabDragMetrics,
+    ResolvedOutputRecomputeIncrementalFixture, ResolvedOutputRecomputeMetrics,
     ScrollbarDragStepFixture, ScrollbarDragStepMetrics, SidebarResizeDragSustainedFixture,
     SidebarResizeDragSustainedMetrics, StagingFixture, StagingMetrics, StatusListFixture,
     StatusListMetrics, StatusMultiSelectFixture, StatusMultiSelectMetrics,
@@ -3735,6 +3736,96 @@ fn bench_markdown_preview_render(c: &mut Criterion) {
     settle_markdown_allocator_pages();
 }
 
+fn emit_markdown_preview_scroll_sidecar(bench: &str, metrics: &MarkdownPreviewScrollMetrics) {
+    emit_sidecar_metrics(
+        bench,
+        Map::from_iter([
+            ("total_rows".to_string(), json!(metrics.total_rows)),
+            ("start_row".to_string(), json!(metrics.start_row)),
+            ("window_size".to_string(), json!(metrics.window_size)),
+            ("rows_rendered".to_string(), json!(metrics.rows_rendered)),
+            (
+                "scroll_step_rows".to_string(),
+                json!(metrics.scroll_step_rows),
+            ),
+            ("long_rows".to_string(), json!(metrics.long_rows)),
+            ("long_row_bytes".to_string(), json!(metrics.long_row_bytes)),
+            ("heading_rows".to_string(), json!(metrics.heading_rows)),
+            ("list_rows".to_string(), json!(metrics.list_rows)),
+            ("table_rows".to_string(), json!(metrics.table_rows)),
+            ("code_rows".to_string(), json!(metrics.code_rows)),
+            (
+                "blockquote_rows".to_string(),
+                json!(metrics.blockquote_rows),
+            ),
+            ("details_rows".to_string(), json!(metrics.details_rows)),
+        ]),
+    );
+}
+
+fn bench_markdown_preview_scroll(c: &mut Criterion) {
+    let sections = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_SCROLL_SECTIONS", 768);
+    let window = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_WINDOW", 200);
+    let scroll_step_rows = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_SCROLL_STEP", 24).max(1);
+    let line_bytes = env_usize("GITCOMET_BENCH_MARKDOWN_PREVIEW_RENDER_LINE_BYTES", 128);
+    let measurement_time = markdown_preview_measurement_time();
+
+    {
+        let fixture = MarkdownPreviewScrollFixture::new_sectioned(sections, line_bytes);
+        let rich_fixture = MarkdownPreviewScrollFixture::new_rich_5000_rows();
+
+        let mut group = c.benchmark_group("markdown_preview_scroll");
+        group.sample_size(10);
+        group.warm_up_time(measurement_time);
+        group.measurement_time(measurement_time);
+        group.bench_with_input(
+            BenchmarkId::new("window_rows", window),
+            &window,
+            |b, &window| {
+                let mut start = 0usize;
+                b.iter(|| {
+                    let hash = fixture.run_scroll_step(start, window);
+                    start = start.wrapping_add(scroll_step_rows);
+                    hash
+                })
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("rich_5000_rows_window_rows", window),
+            &window,
+            |b, &window| {
+                let mut start = 0usize;
+                b.iter(|| {
+                    let hash = rich_fixture.run_scroll_step(start, window);
+                    start = start.wrapping_add(scroll_step_rows);
+                    hash
+                })
+            },
+        );
+        group.finish();
+
+        let _ = fixture.run_scroll_step(0, window);
+        let (_, metrics) = measure_sidecar_allocations(|| {
+            fixture.run_scroll_step_with_metrics(scroll_step_rows, window, scroll_step_rows)
+        });
+        emit_markdown_preview_scroll_sidecar(
+            &format!("markdown_preview_scroll/window_rows/{window}"),
+            &metrics,
+        );
+
+        let _ = rich_fixture.run_scroll_step(0, window);
+        let (_, rich_metrics) = measure_sidecar_allocations(|| {
+            rich_fixture.run_scroll_step_with_metrics(scroll_step_rows, window, scroll_step_rows)
+        });
+        emit_markdown_preview_scroll_sidecar(
+            &format!("markdown_preview_scroll/rich_5000_rows_window_rows/{window}"),
+            &rich_metrics,
+        );
+    }
+
+    settle_markdown_allocator_pages();
+}
+
 fn emit_markdown_preview_first_window_sidecar(
     window: usize,
     metrics: &MarkdownPreviewFirstWindowMetrics,
@@ -5885,6 +5976,7 @@ criterion_group! {
         bench_worktree_preview_render,
         bench_markdown_preview_parse_build,
         bench_markdown_preview_render,
+        bench_markdown_preview_scroll,
         bench_diff_open_markdown_preview_first_window,
         bench_diff_open_image_preview_first_paint,
         bench_diff_open_svg_dual_path_first_window,

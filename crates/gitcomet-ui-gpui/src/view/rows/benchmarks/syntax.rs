@@ -9,7 +9,11 @@ use super::diff_text::{
     prepare_diff_syntax_document_in_background_text,
 };
 use super::*;
-use crate::view::markdown_preview::{self, MarkdownPreviewDiff, MarkdownPreviewDocument};
+use crate::view::markdown_preview::{
+    self, MarkdownChangeHint, MarkdownInlineSpan, MarkdownInlineStyle, MarkdownPreviewDiff,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind,
+    MarkdownPreviewRowStyledTextCache, MarkdownPreviewRowWidthCache,
+};
 
 pub struct FileDiffSyntaxPrepareFixture {
     lines: Vec<String>,
@@ -1178,6 +1182,42 @@ pub struct MarkdownPreviewFirstWindowMetrics {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct MarkdownPreviewScrollMetrics {
+    pub total_rows: u64,
+    pub start_row: u64,
+    pub window_size: u64,
+    pub rows_rendered: u64,
+    pub scroll_step_rows: u64,
+    pub long_rows: u64,
+    pub long_row_bytes: u64,
+    pub heading_rows: u64,
+    pub list_rows: u64,
+    pub table_rows: u64,
+    pub code_rows: u64,
+    pub blockquote_rows: u64,
+    pub details_rows: u64,
+}
+
+const RICH_MARKDOWN_SCROLL_TOTAL_ROWS: usize = 5_000;
+const RICH_MARKDOWN_SCROLL_LONG_ROWS: usize = 500;
+const RICH_MARKDOWN_SCROLL_LONG_ROW_BYTES: usize = 2_000;
+const RICH_MARKDOWN_SCROLL_PATTERN_ROWS: usize = 20;
+const RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES: usize = 120;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct MarkdownPreviewScrollProfile {
+    total_rows: u64,
+    long_rows: u64,
+    long_row_bytes: u64,
+    heading_rows: u64,
+    list_rows: u64,
+    table_rows: u64,
+    code_rows: u64,
+    blockquote_rows: u64,
+    details_rows: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ImagePreviewFirstPaintMetrics {
     pub old_bytes: u64,
     pub new_bytes: u64,
@@ -1259,6 +1299,85 @@ impl ImagePreviewFirstPaintFixture {
     }
 }
 
+/// Benchmark fixture for steady-state markdown Preview-mode scrolling.
+///
+/// The rich fixture intentionally constructs preview rows directly so it can
+/// model a rendered 5k-row document with 500 2k-character rows without being
+/// constrained by the production single-document 1 MiB source-size guard.
+pub struct MarkdownPreviewScrollFixture {
+    document: MarkdownPreviewDocument,
+    theme: AppTheme,
+    profile: MarkdownPreviewScrollProfile,
+}
+
+impl MarkdownPreviewScrollFixture {
+    pub fn new_sectioned(sections: usize, line_bytes: usize) -> Self {
+        let sections = sections.max(1);
+        let line_bytes = line_bytes.max(48);
+        let source = build_synthetic_markdown_document(sections, line_bytes, "scroll");
+        let document = markdown_preview::parse_markdown(&source).expect(
+            "synthetic markdown scroll benchmark fixture should stay within preview limits",
+        );
+        let profile = profile_markdown_preview_scroll_document(&document, 0);
+        Self {
+            document,
+            theme: AppTheme::zed_ayu_dark(),
+            profile,
+        }
+    }
+
+    pub fn new_rich_5000_rows() -> Self {
+        let document = build_synthetic_rich_markdown_scroll_document();
+        let profile = profile_markdown_preview_scroll_document(
+            &document,
+            RICH_MARKDOWN_SCROLL_LONG_ROW_BYTES,
+        );
+        debug_assert_eq!(profile.total_rows, RICH_MARKDOWN_SCROLL_TOTAL_ROWS as u64);
+        debug_assert_eq!(profile.long_rows, RICH_MARKDOWN_SCROLL_LONG_ROWS as u64);
+        debug_assert_eq!(
+            profile.long_row_bytes,
+            RICH_MARKDOWN_SCROLL_LONG_ROW_BYTES as u64
+        );
+        Self {
+            document,
+            theme: AppTheme::zed_ayu_dark(),
+            profile,
+        }
+    }
+
+    pub fn run_scroll_step(&self, start: usize, window: usize) -> u64 {
+        hash_markdown_preview_window(self.theme, &self.document, start, window)
+    }
+
+    pub fn run_scroll_step_with_metrics(
+        &self,
+        start: usize,
+        window: usize,
+        scroll_step_rows: usize,
+    ) -> (u64, MarkdownPreviewScrollMetrics) {
+        let hash = self.run_scroll_step(start, window);
+        let (actual_start, actual_end) =
+            markdown_preview_document_window_bounds(&self.document, start, window);
+        let rows_rendered = actual_end.saturating_sub(actual_start);
+        let metrics = MarkdownPreviewScrollMetrics {
+            total_rows: self.profile.total_rows,
+            start_row: bench_counter_u64(actual_start),
+            window_size: bench_counter_u64(rows_rendered),
+            rows_rendered: bench_counter_u64(rows_rendered),
+            scroll_step_rows: bench_counter_u64(scroll_step_rows),
+            long_rows: self.profile.long_rows,
+            long_row_bytes: self.profile.long_row_bytes,
+            heading_rows: self.profile.heading_rows,
+            list_rows: self.profile.list_rows,
+            table_rows: self.profile.table_rows,
+            code_rows: self.profile.code_rows,
+            blockquote_rows: self.profile.blockquote_rows,
+            details_rows: self.profile.details_rows,
+        };
+        (hash, metrics)
+    }
+}
+
 pub struct MarkdownPreviewFixture {
     single_source: String,
     old_source: String,
@@ -1310,7 +1429,7 @@ impl MarkdownPreviewFixture {
     }
 
     pub fn run_render_single_step(&self, start: usize, window: usize) -> u64 {
-        self.hash_render_window(&self.single_document, start, window)
+        hash_markdown_preview_window(self.theme, &self.single_document, start, window)
     }
 
     /// Measure first-window diff rendering metrics (used for sidecar emission).
@@ -1320,8 +1439,10 @@ impl MarkdownPreviewFixture {
         let old_end = window.min(old_total);
         let new_end = window.min(new_total);
 
-        let old_rendered = self.render_window(&self.diff_preview.old, 0, old_end);
-        let new_rendered = self.render_window(&self.diff_preview.new, 0, new_end);
+        let old_rendered =
+            render_markdown_preview_window(self.theme, &self.diff_preview.old, 0, old_end);
+        let new_rendered =
+            render_markdown_preview_window(self.theme, &self.diff_preview.new, 0, new_end);
 
         MarkdownPreviewFirstWindowMetrics {
             old_total_rows: old_total as u64,
@@ -1341,8 +1462,10 @@ impl MarkdownPreviewFixture {
             return 0;
         }
 
-        let left = self.render_window(&self.diff_preview.old, start, window);
-        let right = self.render_window(&self.diff_preview.new, start, window);
+        let left =
+            render_markdown_preview_window(self.theme, &self.diff_preview.old, start, window);
+        let right =
+            render_markdown_preview_window(self.theme, &self.diff_preview.new, start, window);
 
         let mut h = FxHasher::default();
         start.hash(&mut h);
@@ -1351,51 +1474,63 @@ impl MarkdownPreviewFixture {
         std::hint::black_box(right).len().hash(&mut h);
         h.finish()
     }
+}
 
-    fn hash_render_window(
-        &self,
-        document: &MarkdownPreviewDocument,
-        start: usize,
-        window: usize,
-    ) -> u64 {
-        if window == 0 {
-            return 0;
-        }
-
-        let rows = self.render_window(document, start, window);
-        let mut h = FxHasher::default();
-        start.hash(&mut h);
-        window.hash(&mut h);
-        std::hint::black_box(rows).len().hash(&mut h);
-        h.finish()
+fn hash_markdown_preview_window(
+    theme: AppTheme,
+    document: &MarkdownPreviewDocument,
+    start: usize,
+    window: usize,
+) -> u64 {
+    if window == 0 {
+        return 0;
     }
 
-    fn render_window(
-        &self,
-        document: &MarkdownPreviewDocument,
-        start: usize,
-        window: usize,
-    ) -> Vec<AnyElement> {
-        if document.rows.is_empty() || window == 0 {
-            return Vec::new();
-        }
+    let rows = render_markdown_preview_window(theme, document, start, window);
+    let mut h = FxHasher::default();
+    start.hash(&mut h);
+    window.hash(&mut h);
+    std::hint::black_box(rows).len().hash(&mut h);
+    h.finish()
+}
 
-        let start = start % document.rows.len();
-        let end = (start + window).min(document.rows.len());
-        super::history::render_markdown_preview_document_rows(
-            document,
-            start..end,
-            &super::history::MarkdownPreviewRenderContext {
-                theme: self.theme,
-                bar_color: None,
-                min_width: px(0.0),
-                editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY
-                    .to_string(),
-                view: None,
-                text_region: DiffTextRegion::Inline,
-            },
-        )
+fn render_markdown_preview_window(
+    theme: AppTheme,
+    document: &MarkdownPreviewDocument,
+    start: usize,
+    window: usize,
+) -> Vec<AnyElement> {
+    let (start, end) = markdown_preview_document_window_bounds(document, start, window);
+    if start == end {
+        return Vec::new();
     }
+
+    super::history::render_markdown_preview_document_rows(
+        document,
+        start..end,
+        &super::history::MarkdownPreviewRenderContext {
+            theme,
+            bar_color: None,
+            min_width: px(0.0),
+            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
+            view: None,
+            text_region: DiffTextRegion::Inline,
+        },
+    )
+}
+
+fn markdown_preview_document_window_bounds(
+    document: &MarkdownPreviewDocument,
+    start: usize,
+    window: usize,
+) -> (usize, usize) {
+    if document.rows.is_empty() || window == 0 {
+        return (0, 0);
+    }
+
+    let start = start % document.rows.len();
+    let end = (start + window).min(document.rows.len());
+    (start, end)
 }
 
 fn load_large_html_bench_text(
@@ -1561,6 +1696,428 @@ fn build_synthetic_markdown_document(
     }
 
     source
+}
+
+fn profile_markdown_preview_scroll_document(
+    document: &MarkdownPreviewDocument,
+    long_row_bytes: usize,
+) -> MarkdownPreviewScrollProfile {
+    let mut profile = MarkdownPreviewScrollProfile {
+        total_rows: bench_counter_u64(document.rows.len()),
+        long_row_bytes: bench_counter_u64(long_row_bytes),
+        ..MarkdownPreviewScrollProfile::default()
+    };
+
+    if long_row_bytes > 0 {
+        profile.long_rows = bench_counter_u64(
+            document
+                .rows
+                .iter()
+                .filter(|row| row.text.len() >= long_row_bytes)
+                .count(),
+        );
+    }
+
+    for row in &document.rows {
+        match row.kind {
+            MarkdownPreviewRowKind::Heading { .. } => profile.heading_rows += 1,
+            MarkdownPreviewRowKind::ListItem { .. } => profile.list_rows += 1,
+            MarkdownPreviewRowKind::TableRow { .. } => profile.table_rows += 1,
+            MarkdownPreviewRowKind::CodeLine { .. } => profile.code_rows += 1,
+            MarkdownPreviewRowKind::BlockquoteLine => profile.blockquote_rows += 1,
+            MarkdownPreviewRowKind::DetailsSummary => profile.details_rows += 1,
+            _ => {}
+        }
+    }
+
+    profile
+}
+
+fn build_synthetic_rich_markdown_scroll_document() -> MarkdownPreviewDocument {
+    let block_count = RICH_MARKDOWN_SCROLL_TOTAL_ROWS / RICH_MARKDOWN_SCROLL_PATTERN_ROWS;
+    debug_assert_eq!(
+        block_count.saturating_mul(RICH_MARKDOWN_SCROLL_PATTERN_ROWS),
+        RICH_MARKDOWN_SCROLL_TOTAL_ROWS
+    );
+    debug_assert_eq!(
+        block_count.saturating_mul(2),
+        RICH_MARKDOWN_SCROLL_LONG_ROWS
+    );
+
+    let mut rows = Vec::with_capacity(RICH_MARKDOWN_SCROLL_TOTAL_ROWS);
+
+    for block_ix in 0..block_count {
+        let row_base = block_ix * RICH_MARKDOWN_SCROLL_PATTERN_ROWS;
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::Heading { level: 1 },
+            padded_markdown_preview_text(
+                format!("Preview heading cluster {block_ix} sets the document theme"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base,
+            ),
+            row_base,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::Paragraph,
+            padded_markdown_preview_text(
+                format!(
+                    "Paragraph row {block_ix} exercises rich preview shaping across emphasis, links, tables, and list content for sustained scrolling"
+                ),
+                RICH_MARKDOWN_SCROLL_LONG_ROW_BYTES,
+                row_base + 1,
+            ),
+            row_base + 1,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::Paragraph,
+            padded_markdown_preview_text(
+                format!("Short paragraph row {block_ix} keeps mixed markdown content dense"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 2,
+            ),
+            row_base + 2,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::DetailsSummary,
+            padded_markdown_preview_text(
+                format!("Details summary {block_ix} expands benchmark notes"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 3,
+            ),
+            row_base + 3,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::ListItem { number: None },
+            padded_markdown_preview_text(
+                format!("unordered preview item {block_ix} keeps list layout active"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 4,
+            ),
+            row_base + 4,
+            None,
+            false,
+            1,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::ListItem {
+                number: Some(u64::try_from(block_ix + 1).unwrap_or(u64::MAX)),
+            },
+            padded_markdown_preview_text(
+                format!("ordered preview item {block_ix} validates numbered list rendering"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 5,
+            ),
+            row_base + 5,
+            None,
+            false,
+            1,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::BlockquoteLine,
+            padded_markdown_preview_text(
+                format!("blockquote note {block_ix} keeps quoted styling in rotation"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 6,
+            ),
+            row_base + 6,
+            None,
+            false,
+            0,
+            1,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: true,
+                is_last: false,
+            },
+            padded_markdown_preview_text(
+                format!("fn render_window_{block_ix}() -> usize {{ {block_ix} + 1 }}"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 7,
+            ),
+            row_base + 7,
+            Some(DiffSyntaxLanguage::Rust),
+            false,
+            0,
+            0,
+            false,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: false,
+                is_last: true,
+            },
+            padded_markdown_preview_text(
+                format!(
+                    "let scrolling_preview_row_{block_ix} = cache.refresh_preview_window({block_ix}, 200, true);"
+                ),
+                RICH_MARKDOWN_SCROLL_LONG_ROW_BYTES,
+                row_base + 8,
+            ),
+            row_base + 8,
+            Some(DiffSyntaxLanguage::Rust),
+            true,
+            0,
+            0,
+            false,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::TableRow { is_header: true },
+            padded_markdown_preview_text(
+                format!("column_{block_ix} | value | notes | preview"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 9,
+            ),
+            row_base + 9,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::TableRow { is_header: false },
+            padded_markdown_preview_text(
+                format!("feature_{block_ix} | stable | row_count | 200"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 10,
+            ),
+            row_base + 10,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::Heading { level: 2 },
+            padded_markdown_preview_text(
+                format!("Secondary heading {block_ix} keeps heading hierarchy varied"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 11,
+            ),
+            row_base + 11,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::Paragraph,
+            padded_markdown_preview_text(
+                format!("Compact body row {block_ix} keeps paragraph batches realistic"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 12,
+            ),
+            row_base + 12,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::ListItem { number: None },
+            padded_markdown_preview_text(
+                format!("nested bullet row {block_ix} keeps indentation work active"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 13,
+            ),
+            row_base + 13,
+            None,
+            false,
+            2,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::ListItem {
+                number: Some(u64::try_from(block_ix.saturating_mul(2) + 1).unwrap_or(u64::MAX)),
+            },
+            padded_markdown_preview_text(
+                format!("nested ordered row {block_ix} keeps numbering logic warm"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 14,
+            ),
+            row_base + 14,
+            None,
+            false,
+            2,
+            0,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::BlockquoteLine,
+            padded_markdown_preview_text(
+                format!("quoted follow-up row {block_ix} preserves blockquote density"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 15,
+            ),
+            row_base + 15,
+            None,
+            false,
+            0,
+            1,
+            true,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: true,
+                is_last: false,
+            },
+            padded_markdown_preview_text(
+                format!("let section_{block_ix}_visible = viewport.start + {block_ix};"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 16,
+            ),
+            row_base + 16,
+            Some(DiffSyntaxLanguage::Rust),
+            false,
+            0,
+            0,
+            false,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::CodeLine {
+                is_first: false,
+                is_last: true,
+            },
+            padded_markdown_preview_text(
+                format!("viewport.finish(section_{block_ix}_visible, 200);"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 17,
+            ),
+            row_base + 17,
+            Some(DiffSyntaxLanguage::Rust),
+            false,
+            0,
+            0,
+            false,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::ThematicBreak,
+            String::new(),
+            row_base + 18,
+            None,
+            false,
+            0,
+            0,
+            false,
+        ));
+        rows.push(build_markdown_preview_row(
+            MarkdownPreviewRowKind::TableRow { is_header: false },
+            padded_markdown_preview_text(
+                format!("metric_{block_ix} | scroll_step | 24 | markdown"),
+                RICH_MARKDOWN_SCROLL_SHORT_ROW_BYTES,
+                row_base + 19,
+            ),
+            row_base + 19,
+            None,
+            false,
+            0,
+            0,
+            true,
+        ));
+    }
+
+    debug_assert_eq!(rows.len(), RICH_MARKDOWN_SCROLL_TOTAL_ROWS);
+    MarkdownPreviewDocument { rows }
+}
+
+fn build_markdown_preview_row(
+    kind: MarkdownPreviewRowKind,
+    text: String,
+    source_line: usize,
+    code_language: Option<DiffSyntaxLanguage>,
+    code_block_horizontal_scroll_hint: bool,
+    indent_level: u8,
+    blockquote_level: u8,
+    styled_inline: bool,
+) -> MarkdownPreviewRow {
+    let inline_spans = if styled_inline {
+        build_markdown_preview_inline_spans(&text)
+    } else {
+        Arc::default()
+    };
+
+    MarkdownPreviewRow {
+        kind,
+        text: text.into(),
+        inline_spans,
+        code_language,
+        code_block_horizontal_scroll_hint,
+        source_line_range: source_line..source_line.saturating_add(1),
+        change_hint: MarkdownChangeHint::None,
+        indent_level,
+        blockquote_level,
+        footnote_label: None,
+        alert_kind: None,
+        starts_alert: false,
+        styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
+        measured_width_px: MarkdownPreviewRowWidthCache::default(),
+    }
+}
+
+fn build_markdown_preview_inline_spans(text: &str) -> Arc<Vec<MarkdownInlineSpan>> {
+    let len = text.len();
+    let mut spans = Vec::new();
+    for (start, width, style) in [
+        (0usize, 8usize, MarkdownInlineStyle::Bold),
+        (12usize, 6usize, MarkdownInlineStyle::Italic),
+        (24usize, 8usize, MarkdownInlineStyle::Link),
+        (36usize, 6usize, MarkdownInlineStyle::Code),
+    ] {
+        if start >= len {
+            continue;
+        }
+        let end = start.saturating_add(width).min(len);
+        if end > start {
+            spans.push(MarkdownInlineSpan {
+                byte_range: start..end,
+                style,
+            });
+        }
+    }
+    Arc::new(spans)
+}
+
+fn padded_markdown_preview_text(mut base: String, target_bytes: usize, seed: usize) -> String {
+    if base.len() < target_bytes {
+        base.push(' ');
+        while base.len() < target_bytes {
+            base.push_str("preview_scroll_token_");
+            base.push_str(&(seed % 997).to_string());
+            base.push(' ');
+        }
+        base.truncate(target_bytes);
+    }
+    base
 }
 
 fn push_padded_markdown_line(

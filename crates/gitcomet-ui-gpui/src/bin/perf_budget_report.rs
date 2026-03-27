@@ -122,6 +122,20 @@ const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 2.5 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
+        label: "markdown_preview_scroll/window_rows/200",
+        estimate_path: "markdown_preview_scroll/window_rows/200/new/estimates.json",
+        // Steady-state Preview-mode scroll over a large single markdown document
+        // reuses styled-row caches, so it should stay close to render_single.
+        threshold_ns: 2.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
+        label: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        estimate_path: "markdown_preview_scroll/rich_5000_rows_window_rows/200/new/estimates.json",
+        // Heavier steady-state Preview-mode scroll case: 5k rendered rows with
+        // 500 long 2k-character rows plus mixed headings, lists, tables, and code.
+        threshold_ns: 25.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
         label: "open_repo/balanced",
         estimate_path: "open_repo/balanced/new/estimates.json",
         threshold_ns: 650.0 * NANOS_PER_MILLISECOND,
@@ -1426,6 +1440,116 @@ const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
     StructuralBudgetSpec {
         bench: "diff_open_markdown_preview_first_window/200",
         metric: "new_rows_rendered",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    // Markdown preview single-document scroll structural budgets.
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/window_rows/200",
+        metric: "total_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1_000.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/window_rows/200",
+        metric: "start_row",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 24.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/window_rows/200",
+        metric: "window_size",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/window_rows/200",
+        metric: "rows_rendered",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/window_rows/200",
+        metric: "scroll_step_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 24.0,
+    },
+    // Rich markdown preview scroll structural budgets.
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "total_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 5_000.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "long_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 500.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "long_row_bytes",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 2_000.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "start_row",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 24.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "window_size",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "rows_rendered",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "scroll_step_rows",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 24.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "heading_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "list_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "table_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "code_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "blockquote_rows",
+        comparator: StructuralBudgetComparator::AtLeast,
+        threshold: 1.0,
+    },
+    StructuralBudgetSpec {
+        bench: "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+        metric: "details_rows",
         comparator: StructuralBudgetComparator::AtLeast,
         threshold: 1.0,
     },
@@ -7384,6 +7508,44 @@ mod tests {
         assert!(labels.contains(&"markdown_preview_parse_build/two_sided_diff/medium"));
         assert!(labels.contains(&"markdown_preview_render_single/window_rows/200"));
         assert!(labels.contains(&"markdown_preview_render_diff/window_rows/200"));
+        assert!(labels.contains(&"markdown_preview_scroll/window_rows/200"));
+        assert!(labels.contains(&"markdown_preview_scroll/rich_5000_rows_window_rows/200"));
+    }
+
+    #[test]
+    fn structural_budgets_include_markdown_preview_scroll_target() {
+        let specs = STRUCTURAL_BUDGETS
+            .iter()
+            .map(|spec| (spec.bench, spec.metric))
+            .collect::<Vec<_>>();
+        assert!(specs.contains(&("markdown_preview_scroll/window_rows/200", "total_rows")));
+        assert!(specs.contains(&("markdown_preview_scroll/window_rows/200", "start_row")));
+        assert!(specs.contains(&("markdown_preview_scroll/window_rows/200", "window_size")));
+        assert!(specs.contains(&("markdown_preview_scroll/window_rows/200", "rows_rendered")));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/window_rows/200",
+            "scroll_step_rows"
+        )));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+            "total_rows"
+        )));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+            "long_rows"
+        )));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+            "long_row_bytes"
+        )));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+            "table_rows"
+        )));
+        assert!(specs.contains(&(
+            "markdown_preview_scroll/rich_5000_rows_window_rows/200",
+            "code_rows"
+        )));
     }
 
     #[test]
