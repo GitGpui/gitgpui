@@ -32,6 +32,7 @@ static EMBEDDED_THEME_CACHE: OnceLock<HashMap<&'static str, AppTheme>> = OnceLoc
 pub struct AppTheme {
     pub is_dark: bool,
     pub colors: Colors,
+    pub syntax: SyntaxColors,
     pub graph_lane_palette: GraphLanePalette,
     pub radii: Radii,
 }
@@ -64,6 +65,36 @@ pub struct Colors {
     pub diff_remove_text: Rgba,
     pub input_placeholder: Rgba,
     pub accent_text: Rgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SyntaxColors {
+    pub comment: Rgba,
+    pub comment_doc: Rgba,
+    pub string: Rgba,
+    pub string_escape: Rgba,
+    pub keyword: Rgba,
+    pub keyword_control: Rgba,
+    pub number: Rgba,
+    pub boolean: Rgba,
+    pub function: Rgba,
+    pub function_method: Rgba,
+    pub function_special: Rgba,
+    pub type_name: Rgba,
+    pub type_builtin: Rgba,
+    pub type_interface: Rgba,
+    pub variable: Option<Rgba>,
+    pub variable_parameter: Rgba,
+    pub variable_special: Rgba,
+    pub property: Rgba,
+    pub constant: Rgba,
+    pub operator: Rgba,
+    pub punctuation: Rgba,
+    pub punctuation_bracket: Rgba,
+    pub punctuation_delimiter: Rgba,
+    pub tag: Rgba,
+    pub attribute: Rgba,
+    pub lifetime: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -274,6 +305,8 @@ struct ThemeFile {
     name: Option<String>,
     is_dark: bool,
     colors: ThemeFileColors,
+    #[serde(default)]
+    syntax: Option<ThemeFileSyntaxColors>,
     radii: Radii,
 }
 
@@ -320,6 +353,63 @@ struct ThemeFileColors {
     graph_lane_hues: Option<Vec<f32>>,
 }
 
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeFileSyntaxColors {
+    #[serde(default)]
+    comment: Option<ThemeColor>,
+    #[serde(default)]
+    comment_doc: Option<ThemeColor>,
+    #[serde(default)]
+    string: Option<ThemeColor>,
+    #[serde(default)]
+    string_escape: Option<ThemeColor>,
+    #[serde(default)]
+    keyword: Option<ThemeColor>,
+    #[serde(default)]
+    keyword_control: Option<ThemeColor>,
+    #[serde(default)]
+    number: Option<ThemeColor>,
+    #[serde(default)]
+    boolean: Option<ThemeColor>,
+    #[serde(default)]
+    function: Option<ThemeColor>,
+    #[serde(default)]
+    function_method: Option<ThemeColor>,
+    #[serde(default)]
+    function_special: Option<ThemeColor>,
+    #[serde(rename = "type", default)]
+    type_name: Option<ThemeColor>,
+    #[serde(default)]
+    type_builtin: Option<ThemeColor>,
+    #[serde(default)]
+    type_interface: Option<ThemeColor>,
+    #[serde(default)]
+    variable: Option<ThemeColor>,
+    #[serde(default)]
+    variable_parameter: Option<ThemeColor>,
+    #[serde(default)]
+    variable_special: Option<ThemeColor>,
+    #[serde(default)]
+    property: Option<ThemeColor>,
+    #[serde(default)]
+    constant: Option<ThemeColor>,
+    #[serde(default)]
+    operator: Option<ThemeColor>,
+    #[serde(default)]
+    punctuation: Option<ThemeColor>,
+    #[serde(default)]
+    punctuation_bracket: Option<ThemeColor>,
+    #[serde(default)]
+    punctuation_delimiter: Option<ThemeColor>,
+    #[serde(default)]
+    tag: Option<ThemeColor>,
+    #[serde(default)]
+    attribute: Option<ThemeColor>,
+    #[serde(default)]
+    lifetime: Option<ThemeColor>,
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(untagged)]
 enum ThemeColor {
@@ -341,6 +431,7 @@ impl From<ThemeFile> for AppTheme {
         let ThemeFile {
             is_dark,
             colors,
+            syntax,
             radii,
             ..
         } = theme;
@@ -377,51 +468,123 @@ impl From<ThemeFile> for AppTheme {
         let graph_lane_palette =
             GraphLanePalette::from_theme_colors(is_dark, graph_lane_palette, graph_lane_hues);
 
+        let colors = Colors {
+            window_bg: window_bg.into_rgba(),
+            surface_bg: surface_bg.into_rgba(),
+            surface_bg_elevated: surface_bg_elevated.into_rgba(),
+            active_section: active_section.into_rgba(),
+            border: border.into_rgba(),
+            tooltip_bg: tooltip_bg.into_rgba(),
+            tooltip_text: tooltip_text.into_rgba(),
+            text: text.into_rgba(),
+            text_muted: text_muted.into_rgba(),
+            accent: accent.into_rgba(),
+            hover: hover.into_rgba(),
+            active: active.into_rgba(),
+            focus_ring: focus_ring.into_rgba(),
+            focus_ring_bg: focus_ring_bg.into_rgba(),
+            scrollbar_thumb: scrollbar_thumb.into_rgba(),
+            scrollbar_thumb_hover: scrollbar_thumb_hover.into_rgba(),
+            scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
+            danger: danger.into_rgba(),
+            warning: warning.into_rgba(),
+            success: success.into_rgba(),
+            diff_add_bg: diff_add_bg
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_diff_add_bg(is_dark)),
+            diff_add_text: diff_add_text
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_diff_add_text(is_dark)),
+            diff_remove_bg: diff_remove_bg
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_diff_remove_bg(is_dark)),
+            diff_remove_text: diff_remove_text
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_diff_remove_text(is_dark)),
+            input_placeholder: input_placeholder
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_input_placeholder(is_dark)),
+            accent_text: accent_text
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(default_accent_text),
+        };
+        let syntax = resolve_syntax_colors(is_dark, &colors, syntax.as_ref());
+
         Self {
             is_dark,
-            colors: Colors {
-                window_bg: window_bg.into_rgba(),
-                surface_bg: surface_bg.into_rgba(),
-                surface_bg_elevated: surface_bg_elevated.into_rgba(),
-                active_section: active_section.into_rgba(),
-                border: border.into_rgba(),
-                tooltip_bg: tooltip_bg.into_rgba(),
-                tooltip_text: tooltip_text.into_rgba(),
-                text: text.into_rgba(),
-                text_muted: text_muted.into_rgba(),
-                accent: accent.into_rgba(),
-                hover: hover.into_rgba(),
-                active: active.into_rgba(),
-                focus_ring: focus_ring.into_rgba(),
-                focus_ring_bg: focus_ring_bg.into_rgba(),
-                scrollbar_thumb: scrollbar_thumb.into_rgba(),
-                scrollbar_thumb_hover: scrollbar_thumb_hover.into_rgba(),
-                scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
-                danger: danger.into_rgba(),
-                warning: warning.into_rgba(),
-                success: success.into_rgba(),
-                diff_add_bg: diff_add_bg
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(|| default_diff_add_bg(is_dark)),
-                diff_add_text: diff_add_text
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(|| default_diff_add_text(is_dark)),
-                diff_remove_bg: diff_remove_bg
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(|| default_diff_remove_bg(is_dark)),
-                diff_remove_text: diff_remove_text
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(|| default_diff_remove_text(is_dark)),
-                input_placeholder: input_placeholder
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(|| default_input_placeholder(is_dark)),
-                accent_text: accent_text
-                    .map(ThemeColor::into_rgba)
-                    .unwrap_or_else(default_accent_text),
-            },
+            colors,
+            syntax,
             graph_lane_palette,
             radii,
         }
+    }
+}
+
+fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: 1.0,
+    }
+}
+
+fn derived_syntax_color(is_dark: bool, colors: &Colors, token: Rgba) -> Rgba {
+    let blend_to_text = if is_dark { 0.42 } else { 0.58 };
+    mix_colors(token, colors.text, blend_to_text)
+}
+
+fn resolve_syntax_color(override_color: Option<ThemeColor>, fallback: Rgba) -> Rgba {
+    override_color
+        .map(ThemeColor::into_rgba)
+        .unwrap_or(fallback)
+}
+
+fn resolve_optional_syntax_color(override_color: Option<ThemeColor>) -> Option<Rgba> {
+    override_color.map(ThemeColor::into_rgba)
+}
+
+fn resolve_syntax_colors(
+    is_dark: bool,
+    colors: &Colors,
+    syntax: Option<&ThemeFileSyntaxColors>,
+) -> SyntaxColors {
+    let overrides = syntax.cloned().unwrap_or_default();
+    let accent = derived_syntax_color(is_dark, colors, colors.accent);
+    let warning = derived_syntax_color(is_dark, colors, colors.warning);
+    let success = derived_syntax_color(is_dark, colors, colors.success);
+
+    SyntaxColors {
+        comment: resolve_syntax_color(overrides.comment, colors.text_muted),
+        comment_doc: resolve_syntax_color(overrides.comment_doc, colors.text_muted),
+        string: resolve_syntax_color(overrides.string, warning),
+        string_escape: resolve_syntax_color(overrides.string_escape, success),
+        keyword: resolve_syntax_color(overrides.keyword, accent),
+        keyword_control: resolve_syntax_color(overrides.keyword_control, accent),
+        number: resolve_syntax_color(overrides.number, success),
+        boolean: resolve_syntax_color(overrides.boolean, success),
+        function: resolve_syntax_color(overrides.function, accent),
+        function_method: resolve_syntax_color(overrides.function_method, accent),
+        function_special: resolve_syntax_color(overrides.function_special, accent),
+        type_name: resolve_syntax_color(overrides.type_name, warning),
+        type_builtin: resolve_syntax_color(overrides.type_builtin, warning),
+        type_interface: resolve_syntax_color(overrides.type_interface, warning),
+        variable: resolve_optional_syntax_color(overrides.variable),
+        variable_parameter: resolve_syntax_color(overrides.variable_parameter, colors.text_muted),
+        variable_special: resolve_syntax_color(overrides.variable_special, accent),
+        property: resolve_syntax_color(overrides.property, accent),
+        constant: resolve_syntax_color(overrides.constant, success),
+        operator: resolve_syntax_color(overrides.operator, colors.text_muted),
+        punctuation: resolve_syntax_color(overrides.punctuation, colors.text_muted),
+        punctuation_bracket: resolve_syntax_color(overrides.punctuation_bracket, colors.text_muted),
+        punctuation_delimiter: resolve_syntax_color(
+            overrides.punctuation_delimiter,
+            colors.text_muted,
+        ),
+        tag: resolve_syntax_color(overrides.tag, warning),
+        attribute: resolve_syntax_color(overrides.attribute, accent),
+        lifetime: resolve_syntax_color(overrides.lifetime, accent),
     }
 }
 
@@ -633,7 +796,8 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, GRAPH_LANE_PALETTE_SIZE, Rgba,
-        available_themes, has_theme_key, merged_theme_options, theme_label, with_alpha,
+        available_themes, derived_syntax_color, has_theme_key, merged_theme_options, theme_label,
+        with_alpha,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -721,7 +885,61 @@ mod tests {
             theme.graph_lane_palette.as_slice()[0],
             gpui::hsla(0.25, 0.75, 0.62, 1.0).into()
         );
+        assert_eq!(theme.syntax.comment, theme.colors.text_muted);
+        assert_eq!(
+            theme.syntax.keyword,
+            derived_syntax_color(theme.is_dark, &theme.colors, theme.colors.accent)
+        );
+        assert_eq!(theme.syntax.variable, None);
         assert_eq!(theme.radii.panel, 2.0);
+    }
+
+    #[test]
+    fn parses_theme_json_with_optional_syntax_overrides() {
+        let json = r##"{
+            "is_dark": false,
+            "colors": {
+                "window_bg": "#fafafaff",
+                "surface_bg": "#ebebecff",
+                "surface_bg_elevated": "#ebebecff",
+                "active_section": "#fafafaff",
+                "border": "#dfdfe0ff",
+                "text": "#242529ff",
+                "text_muted": "#58585aff",
+                "accent": "#5c78e2ff",
+                "hover": "#dfdfe0ff",
+                "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                "danger": "#de3e35ff",
+                "warning": "#d2b67cff",
+                "success": "#3f953aff"
+            },
+            "syntax": {
+                "keyword": "#112233ff",
+                "variable": "#445566ff",
+                "comment_doc": "#778899ff"
+            },
+            "radii": {
+                "panel": 2.0,
+                "pill": 2.0,
+                "row": 2.0
+            }
+        }"##;
+
+        let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
+
+        assert_eq!(theme.syntax.keyword, gpui::rgba(0x112233ff));
+        assert_eq!(theme.syntax.variable, Some(gpui::rgba(0x445566ff)));
+        assert_eq!(theme.syntax.comment_doc, gpui::rgba(0x778899ff));
+        assert_eq!(theme.syntax.comment, theme.colors.text_muted);
+        assert_eq!(
+            theme.syntax.string,
+            derived_syntax_color(theme.is_dark, &theme.colors, theme.colors.warning)
+        );
     }
 
     #[test]
@@ -806,6 +1024,17 @@ mod tests {
             dark.graph_lane_palette.as_slice().len(),
             GRAPH_LANE_PALETTE_SIZE
         );
+    }
+
+    #[test]
+    fn built_in_tokyo_night_theme_loads_from_embedded_json() {
+        let theme = AppTheme::from_key("tokyo_night").expect("Tokyo Night theme should load");
+
+        assert!(theme.is_dark);
+        assert_eq!(theme.colors.window_bg, gpui::rgba(0x1a1b26ff));
+        assert_eq!(theme.syntax.keyword, gpui::rgba(0xbb9af7ff));
+        assert_eq!(theme.syntax.string, gpui::rgba(0x9ece6aff));
+        assert_eq!(theme.syntax.variable, Some(gpui::rgba(0xc0caf5ff)));
     }
 
     #[test]

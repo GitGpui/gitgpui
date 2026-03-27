@@ -821,54 +821,35 @@ fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
     hasher.finish()
 }
 
-fn mix_colors(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
-    let t = t.clamp(0.0, 1.0);
-    gpui::Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: 1.0,
-    }
-}
-
-fn calm_syntax_color(theme: AppTheme, token: gpui::Rgba) -> gpui::Rgba {
-    // Pull token colors towards the base foreground for a less-saturated "calm" look.
-    let blend_to_text = if theme.is_dark { 0.42 } else { 0.58 };
-    mix_colors(token, theme.colors.text, blend_to_text)
-}
-
 fn syntax_highlight_color(theme: AppTheme, kind: SyntaxTokenKind) -> Option<gpui::Rgba> {
     match kind {
-        SyntaxTokenKind::None | SyntaxTokenKind::Variable => None,
-        // Muted: comments, parameters, operators, punctuation
-        SyntaxTokenKind::Comment
-        | SyntaxTokenKind::CommentDoc
-        | SyntaxTokenKind::VariableParameter
-        | SyntaxTokenKind::Operator
-        | SyntaxTokenKind::Punctuation
-        | SyntaxTokenKind::PunctuationBracket
-        | SyntaxTokenKind::PunctuationDelimiter => Some(theme.colors.text_muted),
-        // Accent: keywords, functions, properties, attributes, variable.special, lifetime
-        SyntaxTokenKind::Keyword
-        | SyntaxTokenKind::KeywordControl
-        | SyntaxTokenKind::Function
-        | SyntaxTokenKind::FunctionMethod
-        | SyntaxTokenKind::FunctionSpecial
-        | SyntaxTokenKind::VariableSpecial
-        | SyntaxTokenKind::Property
-        | SyntaxTokenKind::Attribute
-        | SyntaxTokenKind::Lifetime => Some(calm_syntax_color(theme, theme.colors.accent)),
-        // Warning: strings, types, tags
-        SyntaxTokenKind::String
-        | SyntaxTokenKind::Type
-        | SyntaxTokenKind::TypeBuiltin
-        | SyntaxTokenKind::TypeInterface
-        | SyntaxTokenKind::Tag => Some(calm_syntax_color(theme, theme.colors.warning)),
-        // Success: numbers, booleans, constants, string escapes
-        SyntaxTokenKind::Number
-        | SyntaxTokenKind::Boolean
-        | SyntaxTokenKind::Constant
-        | SyntaxTokenKind::StringEscape => Some(calm_syntax_color(theme, theme.colors.success)),
+        SyntaxTokenKind::None => None,
+        SyntaxTokenKind::Comment => Some(theme.syntax.comment),
+        SyntaxTokenKind::CommentDoc => Some(theme.syntax.comment_doc),
+        SyntaxTokenKind::String => Some(theme.syntax.string),
+        SyntaxTokenKind::StringEscape => Some(theme.syntax.string_escape),
+        SyntaxTokenKind::Keyword => Some(theme.syntax.keyword),
+        SyntaxTokenKind::KeywordControl => Some(theme.syntax.keyword_control),
+        SyntaxTokenKind::Number => Some(theme.syntax.number),
+        SyntaxTokenKind::Boolean => Some(theme.syntax.boolean),
+        SyntaxTokenKind::Function => Some(theme.syntax.function),
+        SyntaxTokenKind::FunctionMethod => Some(theme.syntax.function_method),
+        SyntaxTokenKind::FunctionSpecial => Some(theme.syntax.function_special),
+        SyntaxTokenKind::Type => Some(theme.syntax.type_name),
+        SyntaxTokenKind::TypeBuiltin => Some(theme.syntax.type_builtin),
+        SyntaxTokenKind::TypeInterface => Some(theme.syntax.type_interface),
+        SyntaxTokenKind::Variable => theme.syntax.variable,
+        SyntaxTokenKind::VariableParameter => Some(theme.syntax.variable_parameter),
+        SyntaxTokenKind::VariableSpecial => Some(theme.syntax.variable_special),
+        SyntaxTokenKind::Property => Some(theme.syntax.property),
+        SyntaxTokenKind::Constant => Some(theme.syntax.constant),
+        SyntaxTokenKind::Operator => Some(theme.syntax.operator),
+        SyntaxTokenKind::Punctuation => Some(theme.syntax.punctuation),
+        SyntaxTokenKind::PunctuationBracket => Some(theme.syntax.punctuation_bracket),
+        SyntaxTokenKind::PunctuationDelimiter => Some(theme.syntax.punctuation_delimiter),
+        SyntaxTokenKind::Tag => Some(theme.syntax.tag),
+        SyntaxTokenKind::Attribute => Some(theme.syntax.attribute),
+        SyntaxTokenKind::Lifetime => Some(theme.syntax.lifetime),
     }
 }
 
@@ -1557,6 +1538,53 @@ mod tests {
         // Regular keywords should not have font weight.
         let plain = syntax_highlight_style(theme, SyntaxTokenKind::Keyword).unwrap();
         assert_eq!(plain.font_weight, None);
+    }
+
+    #[test]
+    fn syntax_highlight_style_uses_theme_syntax_overrides() {
+        let theme = AppTheme::from_json_str(
+            r##"{
+                "is_dark": true,
+                "colors": {
+                    "window_bg": "#0d1016ff",
+                    "surface_bg": "#1f2127ff",
+                    "surface_bg_elevated": "#1f2127ff",
+                    "active_section": "#2d2f34ff",
+                    "border": "#2d2f34ff",
+                    "text": "#bfbdb6ff",
+                    "text_muted": "#8a8986ff",
+                    "accent": "#5ac1feff",
+                    "hover": "#2d2f34ff",
+                    "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                    "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                    "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                    "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                    "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                    "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                    "danger": "#ef7177ff",
+                    "warning": "#feb454ff",
+                    "success": "#aad84cff"
+                },
+                "syntax": {
+                    "keyword": "#112233ff",
+                    "variable": "#445566ff"
+                },
+                "radii": {
+                    "panel": 2.0,
+                    "pill": 2.0,
+                    "row": 2.0
+                }
+            }"##,
+        )
+        .expect("theme JSON should parse");
+
+        let keyword = syntax_highlight_style(theme, SyntaxTokenKind::Keyword)
+            .expect("keyword style should be present");
+        assert_eq!(keyword.color, Some(gpui::rgba(0x112233ff).into()));
+
+        let variable = syntax_highlight_style(theme, SyntaxTokenKind::Variable)
+            .expect("variable style should be present when overridden");
+        assert_eq!(variable.color, Some(gpui::rgba(0x445566ff).into()));
     }
 
     #[test]
