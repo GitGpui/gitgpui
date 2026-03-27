@@ -128,12 +128,18 @@ pub(super) fn paint_history_graph(
         paint_stash_node(
             bounds.left() + node_x,
             y_center,
-            gpui::rgba(0x000000ff),
+            theme.colors.window_bg,
             node_color,
             window,
         );
     } else {
-        paint_commit_node(bounds.left() + node_x, y_center, node_radius, node_color, window);
+        paint_commit_node(
+            bounds.left() + node_x,
+            y_center,
+            node_radius,
+            node_color,
+            window,
+        );
     }
 }
 
@@ -180,10 +186,8 @@ fn paint_stash_node(
     );
 
     window.paint_quad(fill(outer, border_color).corner_radii(r.min(px(2.0))));
-    window.paint_quad(
-        fill(inner, fill_color)
-            .corner_radii((r - px(0.4)).max(px(0.0)).min(px(2.0))),
-    );
+    window
+        .paint_quad(fill(inner, fill_color).corner_radii((r - px(0.4)).max(px(0.0)).min(px(2.0))));
 
     // Simple "lid" line to make it read as a stash/box.
     let lid_y = inner.top() + px(2.4);

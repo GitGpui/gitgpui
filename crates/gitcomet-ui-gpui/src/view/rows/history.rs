@@ -1563,7 +1563,7 @@ fn working_tree_summary_history_row(
         parts.push(icon_count("icons/minus.svg", theme.colors.danger, deleted));
     }
 
-    let black = gpui::rgba(0x000000ff);
+    let node_fill = theme.colors.window_bg;
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
@@ -1601,7 +1601,7 @@ fn working_tree_summary_history_row(
             window.paint_quad(
                 fill(
                     gpui::Bounds::new(point(center.x - r, center.y - r), size(r * 2.0, r * 2.0)),
-                    black,
+                    node_fill,
                 )
                 .corner_radii(r.min(px(2.0))),
             );
