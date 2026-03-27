@@ -1544,36 +1544,43 @@ mod tests {
     fn syntax_highlight_style_uses_theme_syntax_overrides() {
         let theme = AppTheme::from_json_str(
             r##"{
-                "is_dark": true,
-                "colors": {
-                    "window_bg": "#0d1016ff",
-                    "surface_bg": "#1f2127ff",
-                    "surface_bg_elevated": "#1f2127ff",
-                    "active_section": "#2d2f34ff",
-                    "border": "#2d2f34ff",
-                    "text": "#bfbdb6ff",
-                    "text_muted": "#8a8986ff",
-                    "accent": "#5ac1feff",
-                    "hover": "#2d2f34ff",
-                    "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
-                    "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
-                    "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
-                    "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
-                    "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
-                    "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
-                    "danger": "#ef7177ff",
-                    "warning": "#feb454ff",
-                    "success": "#aad84cff"
-                },
-                "syntax": {
-                    "keyword": "#112233ff",
-                    "variable": "#445566ff"
-                },
-                "radii": {
-                    "panel": 2.0,
-                    "pill": 2.0,
-                    "row": 2.0
-                }
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#0d1016ff",
+                            "surface_bg": "#1f2127ff",
+                            "surface_bg_elevated": "#1f2127ff",
+                            "active_section": "#2d2f34ff",
+                            "border": "#2d2f34ff",
+                            "text": "#bfbdb6ff",
+                            "text_muted": "#8a8986ff",
+                            "accent": "#5ac1feff",
+                            "hover": "#2d2f34ff",
+                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                            "danger": "#ef7177ff",
+                            "warning": "#feb454ff",
+                            "success": "#aad84cff"
+                        },
+                        "syntax": {
+                            "keyword": "#112233ff",
+                            "variable": "#445566ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
             }"##,
         )
         .expect("theme JSON should parse");

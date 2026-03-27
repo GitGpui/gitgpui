@@ -1,7 +1,7 @@
 use gpui::Rgba;
 use gpui::WindowAppearance;
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -18,15 +18,14 @@ pub(crate) struct ThemeOption {
     pub label: String,
 }
 
-struct EmbeddedThemeSpec {
-    key: &'static str,
-    label: &'static str,
+struct EmbeddedThemeFile {
+    stem: &'static str,
     json: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/embedded_themes.rs"));
 
-static EMBEDDED_THEME_CACHE: OnceLock<HashMap<&'static str, AppTheme>> = OnceLock::new();
+static EMBEDDED_THEME_CACHE: OnceLock<HashMap<String, RuntimeThemeSpec>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppTheme {
@@ -182,9 +181,20 @@ pub struct Radii {
 }
 
 impl AppTheme {
-    pub(crate) fn from_json_str(json: &str) -> Result<Self, serde_json::Error> {
-        let theme: ThemeFile = serde_json::from_str(json)?;
-        Ok(theme.into())
+    pub(crate) fn from_json_str(json: &str) -> Result<Self, ThemeParseError> {
+        let mut bundle = parse_theme_bundle(json)?;
+        if bundle.themes.len() != 1 {
+            return Err(ThemeParseError::Invalid(format!(
+                "theme bundle must contain exactly one theme, found {}",
+                bundle.themes.len()
+            )));
+        }
+
+        let theme = bundle
+            .themes
+            .pop()
+            .expect("bundle length checked before popping");
+        Ok(theme.into_app_theme())
     }
 
     #[allow(dead_code)]
@@ -220,7 +230,7 @@ impl AppTheme {
         runtime_themes()
             .get(key)
             .map(|spec| spec.theme)
-            .or_else(|| embedded_theme_cache().get(key).copied())
+            .or_else(|| embedded_theme_cache().get(key).map(|spec| spec.theme))
     }
 
     /// GitComet's default dark theme loaded from an embedded JSON definition.
@@ -264,7 +274,7 @@ pub(crate) enum ThemeLoadError {
     },
     Parse {
         path: std::path::PathBuf,
-        source: serde_json::Error,
+        source: ThemeParseError,
     },
 }
 
@@ -298,16 +308,88 @@ impl Error for ThemeLoadError {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum ThemeParseError {
+    Parse(serde_json::Error),
+    Invalid(String),
+}
+
+impl fmt::Display for ThemeParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parse(source) => source.fmt(f),
+            Self::Invalid(message) => f.write_str(message),
+        }
+    }
+}
+
+impl Error for ThemeParseError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Parse(source) => Some(source),
+            Self::Invalid(_) => None,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ThemeFile {
-    #[serde(default)]
-    name: Option<String>,
-    is_dark: bool,
+struct ThemeBundleFile {
+    #[serde(rename = "name")]
+    _name: String,
+    #[serde(rename = "author", default)]
+    _author: Option<String>,
+    themes: Vec<ThemeBundleEntry>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ThemeAppearance {
+    Light,
+    Dark,
+}
+
+impl ThemeAppearance {
+    const fn is_dark(self) -> bool {
+        matches!(self, Self::Dark)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeBundleEntry {
+    key: String,
+    name: String,
+    appearance: ThemeAppearance,
     colors: ThemeFileColors,
     #[serde(default)]
     syntax: Option<ThemeFileSyntaxColors>,
     radii: Radii,
+}
+
+impl ThemeBundleEntry {
+    fn into_app_theme(self) -> AppTheme {
+        ThemeFile {
+            appearance: self.appearance,
+            colors: self.colors,
+            syntax: self.syntax,
+            radii: self.radii,
+        }
+        .into()
+    }
+}
+
+struct ThemeFile {
+    appearance: ThemeAppearance,
+    colors: ThemeFileColors,
+    syntax: Option<ThemeFileSyntaxColors>,
+    radii: Radii,
+}
+
+impl ThemeFile {
+    fn is_dark(&self) -> bool {
+        self.appearance.is_dark()
+    }
 }
 
 #[derive(Deserialize)]
@@ -428,8 +510,9 @@ impl ThemeColor {
 
 impl From<ThemeFile> for AppTheme {
     fn from(theme: ThemeFile) -> Self {
+        let is_dark = theme.is_dark();
         let ThemeFile {
-            is_dark,
+            appearance: _,
             colors,
             syntax,
             radii,
@@ -640,17 +723,18 @@ fn default_accent_text() -> Rgba {
     gpui::rgba(0xffffffff)
 }
 
-fn embedded_theme_cache() -> &'static HashMap<&'static str, AppTheme> {
+fn embedded_theme_cache() -> &'static HashMap<String, RuntimeThemeSpec> {
     EMBEDDED_THEME_CACHE.get_or_init(|| {
-        EMBEDDED_THEME_SPECS
-            .iter()
-            .map(|spec| {
-                let theme = AppTheme::from_json_str(spec.json).unwrap_or_else(|err| {
-                    panic!("failed to load built-in theme {}: {err}", spec.key)
-                });
-                (spec.key, theme)
-            })
-            .collect()
+        let mut themes = HashMap::default();
+        for file in EMBEDDED_THEME_FILES {
+            let specs = load_theme_specs_from_json(file.json).unwrap_or_else(|err| {
+                panic!("failed to load built-in theme file {}: {err}", file.stem)
+            });
+            for spec in specs {
+                themes.insert(spec.option.key.clone(), spec);
+            }
+        }
+        themes
     })
 }
 
@@ -662,14 +746,8 @@ struct RuntimeThemeSpec {
 
 fn merged_theme_options(runtime_dir: Option<&Path>, seed_embedded: bool) -> Vec<ThemeOption> {
     let mut options = BTreeMap::<String, ThemeOption>::new();
-    for spec in EMBEDDED_THEME_SPECS {
-        options.insert(
-            spec.key.to_string(),
-            ThemeOption {
-                key: spec.key.to_string(),
-                label: spec.label.to_string(),
-            },
-        );
+    for spec in embedded_theme_cache().values() {
+        options.insert(spec.option.key.clone(), spec.option.clone());
     }
 
     for spec in runtime_themes_with_dir(runtime_dir, seed_embedded).into_values() {
@@ -712,12 +790,12 @@ fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>, seed_embedded: bool) 
 }
 
 fn seed_runtime_themes_dir(dir: &Path) {
-    for spec in EMBEDDED_THEME_SPECS {
-        let path = dir.join(format!("{}.json", spec.key));
+    for file in EMBEDDED_THEME_FILES {
+        let path = dir.join(format!("{}.json", file.stem));
         if path.exists() {
             continue;
         }
-        let _ = fs::write(path, spec.json);
+        let _ = fs::write(path, file.json);
     }
 }
 
@@ -734,57 +812,60 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
 
     let mut themes = HashMap::default();
     for path in files {
-        let Some(key) = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_string)
-        else {
-            continue;
-        };
-
         let Ok(json) = fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(file) = serde_json::from_str::<ThemeFile>(&json) else {
+        let Ok(specs) = load_theme_specs_from_json(&json) else {
             continue;
         };
 
-        let label = file
-            .name
-            .clone()
-            .unwrap_or_else(|| humanize_theme_key(&key));
-        themes.insert(
-            key.clone(),
-            RuntimeThemeSpec {
-                option: ThemeOption { key, label },
-                theme: file.into(),
-            },
-        );
+        for spec in specs {
+            themes.insert(spec.option.key.clone(), spec);
+        }
     }
 
     themes
 }
 
-fn humanize_theme_key(key: &str) -> String {
-    key.split('_')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            if part.eq_ignore_ascii_case("gitcomet") {
-                return "GitComet".to_string();
-            }
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut word = String::new();
-                    word.push(first.to_ascii_uppercase());
-                    word.extend(chars.map(|ch| ch.to_ascii_lowercase()));
-                    word
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+fn load_theme_specs_from_json(json: &str) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    let bundle = parse_theme_bundle(json)?;
+    load_theme_specs_from_bundle(bundle)
+}
+
+fn load_theme_specs_from_bundle(
+    bundle: ThemeBundleFile,
+) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
+    if bundle.themes.is_empty() {
+        return Err(ThemeParseError::Invalid(
+            "theme bundle must define at least one theme".to_string(),
+        ));
+    }
+
+    let mut seen_keys = HashSet::<String>::default();
+    let mut themes = Vec::with_capacity(bundle.themes.len());
+
+    for entry in bundle.themes {
+        let key = entry.key.clone();
+        if !seen_keys.insert(key.clone()) {
+            return Err(ThemeParseError::Invalid(format!(
+                "theme bundle defines duplicate key `{key}`"
+            )));
+        }
+
+        themes.push(RuntimeThemeSpec {
+            option: ThemeOption {
+                key,
+                label: entry.name.clone(),
+            },
+            theme: entry.into_app_theme(),
+        });
+    }
+
+    Ok(themes)
+}
+
+fn parse_theme_bundle(json: &str) -> Result<ThemeBundleFile, ThemeParseError> {
+    serde_json::from_str(json).map_err(ThemeParseError::Parse)
 }
 
 pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
@@ -796,8 +877,8 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, GRAPH_LANE_PALETTE_SIZE, Rgba,
-        available_themes, derived_syntax_color, has_theme_key, merged_theme_options, theme_label,
-        with_alpha,
+        available_themes, derived_syntax_color, has_theme_key, load_theme_specs_from_json,
+        merged_theme_options, theme_label, with_alpha,
     };
     use std::fs;
     use tempfile::tempdir;
@@ -822,41 +903,48 @@ mod tests {
     #[test]
     fn parses_theme_json_with_alpha_overrides() {
         let json = r##"{
-            "is_dark": true,
-            "colors": {
-                "window_bg": "#0d1016ff",
-                "surface_bg": "#1f2127ff",
-                "surface_bg_elevated": "#1f2127ff",
-                "active_section": "#2d2f34ff",
-                "border": "#2d2f34ff",
-                "tooltip_bg": "#000000ff",
-                "tooltip_text": "#ffffffff",
-                "text": "#bfbdb6ff",
-                "text_muted": "#8a8986ff",
-                "accent": "#5ac1feff",
-                "hover": "#2d2f34ff",
-                "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
-                "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
-                "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
-                "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
-                "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
-                "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
-                "danger": "#ef7177ff",
-                "warning": "#feb454ff",
-                "success": "#aad84cff",
-                "diff_add_bg": "#102030ff",
-                "diff_add_text": "#405060ff",
-                "diff_remove_bg": "#203040ff",
-                "diff_remove_text": "#506070ff",
-                "input_placeholder": "#708090ff",
-                "accent_text": "#112233ff",
-                "graph_lane_hues": [0.25, 0.75]
-            },
-            "radii": {
-                "panel": 2.0,
-                "pill": 2.0,
-                "row": 2.0
-            }
+            "name": "Fixture",
+            "themes": [
+                {
+                    "key": "fixture",
+                    "name": "Fixture",
+                    "appearance": "dark",
+                    "colors": {
+                        "window_bg": "#0d1016ff",
+                        "surface_bg": "#1f2127ff",
+                        "surface_bg_elevated": "#1f2127ff",
+                        "active_section": "#2d2f34ff",
+                        "border": "#2d2f34ff",
+                        "tooltip_bg": "#000000ff",
+                        "tooltip_text": "#ffffffff",
+                        "text": "#bfbdb6ff",
+                        "text_muted": "#8a8986ff",
+                        "accent": "#5ac1feff",
+                        "hover": "#2d2f34ff",
+                        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                        "danger": "#ef7177ff",
+                        "warning": "#feb454ff",
+                        "success": "#aad84cff",
+                        "diff_add_bg": "#102030ff",
+                        "diff_add_text": "#405060ff",
+                        "diff_remove_bg": "#203040ff",
+                        "diff_remove_text": "#506070ff",
+                        "input_placeholder": "#708090ff",
+                        "accent_text": "#112233ff",
+                        "graph_lane_hues": [0.25, 0.75]
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
         }"##;
 
         let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
@@ -897,37 +985,44 @@ mod tests {
     #[test]
     fn parses_theme_json_with_optional_syntax_overrides() {
         let json = r##"{
-            "is_dark": false,
-            "colors": {
-                "window_bg": "#fafafaff",
-                "surface_bg": "#ebebecff",
-                "surface_bg_elevated": "#ebebecff",
-                "active_section": "#fafafaff",
-                "border": "#dfdfe0ff",
-                "text": "#242529ff",
-                "text_muted": "#58585aff",
-                "accent": "#5c78e2ff",
-                "hover": "#dfdfe0ff",
-                "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
-                "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
-                "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
-                "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
-                "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
-                "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
-                "danger": "#de3e35ff",
-                "warning": "#d2b67cff",
-                "success": "#3f953aff"
-            },
-            "syntax": {
-                "keyword": "#112233ff",
-                "variable": "#445566ff",
-                "comment_doc": "#778899ff"
-            },
-            "radii": {
-                "panel": 2.0,
-                "pill": 2.0,
-                "row": 2.0
-            }
+            "name": "Fixture",
+            "themes": [
+                {
+                    "key": "fixture",
+                    "name": "Fixture",
+                    "appearance": "light",
+                    "colors": {
+                        "window_bg": "#fafafaff",
+                        "surface_bg": "#ebebecff",
+                        "surface_bg_elevated": "#ebebecff",
+                        "active_section": "#fafafaff",
+                        "border": "#dfdfe0ff",
+                        "text": "#242529ff",
+                        "text_muted": "#58585aff",
+                        "accent": "#5c78e2ff",
+                        "hover": "#dfdfe0ff",
+                        "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                        "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                        "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                        "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                        "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                        "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                        "danger": "#de3e35ff",
+                        "warning": "#d2b67cff",
+                        "success": "#3f953aff"
+                    },
+                    "syntax": {
+                        "keyword": "#112233ff",
+                        "variable": "#445566ff",
+                        "comment_doc": "#778899ff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
         }"##;
 
         let theme = AppTheme::from_json_str(json).expect("theme JSON should parse");
@@ -949,32 +1044,39 @@ mod tests {
         fs::write(
             &path,
             r##"{
-                "is_dark": false,
-                "colors": {
-                    "window_bg": "#fafafaff",
-                    "surface_bg": "#ebebecff",
-                    "surface_bg_elevated": "#ebebecff",
-                    "active_section": "#fafafaff",
-                    "border": "#dfdfe0ff",
-                    "text": "#242529ff",
-                    "text_muted": "#58585aff",
-                    "accent": "#5c78e2ff",
-                    "hover": "#dfdfe0ff",
-                    "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
-                    "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
-                    "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
-                    "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
-                    "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
-                    "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
-                    "danger": "#de3e35ff",
-                    "warning": "#d2b67cff",
-                    "success": "#3f953aff"
-                },
-                "radii": {
-                    "panel": 2.0,
-                    "pill": 2.0,
-                    "row": 2.0
-                }
+                "name": "Fixture",
+                "themes": [
+                    {
+                        "key": "fixture",
+                        "name": "Fixture",
+                        "appearance": "light",
+                        "colors": {
+                            "window_bg": "#fafafaff",
+                            "surface_bg": "#ebebecff",
+                            "surface_bg_elevated": "#ebebecff",
+                            "active_section": "#fafafaff",
+                            "border": "#dfdfe0ff",
+                            "text": "#242529ff",
+                            "text_muted": "#58585aff",
+                            "accent": "#5c78e2ff",
+                            "hover": "#dfdfe0ff",
+                            "active": { "hex": "#dfdfe0ff", "alpha": 0.88 },
+                            "focus_ring": { "hex": "#5c78e2ff", "alpha": 0.52 },
+                            "focus_ring_bg": { "hex": "#5c78e2ff", "alpha": 0.12 },
+                            "scrollbar_thumb": { "hex": "#58585aff", "alpha": 0.26 },
+                            "scrollbar_thumb_hover": { "hex": "#58585aff", "alpha": 0.36 },
+                            "scrollbar_thumb_active": { "hex": "#58585aff", "alpha": 0.46 },
+                            "danger": "#de3e35ff",
+                            "warning": "#d2b67cff",
+                            "success": "#3f953aff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
             }"##,
         )
         .expect("theme file should be written");
@@ -1038,6 +1140,85 @@ mod tests {
     }
 
     #[test]
+    fn bundled_theme_file_exposes_multiple_themes() {
+        let json = r##"{
+            "name": "Classic",
+            "themes": [
+                {
+                    "key": "classic_light",
+                    "name": "Classic Light",
+                    "appearance": "light",
+                    "colors": {
+                        "window_bg": "#ffffffff",
+                        "surface_bg": "#f9f9f9ff",
+                        "surface_bg_elevated": "#f7f7f7ff",
+                        "active_section": "#ffffffff",
+                        "border": "#d2d2d2ff",
+                        "text": "#000000ff",
+                        "text_muted": "#505050ff",
+                        "accent": "#1f6ae2ff",
+                        "hover": "#d0d0d0ff",
+                        "active": "#c7deffff",
+                        "focus_ring": { "hex": "#1f6ae2ff", "alpha": 0.52 },
+                        "focus_ring_bg": { "hex": "#1f6ae2ff", "alpha": 0.12 },
+                        "scrollbar_thumb": "#c8c8c8aa",
+                        "scrollbar_thumb_hover": "#c8c8c8aa",
+                        "scrollbar_thumb_active": "#c8c8c8ff",
+                        "danger": "#c5060bff",
+                        "warning": "#c99401ff",
+                        "success": "#036a07ff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                },
+                {
+                    "key": "classic_dark",
+                    "name": "Classic Dark",
+                    "appearance": "dark",
+                    "colors": {
+                        "window_bg": "#131313ff",
+                        "surface_bg": "#1e1d1eff",
+                        "surface_bg_elevated": "#1e1d1eff",
+                        "active_section": "#353436ff",
+                        "border": "#404040ff",
+                        "text": "#cacccaff",
+                        "text_muted": "#9e9e9eff",
+                        "accent": "#c28b12ff",
+                        "hover": "#353436ff",
+                        "active": "#474646ff",
+                        "focus_ring": { "hex": "#c28b12ff", "alpha": 0.60 },
+                        "focus_ring_bg": { "hex": "#c28b12ff", "alpha": 0.16 },
+                        "scrollbar_thumb": "#4c4d4daa",
+                        "scrollbar_thumb_hover": "#4c4d4dff",
+                        "scrollbar_thumb_active": "#4c4d4dff",
+                        "danger": "#c74028ff",
+                        "warning": "#b0a878ff",
+                        "success": "#62ba46ff"
+                    },
+                    "radii": {
+                        "panel": 2.0,
+                        "pill": 2.0,
+                        "row": 2.0
+                    }
+                }
+            ]
+        }"##;
+
+        let specs = load_theme_specs_from_json(json).expect("bundle should parse");
+
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].option.key, "classic_light");
+        assert_eq!(specs[0].option.label, "Classic Light");
+        assert!(!specs[0].theme.is_dark);
+        assert_eq!(specs[1].option.key, "classic_dark");
+        assert_eq!(specs[1].option.label, "Classic Dark");
+        assert!(specs[1].theme.is_dark);
+    }
+
+    #[test]
     fn embedded_theme_registry_exposes_default_keys() {
         let themes = available_themes();
 
@@ -1061,32 +1242,38 @@ mod tests {
             dir.path().join("custom_theme.json"),
             r##"{
                 "name": "Custom Theme",
-                "is_dark": true,
-                "colors": {
-                    "window_bg": "#000000ff",
-                    "surface_bg": "#111111ff",
-                    "surface_bg_elevated": "#222222ff",
-                    "active_section": "#333333ff",
-                    "border": "#444444ff",
-                    "text": "#eeeeeeff",
-                    "text_muted": "#999999ff",
-                    "accent": "#abcdef12",
-                    "hover": "#555555ff",
-                    "active": { "hex": "#666666ff", "alpha": 0.9 },
-                    "focus_ring": { "hex": "#777777ff", "alpha": 0.5 },
-                    "focus_ring_bg": { "hex": "#777777ff", "alpha": 0.2 },
-                    "scrollbar_thumb": "#88888880",
-                    "scrollbar_thumb_hover": "#888888ff",
-                    "scrollbar_thumb_active": "#999999ff",
-                    "danger": "#aa0000ff",
-                    "warning": "#bb9900ff",
-                    "success": "#00aa00ff"
-                },
-                "radii": {
-                    "panel": 2.0,
-                    "pill": 2.0,
-                    "row": 2.0
-                }
+                "themes": [
+                    {
+                        "key": "custom_theme",
+                        "name": "Custom Theme",
+                        "appearance": "dark",
+                        "colors": {
+                            "window_bg": "#000000ff",
+                            "surface_bg": "#111111ff",
+                            "surface_bg_elevated": "#222222ff",
+                            "active_section": "#333333ff",
+                            "border": "#444444ff",
+                            "text": "#eeeeeeff",
+                            "text_muted": "#999999ff",
+                            "accent": "#abcdef12",
+                            "hover": "#555555ff",
+                            "active": { "hex": "#666666ff", "alpha": 0.9 },
+                            "focus_ring": { "hex": "#777777ff", "alpha": 0.5 },
+                            "focus_ring_bg": { "hex": "#777777ff", "alpha": 0.2 },
+                            "scrollbar_thumb": "#88888880",
+                            "scrollbar_thumb_hover": "#888888ff",
+                            "scrollbar_thumb_active": "#999999ff",
+                            "danger": "#aa0000ff",
+                            "warning": "#bb9900ff",
+                            "success": "#00aa00ff"
+                        },
+                        "radii": {
+                            "panel": 2.0,
+                            "pill": 2.0,
+                            "row": 2.0
+                        }
+                    }
+                ]
             }"##,
         )
         .expect("custom theme file should be written");
