@@ -621,14 +621,17 @@ impl MainPaneView {
         if same_path_source_refresh {
             let blocked_rev = self.worktree_preview_content_rev;
             self.worktree_preview_cache_write_blocked_until_rev = Some(blocked_rev);
-            cx.spawn(async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                gpui::Timer::after(std::time::Duration::from_millis(1)).await;
-                let _ = view.update(cx, |this, _cx| {
-                    if this.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev) {
-                        this.worktree_preview_cache_write_blocked_until_rev = None;
-                    }
-                });
-            })
+            cx.spawn(
+                async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                    gpui::Timer::after(std::time::Duration::from_millis(1)).await;
+                    let _ = view.update(cx, |this, _cx| {
+                        if this.worktree_preview_cache_write_blocked_until_rev == Some(blocked_rev)
+                        {
+                            this.worktree_preview_cache_write_blocked_until_rev = None;
+                        }
+                    });
+                },
+            )
             .detach();
         }
 

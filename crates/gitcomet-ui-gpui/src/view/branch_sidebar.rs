@@ -1,6 +1,8 @@
 use super::*;
 use rustc_hash::FxHasher;
+use smallvec::SmallVec;
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     hash::{Hash, Hasher},
     num::NonZeroU32,
@@ -130,19 +132,35 @@ pub(super) enum BranchSidebarRow {
     },
 }
 
-#[derive(Default)]
-struct SlashTree {
-    is_leaf: bool,
-    children: BTreeMap<String, SlashTree>,
+#[derive(Clone, Copy, Default)]
+struct SlashTreeLeafMeta {
+    divergence: Option<UpstreamDivergence>,
+    is_head: bool,
 }
 
-impl SlashTree {
-    fn insert(&mut self, name: &str) {
+#[derive(Default)]
+struct SlashTree<'a> {
+    is_leaf: bool,
+    leaf_meta_index: Option<NonZeroU32>,
+    children: BTreeMap<&'a str, SlashTree<'a>>,
+}
+
+impl<'a> SlashTree<'a> {
+    fn insert(&mut self, name: &'a str) {
+        self.insert_with_leaf_meta_index(name, None);
+    }
+
+    fn insert_local(&mut self, name: &'a str, leaf_meta_index: NonZeroU32) {
+        self.insert_with_leaf_meta_index(name, Some(leaf_meta_index));
+    }
+
+    fn insert_with_leaf_meta_index(&mut self, name: &'a str, leaf_meta_index: Option<NonZeroU32>) {
         let mut node = self;
         for part in name.split('/').filter(|part| !part.is_empty()) {
-            node = node.children.entry(part.to_string()).or_default();
+            node = node.children.entry(part).or_default();
         }
         node.is_leaf = true;
+        node.leaf_meta_index = leaf_meta_index;
     }
 }
 
@@ -417,10 +435,27 @@ fn branch_sidebar_stash_source_hash(repo: &RepoState) -> u64 {
     hasher.finish()
 }
 
-fn cmp_case_insensitive_then_case_sensitive(left: &str, right: &str) -> std::cmp::Ordering {
-    left.to_lowercase()
-        .cmp(&right.to_lowercase())
-        .then_with(|| left.cmp(right))
+fn cmp_ascii_case_insensitive(left: &[u8], right: &[u8]) -> Ordering {
+    for (&left, &right) in left.iter().zip(right.iter()) {
+        let ordering = left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+
+    left.len().cmp(&right.len())
+}
+
+fn cmp_case_insensitive_then_case_sensitive(left: &str, right: &str) -> Ordering {
+    let ordering = if left.is_ascii() && right.is_ascii() {
+        cmp_ascii_case_insensitive(left.as_bytes(), right.as_bytes())
+    } else {
+        left.chars()
+            .flat_map(char::to_lowercase)
+            .cmp(right.chars().flat_map(char::to_lowercase))
+    };
+
+    ordering.then_with(|| left.cmp(right))
 }
 
 fn branch_sidebar_depth(depth: usize) -> BranchSidebarDepth {
@@ -473,23 +508,48 @@ pub(super) fn branch_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
 ) -> Vec<BranchSidebarRow> {
-    let approx_rows =
-        16 + match &repo.branches {
+    let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
+    let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
+    let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
+    let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
+    let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
+    let visible_rows = if local_collapsed {
+        0
+    } else {
+        match &repo.branches {
             Loadable::Ready(branches) => branches.len(),
             _ => 0,
-        } + match &repo.remote_branches {
+        }
+    } + if remote_collapsed {
+        0
+    } else {
+        match &repo.remote_branches {
             Loadable::Ready(branches) => branches.len(),
             _ => 0,
-        } + match &repo.worktrees {
+        }
+    } + if worktrees_collapsed {
+        0
+    } else {
+        match &repo.worktrees {
             Loadable::Ready(worktrees) => worktrees.len(),
             _ => 0,
-        } + match &repo.submodules {
+        }
+    } + if submodules_collapsed {
+        0
+    } else {
+        match &repo.submodules {
             Loadable::Ready(submodules) => submodules.len(),
             _ => 0,
-        } + match &repo.stashes {
+        }
+    } + if stash_collapsed {
+        0
+    } else {
+        match &repo.stashes {
             Loadable::Ready(stashes) => stashes.len(),
             _ => 0,
-        };
+        }
+    };
+    let approx_rows = 16 + visible_rows + visible_rows / 8;
     let mut rows = Vec::with_capacity(approx_rows);
     let head_upstream_full = match (&repo.branches, &repo.head_branch) {
         (Loadable::Ready(branches), Loadable::Ready(head)) => branches
@@ -507,7 +567,6 @@ pub(super) fn branch_sidebar_rows(
         _ => None,
     };
 
-    let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
         top_border: false,
@@ -528,22 +587,19 @@ pub(super) fn branch_sidebar_rows(
                     Loadable::Ready(head) => Some(head.as_str()),
                     _ => None,
                 };
-                let mut local_meta: HashMap<String, (Option<UpstreamDivergence>, bool)> =
-                    HashMap::default();
-                local_meta.reserve(branches.len());
-                for branch in branches.iter() {
-                    local_meta.insert(
-                        branch.name.clone(),
-                        (
-                            branch.divergence,
-                            head.is_some_and(|current| current == branch.name),
-                        ),
-                    );
-                }
-
                 let mut tree = SlashTree::default();
+                let mut local_leaf_meta = Vec::with_capacity(branches.len());
                 for branch in branches.iter() {
-                    tree.insert(&branch.name);
+                    local_leaf_meta.push(SlashTreeLeafMeta {
+                        divergence: branch.divergence,
+                        is_head: head.is_some_and(|current| current == branch.name.as_str()),
+                    });
+                    let leaf_meta_index = NonZeroU32::new(
+                        u32::try_from(local_leaf_meta.len())
+                            .expect("branch sidebar local leaf meta index overflow"),
+                    )
+                    .expect("branch sidebar local leaf meta index must be non-zero");
+                    tree.insert_local(branch.name.as_str(), leaf_meta_index);
                 }
 
                 let mut name_prefix = String::new();
@@ -551,7 +607,7 @@ pub(super) fn branch_sidebar_rows(
                 push_slash_tree_rows(
                     &tree,
                     &mut rows,
-                    Some(&local_meta),
+                    Some(local_leaf_meta.as_slice()),
                     head_upstream_full.as_deref(),
                     0,
                     false,
@@ -579,7 +635,6 @@ pub(super) fn branch_sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
-    let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Remote,
         top_border: true,
@@ -588,15 +643,15 @@ pub(super) fn branch_sidebar_rows(
     });
 
     if !remote_collapsed {
-        let mut remotes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut remotes: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut remote_section_is_loading_or_error = false;
         match &repo.remote_branches {
             Loadable::Ready(branches) => {
                 for branch in branches.iter() {
                     remotes
-                        .entry(branch.remote.clone())
+                        .entry(branch.remote.as_str())
                         .or_default()
-                        .push(branch.name.clone());
+                        .push(branch.name.as_str());
                 }
             }
             Loadable::Loading => {
@@ -621,16 +676,16 @@ pub(super) fn branch_sidebar_rows(
                 for local in local_branches.iter() {
                     if let Some(upstream) = &local.upstream {
                         remotes
-                            .entry(upstream.remote.clone())
+                            .entry(upstream.remote.as_str())
                             .or_default()
-                            .push(upstream.branch.clone());
+                            .push(upstream.branch.as_str());
                     }
                 }
             }
 
             if let Loadable::Ready(known) = &repo.remotes {
                 for remote in known.iter() {
-                    remotes.entry(remote.name.clone()).or_default();
+                    remotes.entry(remote.name.as_str()).or_default();
                 }
             }
 
@@ -641,20 +696,15 @@ pub(super) fn branch_sidebar_rows(
                 });
             } else {
                 let mut remotes = remotes.into_iter().collect::<Vec<_>>();
-                remotes.sort_by(|(left, _), (right, _)| {
+                remotes.sort_unstable_by(|(left, _), (right, _)| {
                     cmp_case_insensitive_then_case_sensitive(left, right)
                 });
 
-                for (remote, mut branches) in remotes {
-                    branches.sort_by(|left, right| {
-                        cmp_case_insensitive_then_case_sensitive(left, right)
-                    });
-                    branches.dedup();
-
+                for (remote, branches) in remotes {
                     let remote_collapse_key = remote_header_storage_key(&remote);
                     let remote_is_collapsed = is_collapsed(collapsed_items, &remote_collapse_key);
                     rows.push(BranchSidebarRow::RemoteHeader {
-                        name: remote.clone().into(),
+                        name: SharedString::new(remote),
                         collapsed: remote_is_collapsed,
                         collapse_key: remote_collapse_key.into(),
                     });
@@ -663,6 +713,8 @@ pub(super) fn branch_sidebar_rows(
                     }
 
                     let mut tree = SlashTree::default();
+                    // `push_slash_tree_rows()` sorts each fanout level, so sorting the flat
+                    // branch list here would only duplicate work.
                     for branch in branches {
                         tree.insert(&branch);
                     }
@@ -681,7 +733,7 @@ pub(super) fn branch_sidebar_rows(
                         BranchSection::Remote,
                         &mut name_prefix,
                         &mut group_path_prefix,
-                        Some(remote.as_str()),
+                        Some(remote),
                         collapsed_items,
                     );
                 }
@@ -691,7 +743,6 @@ pub(super) fn branch_sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
-    let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
     rows.push(BranchSidebarRow::WorktreesHeader {
         top_border: true,
         collapsed: worktrees_collapsed,
@@ -734,7 +785,6 @@ pub(super) fn branch_sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
-    let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
     rows.push(BranchSidebarRow::SubmodulesHeader {
         top_border: true,
         collapsed: submodules_collapsed,
@@ -769,7 +819,6 @@ pub(super) fn branch_sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
-    let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
     rows.push(BranchSidebarRow::StashHeader {
         top_border: true,
         collapsed: stash_collapsed,
@@ -820,9 +869,9 @@ pub(super) fn branch_sidebar_rows(
 
 #[allow(clippy::too_many_arguments)]
 fn push_slash_tree_rows(
-    tree: &SlashTree,
+    tree: &SlashTree<'_>,
     out: &mut Vec<BranchSidebarRow>,
-    local_meta: Option<&HashMap<String, (Option<UpstreamDivergence>, bool)>>,
+    local_leaf_meta: Option<&[SlashTreeLeafMeta]>,
     upstream_full: Option<&str>,
     depth: usize,
     muted: bool,
@@ -832,78 +881,96 @@ fn push_slash_tree_rows(
     remote_name: Option<&str>,
     collapsed_items: &BTreeSet<String>,
 ) {
-    let mut children = tree.children.iter().collect::<Vec<_>>();
-    children.sort_by(|(left_label, left_node), (right_label, right_node)| {
+    let mut has_group = false;
+    let mut has_leaf = false;
+    let mut needs_sort = false;
+    for (label, node) in tree.children.iter() {
+        has_group |= !node.children.is_empty();
+        has_leaf |= node.children.is_empty();
+        needs_sort |= slash_tree_label_needs_sort(label);
+    }
+
+    if !needs_sort {
+        if has_group && has_leaf {
+            for (label, node) in tree.children.iter() {
+                if node.children.is_empty() {
+                    continue;
+                }
+                push_slash_tree_child_rows(
+                    label,
+                    node,
+                    out,
+                    local_leaf_meta,
+                    upstream_full,
+                    depth,
+                    muted,
+                    section,
+                    name_prefix,
+                    group_path_prefix,
+                    remote_name,
+                    collapsed_items,
+                );
+            }
+            for (label, node) in tree.children.iter() {
+                if !node.children.is_empty() {
+                    continue;
+                }
+                push_slash_tree_child_rows(
+                    label,
+                    node,
+                    out,
+                    local_leaf_meta,
+                    upstream_full,
+                    depth,
+                    muted,
+                    section,
+                    name_prefix,
+                    group_path_prefix,
+                    remote_name,
+                    collapsed_items,
+                );
+            }
+        } else {
+            for (label, node) in tree.children.iter() {
+                push_slash_tree_child_rows(
+                    label,
+                    node,
+                    out,
+                    local_leaf_meta,
+                    upstream_full,
+                    depth,
+                    muted,
+                    section,
+                    name_prefix,
+                    group_path_prefix,
+                    remote_name,
+                    collapsed_items,
+                );
+            }
+        }
+        return;
+    }
+
+    let mut children: SmallVec<[(&str, &SlashTree<'_>); 8]> = tree
+        .children
+        .iter()
+        .map(|(label, node)| (*label, node))
+        .collect();
+    children.sort_unstable_by(|(left_label, left_node), (right_label, right_node)| {
         let left_is_group = !left_node.children.is_empty();
         let right_is_group = !right_node.children.is_empty();
         right_is_group
             .cmp(&left_is_group)
             .then_with(|| cmp_case_insensitive_then_case_sensitive(left_label, right_label))
     });
-
     for (label, node) in children {
-        if node.children.is_empty() {
-            if node.is_leaf {
-                push_branch_sidebar_branch_row(
-                    out,
-                    label,
-                    name_prefix,
-                    local_meta,
-                    upstream_full,
-                    section,
-                    depth,
-                    muted,
-                );
-            }
-            continue;
-        }
-
-        let group_path_mark = group_path_prefix.len();
-        group_path_prefix.push_str(label);
-        let collapse_key = match section {
-            BranchSection::Local => local_group_storage_key(group_path_prefix.as_str()),
-            BranchSection::Remote => remote_group_storage_key(
-                remote_name.unwrap_or_default(),
-                group_path_prefix.as_str(),
-            ),
-        };
-        let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
-        out.push(BranchSidebarRow::GroupHeader {
-            label: format!("{label}/").into(),
-            section,
-            depth: branch_sidebar_depth(depth),
-            collapsed: group_collapsed,
-            collapse_key: collapse_key.into(),
-        });
-        if group_collapsed {
-            group_path_prefix.truncate(group_path_mark);
-            continue;
-        }
-
-        if node.is_leaf {
-            push_branch_sidebar_branch_row(
-                out,
-                label,
-                name_prefix,
-                local_meta,
-                upstream_full,
-                section,
-                depth + 1,
-                muted,
-            );
-        }
-
-        let name_prefix_mark = name_prefix.len();
-        name_prefix.push_str(label);
-        name_prefix.push('/');
-        group_path_prefix.push('/');
-
-        push_slash_tree_rows(
+        push_slash_tree_child_rows(
+            label,
             node,
             out,
-            local_meta,
+            local_leaf_meta,
             upstream_full,
-            depth + 1,
+            depth,
             muted,
             section,
             name_prefix,
@@ -911,10 +978,105 @@ fn push_slash_tree_rows(
             remote_name,
             collapsed_items,
         );
-
-        name_prefix.truncate(name_prefix_mark);
-        group_path_prefix.truncate(group_path_mark);
     }
+}
+
+fn slash_tree_label_needs_sort(label: &str) -> bool {
+    !label.is_ascii()
+        || label
+            .as_bytes()
+            .iter()
+            .any(|byte| byte.is_ascii_uppercase())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_slash_tree_child_rows(
+    label: &str,
+    node: &SlashTree<'_>,
+    out: &mut Vec<BranchSidebarRow>,
+    local_leaf_meta: Option<&[SlashTreeLeafMeta]>,
+    upstream_full: Option<&str>,
+    depth: usize,
+    muted: bool,
+    section: BranchSection,
+    name_prefix: &mut String,
+    group_path_prefix: &mut String,
+    remote_name: Option<&str>,
+    collapsed_items: &BTreeSet<String>,
+) {
+    if node.children.is_empty() {
+        if node.is_leaf {
+            push_branch_sidebar_branch_row(
+                out,
+                label,
+                name_prefix,
+                node.leaf_meta_index,
+                local_leaf_meta,
+                upstream_full,
+                section,
+                depth,
+                muted,
+            );
+        }
+        return;
+    }
+
+    let group_path_mark = group_path_prefix.len();
+    group_path_prefix.push_str(label);
+    let collapse_key = match section {
+        BranchSection::Local => local_group_storage_key(group_path_prefix.as_str()),
+        BranchSection::Remote => {
+            remote_group_storage_key(remote_name.unwrap_or_default(), group_path_prefix.as_str())
+        }
+    };
+    let group_collapsed = is_collapsed(collapsed_items, &collapse_key);
+    out.push(BranchSidebarRow::GroupHeader {
+        label: format!("{label}/").into(),
+        section,
+        depth: branch_sidebar_depth(depth),
+        collapsed: group_collapsed,
+        collapse_key: collapse_key.into(),
+    });
+    if group_collapsed {
+        group_path_prefix.truncate(group_path_mark);
+        return;
+    }
+
+    if node.is_leaf {
+        push_branch_sidebar_branch_row(
+            out,
+            label,
+            name_prefix,
+            node.leaf_meta_index,
+            local_leaf_meta,
+            upstream_full,
+            section,
+            depth + 1,
+            muted,
+        );
+    }
+
+    let name_prefix_mark = name_prefix.len();
+    name_prefix.push_str(label);
+    name_prefix.push('/');
+    group_path_prefix.push('/');
+
+    push_slash_tree_rows(
+        node,
+        out,
+        local_leaf_meta,
+        upstream_full,
+        depth + 1,
+        muted,
+        section,
+        name_prefix,
+        group_path_prefix,
+        remote_name,
+        collapsed_items,
+    );
+
+    name_prefix.truncate(name_prefix_mark);
+    group_path_prefix.truncate(group_path_mark);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -922,7 +1084,8 @@ fn push_branch_sidebar_branch_row(
     out: &mut Vec<BranchSidebarRow>,
     label: &str,
     name_prefix: &mut String,
-    local_meta: Option<&HashMap<String, (Option<UpstreamDivergence>, bool)>>,
+    leaf_meta_index: Option<NonZeroU32>,
+    local_leaf_meta: Option<&[SlashTreeLeafMeta]>,
     upstream_full: Option<&str>,
     section: BranchSection,
     depth: usize,
@@ -931,14 +1094,20 @@ fn push_branch_sidebar_branch_row(
     name_prefix.push_str(label);
     let is_upstream = section == BranchSection::Remote
         && upstream_full.is_some_and(|u| u == name_prefix.as_str());
-    let (divergence, is_head) = local_meta
-        .and_then(|meta| meta.get(name_prefix.as_str()))
+    let leaf_meta = leaf_meta_index
+        .and_then(|index| {
+            local_leaf_meta.and_then(|meta| meta.get(index.get().saturating_sub(1) as usize))
+        })
         .copied()
-        .unwrap_or((None, false));
+        .unwrap_or_default();
     let name = SharedString::new(name_prefix.as_str());
     name_prefix.truncate(name_prefix.len() - label.len());
-    let divergence_ahead = divergence.and_then(|d| branch_sidebar_divergence_count(d.ahead));
-    let divergence_behind = divergence.and_then(|d| branch_sidebar_divergence_count(d.behind));
+    let divergence_ahead = leaf_meta
+        .divergence
+        .and_then(|d| branch_sidebar_divergence_count(d.ahead));
+    let divergence_behind = leaf_meta
+        .divergence
+        .and_then(|d| branch_sidebar_divergence_count(d.behind));
     out.push(BranchSidebarRow::Branch {
         name,
         section,
@@ -946,7 +1115,7 @@ fn push_branch_sidebar_branch_row(
         muted,
         divergence_ahead,
         divergence_behind,
-        is_head,
+        is_head: leaf_meta.is_head,
         is_upstream,
     });
 }
