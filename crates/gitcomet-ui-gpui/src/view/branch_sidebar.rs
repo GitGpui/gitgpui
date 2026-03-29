@@ -702,17 +702,16 @@ pub(super) fn branch_sidebar_rows(
     let mut head_upstream_full = None;
     let mut local_upstreams: SmallVec<[(&str, &str); 4]> = SmallVec::new();
 
-    if local_collapsed
-        && let Loadable::Ready(branches) = &repo.branches {
-            for branch in branches.iter() {
-                record_local_branch_sidebar_metadata(
-                    branch,
-                    head,
-                    &mut local_upstreams,
-                    &mut head_upstream_full,
-                );
-            }
+    if local_collapsed && let Loadable::Ready(branches) = &repo.branches {
+        for branch in branches.iter() {
+            record_local_branch_sidebar_metadata(
+                branch,
+                head,
+                &mut local_upstreams,
+                &mut head_upstream_full,
+            );
         }
+    }
 
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
@@ -1015,23 +1014,24 @@ fn push_slash_tree_rows(
     collapsed_items: &BTreeSet<String>,
 ) {
     if let Some((label, node)) = tree.children.first_key_value()
-        && tree.children.len() == 1 {
-            push_slash_tree_child_rows(
-                label,
-                node,
-                out,
-                local_leaf_meta,
-                upstream_full,
-                depth,
-                muted,
-                section,
-                name_prefix,
-                group_path_prefix,
-                remote_name,
-                collapsed_items,
-            );
-            return;
-        }
+        && tree.children.len() == 1
+    {
+        push_slash_tree_child_rows(
+            label,
+            node,
+            out,
+            local_leaf_meta,
+            upstream_full,
+            depth,
+            muted,
+            section,
+            name_prefix,
+            group_path_prefix,
+            remote_name,
+            collapsed_items,
+        );
+        return;
+    }
 
     let mut has_group = false;
     let mut has_leaf = false;

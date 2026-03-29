@@ -118,12 +118,13 @@ fn with_ts_parser<R>(
             .is_some_and(|current| current == ts_language);
 
         if (needs_language_reset || !parser_language_matches)
-            && parser.set_language(ts_language).is_err() {
-                invalidate_ts_parser_language_fast_path();
-                return None;
-            }
-            #[cfg(test)]
-            TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
+            && parser.set_language(ts_language).is_err()
+        {
+            invalidate_ts_parser_language_fast_path();
+            return None;
+        }
+        #[cfg(test)]
+        TS_PARSER_SET_LANGUAGE_CALL_COUNT.with(|count| count.set(count.get() + 1));
         Some(f(&mut parser))
     })
 }
@@ -226,7 +227,7 @@ pub(super) enum TreesitterParseReuseMode {
 #[derive(Clone, Debug)]
 struct PreparedSyntaxTreeState {
     language: DiffSyntaxLanguage,
-    text: Arc<str>,
+    text: SharedString,
     line_starts: Arc<[usize]>,
     source_hash: u64,
     source_version: u64,
@@ -326,6 +327,12 @@ struct PreparedSyntaxChunkBuildResult {
 pub(super) enum PreparedSyntaxLineTokensRequest {
     Ready(Arc<[SyntaxToken]>),
     Pending,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct PreparedSyntaxLineTokensRangeSummary {
+    pub ready_lines: usize,
+    pub ready_tokens: usize,
 }
 
 #[derive(Clone)]
@@ -463,16 +470,6 @@ fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocumentData) {
         store.remove(&evict_key);
     }
     store.insert(document.cache_key, document.clone());
-}
-
-fn shared_prepared_document_seed(
-    cache_key: PreparedSyntaxCacheKey,
-) -> Option<PreparedSyntaxDocumentData> {
-    let store = match shared_prepared_document_seed_store().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    store.get(&cache_key).cloned()
 }
 
 fn merge_shared_prepared_document_chunk(
@@ -884,6 +881,7 @@ struct TreesitterDocumentCache {
     by_source_identity: HashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
     lru_order: VecDeque<PreparedSyntaxCacheKey>,
     pending_chunk_requests: HashSet<PreparedSyntaxChunkKey>,
+    pending_chunk_request_counts: HashMap<PreparedSyntaxCacheKey, usize>,
     metrics: PreparedSyntaxCacheMetrics,
 }
 
@@ -901,6 +899,7 @@ impl TreesitterDocumentCache {
             by_source_identity: HashMap::default(),
             lru_order: VecDeque::new(),
             pending_chunk_requests: HashSet::default(),
+            pending_chunk_request_counts: HashMap::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
         }
     }
@@ -922,6 +921,33 @@ impl TreesitterDocumentCache {
     fn record_hit(&mut self, cache_key: PreparedSyntaxCacheKey) {
         self.metrics.hit = self.metrics.hit.saturating_add(1);
         self.touch_key(cache_key);
+    }
+
+    fn insert_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) -> bool {
+        if !self.pending_chunk_requests.insert(chunk_key) {
+            return false;
+        }
+        *self
+            .pending_chunk_request_counts
+            .entry(chunk_key.cache_key)
+            .or_default() += 1;
+        true
+    }
+
+    fn remove_pending_chunk_request(&mut self, chunk_key: PreparedSyntaxChunkKey) -> bool {
+        if !self.pending_chunk_requests.remove(&chunk_key) {
+            return false;
+        }
+        if let std::collections::hash_map::Entry::Occupied(mut entry) =
+            self.pending_chunk_request_counts.entry(chunk_key.cache_key)
+        {
+            let count = entry.get_mut();
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                entry.remove();
+            }
+        }
+        true
     }
 
     fn remove_source_identity_mapping(
@@ -1041,69 +1067,83 @@ impl TreesitterDocumentCache {
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
     ) -> SharedDocumentMergeResult {
-        let Some(shared_document) = shared_prepared_document_seed(cache_key) else {
-            return SharedDocumentMergeResult::None;
-        };
-
         let mut inserted = false;
         let mut updated = false;
         let mut remove_identity = None;
         let mut insert_identity = None;
+        let mut replaced_drop_payload = None;
+        let mut cleared_pending_chunks = Vec::new();
 
-        match self.by_cache_key.entry(cache_key) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                let document = TreesitterCachedDocument::from_chunked_line_tokens(
-                    shared_document.line_count,
-                    shared_document.line_token_chunks,
-                    shared_document.tree_state,
-                );
-                insert_identity = document.source_identity();
-                entry.insert(document);
-                inserted = true;
-            }
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let document = entry.get_mut();
-                if document.line_count != shared_document.line_count {
-                    let old_identity = document.source_identity();
-                    let replaced = std::mem::replace(
-                        document,
-                        TreesitterCachedDocument::from_chunked_line_tokens(
-                            shared_document.line_count,
-                            shared_document.line_token_chunks,
-                            shared_document.tree_state,
-                        ),
+        {
+            let store = match shared_prepared_document_seed_store().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(shared_document) = store.get(&cache_key) else {
+                return SharedDocumentMergeResult::None;
+            };
+
+            match self.by_cache_key.entry(cache_key) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let document = TreesitterCachedDocument::from_chunked_line_tokens(
+                        shared_document.line_count,
+                        shared_document.line_token_chunks.clone(),
+                        shared_document.tree_state.clone(),
                     );
-                    remove_identity = old_identity;
                     insert_identity = document.source_identity();
-                    drop_line_tokens_with_mode(
-                        replaced.into_drop_payload(),
-                        SyntaxCacheDropMode::DeferredWhenLarge,
-                    );
-                    updated = true;
-                } else {
-                    let old_identity = document.source_identity();
-                    if document.tree_state.is_none() && shared_document.tree_state.is_some() {
-                        document.tree_state = shared_document.tree_state;
-                        updated = true;
-                    }
-
-                    for (chunk_ix, chunk) in shared_document.line_token_chunks {
-                        if document.line_token_chunks.contains_key(&chunk_ix) {
-                            continue;
-                        }
-                        insert_line_token_chunk(document, chunk_ix, Some(chunk));
-                        self.pending_chunk_requests.remove(&PreparedSyntaxChunkKey {
-                            cache_key,
-                            chunk_ix,
-                        });
-                        updated = true;
-                    }
-                    if document.source_identity() != old_identity {
+                    entry.insert(document);
+                    inserted = true;
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    let document = entry.get_mut();
+                    if document.line_count != shared_document.line_count {
+                        let old_identity = document.source_identity();
+                        let replaced = std::mem::replace(
+                            document,
+                            TreesitterCachedDocument::from_chunked_line_tokens(
+                                shared_document.line_count,
+                                shared_document.line_token_chunks.clone(),
+                                shared_document.tree_state.clone(),
+                            ),
+                        );
                         remove_identity = old_identity;
                         insert_identity = document.source_identity();
+                        replaced_drop_payload = Some(replaced.into_drop_payload());
+                        updated = true;
+                    } else {
+                        let old_identity = document.source_identity();
+                        if document.tree_state.is_none()
+                            && let Some(tree_state) = shared_document.tree_state.clone()
+                        {
+                            document.tree_state = Some(tree_state);
+                            updated = true;
+                        }
+
+                        for (&chunk_ix, chunk) in &shared_document.line_token_chunks {
+                            if document.line_token_chunks.contains_key(&chunk_ix) {
+                                continue;
+                            }
+                            insert_line_token_chunk(document, chunk_ix, Some(chunk.clone()));
+                            cleared_pending_chunks.push(PreparedSyntaxChunkKey {
+                                cache_key,
+                                chunk_ix,
+                            });
+                            updated = true;
+                        }
+                        if document.source_identity() != old_identity {
+                            remove_identity = old_identity;
+                            insert_identity = document.source_identity();
+                        }
                     }
                 }
             }
+        }
+
+        if let Some(drop_payload) = replaced_drop_payload {
+            drop_line_tokens_with_mode(drop_payload, SyntaxCacheDropMode::DeferredWhenLarge);
+        }
+        for chunk_key in cleared_pending_chunks {
+            self.remove_pending_chunk_request(chunk_key);
         }
 
         if let Some(identity) = remove_identity
@@ -1213,7 +1253,7 @@ impl TreesitterDocumentCache {
         if worker.sender.send(request).is_err() {
             return false;
         }
-        self.pending_chunk_requests.insert(chunk_key);
+        let _ = self.insert_pending_chunk_request(chunk_key);
         true
     }
 
@@ -1342,13 +1382,15 @@ impl TreesitterDocumentCache {
         self.request_line_tokens_with_context(cache_key, line_ix, allow_sync_build_on_insert)
     }
 
-    fn request_line_tokens_range(
+    fn request_line_tokens_range_into(
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
         line_range: Range<usize>,
-    ) -> Option<Vec<PreparedSyntaxLineTokensRequest>> {
+        requests: &mut Vec<PreparedSyntaxLineTokensRequest>,
+    ) -> Option<PreparedSyntaxLineTokensRangeSummary> {
         if line_range.is_empty() {
-            return Some(Vec::new());
+            requests.clear();
+            return Some(PreparedSyntaxLineTokensRangeSummary::default());
         }
 
         let _ = self.drain_completed_chunk_builds_for_cache_key(cache_key);
@@ -1356,16 +1398,80 @@ impl TreesitterDocumentCache {
             self.merge_document_from_shared_seed(cache_key),
             SharedDocumentMergeResult::Inserted
         );
-        let mut requests = Vec::with_capacity(line_range.len());
+
+        if let Some(summary) = self.collect_ready_line_token_requests_for_range(
+            cache_key,
+            line_range.clone(),
+            requests,
+        ) {
+            self.metrics.hit = self.metrics.hit.saturating_add(summary.ready_lines as u64);
+            self.touch_key(cache_key);
+            return Some(summary);
+        }
+
+        requests.clear();
+        let mut summary = PreparedSyntaxLineTokensRangeSummary::default();
         for line_ix in line_range {
-            requests.push(self.request_line_tokens_with_context(
+            let request = self.request_line_tokens_with_context(
                 cache_key,
                 line_ix,
                 allow_sync_build_on_insert,
-            )?);
+            )?;
+            if let PreparedSyntaxLineTokensRequest::Ready(tokens) = &request {
+                summary.ready_lines = summary.ready_lines.saturating_add(1);
+                summary.ready_tokens = summary.ready_tokens.saturating_add(tokens.len());
+            }
+            requests.push(request);
             allow_sync_build_on_insert = false;
         }
-        Some(requests)
+        Some(summary)
+    }
+
+    fn collect_ready_line_token_requests_for_range(
+        &self,
+        cache_key: PreparedSyntaxCacheKey,
+        line_range: Range<usize>,
+        requests: &mut Vec<PreparedSyntaxLineTokensRequest>,
+    ) -> Option<PreparedSyntaxLineTokensRangeSummary> {
+        static EMPTY_TOKENS: OnceLock<Arc<[SyntaxToken]>> = OnceLock::new();
+        let empty_tokens = || Arc::clone(EMPTY_TOKENS.get_or_init(|| Arc::from([])));
+
+        let document = self.by_cache_key.get(&cache_key)?;
+        let original_len = requests.len();
+        requests.clear();
+        requests.reserve(line_range.len());
+
+        let mut current_chunk_ix = usize::MAX;
+        let mut current_chunk_start = 0usize;
+        let mut current_chunk: Option<&[Arc<[SyntaxToken]>]> = None;
+        let mut summary = PreparedSyntaxLineTokensRangeSummary::default();
+
+        for line_ix in line_range {
+            if line_ix >= document.line_count {
+                requests.push(PreparedSyntaxLineTokensRequest::Ready(empty_tokens()));
+                summary.ready_lines = summary.ready_lines.saturating_add(1);
+                continue;
+            }
+
+            let chunk_ix = line_ix / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
+            if chunk_ix != current_chunk_ix {
+                current_chunk_ix = chunk_ix;
+                current_chunk_start = chunk_ix.saturating_mul(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS);
+                current_chunk = document.line_token_chunks.get(&chunk_ix).map(Vec::as_slice);
+            }
+
+            let Some(chunk) = current_chunk else {
+                requests.truncate(original_len);
+                return None;
+            };
+            let line_offset = line_ix.saturating_sub(current_chunk_start);
+            let tokens = chunk.get(line_offset).cloned().unwrap_or_else(empty_tokens);
+            summary.ready_lines = summary.ready_lines.saturating_add(1);
+            summary.ready_tokens = summary.ready_tokens.saturating_add(tokens.len());
+            requests.push(PreparedSyntaxLineTokensRequest::Ready(tokens));
+        }
+
+        Some(summary)
     }
 
     fn prepared_document_data(
@@ -1423,6 +1529,9 @@ impl TreesitterDocumentCache {
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
     ) -> usize {
+        if !self.has_pending_chunk_requests_for_cache_key(cache_key) {
+            return 0;
+        }
         self.drain_completed_chunk_builds_matching(Some(cache_key))
     }
 
@@ -1488,7 +1597,7 @@ impl TreesitterDocumentCache {
 
         let mut applied = 0usize;
         for result in ready_results {
-            self.pending_chunk_requests.remove(&result.chunk_key);
+            self.remove_pending_chunk_request(result.chunk_key);
             self.metrics.chunk_build_ms = self
                 .metrics
                 .chunk_build_ms
@@ -1530,9 +1639,7 @@ impl TreesitterDocumentCache {
     }
 
     fn has_pending_chunk_requests_for_cache_key(&self, cache_key: PreparedSyntaxCacheKey) -> bool {
-        self.pending_chunk_requests
-            .iter()
-            .any(|candidate| candidate.cache_key == cache_key)
+        self.pending_chunk_request_counts.contains_key(&cache_key)
     }
 
     #[cfg(test)]
@@ -1605,7 +1712,7 @@ fn should_apply_chunk_build_result(
 
 #[derive(Clone)]
 struct TreesitterDocumentInput {
-    text: Arc<str>,
+    text: SharedString,
     line_starts: Arc<[usize]>,
 }
 
@@ -1849,9 +1956,9 @@ pub(super) fn prepare_treesitter_document_with_budget_reuse_text(
         prepared_document_source_identity_for_shared_text(language, mode, text.as_ref(), line_count)
         && let Some(document) = TS_DOCUMENT_CACHE
             .with(|cache| cache.borrow_mut().document_for_source_identity(identity))
-        {
-            return PrepareTreesitterDocumentResult::Ready(document);
-        }
+    {
+        return PrepareTreesitterDocumentResult::Ready(document);
+    }
     let source_identity = prepared_document_source_identity_for_shared_text(
         language,
         mode,
@@ -2024,14 +2131,15 @@ pub(super) fn request_syntax_tokens_for_prepared_document_line(
     })
 }
 
-pub(super) fn request_syntax_tokens_for_prepared_document_line_range(
+pub(super) fn request_syntax_tokens_for_prepared_document_line_range_into(
     document: PreparedSyntaxDocument,
     line_range: Range<usize>,
-) -> Option<Vec<PreparedSyntaxLineTokensRequest>> {
+    requests: &mut Vec<PreparedSyntaxLineTokensRequest>,
+) -> Option<PreparedSyntaxLineTokensRangeSummary> {
     TS_DOCUMENT_CACHE.with(|cache| {
         cache
             .borrow_mut()
-            .request_line_tokens_range(document.cache_key, line_range)
+            .request_line_tokens_range_into(document.cache_key, line_range, requests)
     })
 }
 
@@ -2434,7 +2542,7 @@ fn treesitter_document_input_from_shared_text(
 ) -> TreesitterDocumentInput {
     if text.is_empty() {
         return TreesitterDocumentInput {
-            text: Arc::<str>::from(text),
+            text,
             line_starts: Arc::default(),
         };
     }
@@ -2452,7 +2560,7 @@ fn treesitter_document_input_from_shared_text(
     }
 
     TreesitterDocumentInput {
-        text: Arc::<str>::from(text),
+        text,
         line_starts: if normalized_line_starts.len() == line_starts.len() {
             line_starts
         } else {
@@ -2471,7 +2579,7 @@ fn normalized_treesitter_line_starts<'a>(text: &str, line_starts: &'a [usize]) -
 fn treesitter_document_input_from_text(text: &str) -> TreesitterDocumentInput {
     if text.is_empty() {
         return TreesitterDocumentInput {
-            text: Arc::<str>::from(""),
+            text: SharedString::new(""),
             line_starts: Arc::default(),
         };
     }
@@ -2488,7 +2596,7 @@ fn treesitter_document_input_from_text(text: &str) -> TreesitterDocumentInput {
     }
 
     TreesitterDocumentInput {
-        text: Arc::<str>::from(text),
+        text: SharedString::from(text.to_owned()),
         line_starts: Arc::<[usize]>::from(line_starts),
     }
 }
@@ -2647,7 +2755,8 @@ impl TreesitterDocumentCache {
                 document
                     .line_token_chunks
                     .iter()
-                    .filter(|&(&chunk_ix, chunk)| (chunk_ix < chunk_limit)).map(|(&chunk_ix, chunk)| (chunk_ix, chunk.clone()))
+                    .filter(|&(&chunk_ix, _)| chunk_ix < chunk_limit)
+                    .map(|(&chunk_ix, chunk)| (chunk_ix, chunk.clone()))
                     .collect()
             })
             .unwrap_or_default();
@@ -6280,7 +6389,7 @@ mod tests {
         });
 
         assert!(
-            Arc::ptr_eq(&first.text, &second.text),
+            first.text.as_ptr() == second.text.as_ptr() && first.text.len() == second.text.len(),
             "tree state clones should share source text storage"
         );
         assert!(

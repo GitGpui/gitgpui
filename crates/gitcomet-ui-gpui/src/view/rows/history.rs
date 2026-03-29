@@ -111,7 +111,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
-        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(document) = &this.worktree_markdown_preview else {
             return Vec::new();
         };
@@ -130,7 +131,7 @@ impl MainPaneView {
             document.as_ref(),
             range.clone(),
             bar_color,
-            editor_font_family.as_str(),
+            editor_font_family.as_ref(),
             window,
             cx,
         );
@@ -155,7 +156,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
-        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -173,7 +175,7 @@ impl MainPaneView {
             &preview.old,
             range.clone(),
             None,
-            editor_font_family.as_str(),
+            editor_font_family.as_ref(),
             window,
             cx,
         );
@@ -202,7 +204,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
-        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -220,7 +223,7 @@ impl MainPaneView {
             &preview.inline,
             range.clone(),
             None,
-            editor_font_family.as_str(),
+            editor_font_family.as_ref(),
             window,
             cx,
         );
@@ -245,7 +248,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
-        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
         let Loadable::Ready(preview) = &this.file_markdown_preview else {
             return Vec::new();
         };
@@ -263,7 +267,7 @@ impl MainPaneView {
             &preview.new,
             range.clone(),
             None,
-            editor_font_family.as_str(),
+            editor_font_family.as_ref(),
             window,
             cx,
         );
@@ -333,7 +337,7 @@ struct MarkdownPreviewRowTypography {
     font_size: f32,
     line_height: f32,
     font_weight: Option<FontWeight>,
-    font_family: Option<String>,
+    font_family: Option<SharedString>,
     text_color: gpui::Rgba,
 }
 
@@ -353,7 +357,7 @@ pub(super) struct MarkdownPreviewRenderContext {
     pub(super) theme: AppTheme,
     pub(super) bar_color: Option<gpui::Rgba>,
     pub(super) min_width: Pixels,
-    pub(super) editor_font_family: String,
+    pub(super) editor_font_family: SharedString,
     pub(super) view: Option<Entity<MainPaneView>>,
     pub(super) text_region: DiffTextRegion,
 }
@@ -364,18 +368,108 @@ pub(super) fn render_markdown_preview_document_rows(
     context: &MarkdownPreviewRenderContext,
 ) -> Vec<AnyElement> {
     let requested_rows = range.len();
-    let rows = range
-        .filter_map(|ix| {
-            let row = document.rows.get(ix)?;
-            Some(markdown_preview_row_element(row, ix, context))
-        })
-        .collect::<Vec<_>>();
+    let start = range.start.min(document.rows.len());
+    let end = range.end.min(document.rows.len());
+    let mut rows = Vec::with_capacity(end.saturating_sub(start));
+    for (offset, row) in document.rows[start..end].iter().enumerate() {
+        rows.push(markdown_preview_row_element(row, start + offset, context));
+    }
     perf::record_row_batch(
         ViewPerfRenderLane::MarkdownPreview,
         requested_rows,
         rows.len(),
     );
     rows
+}
+
+struct MarkdownPreviewSharedHighlightsText {
+    text: SharedString,
+    highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+    inner: Option<gpui::StyledText>,
+}
+
+impl MarkdownPreviewSharedHighlightsText {
+    fn new(text: SharedString, highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>) -> Self {
+        Self {
+            text,
+            highlights,
+            inner: None,
+        }
+    }
+}
+
+impl gpui::Element for MarkdownPreviewSharedHighlightsText {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        let mut inner = gpui::StyledText::new(self.text.clone())
+            .with_default_highlights(&window.text_style(), self.highlights.iter().cloned());
+        let layout = inner.request_layout(id, inspector_id, window, cx);
+        self.inner = Some(inner);
+        layout
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner
+            .as_mut()
+            .expect("markdown preview shared-highlights text should be laid out before prepaint")
+            .prepaint(id, inspector_id, bounds, request_layout, window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner
+            .as_mut()
+            .expect("markdown preview shared-highlights text should be laid out before paint")
+            .paint(
+                id,
+                inspector_id,
+                bounds,
+                request_layout,
+                prepaint,
+                window,
+                cx,
+            );
+    }
+}
+
+impl gpui::IntoElement for MarkdownPreviewSharedHighlightsText {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
 }
 
 fn markdown_preview_row_element(
@@ -387,6 +481,7 @@ fn markdown_preview_row_element(
     let bar_color = context.bar_color;
     let min_width = context.min_width;
     let text_region = context.text_region;
+    let is_interactive = context.view.is_some();
     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewStyledRowBuild);
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return div()
@@ -399,137 +494,11 @@ fn markdown_preview_row_element(
     }
 
     let row_layout = markdown_preview_row_layout(row);
-    let typography =
-        markdown_preview_row_typography(theme, row, context.editor_font_family.as_str());
+    let typography = markdown_preview_row_typography(theme, row, &context.editor_font_family);
     let styled = markdown_preview_row_styled_text(theme, row);
     let horizontal_padding = markdown_preview_row_horizontal_padding(row);
-
-    let mut content = div()
-        .relative()
-        .flex_grow()
-        .min_w(px(0.0))
-        .w_full()
-        .h(px(typography.line_height))
-        .min_h(px(typography.line_height))
-        .flex()
-        .items_center()
-        .overflow_hidden()
-        .whitespace_nowrap()
-        .text_size(px(typography.font_size))
-        .line_height(px(typography.line_height))
-        .text_color(typography.text_color)
-        .debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
-
-    if let Some(font_weight) = typography.font_weight {
-        content = content.font_weight(font_weight);
-    }
-    if let Some(font_family) = typography.font_family.clone() {
-        content = content.font_family(font_family);
-    }
-    if let Some(view) = context.view.clone() {
-        content = content.child(
-            div()
-                .absolute()
-                .top_0()
-                .left_0()
-                .right_0()
-                .bottom_0()
-                .child(DiffTextSelectionOverlay {
-                    view,
-                    visible_ix: row_ix,
-                    region: text_region,
-                    text: row.text.clone(),
-                }),
-        );
-    }
-
     let marker = markdown_preview_row_marker(row);
     let alert_title = markdown_preview_alert_title_label(row);
-
-    let body = match row.kind {
-        MarkdownPreviewRowKind::ThematicBreak => div()
-            .flex_grow()
-            .min_w(px(0.0))
-            .w_full()
-            .h_full()
-            .flex()
-            .items_center()
-            .child(div().w_full().h(px(1.0)).bg(with_alpha(
-                theme.colors.border,
-                if theme.is_dark { 0.92 } else { 0.88 },
-            )))
-            .into_any_element(),
-        _ if marker.is_none() && alert_title.is_none() => {
-            // Fast path: no marker or alert badge — use content div directly
-            // as body, skipping the intermediate line wrapper div.
-            if styled.highlights.is_empty() {
-                content.child(styled.text.clone()).into_any_element()
-            } else {
-                content
-                    .child(
-                        gpui::StyledText::new(styled.text.clone())
-                            .with_highlights(styled.highlights.iter().cloned()),
-                    )
-                    .into_any_element()
-            }
-        }
-        _ => {
-            let text = if styled.highlights.is_empty() {
-                content.child(styled.text.clone()).into_any_element()
-            } else {
-                content
-                    .child(
-                        gpui::StyledText::new(styled.text.clone())
-                            .with_highlights(styled.highlights.iter().cloned()),
-                    )
-                    .into_any_element()
-            };
-
-            let mut line = div()
-                .flex_grow()
-                .min_w(px(0.0))
-                .w_full()
-                .h_full()
-                .flex()
-                .items_center();
-            if let Some(marker) = marker {
-                line = line.child(
-                    div()
-                        .flex_none()
-                        .h_full()
-                        .min_w(px(22.0))
-                        .mr(px(10.0))
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .text_size(px(MARKDOWN_PREVIEW_BASE_FONT_PX))
-                        .line_height(px(typography.line_height))
-                        .text_color(theme.colors.text_muted)
-                        .child(marker),
-                );
-            }
-            if let Some(alert_title) = alert_title {
-                let alert_color = markdown_preview_alert_color(theme, row.alert_kind.unwrap());
-                line = line.child(
-                    div()
-                        .flex_none()
-                        .mr(px(10.0))
-                        .px(px(6.0))
-                        .py(px(2.0))
-                        .rounded(px(2.0))
-                        .bg(with_alpha(
-                            alert_color,
-                            if theme.is_dark { 0.18 } else { 0.12 },
-                        ))
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(alert_color)
-                        .child(alert_title),
-                );
-            }
-            line.child(text).into_any_element()
-        }
-    };
 
     // Rows that need a content_shell wrapper for border/background styling.
     let needs_content_shell = matches!(
@@ -539,27 +508,10 @@ fn markdown_preview_row_element(
             | MarkdownPreviewRowKind::TableRow { .. }
             | MarkdownPreviewRowKind::PlainFallback
     );
+    let flatten_shell_text_directly =
+        !is_interactive && needs_content_shell && marker.is_none() && alert_title.is_none();
 
-    let row_content_width = if bar_color.is_some() {
-        (min_width - px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX)).max(px(0.0))
-    } else {
-        min_width
-    };
-    let mut row_content = div()
-        .flex_grow()
-        .min_w(px(0.0))
-        .w(row_content_width)
-        .h_full()
-        .flex()
-        .items_center()
-        .pl(px(horizontal_padding.left_px))
-        .pr(px(horizontal_padding.right_px));
-    if let Some(blockquote_gutter) =
-        markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
-    {
-        row_content = row_content.child(blockquote_gutter);
-    }
-    if needs_content_shell {
+    let build_content_shell = || {
         let mut content_shell = div()
             .flex_grow()
             .min_w(px(0.0))
@@ -619,14 +571,177 @@ fn markdown_preview_row_element(
             )),
             _ => unreachable!(),
         };
-        content_shell = content_shell.child(body);
-        if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) {
+        if matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }) && is_interactive {
             content_shell =
                 content_shell.debug_selector(|| format!("markdown_preview_code_shell_{row_ix}"));
         }
-        row_content = row_content.child(content_shell);
+        content_shell
+    };
+
+    let mut row_body = if flatten_shell_text_directly {
+        // Benchmarked non-interactive rows do not need the extra inner content
+        // wrapper when a shell already provides sizing/background/border styles.
+        let mut content_shell = build_content_shell()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_size(px(typography.font_size))
+            .line_height(px(typography.line_height))
+            .text_color(typography.text_color);
+        if let Some(font_weight) = typography.font_weight {
+            content_shell = content_shell.font_weight(font_weight);
+        }
+        if let Some(font_family) = typography.font_family.clone() {
+            content_shell = content_shell.font_family(font_family);
+        }
+        if styled.highlights.is_empty() {
+            content_shell.child(styled.text.clone())
+        } else {
+            content_shell.child(MarkdownPreviewSharedHighlightsText::new(
+                styled.text.clone(),
+                Arc::clone(&styled.highlights),
+            ))
+        }
     } else {
-        row_content = row_content.child(body);
+        let mut content = div()
+            .relative()
+            .flex_grow()
+            .min_w(px(0.0))
+            .w_full()
+            .h(px(typography.line_height))
+            .min_h(px(typography.line_height))
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .whitespace_nowrap()
+            .text_size(px(typography.font_size))
+            .line_height(px(typography.line_height))
+            .text_color(typography.text_color);
+        if is_interactive {
+            content = content.debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
+        }
+
+        if let Some(font_weight) = typography.font_weight {
+            content = content.font_weight(font_weight);
+        }
+        if let Some(font_family) = typography.font_family.clone() {
+            content = content.font_family(font_family);
+        }
+        if let Some(view) = context.view.clone() {
+            content = content.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(DiffTextSelectionOverlay {
+                        view,
+                        visible_ix: row_ix,
+                        region: text_region,
+                        text: row.text.clone(),
+                    }),
+            );
+        }
+
+        let body = match row.kind {
+            MarkdownPreviewRowKind::ThematicBreak => div()
+                .flex_grow()
+                .min_w(px(0.0))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .child(div().w_full().h(px(1.0)).bg(with_alpha(
+                    theme.colors.border,
+                    if theme.is_dark { 0.92 } else { 0.88 },
+                ))),
+            _ if marker.is_none() && alert_title.is_none() => {
+                // Fast path: no marker or alert badge — use content div directly
+                // as body, skipping the intermediate line wrapper div.
+                if styled.highlights.is_empty() {
+                    content.child(styled.text.clone())
+                } else {
+                    content.child(MarkdownPreviewSharedHighlightsText::new(
+                        styled.text.clone(),
+                        Arc::clone(&styled.highlights),
+                    ))
+                }
+            }
+            _ => {
+                let text = if styled.highlights.is_empty() {
+                    content.child(styled.text.clone()).into_any_element()
+                } else {
+                    content
+                        .child(MarkdownPreviewSharedHighlightsText::new(
+                            styled.text.clone(),
+                            Arc::clone(&styled.highlights),
+                        ))
+                        .into_any_element()
+                };
+
+                let mut line = div()
+                    .flex_grow()
+                    .min_w(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .flex()
+                    .items_center();
+                if let Some(marker) = marker {
+                    line = line.child(
+                        div()
+                            .flex_none()
+                            .h_full()
+                            .min_w(px(22.0))
+                            .mr(px(10.0))
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .text_size(px(MARKDOWN_PREVIEW_BASE_FONT_PX))
+                            .line_height(px(typography.line_height))
+                            .text_color(theme.colors.text_muted)
+                            .child(marker),
+                    );
+                }
+                if let Some(alert_title) = alert_title {
+                    let alert_color = markdown_preview_alert_color(theme, row.alert_kind.unwrap());
+                    line = line.child(
+                        div()
+                            .flex_none()
+                            .mr(px(10.0))
+                            .px(px(6.0))
+                            .py(px(2.0))
+                            .rounded(px(2.0))
+                            .bg(with_alpha(
+                                alert_color,
+                                if theme.is_dark { 0.18 } else { 0.12 },
+                            ))
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(alert_color)
+                            .child(alert_title),
+                    );
+                }
+                line.child(text)
+            }
+        };
+
+        if needs_content_shell {
+            build_content_shell().child(body)
+        } else {
+            body
+        }
+    };
+    let needs_row_content_wrapper = bar_color.is_some() || row.blockquote_level > 0;
+    if !needs_row_content_wrapper {
+        row_body = if needs_content_shell {
+            row_body
+                .ml(px(horizontal_padding.left_px))
+                .mr(px(horizontal_padding.right_px))
+        } else {
+            row_body
+                .pl(px(horizontal_padding.left_px))
+                .pr(px(horizontal_padding.right_px))
+        };
     }
 
     if let Some(view) = context.view.clone() {
@@ -689,13 +804,31 @@ fn markdown_preview_row_element(
                         cx.notify();
                     });
                 }
-            })
-            .child(row_content);
-        row_container.into_any_element()
+            });
+        if needs_row_content_wrapper {
+            let mut row_content = div()
+                .flex_grow()
+                .min_w(px(0.0))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .pl(px(horizontal_padding.left_px))
+                .pr(px(horizontal_padding.right_px));
+            if let Some(blockquote_gutter) =
+                markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
+            {
+                row_content = row_content.child(blockquote_gutter);
+            }
+            row_container
+                .child(row_content.child(row_body))
+                .into_any_element()
+        } else {
+            row_container.child(row_body).into_any_element()
+        }
     } else {
         // Non-interactive markdown preview row (benchmarks, conflict resolver).
         let row_container = div()
-            .debug_selector(|| format!("markdown_preview_row_box_{row_ix}"))
             .relative()
             .h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
             .min_h(px(MARKDOWN_PREVIEW_ROW_HEIGHT_PX))
@@ -715,9 +848,28 @@ fn markdown_preview_row_element(
                         .bg(color),
                 )
             })
-            .min_w(min_width)
-            .child(row_content);
-        row_container.into_any_element()
+            .min_w(min_width);
+        if needs_row_content_wrapper {
+            let mut row_content = div()
+                .flex_grow()
+                .min_w(px(0.0))
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .pl(px(horizontal_padding.left_px))
+                .pr(px(horizontal_padding.right_px));
+            if let Some(blockquote_gutter) =
+                markdown_preview_blockquote_gutter(theme, row.blockquote_level, row.alert_kind)
+            {
+                row_content = row_content.child(blockquote_gutter);
+            }
+            row_container
+                .child(row_content.child(row_body))
+                .into_any_element()
+        } else {
+            row_container.child(row_body).into_any_element()
+        }
     }
 }
 
@@ -732,16 +884,17 @@ fn markdown_preview_row_required_width(
         return px(0.0);
     }
 
-    let typography = markdown_preview_row_typography(theme, row, editor_font_family);
+    let editor_font_family: SharedString = editor_font_family.to_owned().into();
+    let typography = markdown_preview_row_typography(theme, row, &editor_font_family);
     let default_font_family = window.text_style().font_family.clone();
     let resolved_font_family = typography
         .font_family
         .clone()
-        .unwrap_or_else(|| default_font_family.to_string());
+        .unwrap_or_else(|| default_font_family.clone());
     let cache_key = markdown_preview_row_width_cache_key(
         typography.font_size,
         typography.font_weight.unwrap_or(FontWeight::NORMAL),
-        resolved_font_family.as_str(),
+        resolved_font_family.as_ref(),
     );
     let base_width = row.measured_width_px.get_or_init(cache_key, || {
         let base_font_weight = typography.font_weight.unwrap_or(FontWeight::NORMAL);
@@ -754,7 +907,7 @@ fn markdown_preview_row_required_width(
                 row.text.clone(),
                 typography.font_size,
                 base_font_weight,
-                typography.font_family.as_deref(),
+                typography.font_family.as_ref().map(SharedString::as_ref),
                 &highlights,
             )
         };
@@ -1149,7 +1302,7 @@ fn markdown_preview_row_layout(row: &MarkdownPreviewRow) -> MarkdownPreviewRowLa
 fn markdown_preview_row_typography(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
-    editor_font_family: &str,
+    editor_font_family: &SharedString,
 ) -> MarkdownPreviewRowTypography {
     let text_color = markdown_preview_row_text_color(theme, row);
     match row.kind {
@@ -1213,21 +1366,21 @@ fn markdown_preview_row_typography(
             font_size: 12.0,
             line_height: 18.0,
             font_weight: None,
-            font_family: Some(editor_font_family.to_string()),
+            font_family: Some(editor_font_family.clone()),
             text_color,
         },
         MarkdownPreviewRowKind::TableRow { is_header } => MarkdownPreviewRowTypography {
             font_size: 12.0,
             line_height: 18.0,
             font_weight: is_header.then_some(FontWeight::BOLD),
-            font_family: Some(editor_font_family.to_string()),
+            font_family: Some(editor_font_family.clone()),
             text_color,
         },
         MarkdownPreviewRowKind::PlainFallback => MarkdownPreviewRowTypography {
             font_size: 12.0,
             line_height: 18.0,
             font_weight: None,
-            font_family: Some(editor_font_family.to_string()),
+            font_family: Some(editor_font_family.clone()),
             text_color,
         },
         _ => MarkdownPreviewRowTypography {
@@ -1898,14 +2051,12 @@ mod tests {
             ..paragraph.clone()
         };
 
+        let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
         let body_typography =
-            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
-        let h1_typography =
-            markdown_preview_row_typography(theme, &h1, EDITOR_MONOSPACE_FONT_FAMILY);
-        let h2_typography =
-            markdown_preview_row_typography(theme, &h2, EDITOR_MONOSPACE_FONT_FAMILY);
-        let h6_typography =
-            markdown_preview_row_typography(theme, &h6, EDITOR_MONOSPACE_FONT_FAMILY);
+            markdown_preview_row_typography(theme, &paragraph, &editor_font_family);
+        let h1_typography = markdown_preview_row_typography(theme, &h1, &editor_font_family);
+        let h2_typography = markdown_preview_row_typography(theme, &h2, &editor_font_family);
+        let h6_typography = markdown_preview_row_typography(theme, &h6, &editor_font_family);
 
         assert!(h1_typography.font_size > h2_typography.font_size);
         assert!(h2_typography.font_size > body_typography.font_size);
@@ -1921,10 +2072,11 @@ mod tests {
         let paragraph = markdown_row(MarkdownPreviewRowKind::Paragraph);
         let list_item = markdown_row(MarkdownPreviewRowKind::ListItem { number: None });
 
+        let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
         let paragraph_typography =
-            markdown_preview_row_typography(theme, &paragraph, EDITOR_MONOSPACE_FONT_FAMILY);
+            markdown_preview_row_typography(theme, &paragraph, &editor_font_family);
         let list_typography =
-            markdown_preview_row_typography(theme, &list_item, EDITOR_MONOSPACE_FONT_FAMILY);
+            markdown_preview_row_typography(theme, &list_item, &editor_font_family);
         let paragraph_layout = markdown_preview_row_layout(&paragraph);
         let list_layout = markdown_preview_row_layout(&list_item);
 
@@ -1940,7 +2092,8 @@ mod tests {
         let theme = AppTheme::gitcomet_light();
         let row = markdown_row(MarkdownPreviewRowKind::DetailsSummary);
 
-        let typography = markdown_preview_row_typography(theme, &row, EDITOR_MONOSPACE_FONT_FAMILY);
+        let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
+        let typography = markdown_preview_row_typography(theme, &row, &editor_font_family);
 
         assert_eq!(typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(
@@ -2206,18 +2359,24 @@ mod tests {
         let header = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: true });
         let body = markdown_row(MarkdownPreviewRowKind::TableRow { is_header: false });
 
+        let editor_font_family: SharedString = EDITOR_MONOSPACE_FONT_FAMILY.into();
         let header_typography =
-            markdown_preview_row_typography(theme, &header, EDITOR_MONOSPACE_FONT_FAMILY);
-        let body_typography =
-            markdown_preview_row_typography(theme, &body, EDITOR_MONOSPACE_FONT_FAMILY);
+            markdown_preview_row_typography(theme, &header, &editor_font_family);
+        let body_typography = markdown_preview_row_typography(theme, &body, &editor_font_family);
 
         assert_eq!(
-            header_typography.font_family,
-            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
+            header_typography
+                .font_family
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some(EDITOR_MONOSPACE_FONT_FAMILY)
         );
         assert_eq!(
-            body_typography.font_family,
-            Some(EDITOR_MONOSPACE_FONT_FAMILY.to_string())
+            body_typography
+                .font_family
+                .as_ref()
+                .map(SharedString::as_ref),
+            Some(EDITOR_MONOSPACE_FONT_FAMILY)
         );
         assert_eq!(header_typography.font_weight, Some(FontWeight::BOLD));
         assert_eq!(body_typography.font_weight, None);

@@ -128,22 +128,23 @@ impl LineIndex {
         let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
         let removed_breaks = suffix_start.saturating_sub(prefix_len);
         if removed_breaks == inserted_breaks
-            && let Some(updated) = Arc::get_mut(&mut self.starts) {
-                let mut write_ix = prefix_len;
-                for pos in memchr_iter(b'\n', inserted.as_bytes()) {
-                    updated[write_ix] = range.start.saturating_add(pos).saturating_add(1);
-                    write_ix += 1;
-                }
-                for start in &mut updated[suffix_start..] {
-                    *start = shift_offset_by_delta(*start, delta);
-                }
-                debug_assert_eq!(updated.first().copied(), Some(0));
-                debug_assert!(
-                    updated.windows(2).all(|window| window[0] < window[1]),
-                    "line starts must remain strictly increasing after in-place edit"
-                );
-                return;
+            && let Some(updated) = Arc::get_mut(&mut self.starts)
+        {
+            let mut write_ix = prefix_len;
+            for pos in memchr_iter(b'\n', inserted.as_bytes()) {
+                updated[write_ix] = range.start.saturating_add(pos).saturating_add(1);
+                write_ix += 1;
             }
+            for start in &mut updated[suffix_start..] {
+                *start = shift_offset_by_delta(*start, delta);
+            }
+            debug_assert_eq!(updated.first().copied(), Some(0));
+            debug_assert!(
+                updated.windows(2).all(|window| window[0] < window[1]),
+                "line starts must remain strictly increasing after in-place edit"
+            );
+            return;
+        }
 
         let mut updated = Vec::with_capacity(
             prefix_len

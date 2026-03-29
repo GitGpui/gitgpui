@@ -3606,10 +3606,8 @@ fn bench_worktree_preview_render(c: &mut Criterion) {
         &cached_metrics,
     );
 
-    let sidecar_fixture = WorktreePreviewRenderFixture::new(lines, line_bytes);
-    let (_, prepare_metrics) = measure_sidecar_allocations(|| {
-        sidecar_fixture.run_render_time_prepare_with_metrics(0, window)
-    });
+    let (_, prepare_metrics) =
+        measure_sidecar_allocations(|| fixture.run_render_time_prepare_with_metrics(0, window));
     emit_worktree_preview_render_sidecar(
         &format!("worktree_preview_render/render_time_prepare_window/{window}"),
         &prepare_metrics,

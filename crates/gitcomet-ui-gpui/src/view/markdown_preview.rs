@@ -170,8 +170,19 @@ struct MarkdownPreviewRowDecoration {
     starts_alert: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-pub(super) struct MarkdownPreviewRowWidthCache(Arc<Mutex<Option<(u64, u32)>>>);
+#[derive(Debug, Default)]
+pub(super) struct MarkdownPreviewRowWidthCache(Mutex<Option<(u64, u32)>>);
+
+impl Clone for MarkdownPreviewRowWidthCache {
+    fn clone(&self) -> Self {
+        let cached = match self.0.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => *poisoned.into_inner(),
+        };
+
+        Self(Mutex::new(cached))
+    }
+}
 
 impl MarkdownPreviewRowWidthCache {
     pub(super) fn get_or_init(&self, key: u64, compute: impl FnOnce() -> u32) -> u32 {
@@ -1762,6 +1773,13 @@ fn align_table_columns(rows: &mut [MarkdownPreviewRow]) {
 }
 
 fn align_table_block_rows(rows: &mut [MarkdownPreviewRow]) {
+    // Most preview tables are plain text, so avoid per-cell owned buffers when
+    // there are no inline spans to remap.
+    if rows.iter().all(|row| row.inline_spans.is_empty()) {
+        align_table_block_rows_without_inline_spans(rows);
+        return;
+    }
+
     let split_rows = rows
         .iter()
         .map(|row| split_markdown_table_cells(row.text.as_ref(), row.inline_spans.as_ref()))
@@ -1782,6 +1800,72 @@ fn align_table_block_rows(rows: &mut [MarkdownPreviewRow]) {
         let (text, spans) = build_aligned_table_row_text(cells, &column_widths);
         row.text = text.into();
         row.inline_spans = Arc::new(spans);
+    }
+}
+
+fn align_table_block_rows_without_inline_spans(rows: &mut [MarkdownPreviewRow]) {
+    let mut column_widths: Vec<usize> = Vec::new();
+
+    for row in rows.iter() {
+        for (column_ix, (_, cell_width)) in
+            MarkdownTableCellIter::new(row.text.as_ref()).enumerate()
+        {
+            if let Some(width) = column_widths.get_mut(column_ix) {
+                *width = (*width).max(cell_width);
+            } else {
+                column_widths.push(cell_width);
+            }
+        }
+    }
+
+    if column_widths.is_empty() {
+        return;
+    }
+
+    for row in rows.iter_mut() {
+        row.text =
+            build_aligned_table_row_text_without_spans(row.text.as_ref(), column_widths.as_slice())
+                .into();
+    }
+}
+
+struct MarkdownTableCellIter<'a> {
+    text: &'a str,
+    next_start: usize,
+    finished: bool,
+}
+
+impl<'a> MarkdownTableCellIter<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            next_start: 0,
+            finished: false,
+        }
+    }
+}
+
+impl<'a> Iterator for MarkdownTableCellIter<'a> {
+    type Item = (&'a str, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        let start = self.next_start;
+        let mut char_width = 0usize;
+        for (relative_byte_ix, ch) in self.text[start..].char_indices() {
+            if ch == '\t' {
+                let end = start + relative_byte_ix;
+                self.next_start = end + ch.len_utf8();
+                return Some((&self.text[start..end], char_width));
+            }
+            char_width += 1;
+        }
+
+        self.finished = true;
+        (start < self.text.len() || start == 0).then_some((&self.text[start..], char_width))
     }
 }
 
@@ -1867,6 +1951,42 @@ fn build_aligned_table_row_text(
     }
 
     (text, spans)
+}
+
+fn build_aligned_table_row_text_without_spans(text: &str, column_widths: &[usize]) -> String {
+    const TABLE_COLUMN_SEPARATOR: &str = " | ";
+
+    let mut aligned = String::with_capacity(
+        text.len().saturating_add(
+            column_widths
+                .len()
+                .saturating_sub(1)
+                .saturating_mul(TABLE_COLUMN_SEPARATOR.len().saturating_sub(1)),
+        ),
+    );
+    let mut cells = MarkdownTableCellIter::new(text);
+
+    for (column_ix, width) in column_widths.iter().copied().enumerate() {
+        let Some((cell_text, cell_width)) = cells.next() else {
+            if column_ix + 1 < column_widths.len() {
+                for _ in 0..width {
+                    aligned.push(' ');
+                }
+                aligned.push_str(TABLE_COLUMN_SEPARATOR);
+            }
+            continue;
+        };
+
+        aligned.push_str(cell_text);
+        if column_ix + 1 < column_widths.len() {
+            for _ in 0..width.saturating_sub(cell_width) {
+                aligned.push(' ');
+            }
+            aligned.push_str(TABLE_COLUMN_SEPARATOR);
+        }
+    }
+
+    aligned
 }
 
 fn normalize_whitespace(s: &str) -> String {
@@ -2523,6 +2643,21 @@ mod tests {
     }
 
     #[test]
+    fn table_alignment_without_inline_spans_keeps_rows_plain() {
+        let doc = parse("| Name | Age |\n|---|---|\n| Alexander | 3 |\n| Bo | 27 |\n");
+        let table_rows: Vec<_> = doc
+            .rows
+            .iter()
+            .filter(|r| matches!(r.kind, MarkdownPreviewRowKind::TableRow { .. }))
+            .collect();
+
+        assert!(table_rows.iter().all(|row| row.inline_spans.is_empty()));
+        assert_eq!(table_rows[0].text.as_ref(), "Name      | Age");
+        assert_eq!(table_rows[1].text.as_ref(), "Alexander | 3");
+        assert_eq!(table_rows[2].text.as_ref(), "Bo        | 27");
+    }
+
+    #[test]
     fn table_alignment_preserves_inline_spans_after_padding_cells() {
         let doc = parse(
             "| A | **Header Bold** |\n| --- | --- |\n| A much longer first column | [link](https://example.com) |\n",
@@ -2594,6 +2729,16 @@ mod tests {
         cached.measured_width_px.get_or_init(1, || 123);
 
         assert_eq!(cached, fresh);
+    }
+
+    #[test]
+    fn cloned_row_preserves_cached_width_measurement() {
+        let cached = parse("Paragraph\n").rows.remove(0);
+        cached.measured_width_px.get_or_init(1, || 123);
+
+        let cloned = cached.clone();
+
+        assert_eq!(cloned.measured_width_px.get_or_init(1, || 999), 123);
     }
 
     // ── Inline spans ────────────────────────────────────────────────────

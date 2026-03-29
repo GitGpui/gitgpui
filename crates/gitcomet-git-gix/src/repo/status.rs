@@ -139,16 +139,15 @@ impl GixRepo {
             });
         }
 
-        if used_cached_staged
-            && let Some(updated_index_stamp) = index_stamp_after_write {
-                let mut cache = self
-                    .gitlink_status_capability
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Some(cached) = cache.as_mut() {
-                    cached.index = updated_index_stamp;
-                }
+        if used_cached_staged && let Some(updated_index_stamp) = index_stamp_after_write {
+            let mut cache = self
+                .gitlink_status_capability
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(cached) = cache.as_mut() {
+                cached.index = updated_index_stamp;
             }
+        }
 
         let mut staged = staged;
 

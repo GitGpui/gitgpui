@@ -584,7 +584,7 @@ pub struct LargeHtmlSyntaxMetrics {
 
 pub struct LargeHtmlSyntaxFixture {
     source: LargeHtmlSyntaxSource,
-    text: Arc<str>,
+    text: SharedString,
     line_starts: Arc<[usize]>,
     line_count: usize,
     theme: AppTheme,
@@ -620,7 +620,7 @@ impl LargeHtmlSyntaxFixture {
                 build_synthetic_large_html_text(synthetic_lines, synthetic_line_bytes),
             )
         });
-        let text: Arc<str> = Arc::from(text);
+        let text = SharedString::from(text);
         let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
         let line_count = line_starts.len().max(1);
         let prepared_document = prewarm_document
@@ -652,7 +652,7 @@ impl LargeHtmlSyntaxFixture {
         let prepared = prepare_diff_syntax_document_in_background_text(
             DiffSyntaxLanguage::Html,
             DiffSyntaxMode::Auto,
-            self.text.as_ref().to_owned().into(),
+            self.text.clone(),
             Arc::clone(&self.line_starts),
         );
 
@@ -1003,7 +1003,14 @@ impl WorktreePreviewRenderFixture {
     }
 
     pub fn run_render_time_prepare_step(&self, start: usize, window: usize) -> u64 {
-        let prepared_document = self.language.and_then(|language| {
+        let prepared_document = self.prepare_document_from_shared_source();
+        self.hash_window(start, window, prepared_document)
+    }
+
+    fn prepare_document_from_shared_source(
+        &self,
+    ) -> Option<super::diff_text::PreparedDiffSyntaxDocument> {
+        self.language.and_then(|language| {
             prepare_bench_diff_syntax_document_from_shared(
                 language,
                 DiffSyntaxBudget::default(),
@@ -1011,8 +1018,7 @@ impl WorktreePreviewRenderFixture {
                 Arc::clone(&self.line_starts),
                 None,
             )
-        });
-        self.hash_window(start, window, prepared_document)
+        })
     }
 
     fn hash_window(
@@ -1094,15 +1100,7 @@ impl WorktreePreviewRenderFixture {
         start: usize,
         window: usize,
     ) -> (u64, WorktreePreviewRenderMetrics) {
-        let text = self.lines.join("\n");
-        let prepared_document = self.language.and_then(|language| {
-            prepare_bench_diff_syntax_document(
-                language,
-                DiffSyntaxBudget::default(),
-                text.as_str(),
-                None,
-            )
-        });
+        let prepared_document = self.prepare_document_from_shared_source();
         let hash = self.hash_window(start, window, prepared_document);
         let actual_start = if self.lines.is_empty() {
             0
@@ -1483,7 +1481,7 @@ fn render_markdown_preview_window(
             theme,
             bar_color: None,
             min_width: px(0.0),
-            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.to_string(),
+            editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
             view: None,
             text_region: DiffTextRegion::Inline,
         },

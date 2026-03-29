@@ -18,6 +18,7 @@ const REPLACEMENT_DISSIMILAR_PENALTY_MIN_LEN: usize = 4;
 const ASCII_BITPARALLEL_MAX_PATTERN_LEN: usize = 128;
 const SIDE_BY_SIDE_HISTOGRAM_LINE_THRESHOLD: usize = 1_024;
 const SIDE_BY_SIDE_LINEAR_FALLBACK_LINE_THRESHOLD: usize = 100_000;
+const PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD: usize = 2_048;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FileDiffEofNewline {
@@ -1904,11 +1905,17 @@ fn patience_recurse<'a>(
         );
 
         if anchors.is_empty() {
-            // No unique anchors — fall back to Myers for this region.
-            edits.extend(myers_edits(
-                &old[inner_old_start..inner_old_end],
-                &new[inner_new_start..inner_new_end],
-            ));
+            let old_inner = &old[inner_old_start..inner_old_end];
+            let new_inner = &new[inner_new_start..inner_new_end];
+            // Large anchorless regions with matching line counts tend to be
+            // structurally aligned already; preserve same-position context
+            // lines linearly instead of paying for a full Myers trace.
+            if should_use_patience_positional_fallback(old_inner, new_inner) {
+                edits.extend(positional_fallback_edits(old_inner, new_inner));
+            } else {
+                // No unique anchors — fall back to Myers for this region.
+                edits.extend(myers_edits(old_inner, new_inner));
+            }
         } else {
             // Recursively diff between anchors.
             let mut oi = inner_old_start;
@@ -1960,6 +1967,11 @@ fn patience_recurse<'a>(
     }
 
     edits
+}
+
+fn should_use_patience_positional_fallback(old: &[&str], new: &[&str]) -> bool {
+    old.len() == new.len()
+        && old.len().saturating_add(new.len()) >= PATIENCE_POSITIONAL_FALLBACK_LINE_THRESHOLD
 }
 
 /// Find lines that are unique in both old and new within the given ranges,
@@ -2123,12 +2135,91 @@ fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     edits
 }
 
+fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+    let mut prefix = 0usize;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+
+    let mut suffix = 0usize;
+    while prefix + suffix < old.len()
+        && prefix + suffix < new.len()
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_mid_end = old.len().saturating_sub(suffix);
+    let new_mid_end = new.len().saturating_sub(suffix);
+    let old_mid = &old[prefix..old_mid_end];
+    let new_mid = &new[prefix..new_mid_end];
+    let paired = old_mid.len().min(new_mid.len());
+
+    let mut edits = Vec::new();
+    for i in 0..prefix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[i]),
+            new: Some(new[i]),
+        });
+    }
+
+    for i in 0..paired {
+        if old_mid[i] == new_mid[i] {
+            edits.push(Edit {
+                kind: EditKind::Equal,
+                old: Some(old_mid[i]),
+                new: Some(new_mid[i]),
+            });
+        } else {
+            edits.push(Edit {
+                kind: EditKind::Delete,
+                old: Some(old_mid[i]),
+                new: None,
+            });
+            edits.push(Edit {
+                kind: EditKind::Insert,
+                old: None,
+                new: Some(new_mid[i]),
+            });
+        }
+    }
+
+    for &line in &old_mid[paired..] {
+        edits.push(Edit {
+            kind: EditKind::Delete,
+            old: Some(line),
+            new: None,
+        });
+    }
+    for &line in &new_mid[paired..] {
+        edits.push(Edit {
+            kind: EditKind::Insert,
+            old: None,
+            new: Some(line),
+        });
+    }
+
+    for i in 0..suffix {
+        edits.push(Edit {
+            kind: EditKind::Equal,
+            old: Some(old[old_mid_end + i]),
+            new: Some(new[new_mid_end + i]),
+        });
+    }
+
+    edits
+}
+
 pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     // Guard against overflow: if n + m exceeds isize::MAX, use linear fallback.
     let Some(sum) = old.len().checked_add(new.len()) else {
         return myers_fallback_edits(old, new);
     };
     if sum > isize::MAX as usize {
+        return myers_fallback_edits(old, new);
+    }
+    if sum > u32::MAX as usize {
         return myers_fallback_edits(old, new);
     }
 
@@ -2140,14 +2231,14 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
     let Some(v_size) = max.checked_mul(2).and_then(|v| v.checked_add(1)) else {
         return myers_fallback_edits(old, new);
     };
-    let mut v = vec![0isize; v_size];
+    let mut v = vec![0u32; v_size];
 
     // Compact trace: store only active diagonals per depth.
     // At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
     // Depth d starts at flat index d*(d+1)/2.
     // This eliminates per-depth Vec allocations and reduces trace memory from
     // d * (2*(n+m)+1) to d*(d+1)/2 elements.
-    let mut trace = Vec::<isize>::new();
+    let mut trace = Vec::<u32>::new();
 
     {
         let mut x = 0isize;
@@ -2156,13 +2247,13 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
             x += 1;
             y += 1;
         }
-        v[offset as usize] = x;
+        v[offset as usize] = x as u32;
     }
     // Store depth 0: only diagonal 0
     trace.push(v[offset as usize]);
 
     let mut last_d = 0usize;
-    if v[offset as usize] >= n && v[offset as usize] >= m {
+    if v[offset as usize] >= n as u32 && v[offset as usize] >= m as u32 {
         last_d = 0;
     } else {
         'outer: for d in 1..=max {
@@ -2182,13 +2273,13 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
                     v[(offset + k - 1) as usize] + 1
                 };
 
-                let mut x = x;
+                let mut x = x as isize;
                 let mut y = x - k;
                 while x < n && y < m && old[x as usize] == new[y as usize] {
                     x += 1;
                     y += 1;
                 }
-                v[k_idx] = x;
+                v[k_idx] = x as u32;
 
                 if x >= n && y >= m {
                     for k2 in (-d_isize..=d_isize).step_by(2) {
@@ -2209,7 +2300,7 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
         return Vec::new();
     }
 
-    if last_d == 0 && n == m && v[offset as usize] == n {
+    if last_d == 0 && n == m && v[offset as usize] == n as u32 {
         return old
             .iter()
             .map(|&s| Edit {
@@ -2239,7 +2330,7 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
             k - 1
         };
 
-        let prev_x = compact_trace_get(&trace, prev_depth, prev_k);
+        let prev_x = compact_trace_get(&trace, prev_depth, prev_k) as isize;
         let prev_y = prev_x - prev_k;
 
         while x > prev_x && y > prev_y {
@@ -2303,7 +2394,7 @@ pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>>
 /// At depth d, active diagonals are -d, -d+2, ..., d (d+1 values).
 /// Base offset = d*(d+1)/2, index within depth = (k+d)/2.
 #[inline]
-fn compact_trace_get(trace: &[isize], depth: usize, k: isize) -> isize {
+fn compact_trace_get(trace: &[u32], depth: usize, k: isize) -> u32 {
     let d = depth as isize;
     let base = depth * (depth + 1) / 2;
     let idx = ((k + d) / 2) as usize;
@@ -2921,6 +3012,57 @@ mod tests {
                 EditKind::Equal
             ]
         );
+    }
+
+    #[test]
+    fn positional_fallback_preserves_same_position_context_lines() {
+        let old = ["repeat", "old-a", "repeat", "old-b", "repeat"];
+        let new = ["repeat", "new-a", "repeat", "new-b", "repeat"];
+        let edits = positional_fallback_edits(&old, &new);
+
+        assert_eq!(
+            edits.iter().map(|edit| edit.kind).collect::<Vec<_>>(),
+            vec![
+                EditKind::Equal,
+                EditKind::Delete,
+                EditKind::Insert,
+                EditKind::Equal,
+                EditKind::Delete,
+                EditKind::Insert,
+                EditKind::Equal,
+            ]
+        );
+    }
+
+    #[test]
+    fn large_anchorless_repeated_regions_keep_context_localized() {
+        let line_count = 700usize;
+        let mut old_lines = Vec::with_capacity(line_count);
+        let mut new_lines = Vec::with_capacity(line_count);
+
+        for ix in 0..line_count {
+            if ix % 2 == 0 {
+                old_lines.push("repeat".to_string());
+                new_lines.push("repeat".to_string());
+            } else {
+                old_lines.push(format!("before-{ix:04}"));
+                new_lines.push(format!("after-{ix:04}"));
+            }
+        }
+
+        let old = format!("{}\n", old_lines.join("\n"));
+        let new = format!("{}\n", new_lines.join("\n"));
+        let rows = side_by_side_rows(&old, &new);
+
+        assert_eq!(rows.len(), line_count);
+        for (ix, row) in rows.iter().enumerate() {
+            let expected_kind = if ix % 2 == 0 {
+                FileDiffRowKind::Context
+            } else {
+                FileDiffRowKind::Modify
+            };
+            assert_eq!(row.kind, expected_kind, "unexpected row kind at index {ix}");
+        }
     }
 
     #[test]
